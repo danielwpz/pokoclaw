@@ -4,6 +4,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasOwnKey(value: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(value, key);
+}
+
 function getSecretPathSegments(ref: string): string[] {
   const prefix = "secret://";
 
@@ -33,6 +37,10 @@ export function resolveSecretRef(secrets: SecretValueTree, ref: string): string 
       throw new Error(`Missing secret for ref: ${ref}`);
     }
 
+    if (!hasOwnKey(current, segment)) {
+      throw new Error(`Missing secret for ref: ${ref}`);
+    }
+
     const next: string | SecretValueTree | undefined = current[segment];
     if (next == null) {
       throw new Error(`Missing secret for ref: ${ref}`);
@@ -53,9 +61,10 @@ export function resolveConfigRefs<T>(input: T, secrets: SecretValueTree): T {
     return input;
   }
 
+  const sourceInput: Record<string, unknown> = input;
   const resolved: Record<string, unknown> = {};
 
-  for (const [key, value] of Object.entries(input)) {
+  for (const [key, value] of Object.entries(sourceInput)) {
     if (key.endsWith("_ref")) {
       if (typeof value !== "string") {
         throw new Error(`Config ref ${key} must be a string`);
@@ -65,7 +74,7 @@ export function resolveConfigRefs<T>(input: T, secrets: SecretValueTree): T {
       if (targetKey.length === 0) {
         throw new Error(`Config ref key is invalid: ${key}`);
       }
-      if (targetKey in input) {
+      if (hasOwnKey(sourceInput, targetKey)) {
         throw new Error(`Config cannot contain both ${targetKey} and ${key}`);
       }
 

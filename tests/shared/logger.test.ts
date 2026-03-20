@@ -63,4 +63,27 @@ describe("logger", () => {
     expect(writes[0]).toContain("source='config.toml'");
     expect(writes[0]?.trim().startsWith("{")).toBe(false);
   });
+
+  test("logger colors only level label when enabled", () => {
+    const writes: string[] = [];
+    const logger = createLogger(
+      {
+        level: "debug",
+        useColors: true,
+      },
+      {
+        now: () => new Date("2026-03-20T12:00:00.000Z"),
+        write(line) {
+          writes.push(line);
+        },
+        subsystem: "runtime",
+      },
+    );
+
+    logger.warn("visible");
+
+    expect(writes[0]).toContain("\u001B[33mWARN\u001B[0m [runtime] visible");
+    expect(writes[0]).not.toContain("\u001B[33m[runtime]");
+    expect(writes[0]).not.toContain("\u001B[33mvisible");
+  });
 });

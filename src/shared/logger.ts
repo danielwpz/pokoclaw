@@ -26,8 +26,25 @@ const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
   error: 40,
 };
 
+const ANSI_RESET = "\u001B[0m";
+const LEVEL_COLORS: Record<LogLevel, string> = {
+  debug: "\u001B[90m",
+  info: "\u001B[36m",
+  warn: "\u001B[33m",
+  error: "\u001B[31m",
+};
+
 function shouldLog(currentLevel: LogLevel, targetLevel: LogLevel): boolean {
   return LOG_LEVEL_ORDER[targetLevel] >= LOG_LEVEL_ORDER[currentLevel];
+}
+
+function formatLevelLabel(level: LogLevel, useColors: boolean): string {
+  const label = level.toUpperCase();
+  if (!useColors) {
+    return label;
+  }
+
+  return `${LEVEL_COLORS[level]}${label}${ANSI_RESET}`;
 }
 
 function formatContext(context: LoggerContext | undefined): string {
@@ -51,12 +68,18 @@ function formatLine(
   context: LoggerContext | undefined,
   now: Date,
   subsystem: string,
+  useColors: boolean,
 ): string {
   const timestamp = now.toISOString();
-  return `${timestamp} ${level.toUpperCase()} [${subsystem}] ${message}${formatContext(context)}`;
+  const levelLabel = formatLevelLabel(level, useColors);
+  return `${timestamp} ${levelLabel} [${subsystem}] ${message}${formatContext(context)}`;
 }
 
-function createLoggerWithLevel(level: LogLevel, options: LoggerOptions): Logger {
+function createLoggerWithLevel(
+  level: LogLevel,
+  useColors: boolean,
+  options: LoggerOptions,
+): Logger {
   const write = options.write ?? ((line: string) => console.error(line));
   const now = options.now ?? (() => new Date());
 
@@ -65,7 +88,7 @@ function createLoggerWithLevel(level: LogLevel, options: LoggerOptions): Logger 
       return;
     }
 
-    write(formatLine(targetLevel, message, context, now(), options.subsystem));
+    write(formatLine(targetLevel, message, context, now(), options.subsystem, useColors));
   };
 
   return {
@@ -85,9 +108,9 @@ function createLoggerWithLevel(level: LogLevel, options: LoggerOptions): Logger 
 }
 
 export function createBootstrapLogger(options: LoggerOptions): Logger {
-  return createLoggerWithLevel("info", options);
+  return createLoggerWithLevel("info", false, options);
 }
 
 export function createLogger(config: LoggingConfig, options: LoggerOptions): Logger {
-  return createLoggerWithLevel(config.level, options);
+  return createLoggerWithLevel(config.level, config.useColors, options);
 }

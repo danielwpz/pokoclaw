@@ -5,12 +5,7 @@ import { parse } from "toml";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { resolveConfigRefs } from "@/src/config/refs.js";
-import {
-  type AppConfig,
-  type RawConfig,
-  validateFileConfig,
-  validateSecretsFile,
-} from "@/src/config/schema.js";
+import { type AppConfig, validateFileConfig, validateSecretsFile } from "@/src/config/schema.js";
 
 interface LoadConfigOptions {
   configTomlPath?: string;
@@ -42,14 +37,12 @@ function getDefaultConfigPaths(homeDir = homedir()): Required<LoadConfigOptions>
   };
 }
 
-async function loadConfigToml(configTomlPath: string): Promise<RawConfig> {
-  const parsed = await readOptionalTomlFile(configTomlPath);
-  return validateFileConfig(parsed, DEFAULT_CONFIG);
+async function loadConfigToml(configTomlPath: string): Promise<unknown | undefined> {
+  return readOptionalTomlFile(configTomlPath);
 }
 
-async function loadSecretsToml(secretsTomlPath: string): Promise<AppConfig["secrets"]> {
-  const parsed = await readOptionalTomlFile(secretsTomlPath);
-  return validateSecretsFile(parsed).root;
+async function loadSecretsToml(secretsTomlPath: string): Promise<unknown | undefined> {
+  return readOptionalTomlFile(secretsTomlPath);
 }
 
 export async function loadConfig(options?: LoadConfigOptions): Promise<AppConfig> {
@@ -57,12 +50,14 @@ export async function loadConfig(options?: LoadConfigOptions): Promise<AppConfig
   const configTomlPath = options?.configTomlPath ?? defaultPaths.configTomlPath;
   const secretsTomlPath = options?.secretsTomlPath ?? defaultPaths.secretsTomlPath;
 
-  const [rawConfig, secrets] = await Promise.all([
+  const [rawConfigInput, rawSecretsInput] = await Promise.all([
     loadConfigToml(configTomlPath),
     loadSecretsToml(secretsTomlPath),
   ]);
 
-  const resolvedConfig = resolveConfigRefs(rawConfig, secrets);
+  const secrets = validateSecretsFile(rawSecretsInput).root;
+  const resolvedConfigInput = resolveConfigRefs(rawConfigInput, secrets);
+  const resolvedConfig = validateFileConfig(resolvedConfigInput, DEFAULT_CONFIG);
 
   return {
     logging: resolvedConfig.logging,

@@ -124,6 +124,7 @@ describe("config loader", () => {
     });
 
     expect(config.logging.level).toBe("info");
+    expect(typeof config.logging.useColors).toBe("boolean");
     expect(config.secrets).toEqual({});
   });
 
@@ -154,6 +155,22 @@ describe("config loader", () => {
     });
   });
 
+  test("resolves _ref values from config.toml using secrets.toml", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    const secretsPath = path.join(tempDir, "secrets.toml");
+    await writeFile(
+      configPath,
+      ["[logging]", 'level_ref = "secret://runtime/logLevel"', "useColors = false", ""].join("\n"),
+      "utf8",
+    );
+    await writeFile(secretsPath, ["[runtime]", 'logLevel = "debug"', ""].join("\n"), "utf8");
+
+    const config = await loadConfig({ configTomlPath: configPath, secretsTomlPath: secretsPath });
+
+    expect(config.logging.level).toBe("debug");
+    expect(config.logging.useColors).toBe(false);
+  });
+
   test("fails clearly on invalid config TOML syntax", async () => {
     const configPath = path.join(tempDir, "config.toml");
     await writeFile(configPath, '[logging\nlevel = "info"\n', "utf8");
@@ -179,6 +196,21 @@ describe("config loader", () => {
     await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
       "config.toml contains unknown top-level key: unknown",
     );
+  });
+
+  test("rejects configs that contain both concrete and _ref fields", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    const secretsPath = path.join(tempDir, "secrets.toml");
+    await writeFile(
+      configPath,
+      ["[logging]", 'level = "info"', 'level_ref = "secret://runtime/logLevel"', ""].join("\n"),
+      "utf8",
+    );
+    await writeFile(secretsPath, ["[runtime]", 'logLevel = "debug"', ""].join("\n"), "utf8");
+
+    await expect(
+      loadConfig({ configTomlPath: configPath, secretsTomlPath: secretsPath }),
+    ).rejects.toThrow("Config cannot contain both level and level_ref");
   });
 
   test("rejects non-string and non-table secret values", async () => {
