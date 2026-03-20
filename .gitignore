@@ -27,6 +27,7 @@ pnpm-debug.log*
 # editors
 .vscode/
 .idea/
+.claude/
 
 # runtime temp
 .tmp/
