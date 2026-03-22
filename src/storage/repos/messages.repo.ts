@@ -26,11 +26,16 @@ export interface AppendMessageInput {
   sessionId: string;
   seq: number;
   role: string;
-  contentJson: string;
+  payloadJson: string;
   createdAt?: Date;
   messageType?: string;
   visibility?: string;
   channelMessageId?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  modelApi?: string | null;
+  stopReason?: string | null;
+  errorMessage?: string | null;
   tokenInput?: number | null;
   tokenOutput?: number | null;
   tokenCacheRead?: number | null;
@@ -60,7 +65,12 @@ export class MessagesRepo {
       messageType: input.messageType ?? "text",
       visibility: input.visibility ?? "user_visible",
       channelMessageId: input.channelMessageId ?? null,
-      contentJson: input.contentJson,
+      provider: input.provider ?? null,
+      model: input.model ?? null,
+      modelApi: input.modelApi ?? null,
+      stopReason: input.stopReason ?? null,
+      errorMessage: input.errorMessage ?? null,
+      payloadJson: input.payloadJson,
       tokenInput: input.tokenInput ?? usage?.input ?? null,
       tokenOutput: input.tokenOutput ?? usage?.output ?? null,
       tokenCacheRead: input.tokenCacheRead ?? usage?.cacheRead ?? null,

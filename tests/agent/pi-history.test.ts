@@ -1,0 +1,166 @@
+import { describe, expect, test } from "vitest";
+import { buildPiMessage, buildPiMessages } from "@/src/agent/llm/messages.js";
+import type { Message } from "@/src/storage/schema/types.js";
+
+function makeStoredMessage(overrides: Partial<Message>): Message {
+  return {
+    id: "msg_1",
+    sessionId: "sess_1",
+    seq: 1,
+    role: "user",
+    messageType: "text",
+    visibility: "user_visible",
+    channelMessageId: null,
+    provider: null,
+    model: null,
+    modelApi: null,
+    stopReason: null,
+    errorMessage: null,
+    payloadJson: "{}",
+    tokenInput: null,
+    tokenOutput: null,
+    tokenCacheRead: null,
+    tokenCacheWrite: null,
+    tokenTotal: null,
+    usageJson: null,
+    createdAt: "2026-03-22T00:00:01.000Z",
+    ...overrides,
+  };
+}
+
+describe("pi history", () => {
+  test("reconstructs user, assistant, and toolResult messages from stored rows", () => {
+    const messages: Message[] = [
+      makeStoredMessage({
+        id: "msg_user",
+        role: "user",
+        payloadJson: JSON.stringify({ content: "hello" }),
+      }),
+      makeStoredMessage({
+        id: "msg_assistant",
+        seq: 2,
+        role: "assistant",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        modelApi: "anthropic-messages",
+        stopReason: "toolUse",
+        payloadJson: JSON.stringify({
+          content: [
+            { type: "text", text: "Inspecting." },
+            { type: "toolCall", id: "tool_1", name: "bash", arguments: { command: "ls" } },
+          ],
+        }),
+        usageJson: JSON.stringify({
+          input: 100,
+          output: 20,
+          cacheRead: 5,
+          cacheWrite: 0,
+          totalTokens: 125,
+          cost: {
+            input: 1,
+            output: 2,
+            cacheRead: 0.1,
+            cacheWrite: 0,
+            total: 3.1,
+          },
+        }),
+      }),
+      makeStoredMessage({
+        id: "msg_tool",
+        seq: 3,
+        role: "tool",
+        messageType: "tool_result",
+        visibility: "hidden_system",
+        payloadJson: JSON.stringify({
+          toolCallId: "tool_1",
+          toolName: "bash",
+          content: [{ type: "text", text: "README.md" }],
+          isError: false,
+          details: { exitCode: 0 },
+        }),
+      }),
+    ];
+
+    expect(buildPiMessages(messages)).toEqual([
+      {
+        role: "user",
+        content: "hello",
+        timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+      },
+      {
+        role: "assistant",
+        api: "anthropic-messages",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        stopReason: "toolUse",
+        content: [
+          { type: "text", text: "Inspecting." },
+          { type: "toolCall", id: "tool_1", name: "bash", arguments: { command: "ls" } },
+        ],
+        usage: {
+          input: 100,
+          output: 20,
+          cacheRead: 5,
+          cacheWrite: 0,
+          totalTokens: 125,
+          cost: {
+            input: 1,
+            output: 2,
+            cacheRead: 0.1,
+            cacheWrite: 0,
+            total: 3.1,
+          },
+        },
+        timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool_1",
+        toolName: "bash",
+        content: [{ type: "text", text: "README.md" }],
+        isError: false,
+        details: { exitCode: 0 },
+        timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+      },
+    ]);
+  });
+
+  test("serializes json tool result blocks into text for pi compatibility", () => {
+    const message = makeStoredMessage({
+      role: "tool",
+      messageType: "tool_result",
+      payloadJson: JSON.stringify({
+        toolCallId: "tool_1",
+        toolName: "read_file",
+        content: [{ type: "json", json: { ok: true, items: [1, 2] } }],
+        isError: false,
+      }),
+    });
+
+    expect(buildPiMessage(message)).toEqual({
+      role: "toolResult",
+      toolCallId: "tool_1",
+      toolName: "read_file",
+      content: [{ type: "text", text: JSON.stringify({ ok: true, items: [1, 2] }) }],
+      isError: false,
+      timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+    });
+  });
+
+  test("fails clearly when stored assistant metadata is incomplete", () => {
+    const message = makeStoredMessage({
+      role: "assistant",
+      payloadJson: JSON.stringify({ content: [{ type: "text", text: "hi" }] }),
+      usageJson: JSON.stringify({
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      }),
+    });
+
+    expect(() => buildPiMessage(message)).toThrow("missing modelApi");
+  });
+});

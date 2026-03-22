@@ -55,7 +55,7 @@ describe("agent session service", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      contentJson: '{"text":"old"}',
+      payloadJson: '{"content":"old"}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
     messagesRepo.append({
@@ -63,7 +63,11 @@ describe("agent session service", () => {
       sessionId: "sess_1",
       seq: 2,
       role: "assistant",
-      contentJson: '{"text":"new"}',
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5",
+      modelApi: "anthropic-messages",
+      stopReason: "stop",
+      payloadJson: '{"content":[{"type":"text","text":"new"}]}',
       createdAt: new Date("2026-03-22T00:00:02.000Z"),
     });
 

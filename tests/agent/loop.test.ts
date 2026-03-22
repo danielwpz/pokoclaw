@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, test } from "vitest";
 import { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
+import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop, type AgentModelRunner } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
@@ -61,6 +62,26 @@ function seedConversationFixture(handle: TestDatabaseHandle): void {
   `);
 }
 
+function makeAssistantResult(params: {
+  content: AgentAssistantContentBlock[];
+  stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
+}) {
+  return {
+    provider: "anthropic_main",
+    model: "claude-sonnet-4-5",
+    modelApi: "anthropic-messages",
+    stopReason: params.stopReason ?? "stop",
+    content: params.content,
+    usage: {
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 15,
+    },
+  } as const;
+}
+
 describe("agent loop", () => {
   let handle: TestDatabaseHandle | null = null;
 
@@ -89,22 +110,15 @@ describe("agent loop", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      contentJson: '{"text":"hello"}',
+      payloadJson: '{"content":"hello"}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
     const runner: AgentModelRunner = {
       async runTurn() {
-        return {
-          text: "hi there",
-          usage: {
-            input: 10,
-            output: 5,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 15,
-          },
-        };
+        return makeAssistantResult({
+          content: [{ type: "text", text: "hi there" }],
+        });
       },
     };
 
@@ -127,12 +141,23 @@ describe("agent loop", () => {
 
     const rows = messagesRepo.listBySession("sess_1");
     expect(rows).toHaveLength(2);
-    expect(JSON.parse(rows[1]?.contentJson ?? "{}")).toEqual({
-      text: "hi there",
-      toolCalls: [],
+    expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({
+      content: [{ type: "text", text: "hi there" }],
     });
+    expect(rows[1]?.provider).toBe("anthropic_main");
+    expect(rows[1]?.model).toBe("claude-sonnet-4-5");
+    expect(rows[1]?.modelApi).toBe("anthropic-messages");
+    expect(rows[1]?.stopReason).toBe("stop");
     expect(result.toolExecutions).toBe(0);
-    expect(result.events.map((event) => event.type)).toEqual(["assistant_message"]);
+    expect(result.events.map((event) => event.type)).toEqual([
+      "run_started",
+      "turn_started",
+      "assistant_message_started",
+      "assistant_message_delta",
+      "assistant_message_completed",
+      "turn_completed",
+      "run_completed",
+    ]);
   });
 
   test("continues after bash tool calls and persists tool results", async () => {
@@ -153,7 +178,7 @@ describe("agent loop", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      contentJson: '{"text":"run ls on the current directory"}',
+      payloadJson: '{"content":"run ls on the current directory"}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
@@ -162,25 +187,27 @@ describe("agent loop", () => {
       async runTurn() {
         callCount += 1;
         if (callCount === 1) {
-          return {
-            text: "I will inspect the directory.",
-            toolCalls: [
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              { type: "text", text: "I will inspect the directory." },
               {
+                type: "toolCall",
                 id: "tool_1",
                 name: "bash",
-                args: {
+                arguments: {
                   command: "ls -1",
                   workdir: "/workspace",
                   timeoutMs: 10_000,
                 },
               },
             ],
-          };
+          });
         }
 
-        return {
-          text: "I found the directory entries.",
-        };
+        return makeAssistantResult({
+          content: [{ type: "text", text: "I found the directory entries." }],
+        });
       },
     };
 
@@ -241,13 +268,14 @@ describe("agent loop", () => {
 
     const rows = messagesRepo.listBySession("sess_1");
     expect(rows).toHaveLength(4);
-    expect(JSON.parse(rows[1]?.contentJson ?? "{}")).toEqual({
-      text: "I will inspect the directory.",
-      toolCalls: [
+    expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({
+      content: [
+        { type: "text", text: "I will inspect the directory." },
         {
+          type: "toolCall",
           id: "tool_1",
           name: "bash",
-          args: {
+          arguments: {
             command: "ls -1",
             workdir: "/workspace",
             timeoutMs: 10_000,
@@ -255,29 +283,38 @@ describe("agent loop", () => {
         },
       ],
     });
-    expect(JSON.parse(rows[2]?.contentJson ?? "{}")).toEqual({
+    expect(rows[1]?.stopReason).toBe("toolUse");
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toEqual({
       toolCallId: "tool_1",
       toolName: "bash",
-      result: {
-        content: [{ type: "text", text: "README.md\nsrc\ntests" }],
-        details: {
-          command: "ls -1",
-          workdir: "/workspace",
-          timeoutMs: 10_000,
-          exitCode: 0,
-        },
+      content: [{ type: "text", text: "README.md\nsrc\ntests" }],
+      isError: false,
+      details: {
+        command: "ls -1",
+        workdir: "/workspace",
+        timeoutMs: 10_000,
+        exitCode: 0,
       },
     });
-    expect(JSON.parse(rows[3]?.contentJson ?? "{}")).toEqual({
-      text: "I found the directory entries.",
-      toolCalls: [],
+    expect(JSON.parse(rows[3]?.payloadJson ?? "{}")).toEqual({
+      content: [{ type: "text", text: "I found the directory entries." }],
     });
     expect(result.toolExecutions).toBe(1);
     expect(result.events.map((event) => event.type)).toEqual([
-      "assistant_message",
-      "tool_call",
-      "tool_result",
-      "assistant_message",
+      "run_started",
+      "turn_started",
+      "assistant_message_started",
+      "assistant_message_delta",
+      "assistant_message_completed",
+      "tool_call_started",
+      "tool_call_completed",
+      "turn_completed",
+      "turn_started",
+      "assistant_message_started",
+      "assistant_message_delta",
+      "assistant_message_completed",
+      "turn_completed",
+      "run_completed",
     ]);
   });
 
@@ -299,17 +336,20 @@ describe("agent loop", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      contentJson: '{"text":"run slow tool"}',
+      payloadJson: '{"content":"run slow tool"}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
     const cancel = new SessionRunAbortRegistry();
     const runner: AgentModelRunner = {
       async runTurn() {
-        return {
-          text: "Working on it.",
-          toolCalls: [{ id: "tool_1", name: "slow", args: {} }],
-        };
+        return makeAssistantResult({
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "Working on it." },
+            { type: "toolCall", id: "tool_1", name: "slow", arguments: {} },
+          ],
+        });
       },
     };
 
@@ -364,7 +404,7 @@ describe("agent loop", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      contentJson: '{"text":"huge context"}',
+      payloadJson: '{"content":"huge context"}',
       tokenTotal: 150_000,
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
@@ -372,7 +412,11 @@ describe("agent loop", () => {
     const runner: AgentModelRunner = {
       async runTurn() {
         return {
-          text: "reply",
+          provider: "anthropic_main",
+          model: "claude-sonnet-4-5",
+          modelApi: "anthropic-messages",
+          stopReason: "stop" as const,
+          content: [{ type: "text", text: "reply" }],
           usage: {
             input: 1_000,
             output: 1_000,
@@ -403,12 +447,14 @@ describe("agent loop", () => {
 
     expect(result.compaction.shouldCompact).toBe(true);
     expect(result.compaction.reason).toBe("threshold");
-    expect(result.events.at(-1)).toEqual({
+    const compactionEvent = result.events.find((event) => event.type === "compaction_requested");
+    expect(compactionEvent).toMatchObject({
       type: "compaction_requested",
       sessionId: "sess_1",
       reason: "threshold",
       thresholdTokens: 140_000,
       effectiveWindow: 200_000,
     });
+    expect(result.events.at(-1)?.type).toBe("run_completed");
   });
 });

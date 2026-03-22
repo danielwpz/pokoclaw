@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
-import {
-  type CompactionDecision,
-  type CompactionReason,
-  decideCompaction,
-} from "@/src/agent/compaction.js";
+import { type CompactionDecision, decideCompaction } from "@/src/agent/compaction.js";
+import type {
+  AgentRuntimeEvent,
+  AgentRuntimeEventInput,
+  AgentToolCall,
+} from "@/src/agent/events.js";
+import type {
+  AgentAssistantContentBlock,
+  AgentAssistantPayload,
+  AgentToolResultPayload,
+} from "@/src/agent/llm/messages.js";
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
@@ -15,16 +21,14 @@ import type { StorageDb } from "@/src/storage/db/client.js";
 import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
 
-export interface AgentToolCall {
-  id: string;
-  name: string;
-  args: unknown;
-}
-
 export interface AgentModelTurnResult {
-  text?: string;
-  toolCalls?: AgentToolCall[];
-  usage?: MessageUsage | null;
+  provider: string;
+  model: string;
+  modelApi: string;
+  stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
+  content: AgentAssistantContentBlock[];
+  usage: MessageUsage;
+  errorMessage?: string;
 }
 
 export interface AgentModelTurnInput {
@@ -41,35 +45,6 @@ export interface AgentModelRunner {
   runTurn(input: AgentModelTurnInput): Promise<AgentModelTurnResult>;
 }
 
-export type AgentLoopEvent =
-  | {
-      type: "assistant_message";
-      sessionId: string;
-      messageId: string;
-      text: string;
-      toolCalls: AgentToolCall[];
-    }
-  | {
-      type: "tool_call";
-      sessionId: string;
-      toolCallId: string;
-      toolName: string;
-    }
-  | {
-      type: "tool_result";
-      sessionId: string;
-      toolCallId: string;
-      toolName: string;
-      messageId: string;
-    }
-  | {
-      type: "compaction_requested";
-      sessionId: string;
-      reason: CompactionReason;
-      thresholdTokens: number;
-      effectiveWindow: number;
-    };
-
 export interface RunAgentLoopInput {
   sessionId: string;
   scenario: ModelScenario;
@@ -77,13 +52,14 @@ export interface RunAgentLoopInput {
 }
 
 export interface RunAgentLoopResult {
+  runId: string;
   sessionId: string;
   scenario: ModelScenario;
   modelId: string;
   appendedMessageIds: string[];
   toolExecutions: number;
   compaction: CompactionDecision;
-  events: AgentLoopEvent[];
+  events: AgentRuntimeEvent[];
 }
 
 export interface AgentLoopDependencies {
@@ -98,6 +74,7 @@ export interface AgentLoopDependencies {
   compaction: CompactionConfig;
   now?: () => Date;
   createId?: () => string;
+  emitEvent?: (event: AgentRuntimeEvent) => void;
 }
 
 export class AgentLoop {
@@ -115,14 +92,36 @@ export class AgentLoop {
     const context = this.deps.sessions.getContext(input.sessionId);
     const model = this.deps.models.getRequiredScenarioModel(input.scenario);
     const messages = [...context.messages];
-    const events: AgentLoopEvent[] = [];
+    const events: AgentRuntimeEvent[] = [];
     const appendedMessageIds: string[] = [];
     let toolExecutions = 0;
     let nextSeq = this.deps.messages.getNextSeq(input.sessionId);
+    const runId = this.createId();
+    let compactionRequested = false;
 
     try {
+      this.recordEvent(events, {
+        type: "run_started",
+        scenario: input.scenario,
+        modelId: model.id,
+        sessionId: input.sessionId,
+        conversationId: context.session.conversationId,
+        branchId: context.session.branchId,
+        runId,
+      });
+
       for (let turn = 0; turn < maxTurns; turn += 1) {
         throwIfAborted(handle.signal);
+        let turnToolExecutions = 0;
+
+        this.recordEvent(events, {
+          type: "turn_started",
+          turn: turn + 1,
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          runId,
+        });
 
         const response = await this.deps.modelRunner.runTurn({
           sessionId: input.sessionId,
@@ -137,8 +136,30 @@ export class AgentLoop {
         throwIfAborted(handle.signal);
 
         const assistantMessageId = this.createId();
-        const assistantText = response.text ?? "";
-        const toolCalls = response.toolCalls ?? [];
+        const assistantText = collectAssistantText(response.content);
+        const toolCalls = collectAgentToolCalls(response.content);
+        this.recordEvent(events, {
+          type: "assistant_message_started",
+          turn: turn + 1,
+          messageId: assistantMessageId,
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          runId,
+        });
+        if (assistantText.length > 0) {
+          this.recordEvent(events, {
+            type: "assistant_message_delta",
+            turn: turn + 1,
+            messageId: assistantMessageId,
+            delta: assistantText,
+            accumulatedText: assistantText,
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            runId,
+          });
+        }
         const assistantMessage = appendMessageAndHydrate({
           repo: this.deps.messages,
           sessionId: input.sessionId,
@@ -147,36 +168,60 @@ export class AgentLoop {
           role: "assistant",
           messageType: "text",
           visibility: "user_visible",
-          content: {
-            text: assistantText,
-            toolCalls,
-          },
-          usage: response.usage ?? null,
+          provider: response.provider,
+          model: response.model,
+          modelApi: response.modelApi,
+          stopReason: response.stopReason,
+          errorMessage: response.errorMessage ?? null,
+          payload: {
+            content: response.content,
+          } satisfies AgentAssistantPayload,
+          usage: response.usage,
           createdAt: this.now(),
         });
         nextSeq += 1;
         messages.push(assistantMessage);
         appendedMessageIds.push(assistantMessageId);
-        events.push({
-          type: "assistant_message",
-          sessionId: input.sessionId,
+        this.recordEvent(events, {
+          type: "assistant_message_completed",
+          turn: turn + 1,
           messageId: assistantMessageId,
           text: assistantText,
           toolCalls,
+          usage: response.usage,
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          runId,
         });
 
         if (toolCalls.length === 0) {
+          this.recordEvent(events, {
+            type: "turn_completed",
+            turn: turn + 1,
+            toolCallsRequested: 0,
+            toolExecutions: 0,
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            runId,
+          });
           break;
         }
 
         for (const toolCall of toolCalls) {
           throwIfAborted(handle.signal);
 
-          events.push({
-            type: "tool_call",
-            sessionId: input.sessionId,
+          this.recordEvent(events, {
+            type: "tool_call_started",
+            turn: turn + 1,
             toolCallId: toolCall.id,
             toolName: toolCall.name,
+            args: toolCall.args,
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            runId,
           });
 
           const result = await this.deps.tools.execute(
@@ -203,25 +248,44 @@ export class AgentLoop {
             role: "tool",
             messageType: "tool_result",
             visibility: "hidden_system",
-            content: {
+            payload: {
               toolCallId: toolCall.id,
               toolName: toolCall.name,
-              result,
-            },
+              content: result.content,
+              isError: false,
+              ...(result.details !== undefined ? { details: result.details } : {}),
+            } satisfies AgentToolResultPayload,
             createdAt: this.now(),
           });
           nextSeq += 1;
           messages.push(toolResultMessage);
           appendedMessageIds.push(toolResultMessageId);
           toolExecutions += 1;
-          events.push({
-            type: "tool_result",
-            sessionId: input.sessionId,
+          turnToolExecutions += 1;
+          this.recordEvent(events, {
+            type: "tool_call_completed",
+            turn: turn + 1,
             toolCallId: toolCall.id,
             toolName: toolCall.name,
             messageId: toolResultMessageId,
+            result,
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            runId,
           });
         }
+
+        this.recordEvent(events, {
+          type: "turn_completed",
+          turn: turn + 1,
+          toolCallsRequested: toolCalls.length,
+          toolExecutions: turnToolExecutions,
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          runId,
+        });
       }
 
       const compaction = decideCompaction({
@@ -231,16 +295,34 @@ export class AgentLoop {
       });
 
       if (compaction.shouldCompact && compaction.reason != null) {
-        events.push({
+        compactionRequested = true;
+        this.recordEvent(events, {
           type: "compaction_requested",
-          sessionId: input.sessionId,
           reason: compaction.reason,
           thresholdTokens: compaction.thresholdTokens,
           effectiveWindow: compaction.effectiveWindow,
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          runId,
         });
       }
 
+      this.recordEvent(events, {
+        type: "run_completed",
+        scenario: input.scenario,
+        modelId: model.id,
+        appendedMessageIds: [...appendedMessageIds],
+        toolExecutions,
+        compactionRequested,
+        sessionId: input.sessionId,
+        conversationId: context.session.conversationId,
+        branchId: context.session.branchId,
+        runId,
+      });
+
       return {
+        runId,
         sessionId: input.sessionId,
         scenario: input.scenario,
         modelId: model.id,
@@ -249,9 +331,32 @@ export class AgentLoop {
         compaction,
         events,
       };
+    } catch (error) {
+      this.recordEvent(events, {
+        type: "run_failed",
+        scenario: input.scenario,
+        modelId: model.id,
+        errorMessage: getErrorMessage(error),
+        sessionId: input.sessionId,
+        conversationId: context.session.conversationId,
+        branchId: context.session.branchId,
+        runId,
+      });
+      throw error;
     } finally {
       handle.finish();
     }
+  }
+
+  private recordEvent(events: AgentRuntimeEvent[], event: AgentRuntimeEventInput): void {
+    const hydrated = {
+      ...event,
+      eventId: this.createId(),
+      createdAt: this.now().toISOString(),
+    } satisfies AgentRuntimeEvent;
+
+    events.push(hydrated);
+    this.deps.emitEvent?.(hydrated);
   }
 }
 
@@ -263,11 +368,16 @@ function appendMessageAndHydrate(input: {
   role: string;
   messageType: string;
   visibility: string;
-  content: unknown;
+  provider?: string | null;
+  model?: string | null;
+  modelApi?: string | null;
+  stopReason?: string | null;
+  errorMessage?: string | null;
+  payload: unknown;
   usage?: MessageUsage | null;
   createdAt: Date;
 }): Message {
-  const contentJson = JSON.stringify(input.content);
+  const payloadJson = JSON.stringify(input.payload);
   input.repo.append({
     id: input.messageId,
     sessionId: input.sessionId,
@@ -275,7 +385,12 @@ function appendMessageAndHydrate(input: {
     role: input.role,
     messageType: input.messageType,
     visibility: input.visibility,
-    contentJson,
+    provider: input.provider ?? null,
+    model: input.model ?? null,
+    modelApi: input.modelApi ?? null,
+    stopReason: input.stopReason ?? null,
+    errorMessage: input.errorMessage ?? null,
+    payloadJson,
     usage: input.usage ?? null,
     createdAt: input.createdAt,
   });
@@ -288,7 +403,12 @@ function appendMessageAndHydrate(input: {
     messageType: input.messageType,
     visibility: input.visibility,
     channelMessageId: null,
-    contentJson,
+    provider: input.provider ?? null,
+    model: input.model ?? null,
+    modelApi: input.modelApi ?? null,
+    stopReason: input.stopReason ?? null,
+    errorMessage: input.errorMessage ?? null,
+    payloadJson,
     tokenInput: input.usage?.input ?? null,
     tokenOutput: input.usage?.output ?? null,
     tokenCacheRead: input.usage?.cacheRead ?? null,
@@ -303,10 +423,28 @@ function estimateContextTokens(compactSummary: string | null, messages: Message[
   let total = compactSummary == null ? 0 : estimateTextTokens(compactSummary);
 
   for (const message of messages) {
-    total += message.tokenTotal ?? estimateTextTokens(message.contentJson);
+    total += message.tokenTotal ?? estimateTextTokens(message.payloadJson);
   }
 
   return total;
+}
+
+function collectAssistantText(content: AgentAssistantContentBlock[]): string {
+  return content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
+}
+
+function collectAgentToolCalls(content: AgentAssistantContentBlock[]): AgentToolCall[] {
+  return content.flatMap((block) =>
+    block.type === "toolCall"
+      ? [
+          {
+            id: block.id,
+            name: block.name,
+            args: block.arguments,
+          } satisfies AgentToolCall,
+        ]
+      : [],
+  );
 }
 
 function estimateTextTokens(value: string): number {
@@ -324,4 +462,12 @@ function throwIfAborted(signal: AbortSignal): void {
   }
 
   throw new Error(typeof reason === "string" ? reason : "Operation aborted");
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return typeof error === "string" ? error : "Unknown error";
 }

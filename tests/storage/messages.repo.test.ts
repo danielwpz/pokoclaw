@@ -68,7 +68,7 @@ describe("messages repo", () => {
       sessionId: "sess_1",
       seq: 2,
       role: "assistant",
-      contentJson: '{"text":"world"}',
+      payloadJson: '{"content":[{"type":"text","text":"world"}]}',
       createdAt: new Date("2026-03-22T00:00:02.000Z"),
     });
     repo.append({
@@ -76,7 +76,7 @@ describe("messages repo", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      contentJson: '{"text":"hello"}',
+      payloadJson: '{"content":"hello"}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
@@ -106,7 +106,7 @@ describe("messages repo", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      contentJson: "{}",
+      payloadJson: "{}",
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
     repo.append({
@@ -114,7 +114,7 @@ describe("messages repo", () => {
       sessionId: "sess_1",
       seq: 2,
       role: "assistant",
-      contentJson: "{}",
+      payloadJson: "{}",
       createdAt: new Date("2026-03-22T00:00:02.000Z"),
     });
     repo.append({
@@ -122,7 +122,7 @@ describe("messages repo", () => {
       sessionId: "sess_1",
       seq: 3,
       role: "assistant",
-      contentJson: "{}",
+      payloadJson: "{}",
       createdAt: new Date("2026-03-22T00:00:03.000Z"),
     });
     repo.append({
@@ -130,7 +130,7 @@ describe("messages repo", () => {
       sessionId: "sess_2",
       seq: 1,
       role: "user",
-      contentJson: "{}",
+      payloadJson: "{}",
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
@@ -158,7 +158,11 @@ describe("messages repo", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "assistant",
-      contentJson: '{"text":"done"}',
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5",
+      modelApi: "anthropic-messages",
+      stopReason: "stop",
+      payloadJson: '{"content":[{"type":"text","text":"done"}]}',
       usage: {
         input: 120,
         output: 30,
@@ -178,6 +182,10 @@ describe("messages repo", () => {
 
     const rows = repo.listBySession("sess_1");
     expect(rows).toHaveLength(1);
+    expect(rows[0]?.provider).toBe("anthropic_main");
+    expect(rows[0]?.model).toBe("claude-sonnet-4-5");
+    expect(rows[0]?.modelApi).toBe("anthropic-messages");
+    expect(rows[0]?.stopReason).toBe("stop");
     expect(rows[0]?.tokenInput).toBe(120);
     expect(rows[0]?.tokenOutput).toBe(30);
     expect(rows[0]?.tokenCacheRead).toBe(10);
@@ -222,7 +230,7 @@ describe("messages repo", () => {
         sessionId: "sess_1",
         seq: 1,
         role: "assistant",
-        contentJson: "{}",
+        payloadJson: "{}",
         usage: {
           input: 100,
           output: 20,
@@ -255,7 +263,7 @@ describe("messages repo", () => {
         sessionId: "sess_1",
         seq: 1,
         role: "user",
-        contentJson: "{}",
+        payloadJson: "{}",
         createdAt: "2026-03-22T00:00:01.000Z" as unknown as Date,
       }),
     ).toThrow("Timestamp must be a Date object");
@@ -282,7 +290,7 @@ describe("messages repo", () => {
         sessionId: "sess_1",
         seq: 1,
         role: "user",
-        contentJson: "{}",
+        payloadJson: "{}",
         createdAt: new Date("invalid"),
       }),
     ).toThrow("Timestamp Date is invalid");
