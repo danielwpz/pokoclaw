@@ -1,5 +1,5 @@
 import { createBootstrapLogger, createLogger } from "@/src/shared/logger.js";
-import { initializeStorageOnStartup } from "@/src/storage/index.js";
+import { initializeStorageOnStartup, registerStorageCleanup } from "@/src/storage/index.js";
 
 export async function main(): Promise<void> {
   const bootstrapLogger = createBootstrapLogger({ subsystem: "bootstrap" });
@@ -9,7 +9,8 @@ export async function main(): Promise<void> {
 
   logger.info("Loaded application config");
 
-  await initializeStorageOnStartup();
+  const storage = await initializeStorageOnStartup();
+  await registerStorageCleanup(storage);
 }
 
 main().catch((error: unknown) => {
