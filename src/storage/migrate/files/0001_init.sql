@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS channel_instances (
   provider TEXT NOT NULL,
   account_key TEXT NOT NULL,
   display_name TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'disabled')),
   config_ref TEXT,
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
@@ -14,9 +15,11 @@ CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   channel_instance_id TEXT NOT NULL REFERENCES channel_instances(id) ON DELETE RESTRICT,
   external_chat_id TEXT NOT NULL,
-  kind TEXT NOT NULL,
+  kind TEXT NOT NULL
+    CHECK (kind IN ('dm', 'group')),
   title TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'archived')),
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
   UNIQUE(channel_instance_id, external_chat_id)
@@ -38,11 +41,13 @@ CREATE TABLE IF NOT EXISTS conversation_branches (
 CREATE TABLE IF NOT EXISTS agents (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL,
+  kind TEXT NOT NULL
+    CHECK (kind IN ('main', 'sub')),
   display_name TEXT,
   policy_profile TEXT,
   default_model TEXT,
-  status TEXT NOT NULL DEFAULT 'active',
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'archived')),
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   archived_at TEXT CHECK (archived_at IS NULL OR (archived_at GLOB '????-??-??T??:??:??*Z' AND datetime(archived_at) IS NOT NULL))
 );
@@ -85,26 +90,32 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   target_conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   target_branch_id TEXT NOT NULL REFERENCES conversation_branches(id) ON DELETE CASCADE,
   name TEXT,
-  schedule_kind TEXT NOT NULL,
+  schedule_kind TEXT NOT NULL
+    CHECK (schedule_kind IN ('at', 'every', 'cron')),
   schedule_value TEXT NOT NULL,
   timezone TEXT,
-  enabled INTEGER NOT NULL DEFAULT 1,
-  session_target TEXT NOT NULL DEFAULT 'isolated',
-  context_mode TEXT NOT NULL DEFAULT 'isolated',
+  enabled INTEGER NOT NULL DEFAULT 1
+    CHECK (enabled IN (0, 1)),
+  session_target TEXT NOT NULL DEFAULT 'isolated'
+    CHECK (session_target IN ('main', 'isolated')),
+  context_mode TEXT NOT NULL DEFAULT 'isolated'
+    CHECK (context_mode IN ('group', 'isolated')),
   payload_json TEXT NOT NULL,
   next_run_at TEXT CHECK (next_run_at IS NULL OR (next_run_at GLOB '????-??-??T??:??:??*Z' AND datetime(next_run_at) IS NOT NULL)),
   last_run_at TEXT CHECK (last_run_at IS NULL OR (last_run_at GLOB '????-??-??T??:??:??*Z' AND datetime(last_run_at) IS NOT NULL)),
   last_status TEXT,
   last_output TEXT,
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
-  delete_after_run INTEGER NOT NULL DEFAULT 0,
+  delete_after_run INTEGER NOT NULL DEFAULT 0
+    CHECK (delete_after_run IN (0, 1)),
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS task_runs (
   id TEXT PRIMARY KEY,
-  run_type TEXT NOT NULL,
+  run_type TEXT NOT NULL
+    CHECK (run_type IN ('delegate', 'cron', 'system')),
   owner_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   branch_id TEXT NOT NULL REFERENCES conversation_branches(id) ON DELETE CASCADE,
@@ -121,7 +132,11 @@ CREATE TABLE IF NOT EXISTS task_runs (
   started_at TEXT NOT NULL CHECK (started_at GLOB '????-??-??T??:??:??*Z' AND datetime(started_at) IS NOT NULL),
   finished_at TEXT CHECK (finished_at IS NULL OR (finished_at GLOB '????-??-??T??:??:??*Z' AND datetime(finished_at) IS NOT NULL)),
   duration_ms INTEGER,
-  cancelled_by TEXT
+  cancelled_by TEXT,
+  CHECK (
+    (run_type = 'cron' AND cron_job_id IS NOT NULL)
+    OR (run_type <> 'cron')
+  )
 );
 
 CREATE TABLE IF NOT EXISTS approval_ledger (
@@ -132,9 +147,11 @@ CREATE TABLE IF NOT EXISTS approval_ledger (
   requested_by_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   request_source TEXT NOT NULL,
   requested_scope_json TEXT NOT NULL,
-  decision TEXT NOT NULL,
+  decision TEXT NOT NULL
+    CHECK (decision IN ('approve', 'deny')),
   reason_text TEXT,
-  used_history_lookup INTEGER NOT NULL DEFAULT 0,
+  used_history_lookup INTEGER NOT NULL DEFAULT 0
+    CHECK (used_history_lookup IN (0, 1)),
   model_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   decided_at TEXT NOT NULL CHECK (decided_at GLOB '????-??-??T??:??:??*Z' AND datetime(decided_at) IS NOT NULL)
 );
@@ -158,7 +175,8 @@ CREATE TABLE IF NOT EXISTS auth_events (
   agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   event_type TEXT NOT NULL,
   provider TEXT,
-  status TEXT NOT NULL,
+  status TEXT NOT NULL
+    CHECK (status IN ('ok', 'error')),
   details_json TEXT,
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL)
 );
