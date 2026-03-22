@@ -5,4 +5,20 @@ export const DEFAULT_CONFIG: RawConfig = {
     level: "info",
     useColors: Boolean(process.stdout.isTTY),
   },
+  providers: {},
+  models: {
+    catalog: [],
+    scenarios: {
+      chat: [],
+      compaction: [],
+      subagent: [],
+      cron: [],
+    },
+  },
+  compaction: {
+    reserveTokens: 60_000,
+    keepRecentTokens: 40_000,
+    reserveTokensFloor: 60_000,
+    recentTurnsPreserve: 3,
+  },
 };

@@ -143,6 +143,10 @@ export const messages = sqliteTable(
     contentJson: text("content_json").notNull(),
     tokenInput: integer("token_input"),
     tokenOutput: integer("token_output"),
+    tokenCacheRead: integer("token_cache_read"),
+    tokenCacheWrite: integer("token_cache_write"),
+    tokenTotal: integer("token_total"),
+    usageJson: text("usage_json"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [

@@ -125,6 +125,20 @@ describe("config loader", () => {
 
     expect(config.logging.level).toBe("info");
     expect(typeof config.logging.useColors).toBe("boolean");
+    expect(config.providers).toEqual({});
+    expect(config.models.catalog).toEqual([]);
+    expect(config.models.scenarios).toEqual({
+      chat: [],
+      compaction: [],
+      subagent: [],
+      cron: [],
+    });
+    expect(config.compaction).toEqual({
+      reserveTokens: 60_000,
+      keepRecentTokens: 40_000,
+      reserveTokensFloor: 60_000,
+      recentTurnsPreserve: 3,
+    });
     expect(config.secrets).toEqual({});
   });
 
@@ -140,6 +154,87 @@ describe("config loader", () => {
 
     expect(config.logging.level).toBe("debug");
     expect(config.logging.useColors).toBe(false);
+  });
+
+  test("loads provider, model catalog, scenario lists, and compaction config", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    const secretsPath = path.join(tempDir, "secrets.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.anthropic_main]",
+        'api = "anthropic-messages"',
+        'baseUrl = "https://api.anthropic.com"',
+        'apiKey_ref = "secret://llm/anthropic/apiKey"',
+        "",
+        "[providers.openai_main]",
+        'api = "openai-responses"',
+        "",
+        "[[models.catalog]]",
+        'id = "anthropic_main/claude-sonnet-4-5"',
+        'provider = "anthropic_main"',
+        'upstreamId = "claude-sonnet-4-5-20250929"',
+        "contextWindow = 200000",
+        "maxOutputTokens = 16384",
+        "supportsTools = true",
+        "supportsVision = true",
+        "supportsReasoning = true",
+        "[models.catalog.pricing]",
+        "input = 3.0",
+        "output = 15.0",
+        "cacheRead = 0.3",
+        "cacheWrite = 3.75",
+        "",
+        "[[models.catalog]]",
+        'id = "openai_main/gpt-5-mini"',
+        'provider = "openai_main"',
+        'upstreamId = "gpt-5-mini"',
+        "contextWindow = 128000",
+        "maxOutputTokens = 16384",
+        "supportsTools = true",
+        "supportsVision = true",
+        "supportsReasoning = true",
+        "",
+        "[models.scenarios]",
+        'chat = ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"]',
+        'compaction = ["openai_main/gpt-5-mini"]',
+        'subagent = ["anthropic_main/claude-sonnet-4-5"]',
+        'cron = ["anthropic_main/claude-sonnet-4-5"]',
+        "",
+        "[compaction]",
+        "reserveTokens = 60000",
+        "keepRecentTokens = 40000",
+        "reserveTokensFloor = 60000",
+        "recentTurnsPreserve = 3",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      secretsPath,
+      ["[llm.anthropic]", 'apiKey = "anthropic-secret"', ""].join("\n"),
+      "utf8",
+    );
+
+    const config = await loadConfig({ configTomlPath: configPath, secretsTomlPath: secretsPath });
+
+    expect(config.providers).toEqual({
+      anthropic_main: {
+        api: "anthropic-messages",
+        baseUrl: "https://api.anthropic.com",
+        apiKey: "anthropic-secret",
+      },
+      openai_main: {
+        api: "openai-responses",
+      },
+    });
+    expect(config.models.catalog).toHaveLength(2);
+    expect(config.models.scenarios.chat).toEqual([
+      "anthropic_main/claude-sonnet-4-5",
+      "openai_main/gpt-5-mini",
+    ]);
+    expect(config.models.scenarios.compaction).toEqual(["openai_main/gpt-5-mini"]);
+    expect(config.compaction.keepRecentTokens).toBe(40_000);
   });
 
   test("loads secrets.toml when present", async () => {
@@ -211,6 +306,36 @@ describe("config loader", () => {
     await expect(
       loadConfig({ configTomlPath: configPath, secretsTomlPath: secretsPath }),
     ).rejects.toThrow("Config cannot contain both level and level_ref");
+  });
+
+  test("rejects model scenarios that reference unknown catalog ids", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.anthropic_main]",
+        'api = "anthropic-messages"',
+        "",
+        "[[models.catalog]]",
+        'id = "anthropic_main/claude-sonnet-4-5"',
+        'provider = "anthropic_main"',
+        'upstreamId = "claude-sonnet-4-5-20250929"',
+        "contextWindow = 200000",
+        "maxOutputTokens = 16384",
+        "supportsTools = true",
+        "supportsVision = true",
+        "supportsReasoning = true",
+        "",
+        "[models.scenarios]",
+        'chat = ["missing/model"]',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml models.scenarios.chat references unknown model id: missing/model",
+    );
   });
 
   test("rejects non-string and non-table secret values", async () => {

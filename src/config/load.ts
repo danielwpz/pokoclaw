@@ -61,6 +61,9 @@ export async function loadConfig(options?: LoadConfigOptions): Promise<AppConfig
 
   return {
     logging: resolvedConfig.logging,
+    providers: resolvedConfig.providers,
+    models: resolvedConfig.models,
+    compaction: resolvedConfig.compaction,
     secrets,
   };
 }

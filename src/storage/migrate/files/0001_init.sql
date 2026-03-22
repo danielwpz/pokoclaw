@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS messages (
   content_json TEXT NOT NULL,
   token_input INTEGER,
   token_output INTEGER,
+  token_cache_read INTEGER,
+  token_cache_write INTEGER,
+  token_total INTEGER,
+  usage_json TEXT,
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   UNIQUE(session_id, seq)
 );
