@@ -318,6 +318,78 @@ describe("agent loop", () => {
     ]);
   });
 
+  test("emits streamed assistant deltas without falling back to a single full-text delta", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        input.onTextDelta?.({
+          delta: "hello ",
+          accumulatedText: "hello ",
+        });
+        input.onTextDelta?.({
+          delta: "world",
+          accumulatedText: "hello world",
+        });
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "hello world" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    const deltaEvents = result.events.filter((event) => event.type === "assistant_message_delta");
+    expect(deltaEvents).toHaveLength(2);
+    expect(deltaEvents).toMatchObject([
+      {
+        type: "assistant_message_delta",
+        delta: "hello ",
+        accumulatedText: "hello ",
+      },
+      {
+        type: "assistant_message_delta",
+        delta: "world",
+        accumulatedText: "hello world",
+      },
+    ]);
+  });
+
   test("propagates cancellation through the active session run", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);

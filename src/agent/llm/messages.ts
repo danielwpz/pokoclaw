@@ -84,6 +84,9 @@ function buildPiUserMessage(message: Message): UserMessage {
 }
 
 function buildPiAssistantMessage(message: Message): AssistantMessage {
+  // Assistant rows must be reconstructable into pi-compatible transcript entries.
+  // We persist the role-specific payload in JSON and keep the critical pi metadata
+  // (provider/model/api/stopReason) in columns so history replay and debugging stay simple.
   const payload = parsePayload<AgentAssistantPayload>(message.payloadJson, message.id);
   if (!Array.isArray(payload.content)) {
     throw new Error(`Stored assistant message ${message.id} is missing payload.content array`);
@@ -116,6 +119,8 @@ function buildPiAssistantMessage(message: Message): AssistantMessage {
 }
 
 function buildPiToolResultMessage(message: Message): ToolResultMessage {
+  // Tool results are replayed back into pi history, so we normalize our stored
+  // payload into pi's ToolResultMessage instead of inventing a parallel format.
   const payload = parsePayload<AgentToolResultPayload>(message.payloadJson, message.id);
   if (typeof payload.toolCallId !== "string" || payload.toolCallId.length === 0) {
     throw new Error(`Stored tool result message ${message.id} is missing toolCallId`);

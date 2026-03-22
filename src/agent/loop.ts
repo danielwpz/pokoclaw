@@ -39,6 +39,7 @@ export interface AgentModelTurnInput {
   compactSummary: string | null;
   messages: Message[];
   signal: AbortSignal;
+  onTextDelta?: (delta: { delta: string; accumulatedText: string }) => void;
 }
 
 export interface AgentModelRunner {
@@ -123,21 +124,8 @@ export class AgentLoop {
           runId,
         });
 
-        const response = await this.deps.modelRunner.runTurn({
-          sessionId: input.sessionId,
-          conversationId: context.session.conversationId,
-          scenario: input.scenario,
-          model,
-          compactSummary: context.compactSummary,
-          messages,
-          signal: handle.signal,
-        });
-
-        throwIfAborted(handle.signal);
-
         const assistantMessageId = this.createId();
-        const assistantText = collectAssistantText(response.content);
-        const toolCalls = collectAgentToolCalls(response.content);
+        let sawStreamedText = false;
         this.recordEvent(events, {
           type: "assistant_message_started",
           turn: turn + 1,
@@ -147,7 +135,39 @@ export class AgentLoop {
           branchId: context.session.branchId,
           runId,
         });
-        if (assistantText.length > 0) {
+
+        const response = await this.deps.modelRunner.runTurn({
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          scenario: input.scenario,
+          model,
+          compactSummary: context.compactSummary,
+          messages,
+          signal: handle.signal,
+          onTextDelta: (event) => {
+            sawStreamedText = true;
+            this.recordEvent(events, {
+              type: "assistant_message_delta",
+              turn: turn + 1,
+              messageId: assistantMessageId,
+              delta: event.delta,
+              accumulatedText: event.accumulatedText,
+              sessionId: input.sessionId,
+              conversationId: context.session.conversationId,
+              branchId: context.session.branchId,
+              runId,
+            });
+          },
+        });
+
+        throwIfAborted(handle.signal);
+
+        const assistantText = collectAssistantText(response.content);
+        const toolCalls = collectAgentToolCalls(response.content);
+        // Some runners will stream deltas incrementally, others may only return
+        // the final assistant payload. We keep one event shape and only fall back
+        // to a single full-text delta if nothing was streamed.
+        if (!sawStreamedText && assistantText.length > 0) {
           this.recordEvent(events, {
             type: "assistant_message_delta",
             turn: turn + 1,
@@ -294,6 +314,8 @@ export class AgentLoop {
         config: this.deps.compaction,
       });
 
+      // The loop only emits the runtime signal here. Actual compaction remains
+      // an async session-level follow-up so normal chat turns are not blocked.
       if (compaction.shouldCompact && compaction.reason != null) {
         compactionRequested = true;
         this.recordEvent(events, {
