@@ -6,6 +6,7 @@ import type {
   AgentRuntimeEventInput,
   AgentToolCall,
 } from "@/src/agent/events.js";
+import { isAgentLlmError } from "@/src/agent/llm/errors.js";
 import type {
   AgentAssistantContentBlock,
   AgentAssistantPayload,
@@ -354,11 +355,14 @@ export class AgentLoop {
         events,
       };
     } catch (error) {
+      const normalizedError = toRunFailure(error);
       this.recordEvent(events, {
         type: "run_failed",
         scenario: input.scenario,
         modelId: model.id,
-        errorMessage: getErrorMessage(error),
+        errorKind: normalizedError.kind,
+        errorMessage: normalizedError.message,
+        retryable: normalizedError.retryable,
         sessionId: input.sessionId,
         conversationId: context.session.conversationId,
         branchId: context.session.branchId,
@@ -492,4 +496,24 @@ function getErrorMessage(error: unknown): string {
   }
 
   return typeof error === "string" ? error : "Unknown error";
+}
+
+function toRunFailure(error: unknown): {
+  kind: import("@/src/agent/llm/errors.js").AgentLlmErrorKind | "unknown";
+  message: string;
+  retryable: boolean;
+} {
+  if (isAgentLlmError(error)) {
+    return {
+      kind: error.kind,
+      message: error.message,
+      retryable: error.retryable,
+    };
+  }
+
+  return {
+    kind: "unknown",
+    message: getErrorMessage(error),
+    retryable: false,
+  };
 }

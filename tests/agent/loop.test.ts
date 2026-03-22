@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, test } from "vitest";
 import { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
+import { AgentLlmError } from "@/src/agent/llm/errors.js";
 import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop, type AgentModelRunner } from "@/src/agent/loop.js";
@@ -456,6 +457,70 @@ describe("agent loop", () => {
 
     await expect(runPromise).rejects.toThrow();
     expect(cancel.isActive("sess_1")).toBe(false);
+  });
+
+  test("emits structured run_failed events for normalized llm errors", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        throw new AgentLlmError({
+          kind: "rate_limit",
+          message: "API rate limit reached",
+          retryable: true,
+          provider: "anthropic_main",
+          model: "anthropic_main/claude-sonnet-4-5",
+        });
+      },
+    };
+
+    const emittedEvents: Array<{ type: string; errorKind?: string; retryable?: boolean }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
+      "API rate limit reached",
+    );
+
+    expect(emittedEvents.at(-1)).toMatchObject({
+      type: "run_failed",
+      errorKind: "rate_limit",
+      retryable: true,
+    });
   });
 
   test("requests compaction when the session context crosses the threshold", async () => {

@@ -1,4 +1,5 @@
 import type { CompactionReason } from "@/src/agent/compaction.js";
+import type { AgentLlmErrorKind } from "@/src/agent/llm/errors.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 
@@ -36,7 +37,9 @@ export interface RunFailedEvent extends AgentRuntimeEventBase {
   type: "run_failed";
   scenario: ModelScenario;
   modelId: string;
+  errorKind: AgentLlmErrorKind | "unknown";
   errorMessage: string;
+  retryable: boolean;
 }
 
 export interface TurnStartedEvent extends AgentRuntimeEventBase {

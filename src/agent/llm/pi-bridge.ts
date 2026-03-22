@@ -7,6 +7,7 @@ import {
   type Tool,
   Type,
 } from "@mariozechner/pi-ai";
+import { normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
 import { type AgentAssistantContentBlock, buildPiMessages } from "@/src/agent/llm/messages.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type {
@@ -58,23 +59,31 @@ export class PiBridge {
     if (tools != null) {
       Object.assign(context, { tools });
     }
-    const stream = streamSimple(model, context, buildPiStreamOptions(input.model, input.signal));
 
-    let accumulatedText = "";
-    for await (const event of stream) {
-      if (event.type !== "text_delta") {
-        continue;
+    try {
+      const stream = streamSimple(model, context, buildPiStreamOptions(input.model, input.signal));
+      let accumulatedText = "";
+      for await (const event of stream) {
+        if (event.type !== "text_delta") {
+          continue;
+        }
+
+        accumulatedText += event.delta;
+        input.onTextDelta?.({
+          delta: event.delta,
+          accumulatedText,
+        });
       }
 
-      accumulatedText += event.delta;
-      input.onTextDelta?.({
-        delta: event.delta,
-        accumulatedText,
+      const finalMessage = await stream.result();
+      return normalizeAssistantResult(finalMessage, "stream");
+    } catch (error) {
+      throw normalizeAgentLlmError({
+        error,
+        provider: input.model.provider.id,
+        model: input.model.id,
       });
     }
-
-    const finalMessage = await stream.result();
-    return normalizeAssistantResult(finalMessage, "stream");
   }
 
   async completeTurn(
@@ -89,12 +98,20 @@ export class PiBridge {
       Object.assign(context, { tools });
     }
 
-    const finalMessage = await completeSimple(
-      model,
-      context,
-      buildPiStreamOptions(input.model, input.signal),
-    );
-    return normalizeAssistantResult(finalMessage, "complete");
+    try {
+      const finalMessage = await completeSimple(
+        model,
+        context,
+        buildPiStreamOptions(input.model, input.signal),
+      );
+      return normalizeAssistantResult(finalMessage, "complete");
+    } catch (error) {
+      throw normalizeAgentLlmError({
+        error,
+        provider: input.model.provider.id,
+        model: input.model.id,
+      });
+    }
   }
 }
 
@@ -224,9 +241,11 @@ function normalizeAssistantResult(
   mode: "stream" | "complete",
 ): PiBridgeRunTurnResult {
   if (message.stopReason === "error" || message.stopReason === "aborted") {
-    throw new Error(
-      message.errorMessage ?? `pi ${mode} failed with stopReason=${message.stopReason}`,
-    );
+    throw normalizeAgentLlmError({
+      error: message.errorMessage ?? `pi ${mode} failed with stopReason=${message.stopReason}`,
+      provider: message.provider,
+      model: message.model,
+    });
   }
 
   return {

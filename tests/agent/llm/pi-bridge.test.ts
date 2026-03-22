@@ -1,5 +1,6 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { AgentLlmError } from "@/src/agent/llm/errors.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import { PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { ToolRegistry } from "@/src/agent/tools/registry.js";
@@ -235,14 +236,14 @@ describe("pi bridge", () => {
     expect(model.baseUrl).toBe("https://api.anthropic.com");
   });
 
-  test("throws when pi returns an error stopReason", async () => {
+  test("normalizes pi stopReason errors into AgentLlmError", async () => {
     const finalMessage = {
       role: "assistant" as const,
       api: "anthropic-messages" as const,
       provider: "anthropic_main",
       model: "claude-sonnet-4-5-20250929",
       stopReason: "error" as const,
-      errorMessage: "Request failed",
+      errorMessage: "API rate limit reached",
       content: [],
       usage: {
         input: 1,
@@ -268,15 +269,47 @@ describe("pi bridge", () => {
     );
 
     const bridge = new PiBridge();
-    await expect(
-      bridge.streamTurn({
+    const error = await bridge
+      .streamTurn({
         model: createResolvedModel(),
         compactSummary: null,
         messages: [createStoredUserMessage()],
         tools: new ToolRegistry(),
         signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow("Request failed");
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(AgentLlmError);
+    expect(error).toMatchObject({
+      kind: "rate_limit",
+      retryable: true,
+      message: "API rate limit reached",
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5-20250929",
+    });
+  });
+
+  test("normalizes thrown upstream exceptions into AgentLlmError", async () => {
+    streamSimpleMock.mockImplementation(() => {
+      throw new Error("prompt is too long: 213462 tokens > 200000 maximum");
+    });
+
+    const bridge = new PiBridge();
+    const error = await bridge
+      .streamTurn({
+        model: createResolvedModel(),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(AgentLlmError);
+    expect(error).toMatchObject({
+      kind: "context_overflow",
+      retryable: false,
+    });
   });
 
   test("completes a non-streaming turn through completeSimple", async () => {
