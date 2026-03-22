@@ -1,5 +1,6 @@
 import util from "node:util";
 
+import { loadConfig } from "@/src/config/load.js";
 import type { LoggingConfig, LogLevel } from "@/src/config/schema.js";
 
 export interface LoggerContext {
@@ -111,6 +112,18 @@ export function createBootstrapLogger(options: LoggerOptions): Logger {
   return createLoggerWithLevel("info", false, options);
 }
 
-export function createLogger(config: LoggingConfig, options: LoggerOptions): Logger {
+export function createTestLogger(config: LoggingConfig, options: LoggerOptions): Logger {
   return createLoggerWithLevel(config.level, config.useColors, options);
+}
+
+let loggingConfigPromise: Promise<LoggingConfig> | null = null;
+
+async function getLoggingConfig(): Promise<LoggingConfig> {
+  loggingConfigPromise ??= loadConfig().then((config) => config.logging);
+  return loggingConfigPromise;
+}
+
+export async function createLogger(options: LoggerOptions): Promise<Logger> {
+  const config = await getLoggingConfig();
+  return createTestLogger(config, options);
 }

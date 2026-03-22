@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { createBootstrapLogger, createLogger } from "@/src/shared/logger.js";
+import { createBootstrapLogger, createTestLogger } from "@/src/shared/logger.js";
 
 describe("logger", () => {
   test("bootstrap logger works without config", () => {
@@ -22,7 +22,7 @@ describe("logger", () => {
 
   test("logger respects configured level", () => {
     const write = vi.fn<(line: string) => void>();
-    const logger = createLogger(
+    const logger = createTestLogger(
       {
         level: "warn",
         useColors: false,
@@ -43,7 +43,7 @@ describe("logger", () => {
 
   test("logger prints human-readable lines instead of json", () => {
     const writes: string[] = [];
-    const logger = createLogger(
+    const logger = createTestLogger(
       {
         level: "debug",
         useColors: false,
@@ -66,7 +66,7 @@ describe("logger", () => {
 
   test("logger colors only level label when enabled", () => {
     const writes: string[] = [];
-    const logger = createLogger(
+    const logger = createTestLogger(
       {
         level: "debug",
         useColors: true,

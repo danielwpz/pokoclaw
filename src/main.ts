@@ -1,14 +1,15 @@
-import { loadConfig } from "@/src/config/load.js";
 import { createBootstrapLogger, createLogger } from "@/src/shared/logger.js";
+import { initializeStorageOnStartup } from "@/src/storage/index.js";
 
 export async function main(): Promise<void> {
   const bootstrapLogger = createBootstrapLogger({ subsystem: "bootstrap" });
   bootstrapLogger.info("Starting Pokeclaw");
 
-  const config = await loadConfig();
-  const logger = createLogger(config.logging, { subsystem: "config" });
+  const logger = await createLogger({ subsystem: "config" });
 
   logger.info("Loaded application config");
+
+  await initializeStorageOnStartup();
 }
 
 main().catch((error: unknown) => {
