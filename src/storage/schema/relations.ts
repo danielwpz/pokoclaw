@@ -26,7 +26,6 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   branches: many(conversationBranches),
   sessions: many(sessions),
   taskRuns: many(taskRuns),
-  approvals: many(approvalLedger),
 }));
 
 export const conversationBranchesRelations = relations(conversationBranches, ({ one, many }) => ({
@@ -64,6 +63,7 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
     references: [agents.id],
   }),
   messages: many(messages),
+  approvals: many(approvalLedger),
 }));
 
 export const messagesRelations = relations(messages, ({ one }) => ({
@@ -89,7 +89,7 @@ export const cronJobsRelations = relations(cronJobs, ({ one, many }) => ({
   taskRuns: many(taskRuns),
 }));
 
-export const taskRunsRelations = relations(taskRuns, ({ one, many }) => ({
+export const taskRunsRelations = relations(taskRuns, ({ one }) => ({
   ownerAgent: one(agents, {
     fields: [taskRuns.ownerAgentId],
     references: [agents.id],
@@ -106,7 +106,6 @@ export const taskRunsRelations = relations(taskRuns, ({ one, many }) => ({
     fields: [taskRuns.cronJobId],
     references: [cronJobs.id],
   }),
-  approvals: many(approvalLedger),
 }));
 
 export const approvalLedgerRelations = relations(approvalLedger, ({ one }) => ({
@@ -114,9 +113,9 @@ export const approvalLedgerRelations = relations(approvalLedger, ({ one }) => ({
     fields: [approvalLedger.ownerAgentId],
     references: [agents.id],
   }),
-  taskRun: one(taskRuns, {
-    fields: [approvalLedger.taskRunId],
-    references: [taskRuns.id],
+  requestedBySession: one(sessions, {
+    fields: [approvalLedger.requestedBySessionId],
+    references: [sessions.id],
   }),
 }));
 

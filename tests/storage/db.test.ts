@@ -223,16 +223,28 @@ describe("storage db bootstrap", () => {
       expect(() =>
         handle.storage.sqlite
           .prepare(
-            "INSERT INTO approval_ledger (owner_agent_id, conversation_id, task_run_id, request_source, requested_scope_json, decision, used_history_lookup, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO approval_ledger (owner_agent_id, requested_by_session_id, requested_scope_json, approval_target, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
           )
           .run(
             "agent_1",
-            "conv_1",
-            "run_1",
+            "sess_1",
+            '{"scopes":[{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
             "runtime",
-            "{}",
-            "allow",
-            2,
+            "waiting",
+            "2026-03-22T00:00:00.000Z",
+          ),
+      ).toThrow();
+
+      expect(() =>
+        handle.storage.sqlite
+          .prepare(
+            "INSERT INTO agent_permission_grants (id, owner_agent_id, scope_json, granted_by, created_at) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(
+            "grant_1",
+            "agent_1",
+            '{"kind":"db.read","database":"system"}',
+            "system",
             "2026-03-22T00:00:00.000Z",
           ),
       ).toThrow();
@@ -251,6 +263,105 @@ describe("storage db bootstrap", () => {
             "2026-03-22T00:00:00.000Z",
           ),
       ).toThrow();
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("approval_ledger accepts pending and approved states with optional decided_at", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      seedAgentFixture(handle);
+
+      handle.storage.sqlite
+        .prepare(
+          "INSERT INTO approval_ledger (owner_agent_id, requested_by_session_id, requested_scope_json, approval_target, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "agent_1",
+          "sess_1",
+          '{"scopes":[{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
+          "user",
+          "pending",
+          "2026-03-22T00:00:00.000Z",
+        );
+
+      handle.storage.sqlite
+        .prepare(
+          "INSERT INTO approval_ledger (owner_agent_id, requested_by_session_id, requested_scope_json, approval_target, status, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "agent_1",
+          "sess_1",
+          '{"scopes":[{"kind":"db.read","database":"system"}]}',
+          "main_agent",
+          "approved",
+          "2026-03-22T00:00:01.000Z",
+          "2026-03-22T00:00:02.000Z",
+        );
+
+      const rows = handle.storage.sqlite
+        .prepare("SELECT approval_target, status, decided_at FROM approval_ledger ORDER BY id")
+        .all() as Array<{ approval_target: string; status: string; decided_at: string | null }>;
+
+      expect(rows).toEqual([
+        { approval_target: "user", status: "pending", decided_at: null },
+        {
+          approval_target: "main_agent",
+          status: "approved",
+          decided_at: "2026-03-22T00:00:02.000Z",
+        },
+      ]);
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("agent_permission_grants accepts approval-linked and expiring grants", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      seedAgentFixture(handle);
+
+      const approval = handle.storage.sqlite
+        .prepare(
+          "INSERT INTO approval_ledger (owner_agent_id, requested_by_session_id, requested_scope_json, approval_target, status, created_at, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "agent_1",
+          "sess_1",
+          '{"scopes":[{"kind":"fs.write","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
+          "user",
+          "approved",
+          "2026-03-22T00:00:00.000Z",
+          "2026-03-22T00:00:01.000Z",
+        );
+
+      handle.storage.sqlite
+        .prepare(
+          "INSERT INTO agent_permission_grants (id, owner_agent_id, source_approval_id, scope_json, granted_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "grant_1",
+          "agent_1",
+          approval.lastInsertRowid,
+          '{"kind":"fs.write","path":"/Users/daniel/.pokeclaw/workspace/**"}',
+          "user",
+          "2026-03-22T00:00:02.000Z",
+          "2026-03-29T00:00:02.000Z",
+        );
+
+      const rows = handle.storage.sqlite
+        .prepare("SELECT granted_by, expires_at FROM agent_permission_grants")
+        .all() as Array<{ granted_by: string; expires_at: string | null }>;
+
+      expect(rows).toEqual([
+        {
+          granted_by: "user",
+          expires_at: "2026-03-29T00:00:02.000Z",
+        },
+      ]);
     } finally {
       await destroyTestDatabase(handle);
     }

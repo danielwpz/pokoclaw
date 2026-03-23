@@ -249,28 +249,23 @@ export const approvalLedger = sqliteTable(
     ownerAgentId: text("owner_agent_id")
       .notNull()
       .references(() => agents.id, { onDelete: "cascade" }),
-    conversationId: text("conversation_id")
-      .notNull()
-      .references(() => conversations.id, { onDelete: "cascade" }),
-    taskRunId: text("task_run_id")
-      .notNull()
-      .references(() => taskRuns.id, { onDelete: "cascade" }),
     requestedBySessionId: text("requested_by_session_id").references(() => sessions.id, {
       onDelete: "set null",
     }),
-    requestSource: text("request_source").notNull(),
     requestedScopeJson: text("requested_scope_json").notNull(),
-    decision: text("decision").notNull(),
+    approvalTarget: text("approval_target").notNull(),
+    status: text("status").notNull(),
     reasonText: text("reason_text"),
-    usedHistoryLookup: integer("used_history_lookup", { mode: "boolean" }).notNull().default(false),
-    modelSessionId: text("model_session_id").references(() => sessions.id, {
-      onDelete: "set null",
-    }),
-    decidedAt: text("decided_at").notNull(),
+    createdAt: text("created_at").notNull(),
+    decidedAt: text("decided_at"),
   },
   (table) => [
     index("idx_approval_owner_time").on(table.ownerAgentId, table.decidedAt),
-    index("idx_approval_task_run").on(table.taskRunId),
+    index("idx_approval_session_status_created").on(
+      table.requestedBySessionId,
+      table.status,
+      table.createdAt,
+    ),
   ],
 );
 
@@ -286,15 +281,10 @@ export const agentPermissionGrants = sqliteTable(
     }),
     scopeJson: text("scope_json").notNull(),
     grantedBy: text("granted_by").notNull(),
-    status: text("status").notNull().default("active"),
-    ttlSeconds: integer("ttl_seconds"),
-    grantedAt: text("granted_at").notNull(),
+    createdAt: text("created_at").notNull(),
     expiresAt: text("expires_at"),
-    revokedAt: text("revoked_at"),
   },
-  (table) => [
-    index("idx_grants_owner_status_exp").on(table.ownerAgentId, table.status, table.expiresAt),
-  ],
+  (table) => [index("idx_grants_owner_exp").on(table.ownerAgentId, table.expiresAt)],
 );
 
 export const authEvents = sqliteTable(
