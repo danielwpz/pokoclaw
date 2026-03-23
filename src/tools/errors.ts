@@ -1,4 +1,4 @@
-import type { ToolContentBlock } from "@/src/agent/tools/types.js";
+import type { ToolContentBlock } from "@/src/tools/types.js";
 
 export type ToolFailureKind =
   // A tool-declared, recoverable failure that should be returned to the model

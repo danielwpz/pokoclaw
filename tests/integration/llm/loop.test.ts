@@ -3,10 +3,10 @@ import { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
 import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
-import { ToolRegistry } from "@/src/agent/tools/registry.js";
 import { createTestLogger } from "@/src/shared/logger.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { ToolRegistry } from "@/src/tools/registry.js";
 import {
   createIntegrationLlmFixture,
   type IntegrationLlmFixture,

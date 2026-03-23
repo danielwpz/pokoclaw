@@ -1,15 +1,19 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AgentLlmError } from "@/src/agent/llm/errors.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import { PiBridge } from "@/src/agent/llm/pi-bridge.js";
-import { ToolRegistry } from "@/src/agent/tools/registry.js";
 import type { Message } from "@/src/storage/schema/types.js";
+import { ToolRegistry } from "@/src/tools/registry.js";
+import { defineTool } from "@/src/tools/types.js";
 
 const { completeSimpleMock, streamSimpleMock } = vi.hoisted(() => ({
   completeSimpleMock: vi.fn(),
   streamSimpleMock: vi.fn(),
 }));
+
+const NO_ARGS_TOOL_SCHEMA = Type.Object({}, { additionalProperties: false });
 
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
@@ -139,13 +143,14 @@ describe("pi bridge", () => {
       compactSummary: "summary",
       messages: [createStoredUserMessage()],
       tools: new ToolRegistry([
-        {
+        defineTool({
           name: "bash",
           description: "Run a shell command",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
           execute() {
             throw new Error("not used");
           },
-        },
+        }),
       ]),
       signal: new AbortController().signal,
       onTextDelta(event) {

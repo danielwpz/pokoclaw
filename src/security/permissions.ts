@@ -66,6 +66,10 @@ function normalizeCheckedPath(value: string, cwd?: string): string {
   return resolvePathWithExistingRealpath(value, cwd);
 }
 
+export function normalizeFilesystemTargetPath(value: string, cwd?: string): string {
+  return normalizeCheckedPath(value, cwd);
+}
+
 function matchesPolicyPath(pattern: string, targetPath: string): boolean {
   if (isFsSubtreeScopePath(pattern)) {
     const basePath = pattern.slice(0, -3);

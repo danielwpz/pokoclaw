@@ -1,8 +1,8 @@
 import type { CompactionReason } from "@/src/agent/compaction.js";
 import type { AgentLlmErrorKind } from "@/src/agent/llm/errors.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
-import type { ToolFailureKind } from "@/src/agent/tools/errors.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
+import type { ToolFailureKind } from "@/src/tools/errors.js";
 
 export interface AgentToolCall {
   id: string;
