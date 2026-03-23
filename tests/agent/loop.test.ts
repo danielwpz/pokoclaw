@@ -84,6 +84,22 @@ function makeAssistantResult(params: {
   } as const;
 }
 
+async function waitForSessionCompaction(
+  sessionsRepo: SessionsRepo,
+  sessionId: string,
+): Promise<ReturnType<SessionsRepo["getById"]>> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const session = sessionsRepo.getById(sessionId);
+    if (session?.compactCursor === 2) {
+      return session;
+    }
+
+    await delay(5);
+  }
+
+  return sessionsRepo.getById(sessionId);
+}
+
 describe("agent loop", () => {
   let handle: TestDatabaseHandle | null = null;
 
@@ -959,9 +975,7 @@ describe("agent loop", () => {
     });
 
     await loop.run({ sessionId: "sess_1", scenario: "chat" });
-    await delay(0);
-
-    const session = sessionsRepo.getById("sess_1");
+    const session = await waitForSessionCompaction(sessionsRepo, "sess_1");
     expect(session?.compactCursor).toBe(2);
     expect(session?.compactSummary).toBe("compact summary");
     expect(session?.compactSummaryTokenTotal).toBe(123);

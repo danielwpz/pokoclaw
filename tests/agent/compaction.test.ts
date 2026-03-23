@@ -12,7 +12,6 @@ import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentSessionService } from "@/src/agent/session.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
-import { createTestLogger } from "@/src/shared/logger.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import {
@@ -352,10 +351,6 @@ describe("compaction helpers", () => {
         reserveTokensFloor: 60_000,
         recentTurnsPreserve: 1,
       },
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-compaction-test" },
-      ),
     });
 
     const emitted: string[] = [];

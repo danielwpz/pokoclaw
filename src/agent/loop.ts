@@ -104,8 +104,6 @@ export class AgentLoop {
           models: deps.models,
           runner: deps.modelRunner,
           config: deps.compaction,
-          logger: deps.logger,
-          now: this.now,
         })
       : null;
   }
@@ -220,6 +218,15 @@ export class AgentLoop {
               branchId: context.session.branchId,
               runId,
             });
+            this.deps.logger.info(
+              "Hit the context window while generating a reply; compacting and retrying",
+              {
+                sessionId: input.sessionId,
+                scenario: input.scenario,
+                modelId: model.id,
+                runId,
+              },
+            );
 
             const compactionResult = await this.compactor.compactNow({
               sessionId: input.sessionId,
@@ -234,6 +241,13 @@ export class AgentLoop {
             if (!compactionResult.compacted) {
               throw error;
             }
+
+            this.deps.logger.info("Compaction finished after an overflow; retrying the turn", {
+              sessionId: input.sessionId,
+              compactCursor: compactionResult.compactCursor,
+              summaryTokenTotal: compactionResult.summaryTokenTotal,
+              runId,
+            });
 
             overflowRecovered = true;
             sawStreamedText = false;
@@ -447,10 +461,29 @@ export class AgentLoop {
         contextWindow: model.contextWindow,
         config: this.deps.compaction,
       });
+      this.deps.logger.debug("Checked post-run context size for compaction", {
+        sessionId: input.sessionId,
+        scenario: input.scenario,
+        modelId: model.id,
+        contextTokens: compactionEstimate.tokens,
+        usageTokens: compactionEstimate.usageTokens,
+        trailingTokens: compactionEstimate.trailingTokens,
+        compactSummaryTokens: compactionEstimate.compactSummaryTokens,
+        thresholdTokens: compaction.thresholdTokens,
+        runId,
+      });
       latestCompaction = compaction.shouldCompact ? compaction : latestCompaction;
 
       if (compaction.shouldCompact && compaction.reason != null) {
         compactionRequested = true;
+        this.deps.logger.info("Context is near the window limit; queueing background compaction", {
+          sessionId: input.sessionId,
+          scenario: input.scenario,
+          modelId: model.id,
+          contextTokens: compactionEstimate.tokens,
+          thresholdTokens: compaction.thresholdTokens,
+          runId,
+        });
         this.recordEvent(events, {
           type: "compaction_requested",
           reason: compaction.reason,

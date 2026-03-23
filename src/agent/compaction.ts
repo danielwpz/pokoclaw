@@ -11,7 +11,7 @@ import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
 import type { CompactionConfig } from "@/src/config/schema.js";
-import type { Logger } from "@/src/shared/logger.js";
+import { createBootstrapLogger, createLogger, type Logger } from "@/src/shared/logger.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
 
@@ -164,8 +164,6 @@ export interface AgentCompactionServiceDependencies {
   models: ProviderRegistry;
   runner: CompactionModelRunner;
   config: CompactionConfig;
-  logger: Logger;
-  now?: () => Date;
 }
 
 export interface AgentCompactionInput {
@@ -328,17 +326,20 @@ export function prepareCompaction(input: {
 }
 
 export class AgentCompactionService {
-  private readonly now: () => Date;
   private readonly inflight = new Map<string, Promise<AgentCompactionResult>>();
+  private loggerPromise: Promise<Logger> | null = null;
 
-  constructor(private readonly deps: AgentCompactionServiceDependencies) {
-    this.now = deps.now ?? (() => new Date());
-  }
+  constructor(private readonly deps: AgentCompactionServiceDependencies) {}
 
   schedule(input: AgentCompactionInput): Promise<AgentCompactionResult> {
+    void this.log("debug", "Queued a background compaction pass", {
+      sessionId: input.sessionId,
+      reason: input.reason,
+      runId: input.runId,
+    });
     const promise = this.compactNow(input);
     void promise.catch((error) => {
-      this.deps.logger.warn("Async compaction failed", {
+      void this.log("warn", "Background compaction did not finish cleanly", {
         sessionId: input.sessionId,
         reason: input.reason,
         error: getErrorMessage(error),
@@ -350,6 +351,11 @@ export class AgentCompactionService {
   compactNow(input: AgentCompactionInput): Promise<AgentCompactionResult> {
     const existing = this.inflight.get(input.sessionId);
     if (existing != null) {
+      void this.log("debug", "Compaction is already running for this session; reusing it", {
+        sessionId: input.sessionId,
+        reason: input.reason,
+        runId: input.runId,
+      });
       return existing;
     }
 
@@ -362,6 +368,13 @@ export class AgentCompactionService {
 
   private async execute(input: AgentCompactionInput): Promise<AgentCompactionResult> {
     const model = this.deps.models.getRequiredScenarioModel("compaction");
+    const logger = await this.getLogger();
+    logger.info("Starting a compaction pass", {
+      sessionId: input.sessionId,
+      reason: input.reason,
+      modelId: model.id,
+      runId: input.runId,
+    });
     input.emitEvent?.({
       type: "compaction_started",
       reason: input.reason,
@@ -385,10 +398,27 @@ export class AgentCompactionService {
         config: this.deps.config,
         contextTokens: contextEstimate.tokens,
       });
+      logger.debug("Compaction context is ready", {
+        sessionId: input.sessionId,
+        reason: input.reason,
+        contextTokens: contextEstimate.tokens,
+        compactSummaryTokens: contextEstimate.compactSummaryTokens,
+        lastUsageIndex: contextEstimate.lastUsageIndex,
+        messageCount: context.messages.length,
+        splitTurn: preparation?.isSplitTurn ?? false,
+        messagesToSummarize: preparation?.messagesToSummarize.length ?? 0,
+        retainedTurnPrefixMessages: preparation?.turnPrefixMessages.length ?? 0,
+      });
 
       if (preparation == null) {
         const compactCursor = context.session.compactCursor;
         const summaryTokenTotal = context.compactSummaryTokenTotal;
+        logger.info("Skipped compaction because there was nothing older to fold in", {
+          sessionId: input.sessionId,
+          reason: input.reason,
+          compactCursor,
+          summaryTokenTotal,
+        });
         input.emitEvent?.({
           type: "compaction_completed",
           reason: input.reason,
@@ -408,6 +438,14 @@ export class AgentCompactionService {
         };
       }
 
+      logger.debug("Generating the new compact summary", {
+        sessionId: input.sessionId,
+        reason: input.reason,
+        compactCursor: preparation.compactCursor,
+        splitTurn: preparation.isSplitTurn,
+        summarizedMessages: preparation.messagesToSummarize.length,
+        retainedTurnPrefixMessages: preparation.turnPrefixMessages.length,
+      });
       const summaryResult = await this.generateSummary({
         model,
         previousSummary: context.compactSummary ?? undefined,
@@ -423,7 +461,14 @@ export class AgentCompactionService {
         // Store the summary text token count itself, not the full API total.
         compactSummaryTokenTotal: summaryResult.usage.output,
         compactSummaryUsageJson: JSON.stringify(summaryResult.usage),
-        updatedAt: this.now(),
+        updatedAt: new Date(),
+      });
+      logger.info("Finished compaction and saved the new summary", {
+        sessionId: input.sessionId,
+        reason: input.reason,
+        compactCursor: preparation.compactCursor,
+        summaryTokenTotal: summaryResult.usage.output,
+        splitTurn: preparation.isSplitTurn,
       });
 
       input.emitEvent?.({
@@ -445,6 +490,12 @@ export class AgentCompactionService {
         summaryTokenTotal: summaryResult.usage.output,
       };
     } catch (error) {
+      logger.warn("Compaction failed", {
+        sessionId: input.sessionId,
+        reason: input.reason,
+        modelId: model.id,
+        error: getErrorMessage(error),
+      });
       input.emitEvent?.({
         type: "compaction_failed",
         reason: input.reason,
@@ -459,6 +510,25 @@ export class AgentCompactionService {
       });
       throw error;
     }
+  }
+
+  private async getLogger(): Promise<Logger> {
+    this.loggerPromise ??= createLogger({ subsystem: "compaction" });
+
+    try {
+      return await this.loggerPromise;
+    } catch {
+      return createBootstrapLogger({ subsystem: "compaction" });
+    }
+  }
+
+  private async log(
+    level: "debug" | "info" | "warn" | "error",
+    message: string,
+    context?: Record<string, unknown>,
+  ): Promise<void> {
+    const logger = await this.getLogger();
+    logger[level](message, context);
   }
 
   private async generateSummary(input: {
