@@ -2,6 +2,7 @@ import type { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import type {
   SessionsRepo,
   UpdateSessionCompactionInput,
+  UpdateSessionStatusInput,
 } from "@/src/storage/repos/sessions.repo.js";
 import type { Message, Session } from "@/src/storage/schema/types.js";
 
@@ -40,5 +41,9 @@ export class AgentSessionService {
 
   updateCompaction(input: UpdateSessionCompactionInput): void {
     this.sessionsRepo.updateCompaction(input);
+  }
+
+  updateStatus(input: UpdateSessionStatusInput): void {
+    this.sessionsRepo.updateStatus(input);
   }
 }

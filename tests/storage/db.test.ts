@@ -65,6 +65,22 @@ describe("storage db bootstrap", () => {
     }
   });
 
+  test("approval_ledger includes expiry and resume payload columns", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      const rows = handle.storage.sqlite
+        .prepare("PRAGMA table_info(approval_ledger)")
+        .all() as Array<{ name: string }>;
+      const columnNames = rows.map((row) => row.name);
+
+      expect(columnNames).toContain("expires_at");
+      expect(columnNames).toContain("resume_payload_json");
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
   test("db-level timestamp CHECK rejects invalid timestamp text", async () => {
     const handle = await createTestDatabase(import.meta.url);
 

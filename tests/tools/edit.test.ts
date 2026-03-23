@@ -7,7 +7,7 @@ import { SecurityService } from "@/src/security/service.js";
 import { createTestLogger } from "@/src/shared/logger.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import { createEditTool } from "@/src/tools/edit.js";
-import type { ToolFailure } from "@/src/tools/errors.js";
+import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
 import { ToolRegistry } from "@/src/tools/registry.js";
 import {
   createTestDatabase,
@@ -169,5 +169,48 @@ describe("edit tool", () => {
       kind: "recoverable_error",
       message: `The read request is blocked by system policy: ${path.join(POKECLAW_SYSTEM_DIR, "config.toml")}`,
     } satisfies Partial<ToolFailure>);
+  });
+
+  test("requests both read and write approval together for an ungranted edit", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-edit-tool-"));
+
+    const filePath = path.join(tempDir, "notes.txt");
+    await writeFile(filePath, "alpha\nbeta\ngamma\n", "utf8");
+    const expectedAbsolutePath = await resolveExpectedToolAbsolutePath(filePath);
+
+    const registry = new ToolRegistry();
+    registry.register(createEditTool());
+
+    await expect(
+      registry.execute(
+        "edit",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: tempDir,
+          storage: handle.storage.db,
+          logger: createTestLogger(
+            { level: "debug", useColors: false },
+            { subsystem: "edit-tool-test" },
+          ),
+        },
+        {
+          path: "notes.txt",
+          oldText: "beta",
+          newText: "delta",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      request: {
+        scopes: [
+          { kind: "fs.read", path: expectedAbsolutePath },
+          { kind: "fs.write", path: expectedAbsolutePath },
+        ],
+      },
+    } satisfies Partial<ToolApprovalRequired>);
   });
 });

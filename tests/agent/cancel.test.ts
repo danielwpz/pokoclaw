@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
+import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 
 describe("session run abort registry", () => {
   test("tracks active runs and aborts them by session", () => {

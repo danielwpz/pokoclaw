@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { SecurityService } from "@/src/security/service.js";
 import { createTestLogger } from "@/src/shared/logger.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
-import type { ToolFailure } from "@/src/tools/errors.js";
+import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
 import { ToolRegistry } from "@/src/tools/registry.js";
 import { createWriteTool } from "@/src/tools/write.js";
 import {
@@ -143,9 +143,16 @@ describe("write tool", () => {
         },
       ),
     ).rejects.toMatchObject({
-      name: "ToolFailure",
-      kind: "recoverable_error",
-      message: expect.stringContaining("The write request is not currently granted:"),
-    } satisfies Partial<ToolFailure>);
+      name: "ToolApprovalRequired",
+      reasonText: expect.stringContaining("This tool needs approval to continue:"),
+      request: {
+        scopes: [
+          {
+            kind: "fs.write",
+            path: await resolveExpectedToolAbsolutePath(path.join(tempDir, "outside.txt")),
+          },
+        ],
+      },
+    } satisfies Partial<ToolApprovalRequired>);
   });
 });

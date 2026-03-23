@@ -2,7 +2,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Type } from "@sinclair/typebox";
 
 import { afterEach, describe, expect, test } from "vitest";
-import { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
 import { AgentLlmError } from "@/src/agent/llm/errors.js";
 import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
@@ -10,11 +9,12 @@ import { AgentLoop, type AgentModelRunner } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
+import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { createTestLogger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
-import { toolRecoverableError } from "@/src/tools/errors.js";
+import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/errors.js";
 import { ToolRegistry } from "@/src/tools/registry.js";
 import { defineTool, textToolResult } from "@/src/tools/types.js";
 import {
@@ -119,6 +119,21 @@ async function waitForSessionCompaction(
   }
 
   return sessionsRepo.getById(sessionId);
+}
+
+async function waitForApprovalRequested(
+  events: Array<{ type: string; approvalId?: string }>,
+): Promise<string> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const approvalId = events.find((event) => event.type === "approval_requested")?.approvalId;
+    if (approvalId != null) {
+      return approvalId;
+    }
+
+    await delay(5);
+  }
+
+  throw new Error("Approval request was not emitted");
 }
 
 describe("agent loop", () => {
@@ -552,6 +567,426 @@ describe("agent loop", () => {
 
     await expect(runPromise).rejects.toThrow();
     expect(cancel.isActive("sess_1")).toBe(false);
+  });
+
+  test("pauses for approval, resumes the same tool call, and inserts queued steer input", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"update the file"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    let toolExecuteCount = 0;
+    let secondTurnLastUserContent: string | null = null;
+    const runner: AgentModelRunner = {
+      async runTurn({ messages }) {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "tool_1", name: "gated", arguments: {} }],
+          });
+        }
+
+        secondTurnLastUserContent =
+          JSON.parse(messages.at(-1)?.payloadJson ?? "{}").content ?? null;
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "gated",
+        description: "Needs approval first",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          toolExecuteCount += 1;
+          if (toolExecuteCount === 1) {
+            throw toolApprovalRequired({
+              request: {
+                scopes: [{ kind: "fs.write", path: `${POKECLAW_WORKSPACE_DIR}/**` }],
+              },
+              reasonText: "This tool needs approval to continue: Write workspace.",
+            });
+          }
+
+          return textToolResult("ok");
+        },
+      }),
+    );
+
+    const emittedEvents: Array<{ type: string; approvalId?: string; decision?: string }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    const approvalId = Number(await waitForApprovalRequested(emittedEvents));
+
+    expect(loop.enqueueSteerInput({ sessionId: "sess_1", content: "Please keep it short." })).toBe(
+      true,
+    );
+    expect(
+      loop.submitApprovalResponse({
+        approvalId,
+        decision: "approve",
+        actor: "user",
+        rawInput: "approve",
+        grantedBy: "user",
+        expiresAt: null,
+      }),
+    ).toBe(true);
+
+    const result = await runPromise;
+
+    expect(toolExecuteCount).toBe(2);
+    expect(secondTurnLastUserContent).toBe("Please keep it short.");
+    expect(result.events.some((event) => event.type === "approval_requested")).toBe(true);
+    expect(
+      result.events.some(
+        (event) => event.type === "approval_resolved" && event.decision === "approve",
+      ),
+    ).toBe(true);
+    expect(sessionsRepo.getById("sess_1")?.status).toBe("active");
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(5);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_1",
+      toolName: "gated",
+      isError: false,
+    });
+    expect(JSON.parse(rows[3]?.payloadJson ?? "{}")).toEqual({
+      content: "Please keep it short.",
+    });
+  });
+
+  test("writes an error tool result when approval is denied", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"try the protected action"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "tool_1", name: "gated", arguments: {} }],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "The user denied the request." }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "gated",
+        description: "Needs approval first",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          throw toolApprovalRequired({
+            request: {
+              scopes: [{ kind: "fs.read", path: `${POKECLAW_WORKSPACE_DIR}/notes.txt` }],
+            },
+            reasonText: "Need approval to read the protected file.",
+          });
+        },
+      }),
+    );
+
+    const emittedEvents: Array<{ type: string; approvalId?: string; decision?: string }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    const approvalId = Number(await waitForApprovalRequested(emittedEvents));
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId,
+        decision: "deny",
+        actor: "user",
+        rawInput: "deny",
+        reasonText: "The user denied this permission request.",
+      }),
+    ).toBe(true);
+
+    const result = await runPromise;
+
+    expect(
+      result.events.some(
+        (event) => event.type === "approval_resolved" && event.decision === "deny",
+      ),
+    ).toBe(true);
+    expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(false);
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(4);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_1",
+      toolName: "gated",
+      isError: true,
+      content: [{ type: "text", text: "The user denied this permission request." }],
+    });
+  });
+
+  test("queues steer input during a streaming text turn and handles it in the next turn", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"start"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turnCount = 0;
+    let secondTurnLastUserContent: string | null = null;
+    const runner: AgentModelRunner = {
+      async runTurn({ onTextDelta, messages }) {
+        turnCount += 1;
+        if (turnCount === 1) {
+          onTextDelta?.({
+            delta: "Working",
+            accumulatedText: "Working",
+          });
+          await delay(25);
+          return makeAssistantResult({
+            content: [{ type: "text", text: "Working" }],
+          });
+        }
+
+        secondTurnLastUserContent =
+          JSON.parse(messages.at(-1)?.payloadJson ?? "{}").content ?? null;
+        return makeAssistantResult({
+          content: [{ type: "text", text: "Done after steer" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    await delay(5);
+    expect(loop.enqueueSteerInput({ sessionId: "sess_1", content: "Use a short answer." })).toBe(
+      true,
+    );
+
+    const result = await runPromise;
+
+    expect(turnCount).toBe(2);
+    expect(secondTurnLastUserContent).toBe("Use a short answer.");
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(4);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toEqual({
+      content: "Use a short answer.",
+    });
+    expect(result.events.filter((event) => event.type === "turn_completed")).toHaveLength(2);
+  });
+
+  test("waits until the current assistant tool batch finishes before inserting steer input", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"do two tool steps"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turnCount = 0;
+    let secondTurnLastUserContent: string | null = null;
+    let toolCallsSeen = 0;
+    const runner: AgentModelRunner = {
+      async runTurn({ messages }) {
+        turnCount += 1;
+        if (turnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              { type: "toolCall", id: "tool_1", name: "step", arguments: { step: 1 } },
+              { type: "toolCall", id: "tool_2", name: "step", arguments: { step: 2 } },
+            ],
+          });
+        }
+
+        secondTurnLastUserContent =
+          JSON.parse(messages.at(-1)?.payloadJson ?? "{}").content ?? null;
+        return makeAssistantResult({
+          content: [{ type: "text", text: "Handled after both tools." }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "step",
+        description: "Step tool",
+        inputSchema: Type.Object(
+          {
+            step: Type.Integer(),
+          },
+          { additionalProperties: false },
+        ),
+        async execute(_context, args) {
+          toolCallsSeen += 1;
+          if (args.step === 1) {
+            expect(
+              loop.enqueueSteerInput({ sessionId: "sess_1", content: "Actually summarize it." }),
+            ).toBe(true);
+          }
+          await delay(5);
+          return textToolResult(`step ${args.step} done`);
+        },
+      }),
+    );
+
+    let loop: AgentLoop;
+    loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(toolCallsSeen).toBe(2);
+    expect(turnCount).toBe(2);
+    expect(secondTurnLastUserContent).toBe("Actually summarize it.");
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(6);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_1",
+      toolName: "step",
+    });
+    expect(JSON.parse(rows[3]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_2",
+      toolName: "step",
+    });
+    expect(JSON.parse(rows[4]?.payloadJson ?? "{}")).toEqual({
+      content: "Actually summarize it.",
+    });
   });
 
   test("returns recoverable tool failures to the model as error tool results", async () => {

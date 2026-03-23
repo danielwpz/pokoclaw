@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { SecurityService } from "@/src/security/service.js";
 import { createTestLogger } from "@/src/shared/logger.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
-import type { ToolFailure } from "@/src/tools/errors.js";
+import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
 import { createReadTool } from "@/src/tools/read.js";
 import { ToolRegistry } from "@/src/tools/registry.js";
 import {
@@ -172,9 +172,16 @@ describe("read tool", () => {
         { path: "private.txt" },
       ),
     ).rejects.toMatchObject({
-      name: "ToolFailure",
-      kind: "recoverable_error",
-      message: expect.stringContaining("The read request is not currently granted:"),
-    } satisfies Partial<ToolFailure>);
+      name: "ToolApprovalRequired",
+      reasonText: expect.stringContaining("This tool needs approval to continue:"),
+      request: {
+        scopes: [
+          {
+            kind: "fs.read",
+            path: await resolveExpectedToolAbsolutePath(path.join(tempDir, "private.txt")),
+          },
+        ],
+      },
+    } satisfies Partial<ToolApprovalRequired>);
   });
 });

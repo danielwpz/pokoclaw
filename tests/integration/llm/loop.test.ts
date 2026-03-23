@@ -1,12 +1,16 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { Type } from "@sinclair/typebox";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
 import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
+import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
 import { createTestLogger } from "@/src/shared/logger.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { ToolRegistry } from "@/src/tools/registry.js";
+import { defineTool, textToolResult } from "@/src/tools/types.js";
 import {
   createIntegrationLlmFixture,
   type IntegrationLlmFixture,
@@ -94,4 +98,94 @@ describe("real llm loop integration", () => {
     expect(storedMessages[1]?.stopReason).toBe("stop");
     expect((storedMessages[1]?.tokenTotal ?? 0) > 0).toBe(true);
   }, 30_000);
+
+  test("steers a new inbound message into the next turn after the current tool batch finishes", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle.storage.sqlite);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    const cancel = new SessionRunAbortRegistry();
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-23T00:00:00.000Z"),
+    });
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "pause_for_steer",
+        description:
+          "Pauses briefly, then returns READY. Use this when the user explicitly asks you to call this tool before answering.",
+        inputSchema: Type.Object({}, { additionalProperties: false }),
+        async execute() {
+          await delay(250);
+          return textToolResult("READY");
+        },
+      }),
+    );
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: fixture.models,
+      tools,
+      cancel,
+      modelRunner: new PiAgentModelRunner(new PiBridge(), tools),
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "info", useColors: false },
+        { subsystem: "llm-loop-integration-test" },
+      ),
+      compaction: fixture.config.compaction,
+    });
+
+    const ingress = new SessionRuntimeIngress({
+      loop,
+      messages: messagesRepo,
+    });
+
+    const runPromise = ingress.submitMessage({
+      sessionId: "sess_1",
+      scenario: "chat",
+      content: [
+        "Do the following exactly:",
+        "1. Call the tool pause_for_steer exactly once before answering.",
+        "2. After the tool returns, reply with the exact text from the latest user message and nothing else.",
+        "3. Do not answer before using the tool.",
+      ].join("\n"),
+    });
+
+    await delay(50);
+
+    const steerResult = await ingress.submitMessage({
+      sessionId: "sess_1",
+      scenario: "chat",
+      content: "POKECLAW_STEER_OK",
+    });
+
+    expect(steerResult).toEqual({ status: "steered" });
+
+    const result = await runPromise;
+    expect(result.status).toBe("started");
+
+    const storedMessages = messagesRepo.listBySession("sess_1");
+    expect(storedMessages.length).toBeGreaterThanOrEqual(5);
+    expect(JSON.parse(storedMessages[3]?.payloadJson ?? "{}")).toEqual({
+      content: "POKECLAW_STEER_OK",
+    });
+
+    const assistantPayload = JSON.parse(storedMessages.at(-1)?.payloadJson ?? "{}");
+    const assistantText = Array.isArray(assistantPayload.content)
+      ? assistantPayload.content
+          .filter((block: { type?: string }) => block.type === "text")
+          .map((block: { text: string }) => block.text)
+          .join("")
+      : "";
+
+    expect(assistantText).toContain("POKECLAW_STEER_OK");
+  }, 45_000);
 });

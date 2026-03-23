@@ -4,9 +4,14 @@ export interface SessionRunHandle {
   finish: () => void;
 }
 
+// Tracks the single active run per session and exposes abort signals for that
+// run. This registry is intentionally tiny: lane/dispatcher owns ingress
+// serialization, while this module only answers "is there a live run to abort?"
+// and ensures the loop can cooperatively stop.
 export class SessionRunAbortRegistry {
   private readonly controllers = new Map<string, AbortController>();
 
+  // Claim the active-run slot for a session before async work begins.
   begin(sessionId: string): SessionRunHandle {
     if (this.controllers.has(sessionId)) {
       throw new Error(`Session already has an active run: ${sessionId}`);

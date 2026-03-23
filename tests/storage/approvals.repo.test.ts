@@ -43,6 +43,9 @@ describe("approvals repo", () => {
       requestedScopeJson:
         '{"scopes":[{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
       approvalTarget: "user",
+      expiresAt: new Date("2026-03-22T00:03:01.000Z"),
+      resumePayloadJson:
+        '{"toolCallId":"tool_1","toolName":"read","toolArgs":{"path":"notes.txt"}}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
@@ -52,6 +55,9 @@ describe("approvals repo", () => {
       requestedBySessionId: "sess_1",
       approvalTarget: "user",
       status: "pending",
+      expiresAt: "2026-03-22T00:03:01.000Z",
+      resumePayloadJson:
+        '{"toolCallId":"tool_1","toolName":"read","toolArgs":{"path":"notes.txt"}}',
       createdAt: "2026-03-22T00:00:01.000Z",
       decidedAt: null,
     });

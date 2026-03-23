@@ -45,8 +45,11 @@ export function createEditTool() {
     inputSchema: EDIT_TOOL_SCHEMA,
     async execute(context, args) {
       const access = createFilesystemAccessController(context);
-      const absolutePath = access.require({ kind: "fs.read", targetPath: args.path });
-      access.require({ kind: "fs.write", targetPath: args.path });
+      const [readDecision] = access.authorize([
+        { kind: "fs.read", targetPath: args.path },
+        { kind: "fs.write", targetPath: args.path },
+      ]);
+      const absolutePath = readDecision?.normalizedPath ?? args.path;
       const displayPath = formatDisplayPath(args.path, access.cwd);
       const replaceAll = args.replaceAll === true;
 

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
 import {
   AgentCompactionService,
   type CompactionDecision,
@@ -17,11 +16,21 @@ import type {
   AgentAssistantContentBlock,
   AgentAssistantPayload,
   AgentToolResultPayload,
+  AgentUserPayload,
 } from "@/src/agent/llm/messages.js";
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
 import type { CompactionConfig } from "@/src/config/schema.js";
+import {
+  type ApprovalResponseInput,
+  type ApprovalWaitOutcome,
+  SessionApprovalWaitRegistry,
+} from "@/src/runtime/approval-waits.js";
+import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-queue.js";
+import { describePermissionScope, type PermissionRequest } from "@/src/security/scope.js";
+import { SecurityService } from "@/src/security/service.js";
 import type { Logger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -29,11 +38,17 @@ import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.re
 import type { Message } from "@/src/storage/schema/types.js";
 import {
   buildToolFailureContent,
+  isToolApprovalRequired,
   isToolFailure,
   normalizeToolFailure,
 } from "@/src/tools/errors.js";
 import type { ToolRegistry } from "@/src/tools/registry.js";
+import { type ToolResult, textToolResult } from "@/src/tools/types.js";
 
+// AgentLoop is the execution core for a single session run.
+// It owns model turns, tool execution, compaction hooks, and the runtime-side
+// approval pause/resume control flow. It does not own transport ingress or
+// cross-session coordination; that belongs to src/runtime/*.
 export interface AgentModelTurnResult {
   provider: string;
   model: string;
@@ -86,19 +101,43 @@ export interface AgentLoopDependencies {
   storage: StorageDb;
   logger: Logger;
   compaction: CompactionConfig;
+  approvalTimeoutMs?: number;
+  approvalGrantTtlMs?: number;
   now?: () => Date;
   createId?: () => string;
   emitEvent?: (event: AgentRuntimeEvent) => void;
+}
+
+interface ApprovalResumePayload {
+  toolCallId: string;
+  toolName: string;
+  toolArgs: unknown;
+  turn: number;
+  runId: string;
+}
+
+interface ExecutedToolCall {
+  result: ToolResult;
+  isError: boolean;
+  queuedSteer: SteerInput[];
 }
 
 export class AgentLoop {
   private readonly now: () => Date;
   private readonly createId: () => string;
   private readonly compactor: AgentCompactionService | null;
+  private readonly security: SecurityService;
+  private readonly approvalWaits = new SessionApprovalWaitRegistry();
+  private readonly steerQueue = new SessionSteerQueueRegistry();
+  private readonly approvalTimeoutMs: number;
+  private readonly approvalGrantTtlMs: number;
 
   constructor(private readonly deps: AgentLoopDependencies) {
     this.now = deps.now ?? (() => new Date());
     this.createId = deps.createId ?? (() => randomUUID());
+    this.security = new SecurityService(deps.storage);
+    this.approvalTimeoutMs = deps.approvalTimeoutMs ?? 3 * 60 * 1000;
+    this.approvalGrantTtlMs = deps.approvalGrantTtlMs ?? 7 * 24 * 60 * 60 * 1000;
     this.compactor = isCompactionModelRunner(deps.modelRunner)
       ? new AgentCompactionService({
           sessions: deps.sessions,
@@ -107,6 +146,21 @@ export class AgentLoop {
           config: deps.compaction,
         })
       : null;
+  }
+
+  submitApprovalResponse(input: ApprovalResponseInput): boolean {
+    return this.approvalWaits.resolveApproval(input);
+  }
+
+  // Runtime-level steer injection. Session lanes call this while a run is
+  // active so the new message can be inserted at the next safe boundary.
+  enqueueSteerInput(input: { sessionId: string; content: string; createdAt?: Date }): boolean {
+    if (!this.deps.cancel.isActive(input.sessionId)) {
+      return false;
+    }
+
+    this.steerQueue.enqueue(input);
+    return true;
   }
 
   async run(input: RunAgentLoopInput): Promise<RunAgentLoopResult> {
@@ -313,6 +367,17 @@ export class AgentLoop {
         });
 
         if (toolCalls.length === 0) {
+          const queuedSteer = this.steerQueue.drain(input.sessionId);
+          if (queuedSteer.length > 0) {
+            nextSeq = this.appendQueuedSteerMessages({
+              queuedSteer,
+              sessionId: input.sessionId,
+              nextSeq,
+              messages,
+              appendedMessageIds,
+            });
+          }
+
           this.recordEvent(events, {
             type: "turn_completed",
             turn: turn + 1,
@@ -323,9 +388,14 @@ export class AgentLoop {
             branchId: context.session.branchId,
             runId,
           });
+
+          if (queuedSteer.length > 0) {
+            continue;
+          }
           break;
         }
 
+        const queuedSteerAfterTurn: SteerInput[] = [];
         for (const toolCall of toolCalls) {
           throwIfAborted(handle.signal);
 
@@ -342,20 +412,15 @@ export class AgentLoop {
           });
 
           try {
-            const result = await this.deps.tools.execute(
-              toolCall.name,
-              {
-                sessionId: input.sessionId,
-                conversationId: context.session.conversationId,
-                ownerAgentId: context.session.ownerAgentId,
-                cwd: POKECLAW_WORKSPACE_DIR,
-                storage: this.deps.storage,
-                logger: this.deps.logger,
-                abortSignal: handle.signal,
-                toolCallId: toolCall.id,
-              },
-              toolCall.args,
-            );
+            const executedTool = await this.executeToolCall({
+              input,
+              context,
+              toolCall,
+              turn: turn + 1,
+              runId,
+              events,
+              signal: handle.signal,
+            });
 
             throwIfAborted(handle.signal);
 
@@ -371,9 +436,11 @@ export class AgentLoop {
               payload: {
                 toolCallId: toolCall.id,
                 toolName: toolCall.name,
-                content: result.content,
-                isError: false,
-                ...(result.details !== undefined ? { details: result.details } : {}),
+                content: executedTool.result.content,
+                isError: executedTool.isError,
+                ...(executedTool.result.details !== undefined
+                  ? { details: executedTool.result.details }
+                  : {}),
               } satisfies AgentToolResultPayload,
               createdAt: this.now(),
             });
@@ -388,12 +455,16 @@ export class AgentLoop {
               toolCallId: toolCall.id,
               toolName: toolCall.name,
               messageId: toolResultMessageId,
-              result,
+              result: executedTool.result,
               sessionId: input.sessionId,
               conversationId: context.session.conversationId,
               branchId: context.session.branchId,
               runId,
             });
+
+            if (executedTool.queuedSteer.length > 0) {
+              queuedSteerAfterTurn.push(...executedTool.queuedSteer);
+            }
           } catch (error) {
             throwIfAborted(handle.signal);
             const failure = normalizeToolFailure(error);
@@ -441,6 +512,17 @@ export class AgentLoop {
           }
         }
 
+        const queuedSteer = [...queuedSteerAfterTurn, ...this.steerQueue.drain(input.sessionId)];
+        if (queuedSteer.length > 0) {
+          nextSeq = this.appendQueuedSteerMessages({
+            queuedSteer,
+            sessionId: input.sessionId,
+            nextSeq,
+            messages,
+            appendedMessageIds,
+          });
+        }
+
         this.recordEvent(events, {
           type: "turn_completed",
           turn: turn + 1,
@@ -451,6 +533,9 @@ export class AgentLoop {
           branchId: context.session.branchId,
           runId,
         });
+
+        if (queuedSteer.length > 0) {
+        }
       }
 
       const compactionEstimate = estimateSessionContextTokens({
@@ -551,8 +636,242 @@ export class AgentLoop {
       });
       throw error;
     } finally {
+      this.steerQueue.clear(input.sessionId);
       handle.finish();
     }
+  }
+
+  private async executeToolCall(input: {
+    input: RunAgentLoopInput;
+    context: ReturnType<AgentSessionService["getContext"]>;
+    toolCall: AgentToolCall;
+    turn: number;
+    runId: string;
+    events: AgentRuntimeEvent[];
+    signal: AbortSignal;
+  }): Promise<ExecutedToolCall> {
+    const queuedSteer: SteerInput[] = [];
+
+    while (true) {
+      try {
+        const result = await this.deps.tools.execute(
+          input.toolCall.name,
+          {
+            sessionId: input.input.sessionId,
+            conversationId: input.context.session.conversationId,
+            ownerAgentId: input.context.session.ownerAgentId,
+            cwd: POKECLAW_WORKSPACE_DIR,
+            storage: this.deps.storage,
+            logger: this.deps.logger,
+            abortSignal: input.signal,
+            toolCallId: input.toolCall.id,
+          },
+          input.toolCall.args,
+        );
+
+        return {
+          result,
+          isError: false,
+          queuedSteer,
+        };
+      } catch (error) {
+        if (!isToolApprovalRequired(error)) {
+          throw error;
+        }
+
+        const approval = await this.requestApproval({
+          runInput: input.input,
+          context: input.context,
+          toolCall: input.toolCall,
+          turn: input.turn,
+          runId: input.runId,
+          request: error.request,
+          reasonText: error.reasonText,
+          events: input.events,
+          signal: input.signal,
+        });
+
+        if (approval.decision === "approve") {
+          queuedSteer.push(...approval.queuedSteer);
+          const grantedBy = approval.grantedBy ?? "user";
+          const grantExpiresAt =
+            approval.expiresAt === undefined
+              ? new Date(approval.decidedAt.getTime() + this.approvalGrantTtlMs)
+              : approval.expiresAt;
+
+          this.security.approveRequestAndGrantScopes({
+            approvalId: approval.approvalId,
+            grantedBy,
+            reasonText: approval.reasonText,
+            decidedAt: approval.decidedAt,
+            expiresAt: grantExpiresAt,
+          });
+          continue;
+        }
+
+        this.security.resolveApproval({
+          approvalId: approval.approvalId,
+          status: "denied",
+          reasonText: approval.reasonText,
+          decidedAt: approval.decidedAt,
+        });
+
+        return {
+          result: textToolResult(
+            approval.reasonText == null || approval.reasonText.length === 0
+              ? "Permission request denied."
+              : approval.reasonText,
+            {
+              approvalId: approval.approvalId,
+              request: approval.request,
+            },
+          ),
+          isError: true,
+          queuedSteer: [...queuedSteer, ...approval.queuedSteer],
+        };
+      }
+    }
+  }
+
+  private async requestApproval(input: {
+    runInput: RunAgentLoopInput;
+    context: ReturnType<AgentSessionService["getContext"]>;
+    toolCall: AgentToolCall;
+    turn: number;
+    runId: string;
+    request: PermissionRequest;
+    reasonText: string;
+    events: AgentRuntimeEvent[];
+    signal: AbortSignal;
+  }): Promise<ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest }> {
+    // Approval is modeled as pause/resume, not as a finished tool failure.
+    // We persist the request for durability, then wait on the in-memory hot
+    // path so normal approve/deny responses can resume the same tool call.
+    const createdAt = this.now();
+    const expiresAt = new Date(createdAt.getTime() + this.approvalTimeoutMs);
+    const resumePayloadJson = JSON.stringify({
+      toolCallId: input.toolCall.id,
+      toolName: input.toolCall.name,
+      toolArgs: input.toolCall.args,
+      turn: input.turn,
+      runId: input.runId,
+    } satisfies ApprovalResumePayload);
+    const approvalId = this.security.createApprovalRequest({
+      ownerAgentId: input.context.session.ownerAgentId ?? "",
+      requestedBySessionId: input.runInput.sessionId,
+      request: input.request,
+      approvalTarget: "user",
+      reasonText: input.reasonText,
+      createdAt,
+      expiresAt,
+      resumePayloadJson,
+    });
+
+    const waitPromise = this.approvalWaits.beginWait({
+      sessionId: input.runInput.sessionId,
+      approvalId,
+      timeoutMs: this.approvalTimeoutMs,
+      now: this.now,
+    });
+
+    this.deps.sessions.updateStatus({
+      id: input.runInput.sessionId,
+      status: "paused",
+      updatedAt: createdAt,
+    });
+
+    this.recordEvent(input.events, {
+      type: "approval_requested",
+      approvalId: String(approvalId),
+      title: buildApprovalTitle(input.request),
+      reasonText: input.reasonText,
+      options: ["Approve for 7 days", "Approve permanently", "Deny"],
+      expiresAt: expiresAt.toISOString(),
+      sessionId: input.runInput.sessionId,
+      conversationId: input.context.session.conversationId,
+      branchId: input.context.session.branchId,
+      runId: input.runId,
+    });
+
+    const onAbort = () => {
+      this.approvalWaits.cancelSession({
+        sessionId: input.runInput.sessionId,
+        actor: "system:cancel",
+        reasonText: "Run cancelled while waiting for approval.",
+        decidedAt: this.now(),
+      });
+    };
+    input.signal.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      const outcome = await waitPromise;
+      if (input.signal.aborted && outcome.actor === "system:cancel") {
+        this.security.resolveApproval({
+          approvalId,
+          status: "cancelled",
+          reasonText: outcome.reasonText,
+          decidedAt: outcome.decidedAt,
+        });
+        throwIfAborted(input.signal);
+      }
+
+      this.recordEvent(input.events, {
+        type: "approval_resolved",
+        approvalId: String(approvalId),
+        decision: outcome.decision,
+        actor: outcome.actor,
+        rawInput: outcome.rawInput,
+        sessionId: input.runInput.sessionId,
+        conversationId: input.context.session.conversationId,
+        branchId: input.context.session.branchId,
+        runId: input.runId,
+      });
+
+      return {
+        ...outcome,
+        approvalId,
+        request: input.request,
+      };
+    } finally {
+      input.signal.removeEventListener("abort", onAbort);
+      this.deps.sessions.updateStatus({
+        id: input.runInput.sessionId,
+        status: "active",
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private appendQueuedSteerMessages(input: {
+    queuedSteer: SteerInput[];
+    sessionId: string;
+    nextSeq: number;
+    messages: Message[];
+    appendedMessageIds: string[];
+  }): number {
+    let nextSeq = input.nextSeq;
+
+    for (const queued of input.queuedSteer) {
+      const messageId = this.createId();
+      const message = appendMessageAndHydrate({
+        repo: this.deps.messages,
+        sessionId: input.sessionId,
+        messageId,
+        seq: nextSeq,
+        role: "user",
+        messageType: "text",
+        visibility: "user_visible",
+        payload: {
+          content: queued.content,
+        } satisfies AgentUserPayload,
+        createdAt: queued.createdAt ?? this.now(),
+      });
+      nextSeq += 1;
+      input.messages.push(message);
+      input.appendedMessageIds.push(messageId);
+    }
+
+    return nextSeq;
   }
 
   private recordEvent(events: AgentRuntimeEvent[], event: AgentRuntimeEventInput): void {
@@ -642,6 +961,15 @@ function collectAgentToolCalls(content: AgentAssistantContentBlock[]): AgentTool
         ]
       : [],
   );
+}
+
+function buildApprovalTitle(request: PermissionRequest): string {
+  const firstScope = request.scopes[0];
+  if (request.scopes.length === 1 && firstScope != null) {
+    return `Approval required: ${describePermissionScope(firstScope)}`;
+  }
+
+  return `Approval required for ${request.scopes.length} permissions`;
 }
 
 function throwIfAborted(signal: AbortSignal): void {

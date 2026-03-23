@@ -1,3 +1,4 @@
+import type { PermissionRequest } from "@/src/security/scope.js";
 import type { ToolContentBlock } from "@/src/tools/types.js";
 
 export type ToolFailureKind =
@@ -13,6 +14,11 @@ export interface ToolFailureShape {
   message: string;
   details?: unknown;
   rawMessage?: string;
+}
+
+export interface ToolApprovalRequiredShape {
+  request: PermissionRequest;
+  reasonText: string;
 }
 
 export class ToolFailure extends Error {
@@ -41,6 +47,18 @@ export class ToolFailure extends Error {
   }
 }
 
+export class ToolApprovalRequired extends Error {
+  readonly request: PermissionRequest;
+  readonly reasonText: string;
+
+  constructor(shape: ToolApprovalRequiredShape) {
+    super(shape.reasonText);
+    this.name = "ToolApprovalRequired";
+    this.request = shape.request;
+    this.reasonText = shape.reasonText;
+  }
+}
+
 // Recoverability must be declared by the tool itself. The runtime does not try
 // to infer "this looks fixable" from generic error strings.
 export function toolRecoverableError(message: string, details?: unknown): ToolFailure {
@@ -50,6 +68,10 @@ export function toolRecoverableError(message: string, details?: unknown): ToolFa
     ...(details !== undefined ? { details } : {}),
     rawMessage: message,
   });
+}
+
+export function toolApprovalRequired(shape: ToolApprovalRequiredShape): ToolApprovalRequired {
+  return new ToolApprovalRequired(shape);
 }
 
 // Backwards-compatible alias while the tool layer is still being filled in.
@@ -91,6 +113,10 @@ export function buildToolFailureContent(failure: ToolFailure): ToolContentBlock[
 
 export function isToolFailure(error: unknown): error is ToolFailure {
   return error instanceof ToolFailure;
+}
+
+export function isToolApprovalRequired(error: unknown): error is ToolApprovalRequired {
+  return error instanceof ToolApprovalRequired;
 }
 
 function getErrorMessage(error: unknown): string {
