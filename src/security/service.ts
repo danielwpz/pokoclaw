@@ -92,6 +92,8 @@ export class SecurityService {
     request: PermissionRequest;
     approvalTarget: "user" | "main_agent";
     reasonText?: string | null;
+    expiresAt?: Date | null;
+    resumePayloadJson?: string | null;
     createdAt?: Date;
   }): number {
     return this.approvalsRepo.create({
@@ -101,6 +103,8 @@ export class SecurityService {
       approvalTarget: input.approvalTarget,
       status: "pending",
       reasonText: input.reasonText ?? null,
+      expiresAt: input.expiresAt ?? null,
+      resumePayloadJson: input.resumePayloadJson ?? null,
       ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
     });
   }

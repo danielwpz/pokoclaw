@@ -1,12 +1,12 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
 import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
+import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { createTestLogger } from "@/src/shared/logger.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";

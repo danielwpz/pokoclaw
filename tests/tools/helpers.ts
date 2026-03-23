@@ -1,5 +1,4 @@
-import { realpath } from "node:fs/promises";
-
+import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
 import type { TestDatabaseHandle } from "@/tests/storage/helpers/test-db.js";
 
 export function seedConversationAndAgentFixture(handle: TestDatabaseHandle): void {
@@ -19,5 +18,5 @@ export function seedConversationAndAgentFixture(handle: TestDatabaseHandle): voi
 }
 
 export async function resolveExpectedToolAbsolutePath(targetPath: string): Promise<string> {
-  return await realpath(targetPath);
+  return normalizeFilesystemTargetPath(targetPath);
 }

@@ -256,6 +256,8 @@ export const approvalLedger = sqliteTable(
     approvalTarget: text("approval_target").notNull(),
     status: text("status").notNull(),
     reasonText: text("reason_text"),
+    expiresAt: text("expires_at"),
+    resumePayloadJson: text("resume_payload_json"),
     createdAt: text("created_at").notNull(),
     decidedAt: text("decided_at"),
   },

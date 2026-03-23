@@ -160,6 +160,8 @@ CREATE TABLE IF NOT EXISTS approval_ledger (
   status TEXT NOT NULL
     CHECK (status IN ('pending', 'approved', 'denied', 'cancelled')),
   reason_text TEXT,
+  expires_at TEXT,
+  resume_payload_json TEXT,
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   decided_at TEXT CHECK (decided_at IS NULL OR (decided_at GLOB '????-??-??T??:??:??*Z' AND datetime(decided_at) IS NOT NULL))
 );

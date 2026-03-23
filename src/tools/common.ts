@@ -1,9 +1,10 @@
 import path from "node:path";
 import type { PermissionCheckResult } from "@/src/security/permissions.js";
 import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
+import { describePermissionScope, type PermissionScope } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
-import { toolRecoverableError } from "@/src/tools/errors.js";
+import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/errors.js";
 import type { ToolExecutionContext } from "@/src/tools/types.js";
 
 export function resolveToolOwnerAgentId(context: ToolExecutionContext): string {
@@ -36,6 +37,9 @@ export interface FilesystemAccessController {
   cwd: string;
   check: (input: { kind: "fs.read" | "fs.write"; targetPath: string }) => FilesystemAccessDecision;
   require: (input: { kind: "fs.read" | "fs.write"; targetPath: string }) => string;
+  authorize: (
+    inputs: Array<{ kind: "fs.read" | "fs.write"; targetPath: string }>,
+  ) => FilesystemAccessDecision[];
 }
 
 export function createFilesystemAccessController(
@@ -64,29 +68,54 @@ export function createFilesystemAccessController(
   };
 
   const require = (input: { kind: "fs.read" | "fs.write"; targetPath: string }): string => {
-    const decision = check(input);
-    if (decision.access.result === "deny") {
-      const action = input.kind === "fs.read" ? "read" : "write";
-      const prefix =
-        decision.access.reason === "hard_deny"
-          ? `The ${action} request is blocked by system policy`
-          : `The ${action} request is not currently granted`;
-      throw toolRecoverableError(`${prefix}: ${decision.normalizedPath}`, {
-        code: "filesystem_access_denied",
-        permissionKind: input.kind,
-        accessReason: decision.access.reason,
-        path: decision.normalizedPath,
-        summary: decision.access.summary,
+    return authorize([input])[0]?.normalizedPath ?? normalizeToolTargetPath(input.targetPath, cwd);
+  };
+
+  const authorize = (
+    inputs: Array<{ kind: "fs.read" | "fs.write"; targetPath: string }>,
+  ): FilesystemAccessDecision[] => {
+    const decisions = inputs.map((item) => ({
+      ...item,
+      ...check(item),
+    }));
+    const hardDeny = decisions.find(
+      (decision) => decision.access.result === "deny" && decision.access.reason === "hard_deny",
+    );
+    if (hardDeny != null) {
+      const action = hardDeny.kind === "fs.read" ? "read" : "write";
+      throw toolRecoverableError(
+        `The ${action} request is blocked by system policy: ${hardDeny.normalizedPath}`,
+        {
+          code: "filesystem_access_denied",
+          permissionKind: hardDeny.kind,
+          accessReason: hardDeny.access.reason,
+          path: hardDeny.normalizedPath,
+          summary: hardDeny.access.summary,
+        },
+      );
+    }
+
+    const requestedScopes = collectMissingFilesystemScopes(decisions);
+    if (requestedScopes.length > 0) {
+      throw toolApprovalRequired({
+        request: {
+          scopes: requestedScopes,
+        },
+        reasonText: buildFilesystemApprovalReason(requestedScopes),
       });
     }
 
-    return decision.normalizedPath;
+    return decisions.map(({ access, normalizedPath }) => ({
+      access,
+      normalizedPath,
+    }));
   };
 
   return {
     cwd,
     check,
     require,
+    authorize,
   };
 }
 
@@ -98,6 +127,38 @@ export function requireFilesystemAccess(
   },
 ): string {
   return createFilesystemAccessController(context).require(input);
+}
+
+function collectMissingFilesystemScopes(
+  decisions: Array<{
+    kind: "fs.read" | "fs.write";
+    access: PermissionCheckResult;
+    normalizedPath: string;
+  }>,
+): PermissionScope[] {
+  const scopes = new Map<string, PermissionScope>();
+  for (const decision of decisions) {
+    if (decision.access.result !== "deny" || decision.access.reason !== "not_granted") {
+      continue;
+    }
+
+    const scope: PermissionScope = {
+      kind: decision.kind,
+      path: decision.normalizedPath,
+    };
+    scopes.set(`${scope.kind}:${scope.path}`, scope);
+  }
+
+  return [...scopes.values()];
+}
+
+function buildFilesystemApprovalReason(scopes: PermissionScope[]): string {
+  const firstScope = scopes[0];
+  if (scopes.length === 1 && firstScope != null) {
+    return `This tool needs approval to continue: ${describePermissionScope(firstScope)}.`;
+  }
+
+  return `This tool needs approval to continue: ${scopes.map(describePermissionScope).join("; ")}.`;
 }
 
 export function formatDisplayPath(targetPath: string, _cwd: string): string {

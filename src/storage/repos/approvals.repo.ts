@@ -12,6 +12,8 @@ export interface CreateApprovalInput {
   approvalTarget: "user" | "main_agent";
   status?: "pending" | "approved" | "denied" | "cancelled";
   reasonText?: string | null;
+  expiresAt?: Date | null;
+  resumePayloadJson?: string | null;
   createdAt?: Date;
   decidedAt?: Date | null;
 }
@@ -40,6 +42,8 @@ export class ApprovalsRepo {
       approvalTarget: input.approvalTarget,
       status: input.status ?? "pending",
       reasonText: input.reasonText ?? null,
+      expiresAt: input.expiresAt == null ? null : toCanonicalUtcIsoTimestamp(input.expiresAt),
+      resumePayloadJson: input.resumePayloadJson ?? null,
       createdAt: toCanonicalUtcIsoTimestamp(createdAt),
       decidedAt: input.decidedAt == null ? null : toCanonicalUtcIsoTimestamp(input.decidedAt),
     };
