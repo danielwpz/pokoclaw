@@ -1,3 +1,6 @@
+import type { Static, TSchema } from "@sinclair/typebox";
+import { Errors } from "@sinclair/typebox/errors";
+import { Check, Clone, Default } from "@sinclair/typebox/value";
 import type { Logger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 
@@ -19,6 +22,8 @@ export interface ToolResult<TDetails = unknown> {
 export interface ToolExecutionContext {
   sessionId: string;
   conversationId: string;
+  ownerAgentId?: string | null;
+  cwd?: string;
   storage: StorageDb;
   logger: Logger;
   abortSignal?: AbortSignal;
@@ -28,12 +33,38 @@ export interface ToolExecutionContext {
 export interface ToolDefinition<TArgs = unknown, TDetails = unknown> {
   name: string;
   description: string;
-  inputSchema?: unknown;
-  validateArgs?: (input: unknown) => TArgs;
-  execute: (
+  inputSchema?: TSchema;
+  execute(
     context: ToolExecutionContext,
     args: TArgs,
+  ): Promise<ToolResult<TDetails>> | ToolResult<TDetails>;
+}
+
+export function defineTool<TInputSchema extends TSchema, TDetails = unknown>(input: {
+  name: string;
+  description: string;
+  inputSchema: TInputSchema;
+  execute: (
+    context: ToolExecutionContext,
+    args: Static<TInputSchema>,
   ) => Promise<ToolResult<TDetails>> | ToolResult<TDetails>;
+}): ToolDefinition<Static<TInputSchema>, TDetails> {
+  return input;
+}
+
+export function parseToolArgs<TInputSchema extends TSchema>(
+  toolName: string,
+  schema: TInputSchema,
+  input: unknown,
+): Static<TInputSchema> {
+  const normalizedInput = Default(schema, Clone(input));
+  if (!Check(schema, normalizedInput)) {
+    const firstError = Errors(schema, normalizedInput).First();
+    const message = firstError?.message ?? "Input does not match the declared schema";
+    throw new Error(`${toolName} args are invalid: ${message}`);
+  }
+
+  return normalizedInput as Static<TInputSchema>;
 }
 
 export function textToolResult<TDetails = unknown>(

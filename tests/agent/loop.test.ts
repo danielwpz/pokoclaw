@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { Type } from "@sinclair/typebox";
 
 import { afterEach, describe, expect, test } from "vitest";
 import { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
@@ -7,19 +8,31 @@ import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop, type AgentModelRunner } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
-import { toolRecoverableError } from "@/src/agent/tools/errors.js";
-import { ToolRegistry } from "@/src/agent/tools/registry.js";
-import { textToolResult } from "@/src/agent/tools/types.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { createTestLogger } from "@/src/shared/logger.js";
+import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { toolRecoverableError } from "@/src/tools/errors.js";
+import { ToolRegistry } from "@/src/tools/registry.js";
+import { defineTool, textToolResult } from "@/src/tools/types.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
   type TestDatabaseHandle,
 } from "@/tests/storage/helpers/test-db.js";
+
+const TEST_BASH_TOOL_SCHEMA = Type.Object(
+  {
+    command: Type.String(),
+    workdir: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
+const NO_ARGS_TOOL_SCHEMA = Type.Object({}, { additionalProperties: false });
 
 function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
   return {
@@ -61,6 +74,14 @@ function seedConversationFixture(handle: TestDatabaseHandle): void {
 
     INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
     VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+  `);
+}
+
+function seedConversationAndAgentFixture(handle: TestDatabaseHandle): void {
+  seedConversationFixture(handle);
+  handle.storage.sqlite.exec(`
+    INSERT INTO agents (id, conversation_id, kind, created_at)
+    VALUES ('agent_1', 'conv_1', 'sub', '2026-03-22T00:00:00.000Z');
   `);
 }
 
@@ -178,6 +199,81 @@ describe("agent loop", () => {
     ]);
   });
 
+  test("passes owner agent and workspace cwd into tool execution context", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"inspect tool context"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        turnCount += 1;
+        if (turnCount === 1) {
+          return makeAssistantResult({
+            content: [{ type: "toolCall", id: "tool_1", name: "inspect_context", arguments: {} }],
+            stopReason: "toolUse",
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "inspect_context",
+        description: "Inspect tool context",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute(context) {
+          expect(context.ownerAgentId).toBe("agent_1");
+          expect(context.cwd).toBe(POKECLAW_WORKSPACE_DIR);
+          return textToolResult("ok");
+        },
+      }),
+    );
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(result.events.some((event) => event.type === "tool_call_completed")).toBe(true);
+    expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(false);
+  });
+
   test("continues after bash tool calls and persists tool results", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
@@ -230,42 +326,21 @@ describe("agent loop", () => {
     };
 
     const tools = new ToolRegistry();
-    tools.register({
-      name: "bash",
-      description: "Run a shell command",
-      validateArgs(input) {
-        if (
-          typeof input !== "object" ||
-          input == null ||
-          !("command" in input) ||
-          typeof input.command !== "string"
-        ) {
-          throw new Error("invalid args");
-        }
-
-        const normalized: { command: string; workdir?: string; timeoutMs?: number } = {
-          command: input.command,
-        };
-
-        if ("workdir" in input && typeof input.workdir === "string") {
-          normalized.workdir = input.workdir;
-        }
-
-        if ("timeoutMs" in input && typeof input.timeoutMs === "number") {
-          normalized.timeoutMs = input.timeoutMs;
-        }
-
-        return normalized;
-      },
-      execute(_context, args: { command: string; workdir?: string; timeoutMs?: number }) {
-        return textToolResult("README.md\nsrc\ntests", {
-          command: args.command,
-          workdir: args.workdir ?? null,
-          timeoutMs: args.timeoutMs ?? null,
-          exitCode: 0,
-        });
-      },
-    });
+    tools.register(
+      defineTool({
+        name: "bash",
+        description: "Run a shell command",
+        inputSchema: TEST_BASH_TOOL_SCHEMA,
+        execute(_context, args) {
+          return textToolResult("README.md\nsrc\ntests", {
+            command: args.command,
+            workdir: args.workdir ?? null,
+            timeoutMs: args.timeoutMs ?? null,
+            exitCode: 0,
+          });
+        },
+      }),
+    );
 
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
@@ -444,14 +519,17 @@ describe("agent loop", () => {
     };
 
     const tools = new ToolRegistry();
-    tools.register({
-      name: "slow",
-      description: "Slow tool",
-      async execute(context) {
-        await delay(1000, undefined, { signal: context.abortSignal });
-        return textToolResult("done");
-      },
-    });
+    tools.register(
+      defineTool({
+        name: "slow",
+        description: "Slow tool",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        async execute(context) {
+          await delay(1000, undefined, { signal: context.abortSignal });
+          return textToolResult("done");
+        },
+      }),
+    );
 
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
@@ -523,13 +601,16 @@ describe("agent loop", () => {
     };
 
     const tools = new ToolRegistry();
-    tools.register({
-      name: "bash",
-      description: "Run a shell command",
-      execute() {
-        throw toolRecoverableError("bash exited with code 1: cat: missing.txt: No such file");
-      },
-    });
+    tools.register(
+      defineTool({
+        name: "bash",
+        description: "Run a shell command",
+        inputSchema: TEST_BASH_TOOL_SCHEMA,
+        execute() {
+          throw toolRecoverableError("bash exited with code 1: cat: missing.txt: No such file");
+        },
+      }),
+    );
 
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
@@ -607,17 +688,20 @@ describe("agent loop", () => {
     };
 
     const tools = new ToolRegistry();
-    tools.register({
-      name: "bash",
-      description: "Run a shell command",
-      execute() {
-        return textToolResult("cat: missing.txt: No such file or directory", {
-          command: "cat missing.txt",
-          exitCode: 1,
-          stderr: "cat: missing.txt: No such file or directory",
-        });
-      },
-    });
+    tools.register(
+      defineTool({
+        name: "bash",
+        description: "Run a shell command",
+        inputSchema: TEST_BASH_TOOL_SCHEMA,
+        execute() {
+          return textToolResult("cat: missing.txt: No such file or directory", {
+            command: "cat missing.txt",
+            exitCode: 1,
+            stderr: "cat: missing.txt: No such file or directory",
+          });
+        },
+      }),
+    );
 
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
@@ -750,13 +834,16 @@ describe("agent loop", () => {
     };
 
     const tools = new ToolRegistry();
-    tools.register({
-      name: "fragile",
-      description: "Explodes internally",
-      execute() {
-        throw new Error("cannot read properties of undefined");
-      },
-    });
+    tools.register(
+      defineTool({
+        name: "fragile",
+        description: "Explodes internally",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          throw new Error("cannot read properties of undefined");
+        },
+      }),
+    );
 
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),

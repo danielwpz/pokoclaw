@@ -1,4 +1,9 @@
-import type { ToolDefinition, ToolExecutionContext, ToolResult } from "@/src/agent/tools/types.js";
+import {
+  parseToolArgs,
+  type ToolDefinition,
+  type ToolExecutionContext,
+  type ToolResult,
+} from "@/src/tools/types.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition<unknown, unknown>>();
@@ -48,7 +53,8 @@ export class ToolRegistry {
     rawArgs: unknown,
   ): Promise<ToolResult> {
     const tool = this.getRequired(name);
-    const args = tool.validateArgs == null ? rawArgs : tool.validateArgs(rawArgs);
+    const args =
+      tool.inputSchema == null ? rawArgs : parseToolArgs(tool.name, tool.inputSchema, rawArgs);
 
     return await tool.execute(context, args);
   }

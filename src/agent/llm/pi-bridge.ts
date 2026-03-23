@@ -20,9 +20,9 @@ import type {
   AgentModelTurnInput,
   AgentModelTurnResult,
 } from "@/src/agent/loop.js";
-import type { ToolRegistry } from "@/src/agent/tools/registry.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
+import type { ToolRegistry } from "@/src/tools/registry.js";
 
 const COMPACTION_SUMMARY_PREFIX = "[Context Summary]";
 const PERMISSIVE_TOOL_PARAMETERS = Type.Object({}, { additionalProperties: true });

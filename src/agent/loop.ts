@@ -21,17 +21,18 @@ import type {
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
+import type { CompactionConfig } from "@/src/config/schema.js";
+import type { Logger } from "@/src/shared/logger.js";
+import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import type { StorageDb } from "@/src/storage/db/client.js";
+import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.repo.js";
+import type { Message } from "@/src/storage/schema/types.js";
 import {
   buildToolFailureContent,
   isToolFailure,
   normalizeToolFailure,
-} from "@/src/agent/tools/errors.js";
-import type { ToolRegistry } from "@/src/agent/tools/registry.js";
-import type { CompactionConfig } from "@/src/config/schema.js";
-import type { Logger } from "@/src/shared/logger.js";
-import type { StorageDb } from "@/src/storage/db/client.js";
-import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.repo.js";
-import type { Message } from "@/src/storage/schema/types.js";
+} from "@/src/tools/errors.js";
+import type { ToolRegistry } from "@/src/tools/registry.js";
 
 export interface AgentModelTurnResult {
   provider: string;
@@ -346,6 +347,8 @@ export class AgentLoop {
               {
                 sessionId: input.sessionId,
                 conversationId: context.session.conversationId,
+                ownerAgentId: context.session.ownerAgentId,
+                cwd: POKECLAW_WORKSPACE_DIR,
                 storage: this.deps.storage,
                 logger: this.deps.logger,
                 abortSignal: handle.signal,
@@ -671,7 +674,7 @@ function isCompactionModelRunner(
 function toRunFailure(error: unknown): {
   kind:
     | import("@/src/agent/llm/errors.js").AgentLlmErrorKind
-    | import("@/src/agent/tools/errors.js").ToolFailureKind
+    | import("@/src/tools/errors.js").ToolFailureKind
     | "unknown";
   message: string;
   retryable: boolean;
