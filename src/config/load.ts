@@ -1,11 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import path from "node:path";
 import { parse } from "toml";
-
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { resolveConfigRefs } from "@/src/config/refs.js";
 import { type AppConfig, validateFileConfig, validateSecretsFile } from "@/src/config/schema.js";
+import { DEFAULT_CONFIG_TOML_PATH, DEFAULT_SECRETS_TOML_PATH } from "@/src/shared/paths.js";
 
 interface LoadConfigOptions {
   configTomlPath?: string;
@@ -30,10 +28,10 @@ function isMissingFileError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function getDefaultConfigPaths(homeDir = homedir()): Required<LoadConfigOptions> {
+function getDefaultConfigPaths(): Required<LoadConfigOptions> {
   return {
-    configTomlPath: path.join(homeDir, ".pokeclaw", "config.toml"),
-    secretsTomlPath: path.join(homeDir, ".pokeclaw", "secrets.toml"),
+    configTomlPath: DEFAULT_CONFIG_TOML_PATH,
+    secretsTomlPath: DEFAULT_SECRETS_TOML_PATH,
   };
 }
 
