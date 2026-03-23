@@ -153,18 +153,15 @@ CREATE TABLE IF NOT EXISTS task_runs (
 CREATE TABLE IF NOT EXISTS approval_ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   owner_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  task_run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
   requested_by_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-  request_source TEXT NOT NULL,
   requested_scope_json TEXT NOT NULL,
-  decision TEXT NOT NULL
-    CHECK (decision IN ('approve', 'deny')),
+  approval_target TEXT NOT NULL
+    CHECK (approval_target IN ('user', 'main_agent')),
+  status TEXT NOT NULL
+    CHECK (status IN ('pending', 'approved', 'denied', 'cancelled')),
   reason_text TEXT,
-  used_history_lookup INTEGER NOT NULL DEFAULT 0
-    CHECK (used_history_lookup IN (0, 1)),
-  model_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-  decided_at TEXT NOT NULL CHECK (decided_at GLOB '????-??-??T??:??:??*Z' AND datetime(decided_at) IS NOT NULL)
+  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
+  decided_at TEXT CHECK (decided_at IS NULL OR (decided_at GLOB '????-??-??T??:??:??*Z' AND datetime(decided_at) IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS agent_permission_grants (
@@ -172,12 +169,9 @@ CREATE TABLE IF NOT EXISTS agent_permission_grants (
   owner_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   source_approval_id INTEGER REFERENCES approval_ledger(id) ON DELETE SET NULL,
   scope_json TEXT NOT NULL,
-  granted_by TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active',
-  ttl_seconds INTEGER,
-  granted_at TEXT NOT NULL CHECK (granted_at GLOB '????-??-??T??:??:??*Z' AND datetime(granted_at) IS NOT NULL),
-  expires_at TEXT CHECK (expires_at IS NULL OR (expires_at GLOB '????-??-??T??:??:??*Z' AND datetime(expires_at) IS NOT NULL)),
-  revoked_at TEXT CHECK (revoked_at IS NULL OR (revoked_at GLOB '????-??-??T??:??:??*Z' AND datetime(revoked_at) IS NOT NULL))
+  granted_by TEXT NOT NULL CHECK (granted_by IN ('user', 'main_agent')),
+  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
+  expires_at TEXT CHECK (expires_at IS NULL OR (expires_at GLOB '????-??-??T??:??:??*Z' AND datetime(expires_at) IS NOT NULL))
 );
 
 CREATE TABLE IF NOT EXISTS auth_events (
@@ -214,9 +208,9 @@ CREATE INDEX IF NOT EXISTS idx_runs_cron_started
   ON task_runs(cron_job_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_approval_owner_time
   ON approval_ledger(owner_agent_id, decided_at);
-CREATE INDEX IF NOT EXISTS idx_approval_task_run
-  ON approval_ledger(task_run_id);
-CREATE INDEX IF NOT EXISTS idx_grants_owner_status_exp
-  ON agent_permission_grants(owner_agent_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_approval_session_status_created
+  ON approval_ledger(requested_by_session_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_grants_owner_exp
+  ON agent_permission_grants(owner_agent_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_auth_events_time
   ON auth_events(created_at);
