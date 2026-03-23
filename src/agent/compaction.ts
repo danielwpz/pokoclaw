@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import { type AgentLlmErrorKind, isAgentLlmError } from "@/src/agent/llm/errors.js";
 import type {
-  AgentAssistantContentBlock,
   AgentAssistantPayload,
   AgentToolResultContentBlock,
   AgentToolResultPayload,

@@ -9,8 +9,8 @@
     "start": "tsx src/main.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check .",
-    "format": "biome check --write .",
+    "lint": "biome check --error-on-warnings .",
+    "format": "biome check --write --error-on-warnings .",
     "test": "vitest run --passWithNoTests",
     "test:integration:llm": "vitest run --passWithNoTests --config vitest.integration.config.ts",
     "preflight": "pnpm format && pnpm lint && pnpm test",
@@ -18,7 +18,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,cjs,mjs,json}": [
-      "biome check --write --no-errors-on-unmatched"
+      "biome check --write --no-errors-on-unmatched --error-on-warnings"
     ]
   },
   "devDependencies": {
