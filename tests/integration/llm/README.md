@@ -30,6 +30,6 @@ Optional variables:
 
 Notes:
 
-- The main app still uses `config.toml` and `secrets.toml`
+- The main app stores config under `~/.pokeclaw/system/config.toml` and `~/.pokeclaw/system/secrets.toml`
 - Integration tests only use the local env file to generate temporary config files
 - Default `pnpm test` excludes everything under `tests/integration/`

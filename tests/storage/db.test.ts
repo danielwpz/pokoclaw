@@ -33,9 +33,9 @@ function seedAgentFixture(handle: TestDatabaseHandle): void {
 }
 
 describe("storage db bootstrap", () => {
-  test("uses ~/.pokeclaw/workspace/pokeclaw.db as production path", () => {
+  test("uses ~/.pokeclaw/system/pokeclaw.db as production path", () => {
     const productionPath = getProductionDatabasePath();
-    expect(productionPath.endsWith("/.pokeclaw/workspace/pokeclaw.db")).toBe(true);
+    expect(productionPath.endsWith("/.pokeclaw/system/pokeclaw.db")).toBe(true);
   });
 
   test("initializes all core tables on open", async () => {

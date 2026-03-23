@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -39,8 +39,11 @@ export interface IntegrationLlmFixture {
 export async function createIntegrationLlmFixture(): Promise<IntegrationLlmFixture> {
   const profile = await loadRequiredIntegrationLlmProfile();
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-llm-integration-"));
-  const configPath = path.join(tempDir, "config.toml");
-  const secretsPath = path.join(tempDir, "secrets.toml");
+  const systemDir = path.join(tempDir, "system");
+  const configPath = path.join(systemDir, "config.toml");
+  const secretsPath = path.join(systemDir, "secrets.toml");
+
+  await mkdir(systemDir, { recursive: true });
 
   await writeFile(configPath, buildConfigToml(profile), "utf8");
   await writeFile(

@@ -347,8 +347,8 @@ describe("config loader", () => {
     );
   });
 
-  test("uses default config paths under home directory override", async () => {
-    const configHome = path.join(tempDir, ".pokeclaw");
+  test("uses system config paths under pokeclaw home override", async () => {
+    const configHome = path.join(tempDir, ".pokeclaw", "system");
     await mkdir(configHome, { recursive: true });
     await writeFile(
       path.join(configHome, "config.toml"),
