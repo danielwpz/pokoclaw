@@ -7,6 +7,11 @@ import {
   type Tool,
   Type,
 } from "@mariozechner/pi-ai";
+import type {
+  CompactionModelRunner,
+  CompactionModelRunnerInput,
+  CompactionModelRunnerResult,
+} from "@/src/agent/compaction.js";
 import { normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
 import { type AgentAssistantContentBlock, buildPiMessages } from "@/src/agent/llm/messages.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
@@ -113,9 +118,48 @@ export class PiBridge {
       });
     }
   }
+
+  async completeText(input: CompactionModelRunnerInput): Promise<CompactionModelRunnerResult> {
+    const model = toPiModel(input.model);
+
+    try {
+      const finalMessage = await completeSimple(
+        model,
+        {
+          systemPrompt: input.systemPrompt,
+          messages: [
+            {
+              role: "user" as const,
+              content: [{ type: "text" as const, text: input.prompt }],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        buildPiStreamOptions(input.model, input.signal ?? new AbortController().signal),
+      );
+
+      const normalized = normalizeAssistantResult(finalMessage, "complete");
+      return {
+        provider: normalized.provider,
+        model: normalized.model,
+        modelApi: normalized.modelApi,
+        text: normalized.content
+          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+          .join("\n")
+          .trim(),
+        usage: normalized.usage,
+      };
+    } catch (error) {
+      throw normalizeAgentLlmError({
+        error,
+        provider: input.model.provider.id,
+        model: input.model.id,
+      });
+    }
+  }
 }
 
-export class PiAgentModelRunner implements AgentModelRunner {
+export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunner {
   constructor(
     private readonly bridge: PiBridge,
     private readonly tools: ToolRegistry,
@@ -130,6 +174,10 @@ export class PiAgentModelRunner implements AgentModelRunner {
       signal: input.signal,
       ...(input.onTextDelta ? { onTextDelta: input.onTextDelta } : {}),
     });
+  }
+
+  runCompaction(input: CompactionModelRunnerInput): Promise<CompactionModelRunnerResult> {
+    return this.bridge.completeText(input);
   }
 }
 

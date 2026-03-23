@@ -1,10 +1,15 @@
 import type { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
-import type { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import type {
+  SessionsRepo,
+  UpdateSessionCompactionInput,
+} from "@/src/storage/repos/sessions.repo.js";
 import type { Message, Session } from "@/src/storage/schema/types.js";
 
 export interface AgentSessionContext {
   session: Session;
   compactSummary: string | null;
+  compactSummaryTokenTotal: number | null;
+  compactSummaryUsageJson: string | null;
   messages: Message[];
 }
 
@@ -27,7 +32,13 @@ export class AgentSessionService {
     return {
       session,
       compactSummary: session.compactSummary,
+      compactSummaryTokenTotal: session.compactSummaryTokenTotal,
+      compactSummaryUsageJson: session.compactSummaryUsageJson,
       messages,
     };
+  }
+
+  updateCompaction(input: UpdateSessionCompactionInput): void {
+    this.sessionsRepo.updateCompaction(input);
   }
 }

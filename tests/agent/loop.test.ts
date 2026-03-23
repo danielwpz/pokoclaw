@@ -805,11 +805,11 @@ describe("agent loop", () => {
           stopReason: "stop" as const,
           content: [{ type: "text", text: "reply" }],
           usage: {
-            input: 1_000,
+            input: 150_000,
             output: 1_000,
             cacheRead: 0,
             cacheWrite: 0,
-            totalTokens: 2_000,
+            totalTokens: 151_000,
           },
         };
       },
@@ -842,6 +842,237 @@ describe("agent loop", () => {
       thresholdTokens: 140_000,
       effectiveWindow: 200_000,
     });
+    expect(result.events.at(-1)?.type).toBe("run_completed");
+  });
+
+  test("runs threshold compaction asynchronously and persists session compaction state", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user_1",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"older turn"}',
+      tokenTotal: 80_000,
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_assistant_1",
+      sessionId: "sess_1",
+      seq: 2,
+      role: "assistant",
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5",
+      modelApi: "anthropic-messages",
+      stopReason: "stop",
+      payloadJson: '{"content":[{"type":"text","text":"older reply"}]}',
+      usage: {
+        input: 80_000,
+        output: 1_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 81_000,
+      },
+      createdAt: new Date("2026-03-22T00:00:02.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user_2",
+      sessionId: "sess_1",
+      seq: 3,
+      role: "user",
+      payloadJson: '{"content":"recent turn"}',
+      tokenTotal: 70_000,
+      createdAt: new Date("2026-03-22T00:00:03.000Z"),
+    });
+
+    const emittedEvents: string[] = [];
+    const runner: AgentModelRunner & {
+      runCompaction: NonNullable<
+        import("@/src/agent/compaction.js").CompactionModelRunner["runCompaction"]
+      >;
+    } = {
+      async runTurn() {
+        return {
+          provider: "anthropic_main",
+          model: "claude-sonnet-4-5",
+          modelApi: "anthropic-messages",
+          stopReason: "stop" as const,
+          content: [{ type: "text", text: "reply" }],
+          usage: {
+            input: 150_000,
+            output: 1_000,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 151_000,
+          },
+        };
+      },
+      async runCompaction() {
+        return {
+          provider: "anthropic_main",
+          model: "anthropic_main/claude-sonnet-4-5",
+          modelApi: "anthropic-messages",
+          text: "compact summary",
+          usage: {
+            input: 500,
+            output: 123,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 623,
+          },
+        };
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: {
+        reserveTokens: 60_000,
+        keepRecentTokens: 15_000,
+        reserveTokensFloor: 60_000,
+        recentTurnsPreserve: 1,
+      },
+      emitEvent(event) {
+        emittedEvents.push(event.type);
+      },
+    });
+
+    await loop.run({ sessionId: "sess_1", scenario: "chat" });
+    await delay(0);
+
+    const session = sessionsRepo.getById("sess_1");
+    expect(session?.compactCursor).toBe(2);
+    expect(session?.compactSummary).toBe("compact summary");
+    expect(session?.compactSummaryTokenTotal).toBe(123);
+    expect(emittedEvents).toContain("compaction_started");
+    expect(emittedEvents).toContain("compaction_completed");
+  });
+
+  test("recovers from context overflow by compacting and retrying the turn once", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user_1",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"huge request"}',
+      tokenTotal: 55_000,
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_assistant_1",
+      sessionId: "sess_1",
+      seq: 2,
+      role: "assistant",
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5",
+      modelApi: "anthropic-messages",
+      stopReason: "stop",
+      payloadJson: '{"content":[{"type":"text","text":"partial work"}]}',
+      usage: {
+        input: 55_000,
+        output: 1_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 56_000,
+      },
+      createdAt: new Date("2026-03-22T00:00:02.000Z"),
+    });
+
+    let runTurnCount = 0;
+    const runner: AgentModelRunner & {
+      runCompaction: NonNullable<
+        import("@/src/agent/compaction.js").CompactionModelRunner["runCompaction"]
+      >;
+    } = {
+      async runTurn() {
+        runTurnCount += 1;
+        if (runTurnCount === 1) {
+          throw new AgentLlmError({
+            kind: "context_overflow",
+            message: "context window exceeded",
+            retryable: false,
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "recovered reply" }],
+        });
+      },
+      async runCompaction() {
+        return {
+          provider: "anthropic_main",
+          model: "anthropic_main/claude-sonnet-4-5",
+          modelApi: "anthropic-messages",
+          text: "overflow compact summary",
+          usage: {
+            input: 500,
+            output: 111,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 611,
+          },
+        };
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    const session = sessionsRepo.getById("sess_1");
+    expect(runTurnCount).toBe(2);
+    expect(session?.compactCursor).toBe(1);
+    expect(session?.compactSummary).toContain("overflow compact summary");
+    expect(session?.compactSummaryTokenTotal).toBeGreaterThan(0);
+    expect(result.compaction.reason).toBe("overflow");
+    expect(result.events.some((event) => event.type === "compaction_started")).toBe(true);
+    expect(result.events.some((event) => event.type === "compaction_completed")).toBe(true);
     expect(result.events.at(-1)?.type).toBe("run_completed");
   });
 });

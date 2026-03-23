@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   status TEXT NOT NULL DEFAULT 'active',
   compact_cursor INTEGER NOT NULL DEFAULT 0,
   compact_summary TEXT,
+  compact_summary_token_total INTEGER,
+  compact_summary_usage_json TEXT,
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
   ended_at TEXT CHECK (ended_at IS NULL OR (ended_at GLOB '????-??-??T??:??:??*Z' AND datetime(ended_at) IS NOT NULL))

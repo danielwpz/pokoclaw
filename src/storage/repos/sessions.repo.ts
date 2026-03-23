@@ -17,6 +17,8 @@ export interface CreateSessionInput {
   status?: string;
   compactCursor?: number;
   compactSummary?: string | null;
+  compactSummaryTokenTotal?: number | null;
+  compactSummaryUsageJson?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
   endedAt?: Date | null;
@@ -31,6 +33,8 @@ export interface UpdateSessionCompactionInput {
   id: string;
   compactCursor: number;
   compactSummary?: string | null;
+  compactSummaryTokenTotal?: number | null;
+  compactSummaryUsageJson?: string | null;
   updatedAt?: Date;
 }
 
@@ -63,6 +67,11 @@ export class SessionsRepo {
       status: input.status ?? "active",
       compactCursor: normalizeNonNegativeInteger("compactCursor", input.compactCursor ?? 0),
       compactSummary: input.compactSummary ?? null,
+      compactSummaryTokenTotal: normalizeOptionalNonNegativeInteger(
+        "compactSummaryTokenTotal",
+        input.compactSummaryTokenTotal,
+      ),
+      compactSummaryUsageJson: input.compactSummaryUsageJson ?? null,
       createdAt: toCanonicalUtcIsoTimestamp(createdAt),
       updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
       endedAt: input.endedAt == null ? null : toCanonicalUtcIsoTimestamp(input.endedAt),
@@ -109,6 +118,11 @@ export class SessionsRepo {
       .set({
         compactCursor: normalizeNonNegativeInteger("compactCursor", input.compactCursor),
         compactSummary: input.compactSummary ?? null,
+        compactSummaryTokenTotal: normalizeOptionalNonNegativeInteger(
+          "compactSummaryTokenTotal",
+          input.compactSummaryTokenTotal,
+        ),
+        compactSummaryUsageJson: input.compactSummaryUsageJson ?? null,
         updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
       })
       .where(eq(sessions.id, input.id))

@@ -42,6 +42,9 @@ describe("sessions repo", () => {
       purpose: "chat",
       compactCursor: 12,
       compactSummary: "summary text",
+      compactSummaryTokenTotal: 321,
+      compactSummaryUsageJson:
+        '{"input":111,"output":321,"cacheRead":0,"cacheWrite":0,"totalTokens":432}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
@@ -51,6 +54,10 @@ describe("sessions repo", () => {
     expect(session?.status).toBe("active");
     expect(session?.compactCursor).toBe(12);
     expect(session?.compactSummary).toBe("summary text");
+    expect(session?.compactSummaryTokenTotal).toBe(321);
+    expect(session?.compactSummaryUsageJson).toBe(
+      '{"input":111,"output":321,"cacheRead":0,"cacheWrite":0,"totalTokens":432}',
+    );
     expect(session?.createdAt).toBe("2026-03-22T00:00:01.000Z");
     expect(session?.updatedAt).toBe("2026-03-22T00:00:01.000Z");
   });
@@ -72,12 +79,19 @@ describe("sessions repo", () => {
       id: "sess_1",
       compactCursor: 20,
       compactSummary: "new summary",
+      compactSummaryTokenTotal: 456,
+      compactSummaryUsageJson:
+        '{"input":222,"output":456,"cacheRead":0,"cacheWrite":0,"totalTokens":678}',
       updatedAt: new Date("2026-03-22T00:00:05.000Z"),
     });
 
     const session = repo.getById("sess_1");
     expect(session?.compactCursor).toBe(20);
     expect(session?.compactSummary).toBe("new summary");
+    expect(session?.compactSummaryTokenTotal).toBe(456);
+    expect(session?.compactSummaryUsageJson).toBe(
+      '{"input":222,"output":456,"cacheRead":0,"cacheWrite":0,"totalTokens":678}',
+    );
     expect(session?.updatedAt).toBe("2026-03-22T00:00:05.000Z");
   });
 
@@ -120,5 +134,15 @@ describe("sessions repo", () => {
         compactCursor: -1,
       }),
     ).toThrow("compactCursor must be a non-negative integer");
+
+    expect(() =>
+      repo.create({
+        id: "sess_bad_2",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        purpose: "chat",
+        compactSummaryTokenTotal: -1,
+      }),
+    ).toThrow("compactSummaryTokenTotal must be a non-negative integer");
   });
 });

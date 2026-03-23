@@ -112,6 +112,30 @@ export interface CompactionRequestedEvent extends AgentRuntimeEventBase {
   effectiveWindow: number;
 }
 
+export interface CompactionStartedEvent extends AgentRuntimeEventBase {
+  type: "compaction_started";
+  reason: CompactionReason;
+  modelId: string;
+}
+
+export interface CompactionCompletedEvent extends AgentRuntimeEventBase {
+  type: "compaction_completed";
+  reason: CompactionReason;
+  modelId: string;
+  compacted: boolean;
+  compactCursor: number;
+  summaryTokenTotal: number | null;
+}
+
+export interface CompactionFailedEvent extends AgentRuntimeEventBase {
+  type: "compaction_failed";
+  reason: CompactionReason;
+  modelId: string;
+  errorKind: AgentLlmErrorKind | "unknown";
+  errorMessage: string;
+  retryable: boolean;
+}
+
 export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
   type: "approval_requested";
   approvalId: string;
@@ -142,6 +166,9 @@ export type AgentRuntimeEvent =
   | ToolCallCompletedEvent
   | ToolCallFailedEvent
   | CompactionRequestedEvent
+  | CompactionStartedEvent
+  | CompactionCompletedEvent
+  | CompactionFailedEvent
   | ApprovalRequestedEvent
   | ApprovalResolvedEvent;
 
@@ -158,5 +185,8 @@ export type AgentRuntimeEventInput =
   | Omit<ToolCallCompletedEvent, "eventId" | "createdAt">
   | Omit<ToolCallFailedEvent, "eventId" | "createdAt">
   | Omit<CompactionRequestedEvent, "eventId" | "createdAt">
+  | Omit<CompactionStartedEvent, "eventId" | "createdAt">
+  | Omit<CompactionCompletedEvent, "eventId" | "createdAt">
+  | Omit<CompactionFailedEvent, "eventId" | "createdAt">
   | Omit<ApprovalRequestedEvent, "eventId" | "createdAt">
   | Omit<ApprovalResolvedEvent, "eventId" | "createdAt">;

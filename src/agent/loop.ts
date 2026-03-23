@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { SessionRunAbortRegistry } from "@/src/agent/cancel.js";
-import { type CompactionDecision, decideCompaction } from "@/src/agent/compaction.js";
+import {
+  AgentCompactionService,
+  type CompactionDecision,
+  type CompactionModelRunner,
+  decideCompaction,
+  estimateSessionContextTokens,
+} from "@/src/agent/compaction.js";
 import type {
   AgentRuntimeEvent,
   AgentRuntimeEventInput,
@@ -87,24 +93,40 @@ export interface AgentLoopDependencies {
 export class AgentLoop {
   private readonly now: () => Date;
   private readonly createId: () => string;
+  private readonly compactor: AgentCompactionService | null;
 
   constructor(private readonly deps: AgentLoopDependencies) {
     this.now = deps.now ?? (() => new Date());
     this.createId = deps.createId ?? (() => randomUUID());
+    this.compactor = isCompactionModelRunner(deps.modelRunner)
+      ? new AgentCompactionService({
+          sessions: deps.sessions,
+          models: deps.models,
+          runner: deps.modelRunner,
+          config: deps.compaction,
+          logger: deps.logger,
+          now: this.now,
+        })
+      : null;
   }
 
   async run(input: RunAgentLoopInput): Promise<RunAgentLoopResult> {
     const handle = this.deps.cancel.begin(input.sessionId);
     const maxTurns = input.maxTurns ?? 8;
-    const context = this.deps.sessions.getContext(input.sessionId);
+    let context = this.deps.sessions.getContext(input.sessionId);
     const model = this.deps.models.getRequiredScenarioModel(input.scenario);
-    const messages = [...context.messages];
+    let messages = [...context.messages];
     const events: AgentRuntimeEvent[] = [];
     const appendedMessageIds: string[] = [];
     let toolExecutions = 0;
     let nextSeq = this.deps.messages.getNextSeq(input.sessionId);
     const runId = this.createId();
     let compactionRequested = false;
+    let latestCompaction = decideCompaction({
+      contextTokens: 0,
+      contextWindow: model.contextWindow,
+      config: this.deps.compaction,
+    });
 
     try {
       this.recordEvent(events, {
@@ -132,39 +154,93 @@ export class AgentLoop {
 
         const assistantMessageId = this.createId();
         let sawStreamedText = false;
-        this.recordEvent(events, {
-          type: "assistant_message_started",
-          turn: turn + 1,
-          messageId: assistantMessageId,
-          sessionId: input.sessionId,
-          conversationId: context.session.conversationId,
-          branchId: context.session.branchId,
-          runId,
-        });
+        let overflowRecovered = false;
+        let response: AgentModelTurnResult;
 
-        const response = await this.deps.modelRunner.runTurn({
-          sessionId: input.sessionId,
-          conversationId: context.session.conversationId,
-          scenario: input.scenario,
-          model,
-          compactSummary: context.compactSummary,
-          messages,
-          signal: handle.signal,
-          onTextDelta: (event) => {
-            sawStreamedText = true;
+        while (true) {
+          this.recordEvent(events, {
+            type: "assistant_message_started",
+            turn: turn + 1,
+            messageId: assistantMessageId,
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            runId,
+          });
+
+          try {
+            response = await this.deps.modelRunner.runTurn({
+              sessionId: input.sessionId,
+              conversationId: context.session.conversationId,
+              scenario: input.scenario,
+              model,
+              compactSummary: context.compactSummary,
+              messages,
+              signal: handle.signal,
+              onTextDelta: (event) => {
+                sawStreamedText = true;
+                this.recordEvent(events, {
+                  type: "assistant_message_delta",
+                  turn: turn + 1,
+                  messageId: assistantMessageId,
+                  delta: event.delta,
+                  accumulatedText: event.accumulatedText,
+                  sessionId: input.sessionId,
+                  conversationId: context.session.conversationId,
+                  branchId: context.session.branchId,
+                  runId,
+                });
+              },
+            });
+            break;
+          } catch (error) {
+            if (
+              overflowRecovered ||
+              !isAgentLlmError(error) ||
+              error.kind !== "context_overflow" ||
+              this.compactor == null
+            ) {
+              throw error;
+            }
+
+            latestCompaction = decideCompaction({
+              contextTokens: 0,
+              contextWindow: model.contextWindow,
+              config: this.deps.compaction,
+              overflow: true,
+            });
+            compactionRequested = true;
             this.recordEvent(events, {
-              type: "assistant_message_delta",
-              turn: turn + 1,
-              messageId: assistantMessageId,
-              delta: event.delta,
-              accumulatedText: event.accumulatedText,
+              type: "compaction_requested",
+              reason: "overflow",
+              thresholdTokens: latestCompaction.thresholdTokens,
+              effectiveWindow: latestCompaction.effectiveWindow,
               sessionId: input.sessionId,
               conversationId: context.session.conversationId,
               branchId: context.session.branchId,
               runId,
             });
-          },
-        });
+
+            const compactionResult = await this.compactor.compactNow({
+              sessionId: input.sessionId,
+              conversationId: context.session.conversationId,
+              branchId: context.session.branchId,
+              runId,
+              reason: "overflow",
+              signal: handle.signal,
+              emitEvent: (event) => this.recordEvent(events, event),
+            });
+
+            if (!compactionResult.compacted) {
+              throw error;
+            }
+
+            overflowRecovered = true;
+            sawStreamedText = false;
+            context = this.deps.sessions.getContext(input.sessionId);
+            messages = [...context.messages];
+          }
+        }
 
         throwIfAborted(handle.signal);
 
@@ -360,14 +436,19 @@ export class AgentLoop {
         });
       }
 
+      const compactionEstimate = estimateSessionContextTokens({
+        compactSummary: context.compactSummary,
+        compactSummaryTokenTotal: context.compactSummaryTokenTotal,
+        compactSummaryUsageJson: context.compactSummaryUsageJson,
+        messages,
+      });
       const compaction = decideCompaction({
-        contextTokens: estimateContextTokens(context.compactSummary, messages),
+        contextTokens: compactionEstimate.tokens,
         contextWindow: model.contextWindow,
         config: this.deps.compaction,
       });
+      latestCompaction = compaction.shouldCompact ? compaction : latestCompaction;
 
-      // The loop only emits the runtime signal here. Actual compaction remains
-      // an async session-level follow-up so normal chat turns are not blocked.
       if (compaction.shouldCompact && compaction.reason != null) {
         compactionRequested = true;
         this.recordEvent(events, {
@@ -380,6 +461,19 @@ export class AgentLoop {
           branchId: context.session.branchId,
           runId,
         });
+
+        if (this.compactor != null) {
+          queueMicrotask(() => {
+            void this.compactor?.schedule({
+              sessionId: input.sessionId,
+              conversationId: context.session.conversationId,
+              branchId: context.session.branchId,
+              runId,
+              reason: compaction.reason as "threshold",
+              emitEvent: (event) => this.recordEvent(events, event),
+            });
+          });
+        }
       }
 
       this.recordEvent(events, {
@@ -402,7 +496,7 @@ export class AgentLoop {
         modelId: model.id,
         appendedMessageIds,
         toolExecutions,
-        compaction,
+        compaction: latestCompaction,
         events,
       };
     } catch (error) {
@@ -496,16 +590,6 @@ function appendMessageAndHydrate(input: {
   };
 }
 
-function estimateContextTokens(compactSummary: string | null, messages: Message[]): number {
-  let total = compactSummary == null ? 0 : estimateTextTokens(compactSummary);
-
-  for (const message of messages) {
-    total += message.tokenTotal ?? estimateTextTokens(message.payloadJson);
-  }
-
-  return total;
-}
-
 function collectAssistantText(content: AgentAssistantContentBlock[]): string {
   return content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
 }
@@ -522,10 +606,6 @@ function collectAgentToolCalls(content: AgentAssistantContentBlock[]): AgentTool
         ]
       : [],
   );
-}
-
-function estimateTextTokens(value: string): number {
-  return Math.ceil(value.length / 4);
 }
 
 function throwIfAborted(signal: AbortSignal): void {
@@ -547,6 +627,12 @@ function getErrorMessage(error: unknown): string {
   }
 
   return typeof error === "string" ? error : "Unknown error";
+}
+
+function isCompactionModelRunner(
+  runner: AgentModelRunner,
+): runner is AgentModelRunner & CompactionModelRunner {
+  return "runCompaction" in runner && typeof runner.runCompaction === "function";
 }
 
 function toRunFailure(error: unknown): {

@@ -114,6 +114,8 @@ export const sessions = sqliteTable(
     status: text("status").notNull().default("active"),
     compactCursor: integer("compact_cursor").notNull().default(0),
     compactSummary: text("compact_summary"),
+    compactSummaryTokenTotal: integer("compact_summary_token_total"),
+    compactSummaryUsageJson: text("compact_summary_usage_json"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
     endedAt: text("ended_at"),
