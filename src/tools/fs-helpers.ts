@@ -92,13 +92,14 @@ export function matchesFindPattern(
 ): boolean {
   const normalizedPattern = toPosixPath(pattern);
   const normalizedRelativePath = toPosixPath(relativePath);
+  const regex = compileGlobPattern(normalizedPattern);
 
-  if (path.matchesGlob(normalizedRelativePath, normalizedPattern)) {
+  if (regex.test(normalizedRelativePath)) {
     return true;
   }
 
   if (!normalizedPattern.includes("/")) {
-    return path.matchesGlob(baseName, normalizedPattern);
+    return regex.test(baseName);
   }
 
   return false;
@@ -118,4 +119,36 @@ export function compileSearchPattern(
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function compileGlobPattern(pattern: string): RegExp {
+  let source = "";
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const current = pattern[index];
+    const next = pattern[index + 1];
+    if (current == null) {
+      continue;
+    }
+
+    if (current === "*" && next === "*") {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+
+    if (current === "*") {
+      source += "[^/]*";
+      continue;
+    }
+
+    if (current === "?") {
+      source += "[^/]";
+      continue;
+    }
+
+    source += escapeRegExp(current);
+  }
+
+  return new RegExp(`^${source}$`);
 }

@@ -10,6 +10,15 @@ describe("builtin tools", () => {
     expect(registry.has("write")).toBe(true);
     expect(registry.has("edit")).toBe(true);
     expect(registry.has("ls")).toBe(true);
-    expect(registry.list().map((tool) => tool.name)).toEqual(["read", "write", "edit", "ls"]);
+    expect(registry.has("find")).toBe(true);
+    expect(registry.has("grep")).toBe(true);
+    expect(registry.list().map((tool) => tool.name)).toEqual([
+      "read",
+      "write",
+      "edit",
+      "ls",
+      "find",
+      "grep",
+    ]);
   });
 });
