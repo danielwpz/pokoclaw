@@ -7,6 +7,7 @@ import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop, type AgentModelRunner } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
+import { toolRecoverableError } from "@/src/agent/tools/errors.js";
 import { ToolRegistry } from "@/src/agent/tools/registry.js";
 import { textToolResult } from "@/src/agent/tools/types.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
@@ -459,6 +460,183 @@ describe("agent loop", () => {
     expect(cancel.isActive("sess_1")).toBe(false);
   });
 
+  test("returns recoverable tool failures to the model as error tool results", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"run cat on a missing file"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let callCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        callCount += 1;
+        if (callCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "bash",
+                arguments: { command: "cat missing.txt" },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "The file was missing, so the command failed." }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "bash",
+      description: "Run a shell command",
+      execute() {
+        throw toolRecoverableError("bash exited with code 1: cat: missing.txt: No such file");
+      },
+    });
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(4);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toEqual({
+      toolCallId: "tool_1",
+      toolName: "bash",
+      content: [{ type: "text", text: "bash exited with code 1: cat: missing.txt: No such file" }],
+      isError: true,
+    });
+    expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(true);
+    expect(result.events.at(-1)?.type).toBe("run_completed");
+  });
+
+  test("treats bash non-zero exits as normal tool results when the tool returns them explicitly", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"try reading a missing file with bash"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let callCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        callCount += 1;
+        if (callCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "bash",
+                arguments: { command: "cat missing.txt" },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "The bash command failed with exit code 1." }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "bash",
+      description: "Run a shell command",
+      execute() {
+        return textToolResult("cat: missing.txt: No such file or directory", {
+          command: "cat missing.txt",
+          exitCode: 1,
+          stderr: "cat: missing.txt: No such file or directory",
+        });
+      },
+    });
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(4);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toEqual({
+      toolCallId: "tool_1",
+      toolName: "bash",
+      content: [{ type: "text", text: "cat: missing.txt: No such file or directory" }],
+      isError: false,
+      details: {
+        command: "cat missing.txt",
+        exitCode: 1,
+        stderr: "cat: missing.txt: No such file or directory",
+      },
+    });
+    expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(false);
+    expect(result.events.at(-1)?.type).toBe("run_completed");
+  });
+
   test("emits structured run_failed events for normalized llm errors", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
@@ -520,6 +698,78 @@ describe("agent loop", () => {
       type: "run_failed",
       errorKind: "rate_limit",
       retryable: true,
+    });
+  });
+
+  test("fails the run on internal tool errors instead of returning them to the model", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"run fragile tool"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const emittedEvents: Array<{ type: string; errorKind?: string }> = [];
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        return makeAssistantResult({
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "tool_1", name: "fragile", arguments: {} }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "fragile",
+      description: "Explodes internally",
+      execute() {
+        throw new Error("cannot read properties of undefined");
+      },
+    });
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      logger: createTestLogger(
+        { level: "debug", useColors: false },
+        { subsystem: "agent-loop-test" },
+      ),
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
+      "Tool execution failed due to an internal runtime error.",
+    );
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(2);
+    expect(emittedEvents.some((event) => event.type === "tool_call_failed")).toBe(true);
+    expect(emittedEvents.at(-1)).toMatchObject({
+      type: "run_failed",
+      errorKind: "internal_error",
     });
   });
 

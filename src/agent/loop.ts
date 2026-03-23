@@ -15,6 +15,11 @@ import type {
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
+import {
+  buildToolFailureContent,
+  isToolFailure,
+  normalizeToolFailure,
+} from "@/src/agent/tools/errors.js";
 import type { ToolRegistry } from "@/src/agent/tools/registry.js";
 import type { CompactionConfig } from "@/src/config/schema.js";
 import type { Logger } from "@/src/shared/logger.js";
@@ -245,56 +250,102 @@ export class AgentLoop {
             runId,
           });
 
-          const result = await this.deps.tools.execute(
-            toolCall.name,
-            {
+          try {
+            const result = await this.deps.tools.execute(
+              toolCall.name,
+              {
+                sessionId: input.sessionId,
+                conversationId: context.session.conversationId,
+                storage: this.deps.storage,
+                logger: this.deps.logger,
+                abortSignal: handle.signal,
+                toolCallId: toolCall.id,
+              },
+              toolCall.args,
+            );
+
+            throwIfAborted(handle.signal);
+
+            const toolResultMessageId = this.createId();
+            const toolResultMessage = appendMessageAndHydrate({
+              repo: this.deps.messages,
               sessionId: input.sessionId,
-              conversationId: context.session.conversationId,
-              storage: this.deps.storage,
-              logger: this.deps.logger,
-              abortSignal: handle.signal,
-              toolCallId: toolCall.id,
-            },
-            toolCall.args,
-          );
-
-          throwIfAborted(handle.signal);
-
-          const toolResultMessageId = this.createId();
-          const toolResultMessage = appendMessageAndHydrate({
-            repo: this.deps.messages,
-            sessionId: input.sessionId,
-            messageId: toolResultMessageId,
-            seq: nextSeq,
-            role: "tool",
-            messageType: "tool_result",
-            visibility: "hidden_system",
-            payload: {
+              messageId: toolResultMessageId,
+              seq: nextSeq,
+              role: "tool",
+              messageType: "tool_result",
+              visibility: "hidden_system",
+              payload: {
+                toolCallId: toolCall.id,
+                toolName: toolCall.name,
+                content: result.content,
+                isError: false,
+                ...(result.details !== undefined ? { details: result.details } : {}),
+              } satisfies AgentToolResultPayload,
+              createdAt: this.now(),
+            });
+            nextSeq += 1;
+            messages.push(toolResultMessage);
+            appendedMessageIds.push(toolResultMessageId);
+            toolExecutions += 1;
+            turnToolExecutions += 1;
+            this.recordEvent(events, {
+              type: "tool_call_completed",
+              turn: turn + 1,
               toolCallId: toolCall.id,
               toolName: toolCall.name,
-              content: result.content,
-              isError: false,
-              ...(result.details !== undefined ? { details: result.details } : {}),
-            } satisfies AgentToolResultPayload,
-            createdAt: this.now(),
-          });
-          nextSeq += 1;
-          messages.push(toolResultMessage);
-          appendedMessageIds.push(toolResultMessageId);
-          toolExecutions += 1;
-          turnToolExecutions += 1;
-          this.recordEvent(events, {
-            type: "tool_call_completed",
-            turn: turn + 1,
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            messageId: toolResultMessageId,
-            result,
-            sessionId: input.sessionId,
-            conversationId: context.session.conversationId,
-            branchId: context.session.branchId,
-            runId,
-          });
+              messageId: toolResultMessageId,
+              result,
+              sessionId: input.sessionId,
+              conversationId: context.session.conversationId,
+              branchId: context.session.branchId,
+              runId,
+            });
+          } catch (error) {
+            throwIfAborted(handle.signal);
+            const failure = normalizeToolFailure(error);
+            this.recordEvent(events, {
+              type: "tool_call_failed",
+              turn: turn + 1,
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              errorKind: failure.kind,
+              errorMessage: failure.message,
+              retryable: failure.retryable,
+              sessionId: input.sessionId,
+              conversationId: context.session.conversationId,
+              branchId: context.session.branchId,
+              runId,
+            });
+
+            if (!failure.shouldReturnToLlm) {
+              throw failure;
+            }
+
+            const toolResultMessageId = this.createId();
+            const toolResultMessage = appendMessageAndHydrate({
+              repo: this.deps.messages,
+              sessionId: input.sessionId,
+              messageId: toolResultMessageId,
+              seq: nextSeq,
+              role: "tool",
+              messageType: "tool_result",
+              visibility: "hidden_system",
+              payload: {
+                toolCallId: toolCall.id,
+                toolName: toolCall.name,
+                content: buildToolFailureContent(failure),
+                isError: true,
+                ...(failure.details !== undefined ? { details: failure.details } : {}),
+              } satisfies AgentToolResultPayload,
+              createdAt: this.now(),
+            });
+            nextSeq += 1;
+            messages.push(toolResultMessage);
+            appendedMessageIds.push(toolResultMessageId);
+            toolExecutions += 1;
+            turnToolExecutions += 1;
+          }
         }
 
         this.recordEvent(events, {
@@ -499,11 +550,22 @@ function getErrorMessage(error: unknown): string {
 }
 
 function toRunFailure(error: unknown): {
-  kind: import("@/src/agent/llm/errors.js").AgentLlmErrorKind | "unknown";
+  kind:
+    | import("@/src/agent/llm/errors.js").AgentLlmErrorKind
+    | import("@/src/agent/tools/errors.js").ToolFailureKind
+    | "unknown";
   message: string;
   retryable: boolean;
 } {
   if (isAgentLlmError(error)) {
+    return {
+      kind: error.kind,
+      message: error.message,
+      retryable: error.retryable,
+    };
+  }
+
+  if (isToolFailure(error)) {
     return {
       kind: error.kind,
       message: error.message,

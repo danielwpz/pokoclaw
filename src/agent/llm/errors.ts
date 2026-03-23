@@ -54,8 +54,10 @@ export function normalizeAgentLlmError(input: NormalizeAgentLlmErrorInput): Agen
 
   const rawMessage = getErrorMessage(input.error);
   const message = rawMessage.trim().length > 0 ? rawMessage : "Unknown upstream error";
+  const httpStatus = getHttpStatusCode(input.error, message);
   const shape = classifyAgentLlmError({
     message,
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
   });
@@ -68,11 +70,12 @@ export function isAgentLlmError(error: unknown): error is AgentLlmError {
 }
 
 function classifyAgentLlmError(input: {
+  httpStatus?: number;
   message: string;
   provider?: string;
   model?: string;
 }): AgentLlmErrorShape {
-  const { message, provider, model } = input;
+  const { httpStatus, message, provider, model } = input;
 
   if (isAbortedMessage(message)) {
     return {
@@ -94,6 +97,18 @@ function classifyAgentLlmError(input: {
       ...(model ? { model } : {}),
       rawMessage: message,
     };
+  }
+
+  if (httpStatus !== undefined) {
+    const statusShape = classifyAgentLlmErrorByStatus({
+      httpStatus,
+      message,
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
+    });
+    if (statusShape != null) {
+      return statusShape;
+    }
   }
 
   if (isAuthMessage(message)) {
@@ -151,6 +166,17 @@ function classifyAgentLlmError(input: {
     };
   }
 
+  if (isNonRetryableUpstreamMessage(message)) {
+    return {
+      kind: "upstream",
+      message,
+      retryable: false,
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
+      rawMessage: message,
+    };
+  }
+
   return {
     kind: "upstream",
     message,
@@ -167,6 +193,173 @@ function getErrorMessage(error: unknown): string {
   }
 
   return typeof error === "string" ? error : String(error);
+}
+
+function getHttpStatusCode(error: unknown, message: string): number | undefined {
+  const structuredStatus =
+    readNumericField(error, ["status"]) ??
+    readNumericField(error, ["statusCode"]) ??
+    readNumericField(error, ["response", "status"]) ??
+    readNumericField(error, ["response", "statusCode"]) ??
+    readNumericField(error, ["cause", "status"]) ??
+    readNumericField(error, ["cause", "statusCode"]) ??
+    readNumericField(error, ["error", "status"]) ??
+    readNumericField(error, ["error", "statusCode"]);
+
+  if (structuredStatus !== undefined) {
+    return structuredStatus;
+  }
+
+  return parseHttpStatusCodeFromMessage(message);
+}
+
+function classifyAgentLlmErrorByStatus(input: {
+  httpStatus: number;
+  message: string;
+  provider?: string;
+  model?: string;
+}): AgentLlmErrorShape | null {
+  const { httpStatus, message, provider, model } = input;
+  const baseShape = {
+    message,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    rawMessage: message,
+  };
+
+  if (httpStatus === 401) {
+    return {
+      kind: "auth",
+      retryable: false,
+      ...baseShape,
+    };
+  }
+
+  if (httpStatus === 402) {
+    return {
+      kind: "billing",
+      retryable: false,
+      ...baseShape,
+    };
+  }
+
+  if (httpStatus === 403) {
+    if (isBillingMessage(message)) {
+      return {
+        kind: "billing",
+        retryable: false,
+        ...baseShape,
+      };
+    }
+
+    if (isAuthMessage(message)) {
+      return {
+        kind: "auth",
+        retryable: false,
+        ...baseShape,
+      };
+    }
+
+    return {
+      kind: "upstream",
+      retryable: false,
+      ...baseShape,
+    };
+  }
+
+  if (httpStatus === 404) {
+    return {
+      kind: "upstream",
+      retryable: false,
+      ...baseShape,
+    };
+  }
+
+  if (httpStatus === 408) {
+    return {
+      kind: "timeout",
+      retryable: true,
+      ...baseShape,
+    };
+  }
+
+  if (httpStatus === 413) {
+    return {
+      kind: "context_overflow",
+      retryable: false,
+      ...baseShape,
+    };
+  }
+
+  if (httpStatus === 429) {
+    return {
+      kind: "rate_limit",
+      retryable: true,
+      ...baseShape,
+    };
+  }
+
+  if (httpStatus >= 500 && httpStatus <= 599) {
+    if (httpStatus === 504) {
+      return {
+        kind: "timeout",
+        retryable: true,
+        ...baseShape,
+      };
+    }
+
+    return {
+      kind: "overloaded",
+      retryable: true,
+      ...baseShape,
+    };
+  }
+
+  if (httpStatus >= 400 && httpStatus <= 499) {
+    return {
+      kind: "upstream",
+      retryable: false,
+      ...baseShape,
+    };
+  }
+
+  return null;
+}
+
+function readNumericField(value: unknown, path: string[]): number | undefined {
+  if (value == null || typeof value !== "object") {
+    return undefined;
+  }
+
+  let current: unknown = value;
+  for (const key of path) {
+    if (current == null || typeof current !== "object" || !(key in current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+
+  return typeof current === "number" && Number.isInteger(current) ? current : undefined;
+}
+
+function parseHttpStatusCodeFromMessage(message: string): number | undefined {
+  const match =
+    message.match(/\bstatus\s*[=:]?\s*(\d{3})\b/i) ??
+    message.match(/\bapi error\s*\((\d{3})\)/i) ??
+    message.match(/\bhttp(?:\s+request)?(?:\s+failed)?[^\d]{0,24}(\d{3})\b/i) ??
+    message.match(/^(\d{3})\b/);
+
+  if (!match) {
+    return undefined;
+  }
+
+  const capturedStatus = match[1];
+  if (capturedStatus === undefined) {
+    return undefined;
+  }
+
+  const status = Number.parseInt(capturedStatus, 10);
+  return Number.isNaN(status) ? undefined : status;
 }
 
 function isAbortedMessage(message: string): boolean {
@@ -245,4 +438,16 @@ function isOverloadedMessage(message: string): boolean {
 function isTimeoutMessage(message: string): boolean {
   const lower = message.toLowerCase();
   return lower.includes("timeout") || lower.includes("timed out");
+}
+
+function isNonRetryableUpstreamMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("not available in your region") ||
+    lower.includes("not available in your country") ||
+    lower.includes("unsupported region") ||
+    lower.includes("unsupported country") ||
+    lower.includes("model is not available in your region") ||
+    lower.includes("model is not available in your country")
+  );
 }

@@ -312,6 +312,30 @@ describe("pi bridge", () => {
     });
   });
 
+  test("marks regional availability upstream failures as non-retryable", async () => {
+    streamSimpleMock.mockImplementation(() => {
+      throw new Error("403 This model is not available in your region.");
+    });
+
+    const bridge = new PiBridge();
+    const error = await bridge
+      .streamTurn({
+        model: createResolvedModel(),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(AgentLlmError);
+    expect(error).toMatchObject({
+      kind: "upstream",
+      retryable: false,
+      message: "403 This model is not available in your region.",
+    });
+  });
+
   test("completes a non-streaming turn through completeSimple", async () => {
     const finalMessage = {
       role: "assistant" as const,

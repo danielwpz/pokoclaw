@@ -1,6 +1,7 @@
 import type { CompactionReason } from "@/src/agent/compaction.js";
 import type { AgentLlmErrorKind } from "@/src/agent/llm/errors.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
+import type { ToolFailureKind } from "@/src/agent/tools/errors.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 
 export interface AgentToolCall {
@@ -37,7 +38,7 @@ export interface RunFailedEvent extends AgentRuntimeEventBase {
   type: "run_failed";
   scenario: ModelScenario;
   modelId: string;
-  errorKind: AgentLlmErrorKind | "unknown";
+  errorKind: AgentLlmErrorKind | ToolFailureKind | "unknown";
   errorMessage: string;
   retryable: boolean;
 }
@@ -94,6 +95,16 @@ export interface ToolCallCompletedEvent extends AgentRuntimeEventBase {
   result: unknown;
 }
 
+export interface ToolCallFailedEvent extends AgentRuntimeEventBase {
+  type: "tool_call_failed";
+  turn: number;
+  toolCallId: string;
+  toolName: string;
+  errorKind: "recoverable_error" | "internal_error";
+  errorMessage: string;
+  retryable: boolean;
+}
+
 export interface CompactionRequestedEvent extends AgentRuntimeEventBase {
   type: "compaction_requested";
   reason: CompactionReason;
@@ -129,6 +140,7 @@ export type AgentRuntimeEvent =
   | AssistantMessageCompletedEvent
   | ToolCallStartedEvent
   | ToolCallCompletedEvent
+  | ToolCallFailedEvent
   | CompactionRequestedEvent
   | ApprovalRequestedEvent
   | ApprovalResolvedEvent;
@@ -144,6 +156,7 @@ export type AgentRuntimeEventInput =
   | Omit<AssistantMessageCompletedEvent, "eventId" | "createdAt">
   | Omit<ToolCallStartedEvent, "eventId" | "createdAt">
   | Omit<ToolCallCompletedEvent, "eventId" | "createdAt">
+  | Omit<ToolCallFailedEvent, "eventId" | "createdAt">
   | Omit<CompactionRequestedEvent, "eventId" | "createdAt">
   | Omit<ApprovalRequestedEvent, "eventId" | "createdAt">
   | Omit<ApprovalResolvedEvent, "eventId" | "createdAt">;
