@@ -1,3 +1,7 @@
+import { createSubsystemLogger } from "@/src/shared/logger.js";
+
+const logger = createSubsystemLogger("approval-waits");
+
 export interface PendingSteerInput {
   content: string;
   createdAt?: Date;
@@ -50,7 +54,6 @@ export class SessionApprovalWaitRegistry {
     sessionId: string;
     approvalId: number;
     timeoutMs: number;
-    now?: () => Date;
   }): Promise<ApprovalWaitOutcome> {
     if (this.waitsBySessionId.has(input.sessionId)) {
       throw new Error(`Session ${input.sessionId} already has a pending approval wait`);
@@ -75,28 +78,47 @@ export class SessionApprovalWaitRegistry {
           });
         },
         timeout: setTimeout(() => {
+          logger.info("approval wait timed out", {
+            sessionId: input.sessionId,
+            approvalId: input.approvalId,
+          });
           entry.resolve({
             decision: "deny",
             actor: "system:timeout",
             rawInput: null,
             grantedBy: null,
             reasonText: "Approval request timed out.",
-            decidedAt: input.now?.() ?? new Date(),
+            decidedAt: new Date(),
           });
         }, input.timeoutMs),
       };
 
       this.waitsBySessionId.set(input.sessionId, entry);
       this.waitsByApprovalId.set(input.approvalId, entry);
+      logger.info("waiting for approval reply", {
+        sessionId: input.sessionId,
+        approvalId: input.approvalId,
+        timeoutMs: input.timeoutMs,
+      });
     });
   }
 
   resolveApproval(input: ApprovalResponseInput): boolean {
     const entry = this.waitsByApprovalId.get(input.approvalId);
     if (entry == null) {
+      logger.debug("approval reply did not match a pending wait", {
+        approvalId: input.approvalId,
+        decision: input.decision,
+      });
       return false;
     }
 
+    logger.info("received approval reply for pending wait", {
+      sessionId: entry.sessionId,
+      approvalId: input.approvalId,
+      decision: input.decision,
+      actor: input.actor,
+    });
     entry.resolve({
       decision: input.decision,
       actor: input.actor,
@@ -115,6 +137,10 @@ export class SessionApprovalWaitRegistry {
       return false;
     }
 
+    logger.debug("queued steer while waiting for approval", {
+      sessionId: input.sessionId,
+      approvalId: entry.approvalId,
+    });
     entry.steerQueue.push({
       content: input.content,
       ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
@@ -134,6 +160,11 @@ export class SessionApprovalWaitRegistry {
       return false;
     }
 
+    logger.info("cancelled approval wait", {
+      sessionId: input.sessionId,
+      approvalId: entry.approvalId,
+      actor: input.actor ?? "system:cancel",
+    });
     entry.resolve({
       decision: "deny",
       actor: input.actor ?? "system:cancel",

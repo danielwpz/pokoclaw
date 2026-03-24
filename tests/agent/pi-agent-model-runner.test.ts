@@ -7,7 +7,6 @@ import { AgentSessionService } from "@/src/agent/session.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
-import { createTestLogger } from "@/src/shared/logger.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
@@ -200,10 +199,6 @@ describe("pi agent model runner", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: new PiAgentModelRunner(new PiBridge(), new ToolRegistry()),
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "pi-agent-model-runner-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 

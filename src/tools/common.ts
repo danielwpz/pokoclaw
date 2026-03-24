@@ -3,12 +3,20 @@ import type { PermissionCheckResult } from "@/src/security/permissions.js";
 import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
 import { describePermissionScope, type PermissionScope } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/errors.js";
 import type { ToolExecutionContext } from "@/src/tools/types.js";
 
+const logger = createSubsystemLogger("tools");
+
 export function resolveToolOwnerAgentId(context: ToolExecutionContext): string {
   if (context.ownerAgentId == null || context.ownerAgentId.trim().length === 0) {
+    logger.warn("tool call missing owner agent", {
+      sessionId: context.sessionId,
+      conversationId: context.conversationId,
+      toolCallId: context.toolCallId,
+    });
     throw toolRecoverableError(
       "This tool call is missing its owner agent context, so the permission check cannot run.",
       { code: "missing_owner_agent" },
@@ -83,6 +91,13 @@ export function createFilesystemAccessController(
     );
     if (hardDeny != null) {
       const action = hardDeny.kind === "fs.read" ? "read" : "write";
+      logger.info("filesystem access blocked by policy", {
+        sessionId: context.sessionId,
+        ownerAgentId,
+        toolCallId: context.toolCallId,
+        kind: hardDeny.kind,
+        path: hardDeny.normalizedPath,
+      });
       throw toolRecoverableError(
         `The ${action} request is blocked by system policy: ${hardDeny.normalizedPath}`,
         {
@@ -97,6 +112,13 @@ export function createFilesystemAccessController(
 
     const requestedScopes = collectMissingFilesystemScopes(decisions);
     if (requestedScopes.length > 0) {
+      logger.info("filesystem approval required", {
+        sessionId: context.sessionId,
+        ownerAgentId,
+        toolCallId: context.toolCallId,
+        scopeCount: requestedScopes.length,
+        scope: requestedScopes[0] == null ? undefined : describePermissionScope(requestedScopes[0]),
+      });
       throw toolApprovalRequired({
         request: {
           scopes: requestedScopes,

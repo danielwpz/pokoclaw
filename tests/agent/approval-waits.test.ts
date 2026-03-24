@@ -43,13 +43,13 @@ describe("session approval wait registry", () => {
 
   test("times out as a deny result", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-23T00:03:00.000Z"));
 
     const registry = new SessionApprovalWaitRegistry();
     const waitPromise = registry.beginWait({
       sessionId: "sess_1",
       approvalId: 13,
       timeoutMs: 180_000,
-      now: () => new Date("2026-03-23T00:03:00.000Z"),
     });
 
     await vi.advanceTimersByTimeAsync(180_000);
@@ -58,7 +58,7 @@ describe("session approval wait registry", () => {
       decision: "deny",
       actor: "system:timeout",
       reasonText: "Approval request timed out.",
-      decidedAt: new Date("2026-03-23T00:03:00.000Z"),
+      decidedAt: new Date("2026-03-23T00:06:00.000Z"),
       queuedSteer: [],
     });
   });

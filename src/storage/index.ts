@@ -1,21 +1,20 @@
-import { createLogger } from "@/src/shared/logger.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDatabase } from "@/src/storage/db/client.js";
 import { openStorageDatabase } from "@/src/storage/db/client.js";
 import { getProductionDatabasePath } from "@/src/storage/db/paths.js";
 
+const logger = createSubsystemLogger("storage");
+
 export async function initializeStorageOnStartup(
   databasePath: string = getProductionDatabasePath(),
 ): Promise<StorageDatabase> {
-  const logger = await createLogger({ subsystem: "db" });
-
-  logger.info("Initializing storage database", { databasePath });
+  logger.info("opening storage database", { databasePath });
   const storage = openStorageDatabase({ databasePath, initializeSchema: true });
-  logger.info("Storage database initialized", { databasePath });
+  logger.info("storage database ready", { databasePath });
   return storage;
 }
 
 export async function registerStorageCleanup(storage: StorageDatabase): Promise<void> {
-  const logger = await createLogger({ subsystem: "db" });
   let closed = false;
 
   const closeStorage = (signal: string): void => {
@@ -26,9 +25,9 @@ export async function registerStorageCleanup(storage: StorageDatabase): Promise<
     closed = true;
     try {
       storage.close();
-      logger.info("Storage database connection closed", { signal });
+      logger.info("storage database closed", { signal });
     } catch (error) {
-      logger.error("Failed to close storage database connection", {
+      logger.error("storage database close failed", {
         signal,
         error: error instanceof Error ? error.message : String(error),
       });

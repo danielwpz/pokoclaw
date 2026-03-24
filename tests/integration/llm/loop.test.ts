@@ -6,7 +6,6 @@ import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
-import { createTestLogger } from "@/src/shared/logger.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { ToolRegistry } from "@/src/tools/registry.js";
@@ -71,10 +70,6 @@ describe("real llm loop integration", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: new PiAgentModelRunner(new PiBridge(), toolRegistry),
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "info", useColors: false },
-        { subsystem: "llm-loop-integration-test" },
-      ),
       compaction: fixture.config.compaction,
     });
 
@@ -136,10 +131,6 @@ describe("real llm loop integration", () => {
       cancel,
       modelRunner: new PiAgentModelRunner(new PiBridge(), tools),
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "info", useColors: false },
-        { subsystem: "llm-loop-integration-test" },
-      ),
       compaction: fixture.config.compaction,
     });
 
@@ -174,6 +165,7 @@ describe("real llm loop integration", () => {
 
     const storedMessages = messagesRepo.listBySession("sess_1");
     expect(storedMessages.length).toBeGreaterThanOrEqual(5);
+    expect(storedMessages[2]?.role).toBe("tool");
     expect(JSON.parse(storedMessages[3]?.payloadJson ?? "{}")).toEqual({
       content: "POKECLAW_STEER_OK",
     });

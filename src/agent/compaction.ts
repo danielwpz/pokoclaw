@@ -11,7 +11,7 @@ import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
 import type { CompactionConfig } from "@/src/config/schema.js";
-import { createBootstrapLogger, createLogger, type Logger } from "@/src/shared/logger.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
 
@@ -71,6 +71,7 @@ Keep it concise.`;
 
 const TOOL_RESULT_MAX_CHARS = 2_000;
 const EMPTY_SUMMARY_FALLBACK = "No prior context.";
+const logger = createSubsystemLogger("compaction");
 
 export type CompactionReason = "threshold" | "overflow";
 
@@ -327,7 +328,6 @@ export function prepareCompaction(input: {
 
 export class AgentCompactionService {
   private readonly inflight = new Map<string, Promise<AgentCompactionResult>>();
-  private loggerPromise: Promise<Logger> | null = null;
 
   constructor(private readonly deps: AgentCompactionServiceDependencies) {}
 
@@ -368,8 +368,7 @@ export class AgentCompactionService {
 
   private async execute(input: AgentCompactionInput): Promise<AgentCompactionResult> {
     const model = this.deps.models.getRequiredScenarioModel("compaction");
-    const logger = await this.getLogger();
-    logger.info("Starting a compaction pass", {
+    logger.info("starting compaction pass", {
       sessionId: input.sessionId,
       reason: input.reason,
       modelId: model.id,
@@ -398,7 +397,7 @@ export class AgentCompactionService {
         config: this.deps.config,
         contextTokens: contextEstimate.tokens,
       });
-      logger.debug("Compaction context is ready", {
+      logger.debug("compaction context ready", {
         sessionId: input.sessionId,
         reason: input.reason,
         contextTokens: contextEstimate.tokens,
@@ -413,7 +412,7 @@ export class AgentCompactionService {
       if (preparation == null) {
         const compactCursor = context.session.compactCursor;
         const summaryTokenTotal = context.compactSummaryTokenTotal;
-        logger.info("Skipped compaction because there was nothing older to fold in", {
+        logger.info("skipping compaction; nothing older to fold", {
           sessionId: input.sessionId,
           reason: input.reason,
           compactCursor,
@@ -438,7 +437,7 @@ export class AgentCompactionService {
         };
       }
 
-      logger.debug("Generating the new compact summary", {
+      logger.debug("generating compact summary", {
         sessionId: input.sessionId,
         reason: input.reason,
         compactCursor: preparation.compactCursor,
@@ -463,7 +462,7 @@ export class AgentCompactionService {
         compactSummaryUsageJson: JSON.stringify(summaryResult.usage),
         updatedAt: new Date(),
       });
-      logger.info("Finished compaction and saved the new summary", {
+      logger.info("compaction saved", {
         sessionId: input.sessionId,
         reason: input.reason,
         compactCursor: preparation.compactCursor,
@@ -490,7 +489,7 @@ export class AgentCompactionService {
         summaryTokenTotal: summaryResult.usage.output,
       };
     } catch (error) {
-      logger.warn("Compaction failed", {
+      logger.warn("compaction failed", {
         sessionId: input.sessionId,
         reason: input.reason,
         modelId: model.id,
@@ -512,22 +511,11 @@ export class AgentCompactionService {
     }
   }
 
-  private async getLogger(): Promise<Logger> {
-    this.loggerPromise ??= createLogger({ subsystem: "compaction" });
-
-    try {
-      return await this.loggerPromise;
-    } catch {
-      return createBootstrapLogger({ subsystem: "compaction" });
-    }
-  }
-
   private async log(
     level: "debug" | "info" | "warn" | "error",
     message: string,
     context?: Record<string, unknown>,
   ): Promise<void> {
-    const logger = await this.getLogger();
     logger[level](message, context);
   }
 

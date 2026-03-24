@@ -4,7 +4,6 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 import { SecurityService } from "@/src/security/service.js";
-import { createTestLogger } from "@/src/shared/logger.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import type { ToolFailure } from "@/src/tools/errors.js";
 import { createGrepTool } from "@/src/tools/grep.js";
@@ -67,10 +66,6 @@ describe("grep tool", () => {
         ownerAgentId: "agent_1",
         cwd: tempDir,
         storage: handle.storage.db,
-        logger: createTestLogger(
-          { level: "debug", useColors: false },
-          { subsystem: "grep-tool-test" },
-        ),
       },
       {
         query: "needle",
@@ -123,10 +118,6 @@ describe("grep tool", () => {
         ownerAgentId: "agent_1",
         cwd: tempDir,
         storage: handle.storage.db,
-        logger: createTestLogger(
-          { level: "debug", useColors: false },
-          { subsystem: "grep-tool-test" },
-        ),
       },
       {
         query: "const\\s+[ab]",
@@ -190,10 +181,6 @@ describe("grep tool", () => {
         ownerAgentId: "agent_1",
         cwd: tempDir,
         storage: handle.storage.db,
-        logger: createTestLogger(
-          { level: "debug", useColors: false },
-          { subsystem: "grep-tool-test" },
-        ),
       },
       {
         query: "needle",
@@ -235,10 +222,6 @@ describe("grep tool", () => {
           ownerAgentId: "agent_1",
           cwd: tempDir,
           storage: handle.storage.db,
-          logger: createTestLogger(
-            { level: "debug", useColors: false },
-            { subsystem: "grep-tool-test" },
-          ),
         },
         {
           path: POKECLAW_SYSTEM_DIR,

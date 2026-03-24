@@ -46,13 +46,10 @@ export interface UpdateSessionStatusInput {
 }
 
 export class SessionsRepo {
-  constructor(
-    private readonly db: StorageDb,
-    private readonly now: () => Date = () => new Date(),
-  ) {}
+  constructor(private readonly db: StorageDb) {}
 
   create(input: CreateSessionInput): void {
-    const createdAt = input.createdAt ?? this.now();
+    const createdAt = input.createdAt ?? new Date();
     const updatedAt = input.updatedAt ?? createdAt;
 
     const row: NewSession = {
@@ -111,7 +108,7 @@ export class SessionsRepo {
   }
 
   updateCompaction(input: UpdateSessionCompactionInput): void {
-    const updatedAt = input.updatedAt ?? this.now();
+    const updatedAt = input.updatedAt ?? new Date();
 
     this.db
       .update(sessions)
@@ -130,7 +127,7 @@ export class SessionsRepo {
   }
 
   updateStatus(input: UpdateSessionStatusInput): void {
-    const updatedAt = input.updatedAt ?? this.now();
+    const updatedAt = input.updatedAt ?? new Date();
 
     this.db
       .update(sessions)

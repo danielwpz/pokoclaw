@@ -1,7 +1,6 @@
 import type { Static, TSchema } from "@sinclair/typebox";
 import { Errors } from "@sinclair/typebox/errors";
 import { Check, Clone, Default } from "@sinclair/typebox/value";
-import type { Logger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 
 export type ToolContentBlock =
@@ -25,7 +24,6 @@ export interface ToolExecutionContext {
   ownerAgentId?: string | null;
   cwd?: string;
   storage: StorageDb;
-  logger: Logger;
   abortSignal?: AbortSignal;
   toolCallId?: string;
 }

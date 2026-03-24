@@ -1,5 +1,6 @@
 import util from "node:util";
 
+import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { loadConfig } from "@/src/config/load.js";
 import type { LoggingConfig, LogLevel } from "@/src/config/schema.js";
 
@@ -15,7 +16,6 @@ export interface Logger {
 }
 
 export interface LoggerOptions {
-  now?: () => Date;
   write?: (line: string) => void;
   subsystem: string;
 }
@@ -34,7 +34,6 @@ const LEVEL_COLORS: Record<LogLevel, string> = {
   warn: "\u001B[33m",
   error: "\u001B[31m",
 };
-
 function shouldLog(currentLevel: LogLevel, targetLevel: LogLevel): boolean {
   return LOG_LEVEL_ORDER[targetLevel] >= LOG_LEVEL_ORDER[currentLevel];
 }
@@ -55,12 +54,26 @@ function formatContext(context: LoggerContext | undefined): string {
 
   const entries = Object.entries(context)
     .filter(([, value]) => value !== undefined)
-    .map(
-      ([key, value]) =>
-        `${key}=${util.inspect(value, { breakLength: Infinity, compact: true, depth: 4 })}`,
-    );
+    .map(([key, value]) => `${key}=${formatContextValue(value)}`);
 
   return entries.length > 0 ? ` ${entries.join(" ")}` : "";
+}
+
+function formatContextValue(value: unknown): string {
+  if (typeof value === "string") {
+    return util.inspect(value, { breakLength: Infinity, compact: true });
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    value == null
+  ) {
+    return String(value);
+  }
+
+  return util.inspect(value, { breakLength: Infinity, compact: true, depth: 1 });
 }
 
 function formatLine(
@@ -82,14 +95,13 @@ function createLoggerWithLevel(
   options: LoggerOptions,
 ): Logger {
   const write = options.write ?? ((line: string) => console.error(line));
-  const now = options.now ?? (() => new Date());
 
   const log = (targetLevel: LogLevel, message: string, context?: LoggerContext): void => {
     if (!shouldLog(level, targetLevel)) {
       return;
     }
 
-    write(formatLine(targetLevel, message, context, now(), options.subsystem, useColors));
+    write(formatLine(targetLevel, message, context, new Date(), options.subsystem, useColors));
   };
 
   return {
@@ -117,13 +129,63 @@ export function createTestLogger(config: LoggingConfig, options: LoggerOptions):
 }
 
 let loggingConfigPromise: Promise<LoggingConfig> | null = null;
+let resolvedLoggingConfig: LoggingConfig | null = null;
 
 async function getLoggingConfig(): Promise<LoggingConfig> {
-  loggingConfigPromise ??= loadConfig().then((config) => config.logging);
+  loggingConfigPromise ??= loadConfig().then((config) => {
+    resolvedLoggingConfig = config.logging;
+    return config.logging;
+  });
   return loggingConfigPromise;
 }
 
 export async function createLogger(options: LoggerOptions): Promise<Logger> {
   const config = await getLoggingConfig();
   return createTestLogger(config, options);
+}
+
+export function createSubsystemLogger(subsystem: string): Logger {
+  let logger =
+    resolvedLoggingConfig == null
+      ? createTestLogger(DEFAULT_CONFIG.logging, { subsystem })
+      : createTestLogger(resolvedLoggingConfig, { subsystem });
+  let loading: Promise<void> | null = null;
+
+  const ensureConfiguredLogger = () => {
+    if (resolvedLoggingConfig != null) {
+      logger = createTestLogger(resolvedLoggingConfig, { subsystem });
+      return;
+    }
+    if (loading != null) {
+      return;
+    }
+
+    loading = getLoggingConfig()
+      .then((config) => {
+        logger = createTestLogger(config, { subsystem });
+      })
+      .catch(() => {})
+      .finally(() => {
+        loading = null;
+      });
+  };
+
+  return {
+    debug(message, context) {
+      ensureConfiguredLogger();
+      logger.debug(message, context);
+    },
+    info(message, context) {
+      ensureConfiguredLogger();
+      logger.info(message, context);
+    },
+    warn(message, context) {
+      ensureConfiguredLogger();
+      logger.warn(message, context);
+    },
+    error(message, context) {
+      ensureConfiguredLogger();
+      logger.error(message, context);
+    },
+  };
 }
