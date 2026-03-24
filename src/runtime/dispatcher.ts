@@ -5,6 +5,9 @@ import {
   type SubmitSessionMessageInput,
   type SubmitSessionMessageResult,
 } from "@/src/runtime/session-lane.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
+
+const logger = createSubsystemLogger("runtime-dispatch");
 
 export type {
   SubmitSessionMessageInput,
@@ -29,7 +32,13 @@ export class InMemorySessionDispatcher {
   // later unify all ingress commands into a single actor queue, this method is
   // the place to reroute them through the lane.
   submitApprovalDecision(input: ApprovalResponseInput): boolean {
-    return this.deps.loop.submitApprovalResponse(input);
+    const resolved = this.deps.loop.submitApprovalResponse(input);
+    logger.info("received approval reply", {
+      approvalId: input.approvalId,
+      decision: input.decision,
+      matched: resolved,
+    });
+    return resolved;
   }
 
   isSessionActive(sessionId: string): boolean {
@@ -44,6 +53,7 @@ export class InMemorySessionDispatcher {
 
     const lane = new InMemorySessionLane(this.deps);
     this.lanes.set(sessionId, lane);
+    logger.debug("created session lane", { sessionId });
     return lane;
   }
 }

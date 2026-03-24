@@ -9,7 +9,6 @@ import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
-import { createTestLogger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
@@ -132,10 +131,6 @@ describe("session runtime ingress", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "runtime-ingress-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -204,10 +199,6 @@ describe("session runtime ingress", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "runtime-ingress-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -283,10 +274,6 @@ describe("session runtime ingress", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "runtime-ingress-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -383,10 +370,6 @@ describe("session runtime ingress", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "runtime-ingress-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);

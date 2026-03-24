@@ -18,10 +18,13 @@ import {
   serializePermissionRequest,
   serializePermissionScope,
 } from "@/src/security/scope.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { PermissionGrantsRepo } from "@/src/storage/repos/permission-grants.repo.js";
 import type { AgentPermissionGrant, ApprovalRecord } from "@/src/storage/schema/types.js";
+
+const logger = createSubsystemLogger("security");
 
 export class SecurityService {
   private readonly approvalsRepo: ApprovalsRepo;
@@ -96,7 +99,7 @@ export class SecurityService {
     resumePayloadJson?: string | null;
     createdAt?: Date;
   }): number {
-    return this.approvalsRepo.create({
+    const approvalId = this.approvalsRepo.create({
       ownerAgentId: input.ownerAgentId,
       requestedBySessionId: input.requestedBySessionId ?? null,
       requestedScopeJson: serializePermissionRequest(input.request),
@@ -107,6 +110,14 @@ export class SecurityService {
       resumePayloadJson: input.resumePayloadJson ?? null,
       ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
     });
+    logger.info("created approval request", {
+      approvalId,
+      ownerAgentId: input.ownerAgentId,
+      sessionId: input.requestedBySessionId ?? null,
+      scopeCount: input.request.scopes.length,
+      target: input.approvalTarget,
+    });
+    return approvalId;
   }
 
   resolveApproval(input: {
@@ -115,6 +126,10 @@ export class SecurityService {
     reasonText?: string | null;
     decidedAt?: Date;
   }): void {
+    logger.info("resolved approval request", {
+      approvalId: input.approvalId,
+      status: input.status,
+    });
     this.approvalsRepo.resolve({
       id: input.approvalId,
       status: input.status,
@@ -146,6 +161,12 @@ export class SecurityService {
         expiresAt: input.expiresAt ?? null,
       });
       grantIds.push(grantId);
+      logger.info("granted permission scope", {
+        grantId,
+        ownerAgentId: input.ownerAgentId,
+        grantedBy: input.grantedBy,
+        scope: describeScopeForLog(scope),
+      });
     }
 
     return grantIds;
@@ -182,4 +203,12 @@ export class SecurityService {
       expiresAt: input.expiresAt ?? null,
     });
   }
+}
+
+function describeScopeForLog(scope: PermissionScope): string {
+  if ("path" in scope) {
+    return `${scope.kind}:${scope.path}`;
+  }
+
+  return `${scope.kind}:${scope.database}`;
 }

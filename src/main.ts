@@ -1,21 +1,22 @@
-import { createBootstrapLogger, createLogger } from "@/src/shared/logger.js";
+import { createBootstrapLogger, createSubsystemLogger } from "@/src/shared/logger.js";
 import { initializeStorageOnStartup, registerStorageCleanup } from "@/src/storage/index.js";
+
+const logger = createSubsystemLogger("main");
 
 export async function main(): Promise<void> {
   const bootstrapLogger = createBootstrapLogger({ subsystem: "bootstrap" });
-  bootstrapLogger.info("Starting Pokeclaw");
+  bootstrapLogger.info("starting pokeclaw");
 
-  const logger = await createLogger({ subsystem: "config" });
-
-  logger.info("Loaded application config");
+  logger.info("application config loaded");
 
   const storage = await initializeStorageOnStartup();
   await registerStorageCleanup(storage);
+  logger.info("startup complete");
 }
 
 main().catch((error: unknown) => {
   const bootstrapLogger = createBootstrapLogger({ subsystem: "bootstrap" });
-  bootstrapLogger.error("Failed to start Pokeclaw", {
+  bootstrapLogger.error("startup failed", {
     error: error instanceof Error ? error.message : String(error),
   });
   process.exitCode = 1;

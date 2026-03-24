@@ -1,6 +1,5 @@
 import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, test } from "vitest";
-import { createTestLogger } from "@/src/shared/logger.js";
 import { ToolRegistry } from "@/src/tools/registry.js";
 import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/types.js";
 import {
@@ -32,11 +31,6 @@ describe("tool registry", () => {
   test("registers and executes a schema-defined read_file tool with defaults", async () => {
     handle = await createTestDatabase(import.meta.url);
     const registry = new ToolRegistry();
-    const logger = createTestLogger(
-      { level: "debug", useColors: false },
-      { subsystem: "test-tools" },
-    );
-
     registry.register(
       defineTool({
         name: "read_file",
@@ -61,7 +55,6 @@ describe("tool registry", () => {
         sessionId: "sess_1",
         conversationId: "conv_1",
         storage: handle.storage.db,
-        logger,
       },
       { path: "/workspace/README.md" },
     );
@@ -103,10 +96,6 @@ describe("tool registry", () => {
           sessionId: "sess_1",
           conversationId: "conv_1",
           storage: handle.storage.db,
-          logger: createTestLogger(
-            { level: "debug", useColors: false },
-            { subsystem: "test-tools" },
-          ),
         },
         { path: 123, unexpected: true },
       ),
@@ -146,10 +135,6 @@ describe("tool registry", () => {
           sessionId: "sess_1",
           conversationId: "conv_1",
           storage: handle.storage.db,
-          logger: createTestLogger(
-            { level: "debug", useColors: false },
-            { subsystem: "test-tools" },
-          ),
         },
         {},
       ),

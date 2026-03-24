@@ -20,12 +20,14 @@ import type {
   AgentModelTurnInput,
   AgentModelTurnResult,
 } from "@/src/agent/loop.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
 import type { ToolRegistry } from "@/src/tools/registry.js";
 
 const COMPACTION_SUMMARY_PREFIX = "[Context Summary]";
 const PERMISSIVE_TOOL_PARAMETERS = Type.Object({}, { additionalProperties: true });
+const logger = createSubsystemLogger("llm-bridge");
 
 export interface PiBridgeTextDelta {
   delta: string;
@@ -65,6 +67,14 @@ export class PiBridge {
       Object.assign(context, { tools });
     }
 
+    logger.debug("starting streaming llm turn", {
+      modelId: input.model.id,
+      provider: input.model.provider.id,
+      messageCount: input.messages.length,
+      tools: tools?.length ?? 0,
+      hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
+    });
+
     try {
       const stream = streamSimple(model, context, buildPiStreamOptions(input.model, input.signal));
       let accumulatedText = "";
@@ -81,6 +91,11 @@ export class PiBridge {
       }
 
       const finalMessage = await stream.result();
+      logger.debug("streaming llm turn finished", {
+        modelId: input.model.id,
+        provider: input.model.provider.id,
+        stopReason: finalMessage.stopReason,
+      });
       return normalizeAssistantResult(finalMessage, "stream");
     } catch (error) {
       throw normalizeAgentLlmError({
@@ -103,12 +118,25 @@ export class PiBridge {
       Object.assign(context, { tools });
     }
 
+    logger.debug("starting non-stream llm turn", {
+      modelId: input.model.id,
+      provider: input.model.provider.id,
+      messageCount: input.messages.length,
+      tools: tools?.length ?? 0,
+      hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
+    });
+
     try {
       const finalMessage = await completeSimple(
         model,
         context,
         buildPiStreamOptions(input.model, input.signal),
       );
+      logger.debug("non-stream llm turn finished", {
+        modelId: input.model.id,
+        provider: input.model.provider.id,
+        stopReason: finalMessage.stopReason,
+      });
       return normalizeAssistantResult(finalMessage, "complete");
     } catch (error) {
       throw normalizeAgentLlmError({
@@ -121,6 +149,11 @@ export class PiBridge {
 
   async completeText(input: CompactionModelRunnerInput): Promise<CompactionModelRunnerResult> {
     const model = toPiModel(input.model);
+
+    logger.debug("starting compaction llm call", {
+      modelId: input.model.id,
+      provider: input.model.provider.id,
+    });
 
     try {
       const finalMessage = await completeSimple(
@@ -139,6 +172,11 @@ export class PiBridge {
       );
 
       const normalized = normalizeAssistantResult(finalMessage, "complete");
+      logger.debug("compaction llm call finished", {
+        modelId: input.model.id,
+        provider: input.model.provider.id,
+        outputTokens: normalized.usage.output,
+      });
       return {
         provider: normalized.provider,
         model: normalized.model,

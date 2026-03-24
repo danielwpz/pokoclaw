@@ -10,7 +10,6 @@ import { AgentSessionService } from "@/src/agent/session.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
-import { createTestLogger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
@@ -184,10 +183,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -276,10 +271,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -365,10 +356,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -473,10 +460,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -554,10 +537,6 @@ describe("agent loop", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -644,10 +623,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);
@@ -761,10 +736,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);
@@ -857,10 +828,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -961,10 +928,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -1055,10 +1018,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -1146,10 +1105,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -1215,10 +1170,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);
@@ -1288,10 +1239,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);
@@ -1361,10 +1308,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -1481,10 +1424,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: {
         reserveTokens: 60_000,
         keepRecentTokens: 15_000,
@@ -1592,10 +1531,6 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
-      logger: createTestLogger(
-        { level: "debug", useColors: false },
-        { subsystem: "agent-loop-test" },
-      ),
       compaction: DEFAULT_CONFIG.compaction,
     });
 

@@ -31,7 +31,7 @@ import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-queue.js";
 import { describePermissionScope, type PermissionRequest } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
-import type { Logger } from "@/src/shared/logger.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.repo.js";
@@ -44,6 +44,8 @@ import {
 } from "@/src/tools/errors.js";
 import type { ToolRegistry } from "@/src/tools/registry.js";
 import { type ToolResult, textToolResult } from "@/src/tools/types.js";
+
+const logger = createSubsystemLogger("agent-loop");
 
 // AgentLoop is the execution core for a single session run.
 // It owns model turns, tool execution, compaction hooks, and the runtime-side
@@ -99,12 +101,9 @@ export interface AgentLoopDependencies {
   cancel: SessionRunAbortRegistry;
   modelRunner: AgentModelRunner;
   storage: StorageDb;
-  logger: Logger;
   compaction: CompactionConfig;
   approvalTimeoutMs?: number;
   approvalGrantTtlMs?: number;
-  now?: () => Date;
-  createId?: () => string;
   emitEvent?: (event: AgentRuntimeEvent) => void;
 }
 
@@ -123,8 +122,6 @@ interface ExecutedToolCall {
 }
 
 export class AgentLoop {
-  private readonly now: () => Date;
-  private readonly createId: () => string;
   private readonly compactor: AgentCompactionService | null;
   private readonly security: SecurityService;
   private readonly approvalWaits = new SessionApprovalWaitRegistry();
@@ -133,8 +130,6 @@ export class AgentLoop {
   private readonly approvalGrantTtlMs: number;
 
   constructor(private readonly deps: AgentLoopDependencies) {
-    this.now = deps.now ?? (() => new Date());
-    this.createId = deps.createId ?? (() => randomUUID());
     this.security = new SecurityService(deps.storage);
     this.approvalTimeoutMs = deps.approvalTimeoutMs ?? 3 * 60 * 1000;
     this.approvalGrantTtlMs = deps.approvalGrantTtlMs ?? 7 * 24 * 60 * 60 * 1000;
@@ -173,7 +168,7 @@ export class AgentLoop {
     const appendedMessageIds: string[] = [];
     let toolExecutions = 0;
     let nextSeq = this.deps.messages.getNextSeq(input.sessionId);
-    const runId = this.createId();
+    const runId = randomUUID();
     let compactionRequested = false;
     let latestCompaction = decideCompaction({
       contextTokens: 0,
@@ -195,6 +190,12 @@ export class AgentLoop {
       for (let turn = 0; turn < maxTurns; turn += 1) {
         throwIfAborted(handle.signal);
         let turnToolExecutions = 0;
+        logger.debug("starting model turn", {
+          sessionId: input.sessionId,
+          turn: turn + 1,
+          runId,
+          tail: summarizeTranscriptTail(messages),
+        });
 
         this.recordEvent(events, {
           type: "turn_started",
@@ -205,7 +206,7 @@ export class AgentLoop {
           runId,
         });
 
-        const assistantMessageId = this.createId();
+        const assistantMessageId = randomUUID();
         let sawStreamedText = false;
         let overflowRecovered = false;
         let response: AgentModelTurnResult;
@@ -273,15 +274,11 @@ export class AgentLoop {
               branchId: context.session.branchId,
               runId,
             });
-            this.deps.logger.info(
-              "Hit the context window while generating a reply; compacting and retrying",
-              {
-                sessionId: input.sessionId,
-                scenario: input.scenario,
-                modelId: model.id,
-                runId,
-              },
-            );
+            logger.info("context overflow; compacting before retry", {
+              sessionId: input.sessionId,
+              modelId: model.id,
+              runId,
+            });
 
             const compactionResult = await this.compactor.compactNow({
               sessionId: input.sessionId,
@@ -297,10 +294,10 @@ export class AgentLoop {
               throw error;
             }
 
-            this.deps.logger.info("Compaction finished after an overflow; retrying the turn", {
+            logger.info("compaction finished; retrying turn", {
               sessionId: input.sessionId,
-              compactCursor: compactionResult.compactCursor,
-              summaryTokenTotal: compactionResult.summaryTokenTotal,
+              cursor: compactionResult.compactCursor,
+              summaryTokens: compactionResult.summaryTokenTotal,
               runId,
             });
 
@@ -348,7 +345,7 @@ export class AgentLoop {
             content: response.content,
           } satisfies AgentAssistantPayload,
           usage: response.usage,
-          createdAt: this.now(),
+          createdAt: new Date(),
         });
         nextSeq += 1;
         messages.push(assistantMessage);
@@ -369,6 +366,13 @@ export class AgentLoop {
         if (toolCalls.length === 0) {
           const queuedSteer = this.steerQueue.drain(input.sessionId);
           if (queuedSteer.length > 0) {
+            logger.info("steering inbound message after turn", {
+              sessionId: input.sessionId,
+              turn: turn + 1,
+              runId,
+              count: queuedSteer.length,
+              latest: truncateLogText(queuedSteer.at(-1)?.content ?? "", 48),
+            });
             nextSeq = this.appendQueuedSteerMessages({
               queuedSteer,
               sessionId: input.sessionId,
@@ -424,7 +428,7 @@ export class AgentLoop {
 
             throwIfAborted(handle.signal);
 
-            const toolResultMessageId = this.createId();
+            const toolResultMessageId = randomUUID();
             const toolResultMessage = appendMessageAndHydrate({
               repo: this.deps.messages,
               sessionId: input.sessionId,
@@ -442,7 +446,7 @@ export class AgentLoop {
                   ? { details: executedTool.result.details }
                   : {}),
               } satisfies AgentToolResultPayload,
-              createdAt: this.now(),
+              createdAt: new Date(),
             });
             nextSeq += 1;
             messages.push(toolResultMessage);
@@ -486,7 +490,7 @@ export class AgentLoop {
               throw failure;
             }
 
-            const toolResultMessageId = this.createId();
+            const toolResultMessageId = randomUUID();
             const toolResultMessage = appendMessageAndHydrate({
               repo: this.deps.messages,
               sessionId: input.sessionId,
@@ -502,7 +506,7 @@ export class AgentLoop {
                 isError: true,
                 ...(failure.details !== undefined ? { details: failure.details } : {}),
               } satisfies AgentToolResultPayload,
-              createdAt: this.now(),
+              createdAt: new Date(),
             });
             nextSeq += 1;
             messages.push(toolResultMessage);
@@ -514,6 +518,14 @@ export class AgentLoop {
 
         const queuedSteer = [...queuedSteerAfterTurn, ...this.steerQueue.drain(input.sessionId)];
         if (queuedSteer.length > 0) {
+          logger.info("steering inbound message after tool batch", {
+            sessionId: input.sessionId,
+            turn: turn + 1,
+            runId,
+            count: queuedSteer.length,
+            latest: truncateLogText(queuedSteer.at(-1)?.content ?? "", 48),
+            tail: summarizeTranscriptTail(messages),
+          });
           nextSeq = this.appendQueuedSteerMessages({
             queuedSteer,
             sessionId: input.sessionId,
@@ -549,27 +561,22 @@ export class AgentLoop {
         contextWindow: model.contextWindow,
         config: this.deps.compaction,
       });
-      this.deps.logger.debug("Checked post-run context size for compaction", {
+      logger.debug("checked context size for compaction", {
         sessionId: input.sessionId,
-        scenario: input.scenario,
         modelId: model.id,
         contextTokens: compactionEstimate.tokens,
-        usageTokens: compactionEstimate.usageTokens,
-        trailingTokens: compactionEstimate.trailingTokens,
-        compactSummaryTokens: compactionEstimate.compactSummaryTokens,
-        thresholdTokens: compaction.thresholdTokens,
+        threshold: compaction.thresholdTokens,
         runId,
       });
       latestCompaction = compaction.shouldCompact ? compaction : latestCompaction;
 
       if (compaction.shouldCompact && compaction.reason != null) {
         compactionRequested = true;
-        this.deps.logger.info("Context is near the window limit; queueing background compaction", {
+        logger.info("queueing background compaction", {
           sessionId: input.sessionId,
-          scenario: input.scenario,
           modelId: model.id,
           contextTokens: compactionEstimate.tokens,
-          thresholdTokens: compaction.thresholdTokens,
+          threshold: compaction.thresholdTokens,
           runId,
         });
         this.recordEvent(events, {
@@ -662,7 +669,6 @@ export class AgentLoop {
             ownerAgentId: input.context.session.ownerAgentId,
             cwd: POKECLAW_WORKSPACE_DIR,
             storage: this.deps.storage,
-            logger: this.deps.logger,
             abortSignal: input.signal,
             toolCallId: input.toolCall.id,
           },
@@ -747,7 +753,7 @@ export class AgentLoop {
     // Approval is modeled as pause/resume, not as a finished tool failure.
     // We persist the request for durability, then wait on the in-memory hot
     // path so normal approve/deny responses can resume the same tool call.
-    const createdAt = this.now();
+    const createdAt = new Date();
     const expiresAt = new Date(createdAt.getTime() + this.approvalTimeoutMs);
     const resumePayloadJson = JSON.stringify({
       toolCallId: input.toolCall.id,
@@ -766,12 +772,22 @@ export class AgentLoop {
       expiresAt,
       resumePayloadJson,
     });
+    logger.info("approval requested for tool call", {
+      sessionId: input.runInput.sessionId,
+      approvalId,
+      toolName: input.toolCall.name,
+      scopeCount: input.request.scopes.length,
+      scope:
+        input.request.scopes[0] == null
+          ? undefined
+          : describePermissionScope(input.request.scopes[0]),
+      runId: input.runId,
+    });
 
     const waitPromise = this.approvalWaits.beginWait({
       sessionId: input.runInput.sessionId,
       approvalId,
       timeoutMs: this.approvalTimeoutMs,
-      now: this.now,
     });
 
     this.deps.sessions.updateStatus({
@@ -798,7 +814,7 @@ export class AgentLoop {
         sessionId: input.runInput.sessionId,
         actor: "system:cancel",
         reasonText: "Run cancelled while waiting for approval.",
-        decidedAt: this.now(),
+        decidedAt: new Date(),
       });
     };
     input.signal.addEventListener("abort", onAbort, { once: true });
@@ -826,6 +842,14 @@ export class AgentLoop {
         branchId: input.context.session.branchId,
         runId: input.runId,
       });
+      logger.info("approval resolved for tool call", {
+        sessionId: input.runInput.sessionId,
+        approvalId,
+        toolName: input.toolCall.name,
+        decision: outcome.decision,
+        actor: outcome.actor,
+        runId: input.runId,
+      });
 
       return {
         ...outcome,
@@ -837,7 +861,7 @@ export class AgentLoop {
       this.deps.sessions.updateStatus({
         id: input.runInput.sessionId,
         status: "active",
-        updatedAt: this.now(),
+        updatedAt: new Date(),
       });
     }
   }
@@ -852,7 +876,7 @@ export class AgentLoop {
     let nextSeq = input.nextSeq;
 
     for (const queued of input.queuedSteer) {
-      const messageId = this.createId();
+      const messageId = randomUUID();
       const message = appendMessageAndHydrate({
         repo: this.deps.messages,
         sessionId: input.sessionId,
@@ -864,7 +888,7 @@ export class AgentLoop {
         payload: {
           content: queued.content,
         } satisfies AgentUserPayload,
-        createdAt: queued.createdAt ?? this.now(),
+        createdAt: queued.createdAt ?? new Date(),
       });
       nextSeq += 1;
       input.messages.push(message);
@@ -877,8 +901,8 @@ export class AgentLoop {
   private recordEvent(events: AgentRuntimeEvent[], event: AgentRuntimeEventInput): void {
     const hydrated = {
       ...event,
-      eventId: this.createId(),
-      createdAt: this.now().toISOString(),
+      eventId: randomUUID(),
+      createdAt: new Date().toISOString(),
     } satisfies AgentRuntimeEvent;
 
     events.push(hydrated);
@@ -970,6 +994,58 @@ function buildApprovalTitle(request: PermissionRequest): string {
   }
 
   return `Approval required for ${request.scopes.length} permissions`;
+}
+
+function summarizeTranscriptTail(messages: Message[], maxMessages: number = 6) {
+  const summary = messages.slice(-maxMessages).map((message) => {
+    if (message.role === "user") {
+      const payload = safeParsePayload<{ content?: unknown }>(message.payloadJson);
+      const content =
+        typeof payload?.content === "string" ? truncateLogText(payload.content, 24) : "non-text";
+      return `u:${content}`;
+    }
+
+    if (message.role === "tool") {
+      const payload = safeParsePayload<{
+        toolName?: unknown;
+        toolCallId?: unknown;
+        isError?: unknown;
+      }>(message.payloadJson);
+      const toolName = typeof payload?.toolName === "string" ? payload.toolName : "unknown";
+      return payload?.isError === true ? `t:${toolName}:err` : `t:${toolName}`;
+    }
+
+    const payload = safeParsePayload<{ content?: Array<{ type?: string; text?: string }> }>(
+      message.payloadJson,
+    );
+    const text = Array.isArray(payload?.content)
+      ? payload.content
+          .filter((block) => block.type === "text" && typeof block.text === "string")
+          .map((block) => block.text)
+          .join(" ")
+      : "";
+    const stopReason = message.stopReason ?? "?";
+    const summaryText = text.length > 0 ? `:${truncateLogText(text, 16)}` : "";
+    return `a:${stopReason}${summaryText}`;
+  });
+
+  return truncateLogText(summary.join(">"), 72);
+}
+
+function safeParsePayload<T>(payloadJson: string): T | null {
+  try {
+    return JSON.parse(payloadJson) as T;
+  } catch {
+    return null;
+  }
+}
+
+function truncateLogText(text: string, maxLength: number = 80) {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength)}...`;
 }
 
 function throwIfAborted(signal: AbortSignal): void {

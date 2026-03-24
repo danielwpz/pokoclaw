@@ -1,3 +1,7 @@
+import { createSubsystemLogger } from "@/src/shared/logger.js";
+
+const logger = createSubsystemLogger("runtime-cancel");
+
 export interface SessionRunHandle {
   sessionId: string;
   signal: AbortSignal;
@@ -19,6 +23,7 @@ export class SessionRunAbortRegistry {
 
     const controller = new AbortController();
     this.controllers.set(sessionId, controller);
+    logger.debug("claimed active run slot", { sessionId });
 
     return {
       sessionId,
@@ -27,6 +32,7 @@ export class SessionRunAbortRegistry {
         const current = this.controllers.get(sessionId);
         if (current === controller) {
           this.controllers.delete(sessionId);
+          logger.debug("released active run slot", { sessionId });
         }
       },
     };
@@ -43,9 +49,11 @@ export class SessionRunAbortRegistry {
   cancel(sessionId: string, reason = "cancelled"): boolean {
     const controller = this.controllers.get(sessionId);
     if (controller == null) {
+      logger.debug("cancel ignored; no active run", { sessionId, reason });
       return false;
     }
 
+    logger.info("cancelling active run", { sessionId, reason });
     controller.abort(reason);
     this.controllers.delete(sessionId);
     return true;

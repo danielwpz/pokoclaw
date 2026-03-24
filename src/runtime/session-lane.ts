@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { AgentLoop, RunAgentLoopResult } from "@/src/agent/loop.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
+
+const logger = createSubsystemLogger("runtime-lane");
 
 // A session lane owns the "one active run per session" invariant.
 // The important implementation detail is that activeRun is claimed
@@ -29,19 +32,12 @@ export type SubmitSessionMessageResult =
 export interface SessionLaneDependencies {
   loop: AgentLoop;
   messages: MessagesRepo;
-  now?: () => Date;
-  createId?: () => string;
 }
 
 export class InMemorySessionLane {
-  private readonly now: () => Date;
-  private readonly createId: () => string;
   private activeRun: Promise<RunAgentLoopResult> | null = null;
 
-  constructor(private readonly deps: SessionLaneDependencies) {
-    this.now = deps.now ?? (() => new Date());
-    this.createId = deps.createId ?? (() => randomUUID());
-  }
+  constructor(private readonly deps: SessionLaneDependencies) {}
 
   isActive(): boolean {
     return this.activeRun != null;
@@ -58,13 +54,17 @@ export class InMemorySessionLane {
         ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
       });
       if (steered) {
+        logger.info("queued inbound message behind active run", {
+          sessionId: input.sessionId,
+          content: truncateLogValue(input.content),
+        });
         return {
           status: "steered",
         };
       }
     }
 
-    const messageId = this.createId();
+    const messageId = randomUUID();
     this.deps.messages.append({
       id: messageId,
       sessionId: input.sessionId,
@@ -75,7 +75,7 @@ export class InMemorySessionLane {
       }),
       messageType: "text",
       visibility: "user_visible",
-      createdAt: input.createdAt ?? this.now(),
+      createdAt: input.createdAt ?? new Date(),
     });
 
     const runPromise = this.deps.loop
@@ -87,10 +87,16 @@ export class InMemorySessionLane {
       .finally(() => {
         if (this.activeRun === runPromise) {
           this.activeRun = null;
+          logger.debug("session run became idle", { sessionId: input.sessionId });
         }
       });
 
     this.activeRun = runPromise;
+    logger.info("starting session run", {
+      sessionId: input.sessionId,
+      messageId,
+      scenario: input.scenario,
+    });
 
     return {
       status: "started",
@@ -102,4 +108,12 @@ export class InMemorySessionLane {
   submitApprovalDecision(input: ApprovalResponseInput): boolean {
     return this.deps.loop.submitApprovalResponse(input);
   }
+}
+
+function truncateLogValue(value: string, maxLength: number = 40) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength - 3)}...`;
 }

@@ -50,10 +50,7 @@ export interface ListSessionMessagesOptions {
 }
 
 export class MessagesRepo {
-  constructor(
-    private readonly db: StorageDb,
-    private readonly now: () => Date = () => new Date(),
-  ) {}
+  constructor(private readonly db: StorageDb) {}
 
   append(input: AppendMessageInput): void {
     const usage = input.usage != null ? normalizeMessageUsage(input.usage) : null;
@@ -77,7 +74,7 @@ export class MessagesRepo {
       tokenCacheWrite: input.tokenCacheWrite ?? usage?.cacheWrite ?? null,
       tokenTotal: input.tokenTotal ?? usage?.totalTokens ?? null,
       usageJson: usage == null ? null : JSON.stringify(usage),
-      createdAt: toCanonicalUtcIsoTimestamp(input.createdAt ?? this.now()),
+      createdAt: toCanonicalUtcIsoTimestamp(input.createdAt ?? new Date()),
     };
 
     this.db.insert(messages).values(row).run();
