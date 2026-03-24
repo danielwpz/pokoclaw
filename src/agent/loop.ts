@@ -21,7 +21,7 @@ import type {
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
-import type { CompactionConfig } from "@/src/config/schema.js";
+import type { CompactionConfig, SecurityConfig } from "@/src/config/schema.js";
 import {
   type ApprovalResponseInput,
   type ApprovalWaitOutcome,
@@ -29,6 +29,7 @@ import {
 } from "@/src/runtime/approval-waits.js";
 import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-queue.js";
+import { buildSystemPolicy } from "@/src/security/policy.js";
 import { describePermissionScope, type PermissionRequest } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
@@ -101,6 +102,7 @@ export interface AgentLoopDependencies {
   cancel: SessionRunAbortRegistry;
   modelRunner: AgentModelRunner;
   storage: StorageDb;
+  securityConfig: SecurityConfig;
   compaction: CompactionConfig;
   approvalTimeoutMs?: number;
   approvalGrantTtlMs?: number;
@@ -130,7 +132,10 @@ export class AgentLoop {
   private readonly approvalGrantTtlMs: number;
 
   constructor(private readonly deps: AgentLoopDependencies) {
-    this.security = new SecurityService(deps.storage);
+    this.security = new SecurityService(
+      deps.storage,
+      buildSystemPolicy({ security: deps.securityConfig }),
+    );
     this.approvalTimeoutMs = deps.approvalTimeoutMs ?? 3 * 60 * 1000;
     this.approvalGrantTtlMs = deps.approvalGrantTtlMs ?? 7 * 24 * 60 * 60 * 1000;
     this.compactor = isCompactionModelRunner(deps.modelRunner)
@@ -668,6 +673,7 @@ export class AgentLoop {
             conversationId: input.context.session.conversationId,
             ownerAgentId: input.context.session.ownerAgentId,
             cwd: POKECLAW_WORKSPACE_DIR,
+            securityConfig: this.deps.securityConfig,
             storage: this.deps.storage,
             abortSignal: input.signal,
             toolCallId: input.toolCall.id,

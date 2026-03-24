@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { PermissionCheckResult } from "@/src/security/permissions.js";
 import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
+import { buildSystemPolicy } from "@/src/security/policy.js";
 import { describePermissionScope, type PermissionScope } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
@@ -55,7 +56,10 @@ export function createFilesystemAccessController(
 ): FilesystemAccessController {
   const ownerAgentId = resolveToolOwnerAgentId(context);
   const cwd = resolveToolCwd(context);
-  const security = new SecurityService(context.storage);
+  const security = new SecurityService(
+    context.storage,
+    buildSystemPolicy({ security: context.securityConfig }),
+  );
 
   const check = (input: {
     kind: "fs.read" | "fs.write";

@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { SystemPermissionPolicy } from "@/src/security/policy.js";
-import { DEFAULT_SYSTEM_POLICY } from "@/src/security/policy.js";
+import {
+  type AgentPermissionBaseline,
+  type AgentRuntimeRole,
+  buildAgentPermissionBaseline,
+  DEFAULT_SYSTEM_POLICY,
+  type SystemPermissionPolicy,
+} from "@/src/security/policy.js";
 import {
   type DbPermissionKind,
   type FsPermissionKind,
@@ -14,6 +19,7 @@ import {
 export interface EffectivePermissions {
   fs: {
     read: {
+      mode: "deny_only" | "allow_only";
       hardDeny: string[];
       deny: string[];
       allow: string[];
@@ -96,18 +102,26 @@ function hasDbGrant(scopes: PermissionScope[], kind: DbPermissionKind): boolean 
 export function buildEffectivePermissions(
   scopes: PermissionScope[],
   systemPolicy: SystemPermissionPolicy = DEFAULT_SYSTEM_POLICY,
+  baseline: AgentPermissionBaseline = buildAgentPermissionBaseline("subagent"),
 ): EffectivePermissions {
   return {
     fs: {
       read: {
+        mode: baseline.fs.readMode,
         hardDeny: systemPolicy.fs.read.hardDeny.map(normalizePolicyPath),
         deny: systemPolicy.fs.read.deny.map(normalizePolicyPath),
-        allow: getFsAllowPaths(scopes, "fs.read"),
+        allow: dedupeNormalizedPaths([
+          ...baseline.fs.readAllow,
+          ...getFsAllowPaths(scopes, "fs.read"),
+        ]),
       },
       write: {
         hardDeny: systemPolicy.fs.write.hardDeny.map(normalizePolicyPath),
         deny: systemPolicy.fs.write.deny.map(normalizePolicyPath),
-        allow: getFsAllowPaths(scopes, "fs.write"),
+        allow: dedupeNormalizedPaths([
+          ...baseline.fs.writeAllow,
+          ...getFsAllowPaths(scopes, "fs.write"),
+        ]),
       },
     },
     db: {
@@ -128,7 +142,9 @@ export function checkFilesystemPermission(input: {
   permissions: EffectivePermissions;
 }): PermissionCheckResult {
   const normalizedTargetPath = normalizeCheckedPath(input.targetPath, input.cwd);
-  const rules = input.kind === "fs.read" ? input.permissions.fs.read : input.permissions.fs.write;
+  const readRules = input.permissions.fs.read;
+  const writeRules = input.permissions.fs.write;
+  const rules = input.kind === "fs.read" ? readRules : writeRules;
 
   if (hasPolicyMatch(rules.hardDeny, normalizedTargetPath)) {
     return {
@@ -141,11 +157,51 @@ export function checkFilesystemPermission(input: {
   const allowMatch = hasPolicyMatch(rules.allow, normalizedTargetPath);
   const denyMatch = hasPolicyMatch(rules.deny, normalizedTargetPath);
 
-  if (input.kind === "fs.read" && denyMatch && allowMatch) {
+  if (input.kind === "fs.read") {
+    if (readRules.mode === "deny_only") {
+      if (denyMatch && allowMatch) {
+        return {
+          result: "allow",
+          reason: "granted",
+          summary: `Read access granted for ${normalizedTargetPath}`,
+        };
+      }
+
+      if (denyMatch) {
+        return {
+          result: "deny",
+          reason: "not_granted",
+          summary: `${input.kind} is not granted for ${normalizedTargetPath}`,
+        };
+      }
+
+      return {
+        result: "allow",
+        reason: "granted",
+        summary: `${input.kind} is granted for ${normalizedTargetPath}`,
+      };
+    }
+
+    if (!allowMatch) {
+      return {
+        result: "deny",
+        reason: "not_granted",
+        summary: `${input.kind} requires approval for ${normalizedTargetPath}`,
+      };
+    }
+
+    if (denyMatch) {
+      return {
+        result: "deny",
+        reason: "not_granted",
+        summary: `${input.kind} is not granted for ${normalizedTargetPath}`,
+      };
+    }
+
     return {
       result: "allow",
       reason: "granted",
-      summary: `Read access granted for ${normalizedTargetPath}`,
+      summary: `${input.kind} is granted for ${normalizedTargetPath}`,
     };
   }
 
@@ -170,6 +226,14 @@ export function checkFilesystemPermission(input: {
     reason: "not_granted",
     summary: `${input.kind} requires approval for ${normalizedTargetPath}`,
   };
+}
+
+export function buildEffectivePermissionsForRole(
+  scopes: PermissionScope[],
+  role: AgentRuntimeRole,
+  systemPolicy: SystemPermissionPolicy = DEFAULT_SYSTEM_POLICY,
+): EffectivePermissions {
+  return buildEffectivePermissions(scopes, systemPolicy, buildAgentPermissionBaseline(role));
 }
 
 export function checkDatabasePermission(input: {
@@ -224,4 +288,20 @@ function resolvePathWithExistingRealpath(inputPath: string, cwd?: string): strin
   }
 
   return remainder.length === 0 ? resolvedExistingPath : path.join(resolvedExistingPath, remainder);
+}
+
+function dedupeNormalizedPaths(paths: string[]): string[] {
+  const normalized = paths.map(normalizePolicyPath);
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of normalized) {
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+
+  return result;
 }

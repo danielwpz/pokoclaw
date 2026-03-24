@@ -49,11 +49,29 @@ export interface CompactionConfig {
   recentTurnsPreserve: number;
 }
 
+export interface SecurityFilesystemConfig {
+  overrideHardDenyRead: boolean;
+  overrideHardDenyWrite: boolean;
+  hardDenyRead: string[];
+  hardDenyWrite: string[];
+}
+
+export interface SecurityNetworkConfig {
+  overrideHardDenyHosts: boolean;
+  hardDenyHosts: string[];
+}
+
+export interface SecurityConfig {
+  filesystem: SecurityFilesystemConfig;
+  network: SecurityNetworkConfig;
+}
+
 export interface RawConfig {
   logging: LoggingConfig;
   providers: Record<string, ProviderConfig>;
   models: ModelsConfig;
   compaction: CompactionConfig;
+  security: SecurityConfig;
 }
 
 export type SecretValueTree = {
@@ -117,11 +135,29 @@ interface CompactionConfigInput {
   recentTurnsPreserve?: unknown;
 }
 
+interface SecurityFilesystemConfigInput {
+  overrideHardDenyRead?: unknown;
+  overrideHardDenyWrite?: unknown;
+  hardDenyRead?: unknown;
+  hardDenyWrite?: unknown;
+}
+
+interface SecurityNetworkConfigInput {
+  overrideHardDenyHosts?: unknown;
+  hardDenyHosts?: unknown;
+}
+
+interface SecurityConfigInput {
+  filesystem?: unknown;
+  network?: unknown;
+}
+
 interface FileConfigInput {
   logging?: unknown;
   providers?: unknown;
   models?: unknown;
   compaction?: unknown;
+  security?: unknown;
 }
 
 export type SecretsFileInput = Record<string, unknown>;
@@ -143,7 +179,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   }
 
   const config = input as FileConfigInput;
-  const allowedRootKeys = new Set(["logging", "providers", "models", "compaction"]);
+  const allowedRootKeys = new Set(["logging", "providers", "models", "compaction", "security"]);
   for (const key of Object.keys(config)) {
     if (!allowedRootKeys.has(key)) {
       throw new Error(`config.toml contains unknown top-level key: ${key}`);
@@ -154,6 +190,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   const providers = validateProvidersConfig(config.providers, defaults.providers);
   const models = validateModelsConfig(config.models, defaults.models, providers);
   const compaction = validateCompactionConfig(config.compaction, defaults.compaction);
+  const security = validateSecurityConfig(config.security, defaults.security);
 
   if (compaction.reserveTokensFloor > compaction.reserveTokens) {
     throw new Error("config.toml compaction.reserveTokensFloor cannot exceed reserveTokens");
@@ -164,6 +201,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     providers,
     models,
     compaction,
+    security,
   };
 }
 
@@ -186,6 +224,18 @@ function cloneRawConfig(config: RawConfig): RawConfig {
       },
     },
     compaction: { ...config.compaction },
+    security: {
+      filesystem: {
+        overrideHardDenyRead: config.security.filesystem.overrideHardDenyRead,
+        overrideHardDenyWrite: config.security.filesystem.overrideHardDenyWrite,
+        hardDenyRead: [...config.security.filesystem.hardDenyRead],
+        hardDenyWrite: [...config.security.filesystem.hardDenyWrite],
+      },
+      network: {
+        overrideHardDenyHosts: config.security.network.overrideHardDenyHosts,
+        hardDenyHosts: [...config.security.network.hardDenyHosts],
+      },
+    },
   };
 }
 
@@ -525,6 +575,119 @@ function validateCompactionConfig(input: unknown, defaults: CompactionConfig): C
   };
 }
 
+function validateSecurityConfig(input: unknown, defaults: SecurityConfig): SecurityConfig {
+  if (input == null) {
+    return {
+      filesystem: {
+        overrideHardDenyRead: defaults.filesystem.overrideHardDenyRead,
+        overrideHardDenyWrite: defaults.filesystem.overrideHardDenyWrite,
+        hardDenyRead: [...defaults.filesystem.hardDenyRead],
+        hardDenyWrite: [...defaults.filesystem.hardDenyWrite],
+      },
+      network: {
+        overrideHardDenyHosts: defaults.network.overrideHardDenyHosts,
+        hardDenyHosts: [...defaults.network.hardDenyHosts],
+      },
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml security must be a table/object");
+  }
+
+  const config = input as SecurityConfigInput;
+  assertAllowedKeys(config, new Set(["filesystem", "network"]), "config.toml security");
+
+  return {
+    filesystem: validateSecurityFilesystemConfig(config.filesystem, defaults.filesystem),
+    network: validateSecurityNetworkConfig(config.network, defaults.network),
+  };
+}
+
+function validateSecurityFilesystemConfig(
+  input: unknown,
+  defaults: SecurityFilesystemConfig,
+): SecurityFilesystemConfig {
+  if (input == null) {
+    return {
+      overrideHardDenyRead: defaults.overrideHardDenyRead,
+      overrideHardDenyWrite: defaults.overrideHardDenyWrite,
+      hardDenyRead: [...defaults.hardDenyRead],
+      hardDenyWrite: [...defaults.hardDenyWrite],
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml security.filesystem must be a table/object");
+  }
+
+  const config = input as SecurityFilesystemConfigInput;
+  assertAllowedKeys(
+    config,
+    new Set(["overrideHardDenyRead", "overrideHardDenyWrite", "hardDenyRead", "hardDenyWrite"]),
+    "config.toml security.filesystem",
+  );
+
+  return {
+    overrideHardDenyRead: validateOptionalBoolean(
+      config.overrideHardDenyRead,
+      defaults.overrideHardDenyRead,
+      "config.toml security.filesystem.overrideHardDenyRead",
+    ),
+    overrideHardDenyWrite: validateOptionalBoolean(
+      config.overrideHardDenyWrite,
+      defaults.overrideHardDenyWrite,
+      "config.toml security.filesystem.overrideHardDenyWrite",
+    ),
+    hardDenyRead: validateStringArray(
+      config.hardDenyRead,
+      defaults.hardDenyRead,
+      "config.toml security.filesystem.hardDenyRead",
+    ),
+    hardDenyWrite: validateStringArray(
+      config.hardDenyWrite,
+      defaults.hardDenyWrite,
+      "config.toml security.filesystem.hardDenyWrite",
+    ),
+  };
+}
+
+function validateSecurityNetworkConfig(
+  input: unknown,
+  defaults: SecurityNetworkConfig,
+): SecurityNetworkConfig {
+  if (input == null) {
+    return {
+      overrideHardDenyHosts: defaults.overrideHardDenyHosts,
+      hardDenyHosts: [...defaults.hardDenyHosts],
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml security.network must be a table/object");
+  }
+
+  const config = input as SecurityNetworkConfigInput;
+  assertAllowedKeys(
+    config,
+    new Set(["overrideHardDenyHosts", "hardDenyHosts"]),
+    "config.toml security.network",
+  );
+
+  return {
+    overrideHardDenyHosts: validateOptionalBoolean(
+      config.overrideHardDenyHosts,
+      defaults.overrideHardDenyHosts,
+      "config.toml security.network.overrideHardDenyHosts",
+    ),
+    hardDenyHosts: validateStringArray(
+      config.hardDenyHosts,
+      defaults.hardDenyHosts,
+      "config.toml security.network.hardDenyHosts",
+    ),
+  };
+}
+
 function assertAllowedKeys(input: object, allowedKeys: Set<string>, path: string): void {
   for (const key of Object.keys(input)) {
     if (!allowedKeys.has(key)) {
@@ -584,6 +747,14 @@ function validateOptionalNonEmptyString(value: unknown, path: string): string | 
   return validateNonEmptyString(value, path);
 }
 
+function validateOptionalBoolean(value: unknown, fallback: boolean, path: string): boolean {
+  if (value == null) {
+    return fallback;
+  }
+
+  return validateBoolean(value, path);
+}
+
 function validateBoolean(value: unknown, path: string): boolean {
   if (typeof value !== "boolean") {
     throw new Error(`${path} must be a boolean`);
@@ -614,6 +785,18 @@ function validateNonNegativeNumber(value: unknown, path: string): number {
   }
 
   return value;
+}
+
+function validateStringArray(input: unknown, defaults: string[], path: string): string[] {
+  if (input == null) {
+    return [...defaults];
+  }
+
+  if (!Array.isArray(input)) {
+    throw new Error(`${path} must be an array`);
+  }
+
+  return input.map((value, index) => validateNonEmptyString(value, `${path}[${index}]`));
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

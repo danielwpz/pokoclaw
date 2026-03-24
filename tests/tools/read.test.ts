@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
+import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
@@ -58,6 +59,7 @@ describe("read tool", () => {
         conversationId: "conv_1",
         ownerAgentId: "agent_1",
         cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
         storage: handle.storage.db,
       },
       { path: "notes.txt", offset: 2, limit: 2 },
@@ -93,6 +95,7 @@ describe("read tool", () => {
         {
           sessionId: "sess_1",
           conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
           storage: handle.storage.db,
         },
         { path: "/tmp/example.txt" },
@@ -121,6 +124,7 @@ describe("read tool", () => {
           conversationId: "conv_1",
           ownerAgentId: "agent_1",
           cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
           storage: handle.storage.db,
         },
         { path: path.join(POKECLAW_SYSTEM_DIR, "config.toml") },
@@ -150,6 +154,7 @@ describe("read tool", () => {
           conversationId: "conv_1",
           ownerAgentId: "agent_1",
           cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
           storage: handle.storage.db,
         },
         { path: "private.txt" },

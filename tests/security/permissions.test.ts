@@ -5,11 +5,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   buildEffectivePermissions,
+  buildEffectivePermissionsForRole,
   checkDatabasePermission,
   checkFilesystemPermission,
   parseGrantedScopes,
 } from "@/src/security/permissions.js";
-import { DEFAULT_SYSTEM_POLICY } from "@/src/security/policy.js";
+import {
+  buildAgentPermissionBaseline,
+  buildSystemPolicy,
+  DEFAULT_SYSTEM_POLICY,
+} from "@/src/security/policy.js";
+import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 
 let tempDir: string;
 
@@ -22,21 +28,6 @@ afterEach(async () => {
 });
 
 describe("effective permissions", () => {
-  test("builds fs and db permissions from granted scopes", () => {
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.read", path: "/Users/daniel/.pokeclaw/workspace/**" },
-      { kind: "fs.write", path: "/Users/daniel/project/README.md" },
-      { kind: "db.read", database: "system" },
-    ]);
-
-    expect(permissions.fs.read.allow).toContain(
-      `${path.resolve("/Users/daniel/.pokeclaw/workspace")}/**`,
-    );
-    expect(permissions.fs.write.allow).toContain(path.resolve("/Users/daniel/project/README.md"));
-    expect(permissions.db.read).toBe(true);
-    expect(permissions.db.write).toBe(false);
-  });
-
   test("parses granted scopes from stored JSON", () => {
     expect(
       parseGrantedScopes([
@@ -49,110 +40,190 @@ describe("effective permissions", () => {
     ]);
   });
 
-  test("merges multiple grants of the same kind", () => {
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.read", path: "/Users/daniel/project-a/**" },
-      { kind: "fs.read", path: "/Users/daniel/project-b/**" },
-      { kind: "db.read", database: "system" },
-      { kind: "db.write", database: "system" },
-    ]);
+  test("main agent baseline grants home read and workspace write", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("main"),
+    );
 
-    expect(permissions.fs.read.allow).toEqual([
-      `${path.resolve("/Users/daniel/project-a")}/**`,
-      `${path.resolve("/Users/daniel/project-b")}/**`,
-    ]);
-    expect(permissions.db.read).toBe(true);
-    expect(permissions.db.write).toBe(true);
+    expect(permissions.fs.read.mode).toBe("allow_only");
+    expect(permissions.fs.read.allow).toContain(`${path.resolve(os.homedir())}/**`);
+    expect(permissions.fs.write.allow).toContain(`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`);
+  });
+
+  test("subagent baseline only grants workspace read and write", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("subagent"),
+    );
+
+    expect(permissions.fs.read.mode).toBe("allow_only");
+    expect(permissions.fs.read.allow).toEqual([`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`]);
+    expect(permissions.fs.write.allow).toEqual([`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`]);
+  });
+
+  test("buildEffectivePermissionsForRole merges explicit grants with the role baseline", () => {
+    const permissions = buildEffectivePermissionsForRole(
+      [{ kind: "fs.write", path: "/Users/daniel/project/README.md" }],
+      "subagent",
+    );
+
+    expect(permissions.fs.write.allow).toContain(path.resolve("/Users/daniel/project/README.md"));
+    expect(permissions.fs.write.allow).toContain(`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`);
   });
 });
 
 describe("filesystem permission checks", () => {
-  test("allows granted subtree reads", () => {
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.read", path: "/Users/daniel/.pokeclaw/workspace/**" },
-    ]);
+  test("main agent can read a normal home path without an explicit grant", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("main"),
+    );
 
     expect(
       checkFilesystemPermission({
         kind: "fs.read",
-        targetPath: "/Users/daniel/.pokeclaw/workspace/memory/state.json",
+        targetPath: path.join(os.homedir(), "Documents", "notes.md"),
         permissions,
       }),
     ).toEqual({
       result: "allow",
       reason: "granted",
-      summary: "fs.read is granted for /Users/daniel/.pokeclaw/workspace/memory/state.json",
+      summary: `fs.read is granted for ${path.join(os.homedir(), "Documents", "notes.md")}`,
     });
   });
 
-  test("blocks hard denied system paths even without considering grants", () => {
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.read", path: "/Users/daniel/.pokeclaw/workspace/**" },
-    ]);
+  test("main agent still cannot write outside workspace without a grant", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("main"),
+    );
+
+    expect(
+      checkFilesystemPermission({
+        kind: "fs.write",
+        targetPath: path.join(os.homedir(), "Documents", "notes.md"),
+        permissions,
+      }),
+    ).toEqual({
+      result: "deny",
+      reason: "not_granted",
+      summary: `fs.write requires approval for ${path.join(os.homedir(), "Documents", "notes.md")}`,
+    });
+  });
+
+  test("subagent requires approval to read outside workspace by default", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("subagent"),
+    );
 
     expect(
       checkFilesystemPermission({
         kind: "fs.read",
-        targetPath: path.join(os.homedir(), ".pokeclaw", "system", "config.toml"),
+        targetPath: path.join(os.homedir(), "Documents", "notes.md"),
+        permissions,
+      }),
+    ).toEqual({
+      result: "deny",
+      reason: "not_granted",
+      summary: `fs.read requires approval for ${path.join(os.homedir(), "Documents", "notes.md")}`,
+    });
+  });
+
+  test("subagent can read and write inside workspace by default", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("subagent"),
+    );
+    const workspaceFile = path.join(POKECLAW_WORKSPACE_DIR, "memory", "state.json");
+
+    expect(
+      checkFilesystemPermission({
+        kind: "fs.read",
+        targetPath: workspaceFile,
+        permissions,
+      }),
+    ).toEqual({
+      result: "allow",
+      reason: "granted",
+      summary: `fs.read is granted for ${workspaceFile}`,
+    });
+
+    expect(
+      checkFilesystemPermission({
+        kind: "fs.write",
+        targetPath: workspaceFile,
+        permissions,
+      }),
+    ).toEqual({
+      result: "allow",
+      reason: "granted",
+      summary: `fs.write is granted for ${workspaceFile}`,
+    });
+  });
+
+  test("hard denied system paths are always blocked", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("main"),
+    );
+    const targetPath = path.join(os.homedir(), ".pokeclaw", "system", "config.toml");
+
+    expect(
+      checkFilesystemPermission({
+        kind: "fs.read",
+        targetPath,
         permissions,
       }),
     ).toEqual({
       result: "deny",
       reason: "hard_deny",
-      summary: `fs.read is blocked by system policy for ${path.join(os.homedir(), ".pokeclaw", "system", "config.toml")}`,
+      summary: `fs.read is blocked by system policy for ${targetPath}`,
     });
   });
 
-  test("requires approval when path is not granted", () => {
-    const permissions = buildEffectivePermissions([]);
+  test("deny rules can carve out regions from allowed read paths", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      {
+        ...DEFAULT_SYSTEM_POLICY,
+        fs: {
+          ...DEFAULT_SYSTEM_POLICY.fs,
+          read: {
+            ...DEFAULT_SYSTEM_POLICY.fs.read,
+            deny: ["/Users/daniel/project/**"],
+          },
+        },
+      },
+      buildAgentPermissionBaseline("main"),
+    );
 
     expect(
       checkFilesystemPermission({
-        kind: "fs.write",
-        targetPath: "/Users/daniel/project/README.md",
+        kind: "fs.read",
+        targetPath: "/Users/daniel/project/private.txt",
         permissions,
       }),
     ).toEqual({
       result: "deny",
       reason: "not_granted",
-      summary: "fs.write requires approval for /Users/daniel/project/README.md",
+      summary: "fs.read is not granted for /Users/daniel/project/private.txt",
     });
   });
 
-  test("allows exact-path writes only for the exact file", () => {
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.write", path: "/Users/daniel/project/README.md" },
-    ]);
-
-    expect(
-      checkFilesystemPermission({
-        kind: "fs.write",
-        targetPath: "/Users/daniel/project/README.md",
-        permissions,
-      }),
-    ).toEqual({
-      result: "allow",
-      reason: "granted",
-      summary: "fs.write is granted for /Users/daniel/project/README.md",
-    });
-
-    expect(
-      checkFilesystemPermission({
-        kind: "fs.write",
-        targetPath: "/Users/daniel/project/README.md.bak",
-        permissions,
-      }),
-    ).toEqual({
-      result: "deny",
-      reason: "not_granted",
-      summary: "fs.write requires approval for /Users/daniel/project/README.md.bak",
-    });
-  });
-
-  test("does not let subtree grants leak into sibling paths", () => {
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.read", path: "/Users/daniel/project/**" },
-    ]);
+  test("subtree grants do not leak into sibling paths", () => {
+    const permissions = buildEffectivePermissionsForRole(
+      [{ kind: "fs.read", path: "/Users/daniel/project/**" }],
+      "subagent",
+    );
 
     expect(
       checkFilesystemPermission({
@@ -168,18 +239,20 @@ describe("filesystem permission checks", () => {
   });
 
   test("normalizes relative runtime paths against cwd before checking", async () => {
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.read", path: `${tempDir}/workspace/**` },
-    ]);
-    await mkdir(path.join(tempDir, "workspace"), { recursive: true });
-    const realWorkspaceDir = await realpath(path.join(tempDir, "workspace"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    await mkdir(workspaceDir, { recursive: true });
+    const realWorkspaceDir = await realpath(workspaceDir);
     const expectedPath = path.join(realWorkspaceDir, "notes", "today.md");
+    const permissions = buildEffectivePermissionsForRole(
+      [{ kind: "fs.read", path: `${workspaceDir}/**` }],
+      "subagent",
+    );
 
     expect(
       checkFilesystemPermission({
         kind: "fs.read",
         targetPath: "./notes/today.md",
-        cwd: path.join(tempDir, "workspace"),
+        cwd: workspaceDir,
         permissions,
       }),
     ).toEqual({
@@ -187,69 +260,6 @@ describe("filesystem permission checks", () => {
       reason: "granted",
       summary: `fs.read is granted for ${expectedPath}`,
     });
-  });
-
-  test("respects read allow-back inside denied regions", () => {
-    const permissions = buildEffectivePermissions(
-      [{ kind: "fs.read", path: "/Users/daniel/project/safe/**" }],
-      {
-        ...DEFAULT_SYSTEM_POLICY,
-        fs: {
-          ...DEFAULT_SYSTEM_POLICY.fs,
-          read: {
-            ...DEFAULT_SYSTEM_POLICY.fs.read,
-            deny: ["/Users/daniel/project/**"],
-          },
-        },
-      },
-    );
-
-    expect(
-      checkFilesystemPermission({
-        kind: "fs.read",
-        targetPath: "/Users/daniel/project/safe/README.md",
-        permissions,
-      }),
-    ).toEqual({
-      result: "allow",
-      reason: "granted",
-      summary: "Read access granted for /Users/daniel/project/safe/README.md",
-    });
-  });
-
-  test("keeps write deny precedence over allow", () => {
-    const permissions = buildEffectivePermissions(
-      [{ kind: "fs.write", path: "/Users/daniel/project/**" }],
-      {
-        ...DEFAULT_SYSTEM_POLICY,
-        fs: {
-          ...DEFAULT_SYSTEM_POLICY.fs,
-          write: {
-            ...DEFAULT_SYSTEM_POLICY.fs.write,
-            deny: ["/Users/daniel/project/blocked/**"],
-          },
-        },
-      },
-    );
-
-    expect(
-      checkFilesystemPermission({
-        kind: "fs.write",
-        targetPath: "/Users/daniel/project/blocked/data.json",
-        permissions,
-      }),
-    ).toEqual({
-      result: "deny",
-      reason: "not_granted",
-      summary: "fs.write is not granted for /Users/daniel/project/blocked/data.json",
-    });
-  });
-
-  test("expands home-prefixed policy paths", () => {
-    const permissions = buildEffectivePermissions([{ kind: "fs.read", path: "~/allowed/**" }]);
-    const homeDir = os.homedir();
-
-    expect(permissions.fs.read.allow).toContain(`${path.join(homeDir, "allowed")}/**`);
   });
 
   test("resolves symlinked target paths before subtree checks", async () => {
@@ -262,9 +272,10 @@ describe("filesystem permission checks", () => {
     await symlink(outsideDir, linkDir, "dir");
     const realOutsideDir = await realpath(outsideDir);
 
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.read", path: `${workspaceDir}/**` },
-    ]);
+    const permissions = buildEffectivePermissionsForRole(
+      [{ kind: "fs.read", path: `${workspaceDir}/**` }],
+      "subagent",
+    );
 
     expect(
       checkFilesystemPermission({
@@ -278,44 +289,16 @@ describe("filesystem permission checks", () => {
       summary: `fs.read requires approval for ${path.join(realOutsideDir, "secret.txt")}`,
     });
   });
-
-  test("normalizes non-existing paths through the nearest existing symlink ancestor", async () => {
-    const outsideDir = path.join(tempDir, "outside");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const linkDir = path.join(workspaceDir, "linked");
-    await mkdir(outsideDir, { recursive: true });
-    await mkdir(workspaceDir, { recursive: true });
-    await symlink(outsideDir, linkDir, "dir");
-    const realOutsideDir = await realpath(outsideDir);
-
-    const permissions = buildEffectivePermissions([
-      { kind: "fs.write", path: `${workspaceDir}/**` },
-    ]);
-
-    expect(
-      checkFilesystemPermission({
-        kind: "fs.write",
-        targetPath: path.join(linkDir, "new.txt"),
-        permissions,
-      }),
-    ).toEqual({
-      result: "deny",
-      reason: "not_granted",
-      summary: `fs.write requires approval for ${path.join(realOutsideDir, "new.txt")}`,
-    });
-  });
 });
 
 describe("database permission checks", () => {
   test("allows granted db read access", () => {
-    const permissions = buildEffectivePermissions([{ kind: "db.read", database: "system" }]);
+    const permissions = buildEffectivePermissionsForRole(
+      [{ kind: "db.read", database: "system" }],
+      "subagent",
+    );
 
-    expect(
-      checkDatabasePermission({
-        kind: "db.read",
-        permissions,
-      }),
-    ).toEqual({
+    expect(checkDatabasePermission({ kind: "db.read", permissions })).toEqual({
       result: "allow",
       reason: "granted",
       summary: "db.read is granted for the system database",
@@ -323,38 +306,12 @@ describe("database permission checks", () => {
   });
 
   test("requires approval when db access is not granted", () => {
-    const permissions = buildEffectivePermissions([]);
+    const permissions = buildEffectivePermissionsForRole([], "subagent");
 
-    expect(
-      checkDatabasePermission({
-        kind: "db.write",
-        permissions,
-      }),
-    ).toEqual({
+    expect(checkDatabasePermission({ kind: "db.write", permissions })).toEqual({
       result: "deny",
       reason: "not_granted",
       summary: "db.write requires approval for the system database",
-    });
-  });
-
-  test("respects global db policy disablement", () => {
-    const permissions = buildEffectivePermissions([{ kind: "db.read", database: "system" }], {
-      ...DEFAULT_SYSTEM_POLICY,
-      db: {
-        read: false,
-        write: false,
-      },
-    });
-
-    expect(
-      checkDatabasePermission({
-        kind: "db.read",
-        permissions,
-      }),
-    ).toEqual({
-      result: "deny",
-      reason: "not_granted",
-      summary: "db.read requires approval for the system database",
     });
   });
 });

@@ -139,6 +139,18 @@ describe("config loader", () => {
       reserveTokensFloor: 60_000,
       recentTurnsPreserve: 3,
     });
+    expect(config.security).toEqual({
+      filesystem: {
+        overrideHardDenyRead: false,
+        overrideHardDenyWrite: false,
+        hardDenyRead: [],
+        hardDenyWrite: [],
+      },
+      network: {
+        overrideHardDenyHosts: false,
+        hardDenyHosts: [],
+      },
+    });
     expect(config.secrets).toEqual({});
   });
 
@@ -246,6 +258,40 @@ describe("config loader", () => {
     expect(config.secrets).toEqual({
       api: {
         key: "secret-value",
+      },
+    });
+  });
+
+  test("loads security override flags and appended hard deny lists", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[security.filesystem]",
+        "overrideHardDenyRead = true",
+        'hardDenyRead = ["/Users/daniel/private/**"]',
+        'hardDenyWrite = ["/Users/daniel/private/**"]',
+        "",
+        "[security.network]",
+        "overrideHardDenyHosts = true",
+        'hardDenyHosts = ["internal.example.com"]',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const config = await loadConfig({ configTomlPath: configPath });
+
+    expect(config.security).toEqual({
+      filesystem: {
+        overrideHardDenyRead: true,
+        overrideHardDenyWrite: false,
+        hardDenyRead: ["/Users/daniel/private/**"],
+        hardDenyWrite: ["/Users/daniel/private/**"],
+      },
+      network: {
+        overrideHardDenyHosts: true,
+        hardDenyHosts: ["internal.example.com"],
       },
     });
   });

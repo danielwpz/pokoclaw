@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@anthropic-ai/sandbox-runtime':
+        specifier: link:../sandbox-runtime
+        version: link:../sandbox-runtime
       '@mariozechner/pi-agent-core':
         specifier: 0.58.0
         version: 0.58.0(ws@8.20.0)(zod@4.3.6)
