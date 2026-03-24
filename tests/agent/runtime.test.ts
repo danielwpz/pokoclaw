@@ -131,6 +131,7 @@ describe("session runtime ingress", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -199,6 +200,7 @@ describe("session runtime ingress", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -274,6 +276,7 @@ describe("session runtime ingress", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -370,6 +373,7 @@ describe("session runtime ingress", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);

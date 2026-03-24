@@ -17,6 +17,12 @@ function seedAgentFixture(handle: TestDatabaseHandle): void {
     VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
     INSERT INTO agents (id, conversation_id, kind, created_at)
     VALUES ('agent_1', 'conv_1', 'main', '2026-03-22T00:00:00.000Z');
+    INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+    VALUES ('conv_2', 'ci_1', 'chat_2', 'group', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+    INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+    VALUES ('branch_2', 'conv_2', 'group_main', 'main', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+    INSERT INTO agents (id, conversation_id, kind, created_at)
+    VALUES ('agent_2', 'conv_2', 'sub', '2026-03-22T00:00:00.000Z');
     INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, created_at, updated_at)
     VALUES ('sess_1', 'conv_1', 'branch_1', 'agent_1', 'chat', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
   `);
@@ -65,7 +71,7 @@ describe("security service", () => {
       requestedBySessionId: "sess_1",
       request: {
         scopes: [
-          { kind: "fs.read", path: "/Users/daniel/.pokeclaw/workspace/**" },
+          { kind: "fs.read", path: "/Users/daniel/project/**" },
           { kind: "db.read", database: "system" },
         ],
       },
@@ -79,45 +85,42 @@ describe("security service", () => {
       expiresAt: new Date("2026-03-29T00:00:02.000Z"),
     });
 
-    expect(grantIds).toHaveLength(2);
+    expect(grantIds).toHaveLength(3);
     expect(service.getApprovalById(approvalId)).toMatchObject({
       status: "approved",
       decidedAt: "2026-03-22T00:00:02.000Z",
     });
     expect(service.listActiveGrants("agent_1", new Date("2026-03-22T12:00:00.000Z"))).toHaveLength(
-      2,
+      3,
     );
   });
 
-  test("effective permissions and checks reflect active grants from storage", async () => {
+  test("main agent gets home read access from its baseline role", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
     const service = new SecurityService(handle.storage.db);
-
-    service.grantScopes({
-      ownerAgentId: "agent_1",
-      scopes: [
-        { kind: "fs.read", path: "/Users/daniel/.pokeclaw/workspace/**" },
-        { kind: "db.read", database: "system" },
-      ],
-      grantedBy: "main_agent",
-      createdAt: new Date("2026-03-22T00:00:01.000Z"),
-      expiresAt: new Date("2026-03-29T00:00:01.000Z"),
-    });
 
     expect(
       service.checkFilesystemAccess({
         ownerAgentId: "agent_1",
         kind: "fs.read",
-        targetPath: "/Users/daniel/.pokeclaw/workspace/memory/summary.md",
+        targetPath: `${process.env.HOME ?? "/Users/daniel"}/Documents/summary.md`,
       }),
     ).toMatchObject({ result: "allow" });
+  });
+
+  test("subagent only gets workspace access from its baseline role", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    const service = new SecurityService(handle.storage.db);
+
     expect(
-      service.checkDatabaseAccess({
-        ownerAgentId: "agent_1",
-        kind: "db.read",
+      service.checkFilesystemAccess({
+        ownerAgentId: "agent_2",
+        kind: "fs.read",
+        targetPath: `${process.env.HOME ?? "/Users/daniel"}/Documents/summary.md`,
       }),
-    ).toMatchObject({ result: "allow" });
+    ).toMatchObject({ result: "deny", reason: "not_granted" });
   });
 
   test("expired grants do not contribute to effective permissions", async () => {
@@ -144,5 +147,14 @@ describe("security service", () => {
       reason: "not_granted",
       summary: "db.read requires approval for the system database",
     });
+  });
+
+  test("getAgentRole normalizes persisted agent kinds", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    const service = new SecurityService(handle.storage.db);
+
+    expect(service.getAgentRole("agent_1")).toBe("main");
+    expect(service.getAgentRole("agent_2")).toBe("subagent");
   });
 });

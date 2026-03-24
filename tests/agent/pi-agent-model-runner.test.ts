@@ -199,6 +199,7 @@ describe("pi agent model runner", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: new PiAgentModelRunner(new PiBridge(), new ToolRegistry()),
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 

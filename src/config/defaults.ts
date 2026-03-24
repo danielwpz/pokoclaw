@@ -21,4 +21,16 @@ export const DEFAULT_CONFIG: RawConfig = {
     reserveTokensFloor: 60_000,
     recentTurnsPreserve: 3,
   },
+  security: {
+    filesystem: {
+      overrideHardDenyRead: false,
+      overrideHardDenyWrite: false,
+      hardDenyRead: [],
+      hardDenyWrite: [],
+    },
+    network: {
+      overrideHardDenyHosts: false,
+      hardDenyHosts: [],
+    },
+  },
 };

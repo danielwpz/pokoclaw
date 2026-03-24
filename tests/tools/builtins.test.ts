@@ -6,6 +6,7 @@ describe("builtin tools", () => {
   test("registers the current filesystem tool set", () => {
     const registry = createBuiltinToolRegistry();
 
+    expect(registry.has("bash")).toBe(true);
     expect(registry.has("read")).toBe(true);
     expect(registry.has("write")).toBe(true);
     expect(registry.has("edit")).toBe(true);
@@ -13,6 +14,7 @@ describe("builtin tools", () => {
     expect(registry.has("find")).toBe(true);
     expect(registry.has("grep")).toBe(true);
     expect(registry.list().map((tool) => tool.name)).toEqual([
+      "bash",
       "read",
       "write",
       "edit",

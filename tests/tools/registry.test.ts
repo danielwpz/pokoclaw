@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, test } from "vitest";
+import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { ToolRegistry } from "@/src/tools/registry.js";
 import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/types.js";
 import {
@@ -54,6 +55,7 @@ describe("tool registry", () => {
       {
         sessionId: "sess_1",
         conversationId: "conv_1",
+        securityConfig: DEFAULT_CONFIG.security,
         storage: handle.storage.db,
       },
       { path: "/workspace/README.md" },
@@ -95,6 +97,7 @@ describe("tool registry", () => {
         {
           sessionId: "sess_1",
           conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
           storage: handle.storage.db,
         },
         { path: 123, unexpected: true },
@@ -134,6 +137,7 @@ describe("tool registry", () => {
         {
           sessionId: "sess_1",
           conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
           storage: handle.storage.db,
         },
         {},

@@ -183,6 +183,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -271,6 +272,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -356,6 +358,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -460,6 +463,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -537,6 +541,7 @@ describe("agent loop", () => {
       cancel,
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -623,6 +628,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);
@@ -736,6 +742,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);
@@ -828,6 +835,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -928,6 +936,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -1018,6 +1027,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -1105,6 +1115,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -1170,6 +1181,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);
@@ -1239,6 +1251,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
       emitEvent(event) {
         emittedEvents.push(event);
@@ -1308,6 +1321,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 
@@ -1424,6 +1438,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: {
         reserveTokens: 60_000,
         keepRecentTokens: 15_000,
@@ -1531,6 +1546,7 @@ describe("agent loop", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: runner,
       storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
     });
 

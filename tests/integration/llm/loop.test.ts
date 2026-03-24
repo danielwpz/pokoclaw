@@ -70,6 +70,7 @@ describe("real llm loop integration", () => {
       cancel: new SessionRunAbortRegistry(),
       modelRunner: new PiAgentModelRunner(new PiBridge(), toolRegistry),
       storage: handle.storage.db,
+      securityConfig: fixture.config.security,
       compaction: fixture.config.compaction,
     });
 
@@ -131,6 +132,7 @@ describe("real llm loop integration", () => {
       cancel,
       modelRunner: new PiAgentModelRunner(new PiBridge(), tools),
       storage: handle.storage.db,
+      securityConfig: fixture.config.security,
       compaction: fixture.config.compaction,
     });
 

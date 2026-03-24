@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
+import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
@@ -55,6 +56,7 @@ describe("write tool", () => {
         conversationId: "conv_1",
         ownerAgentId: "agent_1",
         cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
         storage: handle.storage.db,
       },
       {
@@ -92,6 +94,7 @@ describe("write tool", () => {
           conversationId: "conv_1",
           ownerAgentId: "agent_1",
           cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
           storage: handle.storage.db,
         },
         {
@@ -122,6 +125,7 @@ describe("write tool", () => {
           conversationId: "conv_1",
           ownerAgentId: "agent_1",
           cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
           storage: handle.storage.db,
         },
         {

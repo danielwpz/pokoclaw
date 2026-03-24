@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 
 import {
   buildEffectivePermissions,
@@ -8,7 +9,13 @@ import {
   type PermissionCheckResult,
   parseGrantedScopes,
 } from "@/src/security/permissions.js";
-import { DEFAULT_SYSTEM_POLICY, type SystemPermissionPolicy } from "@/src/security/policy.js";
+import {
+  type AgentRuntimeRole,
+  buildAgentPermissionBaseline,
+  buildSystemPolicy,
+  normalizeAgentKindToRuntimeRole,
+  type SystemPermissionPolicy,
+} from "@/src/security/policy.js";
 import {
   type DbPermissionKind,
   type FsPermissionKind,
@@ -22,6 +29,7 @@ import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { PermissionGrantsRepo } from "@/src/storage/repos/permission-grants.repo.js";
+import { agents } from "@/src/storage/schema/tables.js";
 import type { AgentPermissionGrant, ApprovalRecord } from "@/src/storage/schema/types.js";
 
 const logger = createSubsystemLogger("security");
@@ -29,11 +37,13 @@ const logger = createSubsystemLogger("security");
 export class SecurityService {
   private readonly approvalsRepo: ApprovalsRepo;
   private readonly grantsRepo: PermissionGrantsRepo;
+  private readonly db: StorageDb;
 
   constructor(
     db: StorageDb,
-    private readonly systemPolicy: SystemPermissionPolicy = DEFAULT_SYSTEM_POLICY,
+    private readonly systemPolicy: SystemPermissionPolicy = buildSystemPolicy(),
   ) {
+    this.db = db;
     this.approvalsRepo = new ApprovalsRepo(db);
     this.grantsRepo = new PermissionGrantsRepo(db);
   }
@@ -60,7 +70,11 @@ export class SecurityService {
   getEffectivePermissions(ownerAgentId: string, activeAt?: Date): EffectivePermissions {
     const grants = this.grantsRepo.listActiveByOwner(ownerAgentId, activeAt);
     const scopes = parseGrantedScopes(grants.map((grant) => grant.scopeJson));
-    return buildEffectivePermissions(scopes, this.systemPolicy);
+    return buildEffectivePermissions(
+      scopes,
+      this.systemPolicy,
+      buildAgentPermissionBaseline(this.getAgentRole(ownerAgentId)),
+    );
   }
 
   checkFilesystemAccess(input: {
@@ -147,9 +161,13 @@ export class SecurityService {
     expiresAt?: Date | null;
   }): string[] {
     const createdAt = input.createdAt ?? new Date();
+    const normalizedScopes =
+      input.grantedBy === "user"
+        ? expandUserApprovedFilesystemScopes(input.scopes)
+        : dedupeScopes(input.scopes);
     const grantIds: string[] = [];
 
-    for (const scope of input.scopes) {
+    for (const scope of normalizedScopes) {
       const grantId = randomUUID();
       this.grantsRepo.create({
         id: grantId,
@@ -203,6 +221,14 @@ export class SecurityService {
       expiresAt: input.expiresAt ?? null,
     });
   }
+
+  getAgentRole(ownerAgentId: string): AgentRuntimeRole {
+    const row =
+      this.db.select({ kind: agents.kind }).from(agents).where(eq(agents.id, ownerAgentId)).get() ??
+      null;
+
+    return normalizeAgentKindToRuntimeRole(row?.kind);
+  }
 }
 
 function describeScopeForLog(scope: PermissionScope): string {
@@ -211,4 +237,35 @@ function describeScopeForLog(scope: PermissionScope): string {
   }
 
   return `${scope.kind}:${scope.database}`;
+}
+
+function expandUserApprovedFilesystemScopes(scopes: PermissionScope[]): PermissionScope[] {
+  const expanded = new Map<string, PermissionScope>();
+
+  for (const scope of scopes) {
+    if ("path" in scope) {
+      expanded.set(`fs.read:${scope.path}`, { kind: "fs.read", path: scope.path });
+      expanded.set(`fs.write:${scope.path}`, { kind: "fs.write", path: scope.path });
+      continue;
+    }
+
+    expanded.set(`${scope.kind}:${scope.database}`, scope);
+  }
+
+  return [...expanded.values()];
+}
+
+function dedupeScopes(scopes: PermissionScope[]): PermissionScope[] {
+  const unique = new Map<string, PermissionScope>();
+
+  for (const scope of scopes) {
+    if ("path" in scope) {
+      unique.set(`${scope.kind}:${scope.path}`, scope);
+      continue;
+    }
+
+    unique.set(`${scope.kind}:${scope.database}`, scope);
+  }
+
+  return [...unique.values()];
 }

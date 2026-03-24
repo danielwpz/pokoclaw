@@ -33,6 +33,7 @@
     "vitest": "^4.1.0"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "link:../sandbox-runtime",
     "@mariozechner/pi-agent-core": "0.58.0",
     "@mariozechner/pi-ai": "0.58.0",
     "@sinclair/typebox": "^0.34.48",
