@@ -28,8 +28,8 @@ export function completeTaskExecution(input: {
     db: input.db,
     taskRunId: input.taskRunId,
     status: "completed",
-    resultSummary: input.resultSummary,
-    finishedAt: input.finishedAt,
+    ...(input.resultSummary === undefined ? {} : { resultSummary: input.resultSummary }),
+    ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
   });
 }
 
@@ -44,9 +44,9 @@ export function failTaskExecution(input: {
     db: input.db,
     taskRunId: input.taskRunId,
     status: "failed",
-    errorText: input.errorText,
-    resultSummary: input.resultSummary,
-    finishedAt: input.finishedAt,
+    ...(input.errorText === undefined ? {} : { errorText: input.errorText }),
+    ...(input.resultSummary === undefined ? {} : { resultSummary: input.resultSummary }),
+    ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
   });
 }
 
@@ -62,8 +62,8 @@ export function cancelTaskExecution(input: {
     taskRunId: input.taskRunId,
     status: "cancelled",
     cancelledBy: input.cancelledBy,
-    resultSummary: input.resultSummary,
-    finishedAt: input.finishedAt,
+    ...(input.resultSummary === undefined ? {} : { resultSummary: input.resultSummary }),
+    ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
   });
 }
 

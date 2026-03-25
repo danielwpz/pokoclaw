@@ -5,10 +5,15 @@ import {
   buildApprovalAgentOperatingModelSection,
   buildApprovalReviewSection,
   buildBashFullAccessSection,
+  buildMainAgentIdentitySection,
+  buildMainAgentOperatingModelSection,
   buildPermissionsSection,
   buildProjectContextSection,
   buildSafetySection,
   buildSkillsSection,
+  buildSubagentIdentitySection,
+  buildSubagentOperatingModelSection,
+  buildSubagentProfileSection,
   buildTaskAgentIdentitySection,
   buildTaskAgentOperatingModelSection,
   buildToolUsageSection,
@@ -17,9 +22,12 @@ import {
 
 describe("agent system prompt", () => {
   test("builds the current structured sections and omits future empty sections", () => {
-    const prompt = buildAgentSystemPrompt();
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+    });
 
-    expect(prompt).toContain("You are Pokeclaw, an agent that completes the user's request");
+    expect(prompt).toContain("You are Pokeclaw Main Agent");
     expect(prompt).toContain("## Operating Model");
     expect(prompt).toContain("## Tool Usage");
     expect(prompt).toContain("## Permissions");
@@ -33,7 +41,10 @@ describe("agent system prompt", () => {
   });
 
   test("keeps the current section order stable", () => {
-    const prompt = buildAgentSystemPrompt();
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+    });
 
     const operatingIndex = prompt.indexOf("## Operating Model");
     const toolUsageIndex = prompt.indexOf("## Tool Usage");
@@ -49,7 +60,7 @@ describe("agent system prompt", () => {
   });
 
   test("builds a distinct approval-agent identity and operating model", () => {
-    const taskPrompt = buildAgentSystemPrompt();
+    const taskPrompt = buildAgentSystemPrompt({ sessionPurpose: "task" });
     const approvalPrompt = buildAgentSystemPrompt({ sessionPurpose: "approval" });
 
     expect(taskPrompt).toContain("You are Pokeclaw, an agent that completes the user's request");
@@ -66,7 +77,10 @@ describe("agent system prompt", () => {
   });
 
   test("includes the currently required permission and bash guidance", () => {
-    const prompt = buildAgentSystemPrompt();
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+    });
 
     expect(prompt).toContain("call request_permissions");
     expect(prompt).toContain("retryToolCallId");
@@ -95,7 +109,29 @@ describe("agent system prompt", () => {
     expect(buildSkillsSection()).toBe("");
   });
 
+  test("builds a dedicated subagent prompt with its persisted profile", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "sub",
+      displayName: "PR Review",
+      description: "Review pull requests and summarize concrete findings.",
+      workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+    });
+
+    expect(prompt).toContain("You are Pokeclaw SubAgent");
+    expect(prompt).toContain("## SubAgent Profile");
+    expect(prompt).toContain("<title>PR Review</title>");
+    expect(prompt).toContain("<description>");
+    expect(prompt).toContain("<workdir>/Users/daniel/Programs/ai/openclaw/pokeclaw</workdir>");
+    expect(prompt).not.toContain("<initial_task>");
+  });
+
   test("current filled section builders remain non-empty", () => {
+    expect(buildMainAgentIdentitySection()).not.toBe("");
+    expect(buildMainAgentOperatingModelSection()).not.toBe("");
+    expect(buildSubagentIdentitySection()).not.toBe("");
+    expect(buildSubagentOperatingModelSection()).not.toBe("");
+    expect(buildSubagentProfileSection({ title: "PR Review" })).not.toBe("");
     expect(buildTaskAgentIdentitySection()).not.toBe("");
     expect(buildApprovalAgentIdentitySection()).not.toBe("");
     expect(buildTaskAgentOperatingModelSection()).not.toBe("");
@@ -108,6 +144,11 @@ describe("agent system prompt", () => {
   });
 
   test("exports the built prompt as a stable constant", () => {
-    expect(AGENT_SYSTEM_PROMPT).toBe(buildAgentSystemPrompt());
+    expect(AGENT_SYSTEM_PROMPT).toBe(
+      buildAgentSystemPrompt({
+        sessionPurpose: "chat",
+        agentKind: "main",
+      }),
+    );
   });
 });

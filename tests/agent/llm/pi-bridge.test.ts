@@ -316,6 +316,90 @@ describe("pi bridge", () => {
     expect(context.tools.map((tool) => tool.name)).toEqual(["read", "review_permission_request"]);
   });
 
+  test("only exposes create_subagent to the main-agent chat surface", async () => {
+    const finalMessage = {
+      role: "assistant" as const,
+      api: "anthropic-messages" as const,
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5-20250929",
+      stopReason: "stop" as const,
+      content: [{ type: "text" as const, text: "ok" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream(
+        [{ type: "done", reason: "stop", message: finalMessage }],
+        finalMessage,
+      ),
+    );
+
+    const tools = new ToolRegistry([
+      defineTool({
+        name: "create_subagent",
+        description: "Create a subagent",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          throw new Error("not used");
+        },
+      }),
+      defineTool({
+        name: "read",
+        description: "Read a file",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          throw new Error("not used");
+        },
+      }),
+    ]);
+    const bridge = new PiBridge();
+
+    await bridge.streamTurn({
+      model: createResolvedModel(),
+      compactSummary: null,
+      messages: [createStoredUserMessage()],
+      tools,
+      sessionPurpose: "chat",
+      agentKind: "sub",
+      signal: new AbortController().signal,
+    });
+
+    const [, subagentContext] = streamSimpleMock.mock.calls[0] as [
+      ResolvedModel,
+      { tools: Array<{ name: string }> },
+    ];
+    expect(subagentContext.tools.map((tool) => tool.name)).toEqual(["read"]);
+
+    await bridge.streamTurn({
+      model: createResolvedModel(),
+      compactSummary: null,
+      messages: [createStoredUserMessage()],
+      tools,
+      sessionPurpose: "chat",
+      agentKind: "main",
+      signal: new AbortController().signal,
+    });
+
+    const [, mainAgentContext] = streamSimpleMock.mock.calls[1] as [
+      ResolvedModel,
+      { tools: Array<{ name: string }> },
+    ];
+    expect(mainAgentContext.tools.map((tool) => tool.name)).toEqual(["create_subagent", "read"]);
+  });
+
   test("normalizes pi stopReason errors into AgentLlmError", async () => {
     const finalMessage = {
       role: "assistant" as const,

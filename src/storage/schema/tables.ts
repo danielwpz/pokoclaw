@@ -88,6 +88,7 @@ export const agents = sqliteTable("agents", {
   kind: text("kind").notNull(),
   displayName: text("display_name"),
   description: text("description"),
+  workdir: text("workdir"),
   policyProfile: text("policy_profile"),
   defaultModel: text("default_model"),
   status: text("status").notNull().default("active"),
@@ -303,6 +304,49 @@ export const agentPermissionGrants = sqliteTable(
     expiresAt: text("expires_at"),
   },
   (table) => [index("idx_grants_owner_exp").on(table.ownerAgentId, table.expiresAt)],
+);
+
+export const subagentCreationRequests = sqliteTable(
+  "subagent_creation_requests",
+  {
+    id: text("id").primaryKey(),
+    sourceSessionId: text("source_session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    sourceAgentId: text("source_agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    sourceConversationId: text("source_conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    channelInstanceId: text("channel_instance_id")
+      .notNull()
+      .references(() => channelInstances.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    initialTask: text("initial_task").notNull(),
+    workdir: text("workdir").notNull(),
+    initialExtraScopesJson: text("initial_extra_scopes_json").notNull(),
+    status: text("status").notNull(),
+    createdSubagentAgentId: text("created_subagent_agent_id").references(
+      (): AnySQLiteColumn => agents.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    failureReason: text("failure_reason"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    decidedAt: text("decided_at"),
+    expiresAt: text("expires_at"),
+  },
+  (table) => [
+    index("idx_subagent_creation_requests_status_created").on(table.status, table.createdAt),
+    index("idx_subagent_creation_requests_source_session").on(
+      table.sourceSessionId,
+      table.createdAt,
+    ),
+  ],
 );
 
 export const authEvents = sqliteTable(

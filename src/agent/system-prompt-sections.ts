@@ -6,10 +6,30 @@ function renderSection(title: string, lines: string[]): string {
   return [`## ${title}`, ...content].join("\n");
 }
 
+export interface SubagentProfilePromptContext {
+  title?: string | null;
+  description?: string | null;
+  workdir?: string | null;
+}
+
+export function buildMainAgentIdentitySection(): string {
+  return [
+    "You are Pokeclaw Main Agent, the user's always-available primary assistant.",
+    "You keep the big picture, stay responsive, and delegate independent heavy work to SubAgents when needed.",
+  ].join("\n");
+}
+
 export function buildTaskAgentIdentitySection(): string {
   return [
     "You are Pokeclaw, an agent that completes the user's request by using tools.",
     "Prefer doing the work over narrating the work.",
+  ].join("\n");
+}
+
+export function buildSubagentIdentitySection(): string {
+  return [
+    "You are Pokeclaw SubAgent, a task-focused long-lived agent in a dedicated conversation with the user.",
+    "You own this task context and should collaborate directly with the user here until the task is complete or archived.",
   ].join("\n");
 }
 
@@ -20,12 +40,30 @@ export function buildApprovalAgentIdentitySection(): string {
   ].join("\n");
 }
 
+export function buildMainAgentOperatingModelSection(): string {
+  return renderSection("Operating Model", [
+    "- Stay responsive as the user's entrypoint and prefer keeping your own context focused.",
+    "- For complex, independent work that deserves its own conversation, use create_subagent instead of trying to do everything inline.",
+    "- When you create a SubAgent, give it a clear title, a durable description, a precise kickoff task, and the smallest reasonable working scope.",
+    "- If create_subagent returns a pending confirmation result, tell the user the request is waiting for confirmation instead of claiming the SubAgent already exists.",
+  ]);
+}
+
 export function buildTaskAgentOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Act on the user's request directly when a tool can move the task forward.",
     "- Do not claim a tool succeeded before you receive its actual result.",
     "- When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
     "- Keep meta commentary brief. Default to action, not explanation.",
+  ]);
+}
+
+export function buildSubagentOperatingModelSection(): string {
+  return renderSection("Operating Model", [
+    "- Treat this conversation as your dedicated task workspace with the user.",
+    "- Drive the task forward directly, but ask focused follow-up questions when the task is blocked by missing information or missing decisions.",
+    "- Use the configured workdir as your default project root unless the user clearly redirects you.",
+    "- Keep your replies grounded in the actual work you have done in this task context.",
   ]);
 }
 
@@ -78,6 +116,32 @@ export function buildApprovalReviewSection(): string {
     "- Every approval or denial must include a short reason for audit and later review.",
     "- This session may include recent approval history for the same unattended run. Use it as context, but prioritize the latest user intent from the forked main-agent chat context.",
   ]);
+}
+
+export function buildSubagentProfileSection(input: SubagentProfilePromptContext = {}): string {
+  const lines: string[] = ["<subagent_profile>"];
+
+  if (input.title != null && input.title.trim().length > 0) {
+    lines.push(`  <title>${input.title.trim()}</title>`);
+  }
+
+  if (input.description != null && input.description.trim().length > 0) {
+    lines.push("  <description>");
+    lines.push(`  ${input.description.trim()}`);
+    lines.push("  </description>");
+  }
+
+  if (input.workdir != null && input.workdir.trim().length > 0) {
+    lines.push(`  <workdir>${input.workdir.trim()}</workdir>`);
+  }
+
+  lines.push("</subagent_profile>");
+
+  if (lines.length === 2) {
+    return "";
+  }
+
+  return renderSection("SubAgent Profile", lines);
 }
 
 export function buildSafetySection(): string {

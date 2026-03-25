@@ -21,7 +21,7 @@ import type {
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
-import { assertToolAllowedForSessionPurpose } from "@/src/agent/session-policy.js";
+import { assertToolAllowedForSession } from "@/src/agent/session-policy.js";
 import { buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
 import { requestToolApproval } from "@/src/agent/tool-approval.js";
 import type { CompactionConfig, SecurityConfig } from "@/src/config/schema.js";
@@ -38,6 +38,7 @@ import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
 import {
@@ -51,6 +52,7 @@ import {
   type ToolExecutionApprovalState,
   type ToolExecutionContext,
   type ToolResult,
+  type ToolRuntimeControl,
   textToolResult,
 } from "@/src/tools/core/types.js";
 import {
@@ -81,6 +83,7 @@ export interface AgentModelTurnInput {
   conversationId: string;
   scenario: ModelScenario;
   sessionPurpose?: string;
+  agentKind?: string | null;
   model: ResolvedModel;
   systemPrompt?: string;
   compactSummary: string | null;
@@ -122,6 +125,7 @@ export interface AgentLoopDependencies {
   compaction: CompactionConfig;
   approvalTimeoutMs?: number;
   approvalGrantTtlMs?: number;
+  runtimeControl?: Omit<ToolRuntimeControl, "submitApprovalDecision">;
   emitEvent?: (event: AgentRuntimeEvent) => void;
 }
 
@@ -164,23 +168,29 @@ export class AgentLoop {
     sessionId: string;
     conversationId: string;
     ownerAgentId?: string | null;
+    agentKind?: string | null;
+    cwd?: string;
     signal: AbortSignal;
     toolCallId: string;
     approvalState?: ToolExecutionApprovalState;
   }): ToolExecutionContext {
+    const runtimeControl = {
+      submitApprovalDecision: (decision) => this.submitApprovalResponse(decision),
+      ...(this.deps.runtimeControl ?? {}),
+    } satisfies ToolRuntimeControl;
+
     return {
       sessionId: input.sessionId,
       conversationId: input.conversationId,
-      cwd: POKECLAW_WORKSPACE_DIR,
+      cwd: input.cwd ?? POKECLAW_WORKSPACE_DIR,
       securityConfig: this.deps.securityConfig,
       storage: this.deps.storage,
       abortSignal: input.signal,
       toolCallId: input.toolCallId,
       ...(input.ownerAgentId === undefined ? {} : { ownerAgentId: input.ownerAgentId }),
+      ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
       ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
-      runtimeControl: {
-        submitApprovalDecision: (decision) => this.submitApprovalResponse(decision),
-      },
+      runtimeControl,
     };
   }
 
@@ -206,6 +216,10 @@ export class AgentLoop {
     const maxTurns = input.maxTurns ?? 8;
     let context = this.deps.sessions.getContext(input.sessionId);
     const model = this.deps.models.getRequiredScenarioModel(input.scenario);
+    const ownerAgent =
+      context.session.ownerAgentId == null
+        ? null
+        : new AgentsRepo(this.deps.storage).getById(context.session.ownerAgentId);
     let messages = [...context.messages];
     const events: AgentRuntimeEvent[] = [];
     const appendedMessageIds: string[] = [];
@@ -270,9 +284,14 @@ export class AgentLoop {
               sessionId: input.sessionId,
               conversationId: context.session.conversationId,
               scenario: input.scenario,
+              agentKind: ownerAgent?.kind ?? null,
               model,
               systemPrompt: buildAgentSystemPrompt({
                 sessionPurpose: context.session.purpose,
+                agentKind: ownerAgent?.kind ?? null,
+                displayName: ownerAgent?.displayName ?? null,
+                description: ownerAgent?.description ?? null,
+                workdir: ownerAgent?.workdir ?? null,
               }),
               compactSummary: context.compactSummary,
               messages,
@@ -465,6 +484,7 @@ export class AgentLoop {
             const executedTool = await this.executeToolCall({
               input,
               context,
+              ownerAgent,
               messages,
               toolCall,
               turn: turn + 1,
@@ -714,6 +734,7 @@ export class AgentLoop {
   private async executeToolCall(input: {
     input: RunAgentLoopInput;
     context: ReturnType<AgentSessionService["getContext"]>;
+    ownerAgent: ReturnType<AgentsRepo["getById"]>;
     messages: Message[];
     toolCall: AgentToolCall;
     turn: number;
@@ -726,8 +747,9 @@ export class AgentLoop {
 
     while (true) {
       try {
-        assertToolAllowedForSessionPurpose({
+        assertToolAllowedForSession({
           purpose: input.context.session.purpose,
+          agentKind: input.ownerAgent?.kind ?? null,
           toolName: input.toolCall.name,
         });
         const result = await this.deps.tools.execute(
@@ -736,8 +758,10 @@ export class AgentLoop {
             sessionId: input.input.sessionId,
             conversationId: input.context.session.conversationId,
             ownerAgentId: input.context.session.ownerAgentId,
+            agentKind: input.ownerAgent?.kind ?? null,
             signal: input.signal,
             toolCallId: input.toolCall.id,
+            ...(input.ownerAgent?.workdir == null ? {} : { cwd: input.ownerAgent.workdir }),
             ...(approvalState == null ? {} : { approvalState }),
           }),
           input.toolCall.args,
@@ -856,6 +880,7 @@ export class AgentLoop {
     input: {
       input: RunAgentLoopInput;
       context: ReturnType<AgentSessionService["getContext"]>;
+      ownerAgent: ReturnType<AgentsRepo["getById"]>;
       messages: Message[];
       toolCall: AgentToolCall;
       turn: number;
@@ -923,8 +948,9 @@ export class AgentLoop {
         retriedToolName: retryTarget.name,
         runId: input.input.runId,
       });
-      assertToolAllowedForSessionPurpose({
+      assertToolAllowedForSession({
         purpose: input.input.context.session.purpose,
+        agentKind: input.input.ownerAgent?.kind ?? null,
         toolName: retryTarget.name,
       });
       const retriedResult = await this.deps.tools.execute(
@@ -933,8 +959,12 @@ export class AgentLoop {
           sessionId: input.input.input.sessionId,
           conversationId: input.input.context.session.conversationId,
           ownerAgentId: input.input.context.session.ownerAgentId,
+          agentKind: input.input.ownerAgent?.kind ?? null,
           signal: input.input.signal,
           toolCallId: retryTarget.id,
+          ...(input.input.ownerAgent?.workdir == null
+            ? {}
+            : { cwd: input.input.ownerAgent.workdir }),
         }),
         retryTarget.args,
       );
