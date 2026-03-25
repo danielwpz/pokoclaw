@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { toolInternalError, toolRecoverableError } from "@/src/tools/errors.js";
+import { toolInternalError, toolRecoverableError } from "@/src/tools/core/errors.js";
 
 describe("tool errors", () => {
   test("derives recoverable tool error behavior from kind", () => {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { bashPrefixMatchesCommand } from "@/src/security/bash-prefix.js";
 import {
   type AgentPermissionBaseline,
   type AgentRuntimeRole,
@@ -9,6 +10,7 @@ import {
   type SystemPermissionPolicy,
 } from "@/src/security/policy.js";
 import {
+  type BashFullAccessScope,
   type DbPermissionKind,
   type FsPermissionKind,
   isFsSubtreeScopePath,
@@ -33,6 +35,9 @@ export interface EffectivePermissions {
   db: {
     read: boolean;
     write: boolean;
+  };
+  bash: {
+    fullAccessPrefixes: string[][];
   };
 }
 
@@ -99,6 +104,12 @@ function hasDbGrant(scopes: PermissionScope[], kind: DbPermissionKind): boolean 
   });
 }
 
+function getBashFullAccessPrefixes(scopes: PermissionScope[]): string[][] {
+  return scopes
+    .filter((scope): scope is BashFullAccessScope => scope.kind === "bash.full_access")
+    .map((scope) => [...scope.prefix]);
+}
+
 export function buildEffectivePermissions(
   scopes: PermissionScope[],
   systemPolicy: SystemPermissionPolicy = DEFAULT_SYSTEM_POLICY,
@@ -127,6 +138,9 @@ export function buildEffectivePermissions(
     db: {
       read: systemPolicy.db.read && hasDbGrant(scopes, "db.read"),
       write: systemPolicy.db.write && hasDbGrant(scopes, "db.write"),
+    },
+    bash: {
+      fullAccessPrefixes: getBashFullAccessPrefixes(scopes),
     },
   };
 }
@@ -253,6 +267,29 @@ export function checkDatabasePermission(input: {
     result: "deny",
     reason: "not_granted",
     summary: `${input.kind} requires approval for the system database`,
+  };
+}
+
+export function checkBashFullAccessPermission(input: {
+  commandPrefix: string[];
+  permissions: EffectivePermissions;
+}): PermissionCheckResult {
+  const matched = input.permissions.bash.fullAccessPrefixes.some((prefix) =>
+    bashPrefixMatchesCommand(prefix, input.commandPrefix),
+  );
+
+  if (matched) {
+    return {
+      result: "allow",
+      reason: "granted",
+      summary: `bash.full_access is granted for ${input.commandPrefix.join(" ")}`,
+    };
+  }
+
+  return {
+    result: "deny",
+    reason: "not_granted",
+    summary: `bash.full_access requires approval for ${input.commandPrefix.join(" ")}`,
   };
 }
 

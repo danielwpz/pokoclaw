@@ -6,9 +6,9 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
-import type { ToolFailure } from "@/src/tools/errors.js";
+import type { ToolFailure } from "@/src/tools/core/errors.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createGrepTool } from "@/src/tools/grep.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -236,7 +236,18 @@ describe("grep tool", () => {
     ).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
-      message: `The read request is blocked by system policy: ${POKECLAW_SYSTEM_DIR}`,
+      details: {
+        code: "permission_denied",
+        requestable: false,
+        entries: [
+          {
+            resource: "filesystem",
+            path: POKECLAW_SYSTEM_DIR,
+            scope: "exact",
+            access: "read",
+          },
+        ],
+      },
     } satisfies Partial<ToolFailure>);
   });
 });

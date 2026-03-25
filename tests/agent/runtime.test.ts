@@ -9,12 +9,12 @@ import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
-import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
-import { toolApprovalRequired } from "@/src/tools/errors.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
-import { defineTool, textToolResult } from "@/src/tools/types.js";
+import { toolRecoverableError } from "@/src/tools/core/errors.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { defineTool, textToolResult } from "@/src/tools/core/types.js";
+import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -22,6 +22,7 @@ import {
 } from "@/tests/storage/helpers/test-db.js";
 
 const NO_ARGS_TOOL_SCHEMA = Type.Object({}, { additionalProperties: false });
+const RUNTIME_PROTECTED_FILE = "/tmp/pokeclaw-runtime-protected.txt";
 
 function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
   return {
@@ -336,6 +337,31 @@ describe("session runtime ingress", () => {
           });
         }
 
+        if (turnCount === 2) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_2",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: RUNTIME_PROTECTED_FILE,
+                      scope: "exact",
+                      access: "write",
+                    },
+                  ],
+                  justification: "Need to write the requested file.",
+                  retryToolCallId: "tool_1",
+                },
+              },
+            ],
+          });
+        }
+
         return makeAssistantResult({
           content: [{ type: "text", text: "done" }],
         });
@@ -351,11 +377,19 @@ describe("session runtime ingress", () => {
         execute() {
           toolExecuteCount += 1;
           if (toolExecuteCount === 1) {
-            throw toolApprovalRequired({
-              request: {
-                scopes: [{ kind: "fs.write", path: `${POKECLAW_WORKSPACE_DIR}/**` }],
-              },
-              reasonText: "This tool needs approval to continue: Write workspace.",
+            throw toolRecoverableError("Write access is missing for the workspace file.", {
+              code: "permission_denied",
+              requestable: true,
+              failedToolCallId: "tool_1",
+              summary: "Write access is missing for the workspace file.",
+              entries: [
+                {
+                  resource: "filesystem",
+                  path: RUNTIME_PROTECTED_FILE,
+                  scope: "exact",
+                  access: "write",
+                },
+              ],
             });
           }
 
@@ -363,6 +397,7 @@ describe("session runtime ingress", () => {
         },
       }),
     );
+    tools.register(createRequestPermissionsTool());
 
     const emittedEvents: Array<{ type: string; approvalId?: string }> = [];
     const loop = new AgentLoop({
@@ -417,13 +452,21 @@ describe("session runtime ingress", () => {
     const result = await runPromise;
     expect(result.status).toBe("started");
     expect(toolExecuteCount).toBe(2);
-    expect(turnCount).toBe(2);
+    expect(turnCount).toBe(3);
 
     const rows = messagesRepo.listBySession("sess_1");
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(6);
     expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
       toolCallId: "tool_1",
       toolName: "gated",
+      isError: true,
+      details: {
+        code: "permission_denied",
+      },
+    });
+    expect(JSON.parse(rows[4]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_2",
+      toolName: "request_permissions",
       isError: false,
     });
   });

@@ -1,8 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
-import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/types.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/core/types.js";
 import {
   createTestDatabase,
   destroyTestDatabase,

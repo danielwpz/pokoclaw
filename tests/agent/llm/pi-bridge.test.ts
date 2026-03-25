@@ -5,8 +5,8 @@ import { AgentLlmError } from "@/src/agent/llm/errors.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import { PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import type { Message } from "@/src/storage/schema/types.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
-import { defineTool } from "@/src/tools/types.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { defineTool } from "@/src/tools/core/types.js";
 
 const { completeSimpleMock, streamSimpleMock } = vi.hoisted(() => ({
   completeSimpleMock: vi.fn(),
@@ -140,6 +140,7 @@ describe("pi bridge", () => {
     const bridge = new PiBridge();
     const result = await bridge.streamTurn({
       model: createResolvedModel(),
+      systemPrompt: "system prompt",
       compactSummary: "summary",
       messages: [createStoredUserMessage()],
       tools: new ToolRegistry([
@@ -187,10 +188,11 @@ describe("pi bridge", () => {
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
     const [model, context, options] = streamSimpleMock.mock.calls[0] as [
       ResolvedModel,
-      { messages: unknown[]; tools: unknown[] },
+      { systemPrompt?: string; messages: unknown[]; tools: unknown[] },
       { apiKey: string; sessionId: string },
     ];
     expect((model as unknown as { id: string }).id).toBe("claude-sonnet-4-5-20250929");
+    expect(context.systemPrompt).toBe("system prompt");
     expect(context.messages).toHaveLength(2);
     expect(context.tools).toHaveLength(1);
     expect(options.apiKey).toBe("secret");

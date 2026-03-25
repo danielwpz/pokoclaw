@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import type { Message } from "@/src/storage/schema/types.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
 import {
   createIntegrationLlmFixture,
   createStoredAssistantMessage,

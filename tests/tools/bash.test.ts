@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const { executeSandboxedBashMock } = vi.hoisted(() => ({
+const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() => ({
   executeSandboxedBashMock: vi.fn(),
+  executeUnsandboxedBashMock: vi.fn(),
 }));
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import { SecurityService } from "@/src/security/service.js";
 import { createBashTool } from "@/src/tools/bash.js";
-import {
-  type ToolApprovalRequired,
-  type ToolFailure,
-  toolApprovalRequired,
-} from "@/src/tools/errors.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
+import { type ToolFailure, toolRecoverableError } from "@/src/tools/core/errors.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -27,6 +25,7 @@ vi.mock("@/src/security/sandbox.js", async () => {
   return {
     ...actual,
     executeSandboxedBash: executeSandboxedBashMock,
+    executeUnsandboxedBash: executeUnsandboxedBashMock,
   };
 });
 
@@ -35,6 +34,7 @@ describe("bash tool", () => {
 
   beforeEach(() => {
     executeSandboxedBashMock.mockReset();
+    executeUnsandboxedBashMock.mockReset();
   });
 
   afterEach(async () => {
@@ -73,19 +73,36 @@ describe("bash tool", () => {
       },
     );
 
-    expect(result).toEqual({
-      content: [{ type: "text", text: "/tmp/work\n" }],
-      details: {
-        command: "pwd",
-        cwd: "/tmp/work",
-        timeoutMs: 10_000,
-        exitCode: 0,
-        signal: null,
-        stdoutChars: 10,
-        stderrChars: 0,
-        outputTruncated: false,
-      },
+    expect(result.details).toEqual({
+      command: "pwd",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      exitCode: 0,
+      signal: null,
+      stdoutChars: 10,
+      stderrChars: 0,
+      outputTruncated: false,
     });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `<bash_result>
+  <command>pwd</command>
+  <cwd>/tmp/work</cwd>
+  <exit_code>0</exit_code>
+  <signal></signal>
+
+  <stdout>
+    /tmp/work
+    
+  </stdout>
+
+  <stderr>
+    
+  </stderr>
+</bash_result>`,
+      },
+    ]);
   });
 
   test("returns non-zero exits as normal tool results", async () => {
@@ -117,35 +134,54 @@ describe("bash tool", () => {
       },
     );
 
-    expect(result).toEqual({
-      content: [
-        {
-          type: "text",
-          text: "cat: missing.txt: No such file or directory\n\n(Command exited with code 1.)",
-        },
-      ],
-      details: {
-        command: "cat missing.txt",
-        cwd: "/tmp/work",
-        timeoutMs: 10_000,
-        exitCode: 1,
-        signal: null,
-        stdoutChars: 0,
-        stderrChars: 44,
-        outputTruncated: false,
-      },
+    expect(result.details).toEqual({
+      command: "cat missing.txt",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      exitCode: 1,
+      signal: null,
+      stdoutChars: 0,
+      stderrChars: 44,
+      outputTruncated: false,
     });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `<bash_result>
+  <command>cat missing.txt</command>
+  <cwd>/tmp/work</cwd>
+  <exit_code>1</exit_code>
+  <signal></signal>
+
+  <stdout>
+    
+  </stdout>
+
+  <stderr>
+    cat: missing.txt: No such file or directory
+    
+  </stderr>
+</bash_result>`,
+      },
+    ]);
   });
 
-  test("passes through approval-required errors from the sandbox adapter", async () => {
+  test("passes through permission-blocked failures from the sandbox adapter", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
     executeSandboxedBashMock.mockRejectedValue(
-      toolApprovalRequired({
-        request: {
-          scopes: [{ kind: "fs.write", path: "/tmp/work/notes.txt" }],
-        },
-        reasonText: "This tool needs approval to continue: Write /tmp/work/notes.txt.",
+      toolRecoverableError("Write /tmp/work/notes.txt access is missing.", {
+        code: "permission_denied",
+        requestable: true,
+        summary: "Write /tmp/work/notes.txt access is missing.",
+        entries: [
+          {
+            resource: "filesystem",
+            path: "/tmp/work/notes.txt",
+            scope: "exact",
+            access: "write",
+          },
+        ],
       }),
     );
 
@@ -167,12 +203,195 @@ describe("bash tool", () => {
         },
       ),
     ).rejects.toMatchObject({
-      name: "ToolApprovalRequired",
-      reasonText: "This tool needs approval to continue: Write /tmp/work/notes.txt.",
-      request: {
-        scopes: [{ kind: "fs.write", path: "/tmp/work/notes.txt" }],
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        entries: [
+          {
+            resource: "filesystem",
+            path: "/tmp/work/notes.txt",
+            scope: "exact",
+            access: "write",
+          },
+        ],
       },
-    } satisfies Partial<ToolApprovalRequired>);
+    } satisfies Partial<ToolFailure>);
+  });
+
+  test("requires justification before requesting bash full access", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command: "npm run dev",
+          sandboxMode: "full_access",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_full_access_requires_justification",
+      },
+    } satisfies Partial<ToolFailure>);
+  });
+
+  test("rejects full-access-only arguments in sandboxed mode", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command: "npm run dev",
+          justification: "Need to run the dev server.",
+          prefix: ["npm", "run"],
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_full_access_args_require_full_access_mode",
+      },
+    } satisfies Partial<ToolFailure>);
+  });
+
+  test("uses an existing bash full-access prefix grant for a simple command", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["npm", "run"] }],
+    });
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command: "FOO=1 npm run dev",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "ready\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "FOO=1 npm run dev",
+        sandboxMode: "full_access",
+        justification: "Need to start the requested local dev server.",
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      command: "FOO=1 npm run dev",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
+  test("rejects reusable full-access prefixes for complex shell commands", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command: "npm run dev | tee out.log",
+          sandboxMode: "full_access",
+          justification: "Need to run the requested dev server and inspect output.",
+          prefix: ["npm", "run"],
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_full_access_prefix_requires_simple_command",
+      },
+    } satisfies Partial<ToolFailure>);
+  });
+
+  test("requests one-shot full access for complex commands without a prefix", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command: "npm run dev | tee out.log",
+          sandboxMode: "full_access",
+          justification: "Need to run the requested dev server with full access.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      grantOnApprove: false,
+      approvalTitle: "Approval required: run bash command with full access",
+      request: {
+        scopes: [{ kind: "bash.full_access", prefix: ["bash", "-lc"] }],
+      },
+    });
   });
 
   test("rejects unmanaged background shell syntax before invoking sandbox execution", async () => {
@@ -238,7 +457,27 @@ describe("bash tool", () => {
       },
     );
 
-    expect(result.content).toEqual([{ type: "text", text: "ok\nstill-ok\n" }]);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `<bash_result>
+  <command>echo ok &amp;&amp; echo still-ok</command>
+  <cwd>/tmp/work</cwd>
+  <exit_code>0</exit_code>
+  <signal></signal>
+
+  <stdout>
+    ok
+    still-ok
+    
+  </stdout>
+
+  <stderr>
+    
+  </stderr>
+</bash_result>`,
+      },
+    ]);
 
     await expect(
       registry.execute(
@@ -341,7 +580,26 @@ describe("bash tool", () => {
       { command },
     );
 
-    expect(result.content).toEqual([{ type: "text", text: "ok\n" }]);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `<bash_result>
+  <command>${escapeXml(command)}</command>
+  <cwd>/tmp/work</cwd>
+  <exit_code>0</exit_code>
+  <signal></signal>
+
+  <stdout>
+    ok
+    
+  </stdout>
+
+  <stderr>
+    
+  </stderr>
+</bash_result>`,
+      },
+    ]);
     expect(executeSandboxedBashMock).toHaveBeenCalledWith(
       expect.objectContaining({
         command,
@@ -349,3 +607,7 @@ describe("bash tool", () => {
     );
   });
 });
+
+function escapeXml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}

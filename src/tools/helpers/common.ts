@@ -6,8 +6,12 @@ import { describePermissionScope, type PermissionScope } from "@/src/security/sc
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
-import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/errors.js";
-import type { ToolExecutionContext } from "@/src/tools/types.js";
+import { toolRecoverableError } from "@/src/tools/core/errors.js";
+import type { ToolExecutionContext } from "@/src/tools/core/types.js";
+import {
+  buildPermissionDeniedDetails,
+  compressPermissionScopesToEntries,
+} from "@/src/tools/helpers/permission-block.js";
 
 const logger = createSubsystemLogger("tools");
 
@@ -94,7 +98,13 @@ export function createFilesystemAccessController(
       (decision) => decision.access.result === "deny" && decision.access.reason === "hard_deny",
     );
     if (hardDeny != null) {
-      const action = hardDeny.kind === "fs.read" ? "read" : "write";
+      const hardDenyScopes: PermissionScope[] = [
+        {
+          kind: hardDeny.kind,
+          path: hardDeny.normalizedPath,
+        },
+      ];
+      const entries = compressPermissionScopesToEntries(hardDenyScopes);
       logger.info("filesystem access blocked by policy", {
         sessionId: context.sessionId,
         ownerAgentId,
@@ -103,14 +113,13 @@ export function createFilesystemAccessController(
         path: hardDeny.normalizedPath,
       });
       throw toolRecoverableError(
-        `The ${action} request is blocked by system policy: ${hardDeny.normalizedPath}`,
-        {
-          code: "filesystem_access_denied",
-          permissionKind: hardDeny.kind,
-          accessReason: hardDeny.access.reason,
-          path: hardDeny.normalizedPath,
+        hardDeny.access.summary,
+        buildPermissionDeniedDetails({
+          requestable: false,
           summary: hardDeny.access.summary,
-        },
+          entries,
+          ...(context.toolCallId == null ? {} : { failedToolCallId: context.toolCallId }),
+        }),
       );
     }
 
@@ -123,12 +132,16 @@ export function createFilesystemAccessController(
         scopeCount: requestedScopes.length,
         scope: requestedScopes[0] == null ? undefined : describePermissionScope(requestedScopes[0]),
       });
-      throw toolApprovalRequired({
-        request: {
-          scopes: requestedScopes,
-        },
-        reasonText: buildFilesystemApprovalReason(requestedScopes),
-      });
+      const entries = compressPermissionScopesToEntries(requestedScopes);
+      throw toolRecoverableError(
+        buildFilesystemApprovalReason(requestedScopes),
+        buildPermissionDeniedDetails({
+          requestable: true,
+          summary: buildFilesystemApprovalReason(requestedScopes),
+          entries,
+          ...(context.toolCallId == null ? {} : { failedToolCallId: context.toolCallId }),
+        }),
+      );
     }
 
     return decisions.map(({ access, normalizedPath }) => ({
@@ -181,10 +194,10 @@ function collectMissingFilesystemScopes(
 function buildFilesystemApprovalReason(scopes: PermissionScope[]): string {
   const firstScope = scopes[0];
   if (scopes.length === 1 && firstScope != null) {
-    return `This tool needs approval to continue: ${describePermissionScope(firstScope)}.`;
+    return `${describePermissionScope(firstScope)} access is missing.`;
   }
 
-  return `This tool needs approval to continue: ${scopes.map(describePermissionScope).join("; ")}.`;
+  return `${scopes.map(describePermissionScope).join("; ")} access is missing.`;
 }
 
 export function formatDisplayPath(targetPath: string, _cwd: string): string {

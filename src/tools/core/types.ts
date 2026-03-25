@@ -28,6 +28,15 @@ export interface ToolExecutionContext {
   storage: StorageDb;
   abortSignal?: AbortSignal;
   toolCallId?: string;
+  approvalState?: ToolExecutionApprovalState;
+}
+
+export interface ToolExecutionApprovalState {
+  bashFullAccess?: {
+    approved: true;
+    mode: "one_shot";
+    approvalId: number;
+  };
 }
 
 export interface ToolDefinition<TArgs = unknown, TDetails = unknown> {

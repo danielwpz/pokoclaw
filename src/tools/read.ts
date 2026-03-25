@@ -1,9 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
 import { type Static, Type } from "@sinclair/typebox";
-
-import { formatDisplayPath, requireFilesystemAccess, resolveToolCwd } from "@/src/tools/common.js";
-import { toolRecoverableError } from "@/src/tools/errors.js";
-import { defineTool, textToolResult } from "@/src/tools/types.js";
+import { toolRecoverableError } from "@/src/tools/core/errors.js";
+import { defineTool, textToolResult } from "@/src/tools/core/types.js";
+import {
+  formatDisplayPath,
+  requireFilesystemAccess,
+  resolveToolCwd,
+} from "@/src/tools/helpers/common.js";
 
 const DEFAULT_LINE_LIMIT = 2000;
 const MAX_RESULT_CHARS = 128_000;

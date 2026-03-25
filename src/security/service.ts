@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 
 import {
   buildEffectivePermissions,
+  checkBashFullAccessPermission,
   checkDatabasePermission,
   checkFilesystemPermission,
   type EffectivePermissions,
@@ -99,6 +100,17 @@ export class SecurityService {
   }): PermissionCheckResult {
     return checkDatabasePermission({
       kind: input.kind,
+      permissions: this.getEffectivePermissions(input.ownerAgentId, input.activeAt),
+    });
+  }
+
+  checkBashFullAccess(input: {
+    ownerAgentId: string;
+    commandPrefix: string[];
+    activeAt?: Date;
+  }): PermissionCheckResult {
+    return checkBashFullAccessPermission({
+      commandPrefix: input.commandPrefix,
       permissions: this.getEffectivePermissions(input.ownerAgentId, input.activeAt),
     });
   }
@@ -236,6 +248,10 @@ function describeScopeForLog(scope: PermissionScope): string {
     return `${scope.kind}:${scope.path}`;
   }
 
+  if ("prefix" in scope) {
+    return `${scope.kind}:${scope.prefix.join(" ")}`;
+  }
+
   return `${scope.kind}:${scope.database}`;
 }
 
@@ -246,6 +262,11 @@ function expandUserApprovedFilesystemScopes(scopes: PermissionScope[]): Permissi
     if ("path" in scope) {
       expanded.set(`fs.read:${scope.path}`, { kind: "fs.read", path: scope.path });
       expanded.set(`fs.write:${scope.path}`, { kind: "fs.write", path: scope.path });
+      continue;
+    }
+
+    if ("prefix" in scope) {
+      expanded.set(`${scope.kind}:${scope.prefix.join("\u0000")}`, scope);
       continue;
     }
 
@@ -261,6 +282,11 @@ function dedupeScopes(scopes: PermissionScope[]): PermissionScope[] {
   for (const scope of scopes) {
     if ("path" in scope) {
       unique.set(`${scope.kind}:${scope.path}`, scope);
+      continue;
+    }
+
+    if ("prefix" in scope) {
+      unique.set(`${scope.kind}:${scope.prefix.join("\u0000")}`, scope);
       continue;
     }
 

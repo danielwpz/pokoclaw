@@ -2,7 +2,8 @@ import path from "node:path";
 
 export type FsPermissionKind = "fs.read" | "fs.write";
 export type DbPermissionKind = "db.read" | "db.write";
-export type PermissionKind = FsPermissionKind | DbPermissionKind;
+export type BashPermissionKind = "bash.full_access";
+export type PermissionKind = FsPermissionKind | DbPermissionKind | BashPermissionKind;
 
 export interface FsPermissionScope {
   kind: FsPermissionKind;
@@ -14,7 +15,12 @@ export interface DbPermissionScope {
   database: "system";
 }
 
-export type PermissionScope = FsPermissionScope | DbPermissionScope;
+export interface BashFullAccessScope {
+  kind: BashPermissionKind;
+  prefix: string[];
+}
+
+export type PermissionScope = FsPermissionScope | DbPermissionScope | BashFullAccessScope;
 
 export interface PermissionRequest {
   scopes: PermissionScope[];
@@ -81,6 +87,26 @@ function parseDbScope(input: Record<string, unknown>, kind: DbPermissionKind): D
   };
 }
 
+function parseBashScope(input: Record<string, unknown>): BashFullAccessScope {
+  const prefix = input.prefix;
+  if (!Array.isArray(prefix) || prefix.length === 0) {
+    throw new Error("bash.full_access prefix must be a non-empty array");
+  }
+
+  const normalizedPrefix = prefix.map((entry, index) =>
+    assertString(entry, `bash.full_access prefix[${index}]`).trim(),
+  );
+
+  if (normalizedPrefix.some((entry) => entry.length === 0)) {
+    throw new Error("bash.full_access prefix entries must be non-empty strings");
+  }
+
+  return {
+    kind: "bash.full_access",
+    prefix: normalizedPrefix,
+  };
+}
+
 export function parsePermissionScope(input: unknown): PermissionScope {
   const scope = assertObject(input, "permission scope");
   const kind = assertString(scope.kind, "permission scope kind") as PermissionKind;
@@ -92,6 +118,8 @@ export function parsePermissionScope(input: unknown): PermissionScope {
     case "db.read":
     case "db.write":
       return parseDbScope(scope, kind);
+    case "bash.full_access":
+      return parseBashScope(scope);
     default:
       throw new Error(`Unsupported permission scope kind: ${kind}`);
   }
@@ -159,5 +187,7 @@ export function describePermissionScope(scope: PermissionScope): string {
       return "Read system database";
     case "db.write":
       return "Write system database";
+    case "bash.full_access":
+      return `Run bash commands with full access for prefix: ${scope.prefix.join(" ")}`;
   }
 }

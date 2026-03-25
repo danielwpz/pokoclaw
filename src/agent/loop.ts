@@ -21,6 +21,7 @@ import type {
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
+import { AGENT_SYSTEM_PROMPT } from "@/src/agent/system-prompt.js";
 import type { CompactionConfig, SecurityConfig } from "@/src/config/schema.js";
 import {
   type ApprovalResponseInput,
@@ -42,9 +43,19 @@ import {
   isToolApprovalRequired,
   isToolFailure,
   normalizeToolFailure,
-} from "@/src/tools/errors.js";
-import type { ToolRegistry } from "@/src/tools/registry.js";
-import { type ToolResult, textToolResult } from "@/src/tools/types.js";
+} from "@/src/tools/core/errors.js";
+import type { ToolRegistry } from "@/src/tools/core/registry.js";
+import {
+  type ToolExecutionApprovalState,
+  type ToolResult,
+  textToolResult,
+} from "@/src/tools/core/types.js";
+import {
+  isPermissionDeniedDetails,
+  renderPermissionRequestResultBlock,
+  renderPermissionRetryDivider,
+  renderPermissionRetryNewBoundaryNote,
+} from "@/src/tools/helpers/permission-block.js";
 
 const logger = createSubsystemLogger("agent-loop");
 
@@ -67,6 +78,7 @@ export interface AgentModelTurnInput {
   conversationId: string;
   scenario: ModelScenario;
   model: ResolvedModel;
+  systemPrompt?: string;
   compactSummary: string | null;
   messages: Message[];
   signal: AbortSignal;
@@ -233,6 +245,7 @@ export class AgentLoop {
               conversationId: context.session.conversationId,
               scenario: input.scenario,
               model,
+              systemPrompt: AGENT_SYSTEM_PROMPT,
               compactSummary: context.compactSummary,
               messages,
               signal: handle.signal,
@@ -424,6 +437,7 @@ export class AgentLoop {
             const executedTool = await this.executeToolCall({
               input,
               context,
+              messages,
               toolCall,
               turn: turn + 1,
               runId,
@@ -656,6 +670,7 @@ export class AgentLoop {
   private async executeToolCall(input: {
     input: RunAgentLoopInput;
     context: ReturnType<AgentSessionService["getContext"]>;
+    messages: Message[];
     toolCall: AgentToolCall;
     turn: number;
     runId: string;
@@ -663,6 +678,7 @@ export class AgentLoop {
     signal: AbortSignal;
   }): Promise<ExecutedToolCall> {
     const queuedSteer: SteerInput[] = [];
+    let approvalState: ToolExecutionApprovalState | undefined;
 
     while (true) {
       try {
@@ -677,6 +693,7 @@ export class AgentLoop {
             storage: this.deps.storage,
             abortSignal: input.signal,
             toolCallId: input.toolCall.id,
+            ...(approvalState == null ? {} : { approvalState }),
           },
           input.toolCall.args,
         );
@@ -699,25 +716,47 @@ export class AgentLoop {
           runId: input.runId,
           request: error.request,
           reasonText: error.reasonText,
+          ...(error.approvalTitle == null ? {} : { approvalTitle: error.approvalTitle }),
           events: input.events,
           signal: input.signal,
         });
 
         if (approval.decision === "approve") {
           queuedSteer.push(...approval.queuedSteer);
-          const grantedBy = approval.grantedBy ?? "user";
-          const grantExpiresAt =
-            approval.expiresAt === undefined
-              ? new Date(approval.decidedAt.getTime() + this.approvalGrantTtlMs)
-              : approval.expiresAt;
+          if (error.grantOnApprove) {
+            const grantedBy = approval.grantedBy ?? "user";
+            const grantExpiresAt =
+              approval.expiresAt === undefined
+                ? new Date(approval.decidedAt.getTime() + this.approvalGrantTtlMs)
+                : approval.expiresAt;
 
-          this.security.approveRequestAndGrantScopes({
-            approvalId: approval.approvalId,
-            grantedBy,
-            reasonText: approval.reasonText,
-            decidedAt: approval.decidedAt,
-            expiresAt: grantExpiresAt,
-          });
+            this.security.approveRequestAndGrantScopes({
+              approvalId: approval.approvalId,
+              grantedBy,
+              reasonText: approval.reasonText,
+              decidedAt: approval.decidedAt,
+              expiresAt: grantExpiresAt,
+            });
+          } else {
+            this.security.resolveApproval({
+              approvalId: approval.approvalId,
+              status: "approved",
+              reasonText: approval.reasonText,
+              decidedAt: approval.decidedAt,
+            });
+          }
+
+          approvalState = error.approvalState;
+
+          if (input.toolCall.name === "request_permissions") {
+            return await this.finishPermissionRequestAfterApproval({
+              input,
+              approval,
+              queuedSteer,
+              ...(error.retryToolCallId == null ? {} : { retryToolCallId: error.retryToolCallId }),
+            });
+          }
+
           continue;
         }
 
@@ -729,15 +768,33 @@ export class AgentLoop {
         });
 
         return {
-          result: textToolResult(
-            approval.reasonText == null || approval.reasonText.length === 0
-              ? "Permission request denied."
-              : approval.reasonText,
-            {
-              approvalId: approval.approvalId,
-              request: approval.request,
-            },
-          ),
+          result:
+            input.toolCall.name === "request_permissions"
+              ? textToolResult(
+                  renderPermissionRequestResultBlock({
+                    status: "denied",
+                    justification:
+                      approval.reasonText == null || approval.reasonText.length === 0
+                        ? "Permission request denied."
+                        : approval.reasonText,
+                    ...(error.retryToolCallId == null
+                      ? {}
+                      : { retryToolCallId: error.retryToolCallId }),
+                  }),
+                  {
+                    approvalId: approval.approvalId,
+                    request: approval.request,
+                  },
+                )
+              : textToolResult(
+                  approval.reasonText == null || approval.reasonText.length === 0
+                    ? "Permission request denied."
+                    : approval.reasonText,
+                  {
+                    approvalId: approval.approvalId,
+                    request: approval.request,
+                  },
+                ),
           isError: true,
           queuedSteer: [...queuedSteer, ...approval.queuedSteer],
         };
@@ -753,6 +810,7 @@ export class AgentLoop {
     runId: string;
     request: PermissionRequest;
     reasonText: string;
+    approvalTitle?: string;
     events: AgentRuntimeEvent[];
     signal: AbortSignal;
   }): Promise<ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest }> {
@@ -805,7 +863,7 @@ export class AgentLoop {
     this.recordEvent(input.events, {
       type: "approval_requested",
       approvalId: String(approvalId),
-      title: buildApprovalTitle(input.request),
+      title: input.approvalTitle ?? buildApprovalTitle(input.request),
       reasonText: input.reasonText,
       options: ["Approve for 7 days", "Approve permanently", "Deny"],
       expiresAt: expiresAt.toISOString(),
@@ -869,6 +927,172 @@ export class AgentLoop {
         status: "active",
         updatedAt: new Date(),
       });
+    }
+  }
+
+  private async finishPermissionRequestAfterApproval(input: {
+    input: {
+      input: RunAgentLoopInput;
+      context: ReturnType<AgentSessionService["getContext"]>;
+      messages: Message[];
+      toolCall: AgentToolCall;
+      turn: number;
+      runId: string;
+      events: AgentRuntimeEvent[];
+      signal: AbortSignal;
+    };
+    approval: ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest };
+    queuedSteer: SteerInput[];
+    retryToolCallId?: string;
+  }): Promise<ExecutedToolCall> {
+    if (input.retryToolCallId == null) {
+      logger.info("permission request approved without retry", {
+        sessionId: input.input.input.sessionId,
+        approvalId: input.approval.approvalId,
+        toolName: input.input.toolCall.name,
+        runId: input.input.runId,
+      });
+      return {
+        result: textToolResult(
+          renderPermissionRequestResultBlock({
+            status: "approved",
+            justification: input.approval.reasonText ?? "Permission request approved.",
+          }),
+          {
+            approvalId: input.approval.approvalId,
+            request: input.approval.request,
+          },
+        ),
+        isError: false,
+        queuedSteer: input.queuedSteer,
+      };
+    }
+
+    const retryTarget = findAssistantToolCallById(input.input.messages, input.retryToolCallId);
+    if (retryTarget == null) {
+      logger.warn("permission retry target missing", {
+        sessionId: input.input.input.sessionId,
+        approvalId: input.approval.approvalId,
+        retryToolCallId: input.retryToolCallId,
+        runId: input.input.runId,
+      });
+      return {
+        result: textToolResult(
+          `${renderPermissionRequestResultBlock({
+            status: "approved",
+            justification: input.approval.reasonText ?? "Permission request approved.",
+            retryToolCallId: input.retryToolCallId,
+          })}\n\nAutomatic retry could not find the original tool call. Retry it manually if needed.`,
+          {
+            approvalId: input.approval.approvalId,
+            request: input.approval.request,
+          },
+        ),
+        isError: true,
+        queuedSteer: input.queuedSteer,
+      };
+    }
+
+    try {
+      logger.info("retrying blocked tool after approval", {
+        sessionId: input.input.input.sessionId,
+        approvalId: input.approval.approvalId,
+        retryToolCallId: input.retryToolCallId,
+        retriedToolName: retryTarget.name,
+        runId: input.input.runId,
+      });
+      const retriedResult = await this.deps.tools.execute(
+        retryTarget.name,
+        {
+          sessionId: input.input.input.sessionId,
+          conversationId: input.input.context.session.conversationId,
+          ownerAgentId: input.input.context.session.ownerAgentId,
+          cwd: POKECLAW_WORKSPACE_DIR,
+          securityConfig: this.deps.securityConfig,
+          storage: this.deps.storage,
+          abortSignal: input.input.signal,
+          toolCallId: retryTarget.id,
+        },
+        retryTarget.args,
+      );
+
+      logger.info("retry completed after approval", {
+        sessionId: input.input.input.sessionId,
+        approvalId: input.approval.approvalId,
+        retryToolCallId: input.retryToolCallId,
+        retriedToolName: retryTarget.name,
+        runId: input.input.runId,
+      });
+
+      return {
+        result: {
+          content: [
+            {
+              type: "text",
+              text: renderPermissionRequestResultBlock({
+                status: "approved",
+                justification: input.approval.reasonText ?? "Permission request approved.",
+                retryToolCallId: input.retryToolCallId,
+                retriedToolName: retryTarget.name,
+              }),
+            },
+            {
+              type: "text",
+              text: renderPermissionRetryDivider(),
+            },
+            ...retriedResult.content,
+          ],
+          ...(retriedResult.details === undefined ? {} : { details: retriedResult.details }),
+        },
+        isError: false,
+        queuedSteer: input.queuedSteer,
+      };
+    } catch (error) {
+      const failure = normalizeToolFailure(error);
+      if (!failure.shouldReturnToLlm) {
+        throw failure;
+      }
+
+      logger.info("retry failed after approval", {
+        sessionId: input.input.input.sessionId,
+        approvalId: input.approval.approvalId,
+        retryToolCallId: input.retryToolCallId,
+        retriedToolName: retryTarget.name,
+        errorKind: failure.kind,
+        runId: input.input.runId,
+      });
+
+      return {
+        result: {
+          content: [
+            {
+              type: "text",
+              text: renderPermissionRequestResultBlock({
+                status: "approved",
+                justification: input.approval.reasonText ?? "Permission request approved.",
+                retryToolCallId: input.retryToolCallId,
+                retriedToolName: retryTarget.name,
+              }),
+            },
+            {
+              type: "text",
+              text: renderPermissionRetryDivider(),
+            },
+            ...(isPermissionDeniedDetails(failure.details)
+              ? [
+                  {
+                    type: "text" as const,
+                    text: renderPermissionRetryNewBoundaryNote(),
+                  },
+                ]
+              : []),
+            ...buildToolFailureContent(failure),
+          ],
+          ...(failure.details === undefined ? {} : { details: failure.details }),
+        },
+        isError: true,
+        queuedSteer: input.queuedSteer,
+      };
     }
   }
 
@@ -993,6 +1217,29 @@ function collectAgentToolCalls(content: AgentAssistantContentBlock[]): AgentTool
   );
 }
 
+function findAssistantToolCallById(messages: Message[], toolCallId: string): AgentToolCall | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") {
+      continue;
+    }
+
+    const payload = safeParsePayload<AgentAssistantPayload>(message.payloadJson);
+    if (!Array.isArray(payload?.content)) {
+      continue;
+    }
+
+    const toolCall = collectAgentToolCalls(payload.content).find(
+      (entry) => entry.id === toolCallId,
+    );
+    if (toolCall != null) {
+      return toolCall;
+    }
+  }
+
+  return null;
+}
+
 function buildApprovalTitle(request: PermissionRequest): string {
   const firstScope = request.scopes[0];
   if (request.scopes.length === 1 && firstScope != null) {
@@ -1084,7 +1331,7 @@ function isCompactionModelRunner(
 function toRunFailure(error: unknown): {
   kind:
     | import("@/src/agent/llm/errors.js").AgentLlmErrorKind
-    | import("@/src/tools/errors.js").ToolFailureKind
+    | import("@/src/tools/core/errors.js").ToolFailureKind
     | "unknown";
   message: string;
   retryable: boolean;
