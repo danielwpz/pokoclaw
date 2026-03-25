@@ -11,11 +11,13 @@ import {
   cronJobs,
   messages,
   sessions,
+  subagentCreationRequests,
   taskRuns,
 } from "@/src/storage/schema/tables.js";
 
 export const channelInstancesRelations = relations(channelInstances, ({ many }) => ({
   conversations: many(conversations),
+  subagentCreationRequests: many(subagentCreationRequests),
 }));
 
 export const conversationsRelations = relations(conversations, ({ one, many }) => ({
@@ -26,6 +28,7 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   branches: many(conversationBranches),
   sessions: many(sessions),
   taskRuns: many(taskRuns),
+  subagentCreationRequests: many(subagentCreationRequests),
 }));
 
 export const conversationBranchesRelations = relations(conversationBranches, ({ one, many }) => ({
@@ -55,6 +58,12 @@ export const agentsRelations = relations(agents, ({ one, many }) => ({
   approvals: many(approvalLedger),
   permissionGrants: many(agentPermissionGrants),
   authEvents: many(authEvents),
+  subagentCreationRequests: many(subagentCreationRequests, {
+    relationName: "subagent_creation_request_source_agent",
+  }),
+  createdFromRequests: many(subagentCreationRequests, {
+    relationName: "subagent_creation_request_created_agent",
+  }),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one, many }) => ({
@@ -72,6 +81,7 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   }),
   messages: many(messages),
   approvals: many(approvalLedger),
+  subagentCreationRequests: many(subagentCreationRequests),
 }));
 
 export const messagesRelations = relations(messages, ({ one }) => ({
@@ -146,5 +156,30 @@ export const authEventsRelations = relations(authEvents, ({ one }) => ({
   agent: one(agents, {
     fields: [authEvents.agentId],
     references: [agents.id],
+  }),
+}));
+
+export const subagentCreationRequestsRelations = relations(subagentCreationRequests, ({ one }) => ({
+  sourceSession: one(sessions, {
+    fields: [subagentCreationRequests.sourceSessionId],
+    references: [sessions.id],
+  }),
+  sourceAgent: one(agents, {
+    fields: [subagentCreationRequests.sourceAgentId],
+    references: [agents.id],
+    relationName: "subagent_creation_request_source_agent",
+  }),
+  sourceConversation: one(conversations, {
+    fields: [subagentCreationRequests.sourceConversationId],
+    references: [conversations.id],
+  }),
+  channelInstance: one(channelInstances, {
+    fields: [subagentCreationRequests.channelInstanceId],
+    references: [channelInstances.id],
+  }),
+  createdSubagent: one(agents, {
+    fields: [subagentCreationRequests.createdSubagentAgentId],
+    references: [agents.id],
+    relationName: "subagent_creation_request_created_agent",
   }),
 }));

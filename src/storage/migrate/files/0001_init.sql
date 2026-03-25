@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS agents (
     CHECK (kind IN ('main', 'sub')),
   display_name TEXT,
   description TEXT,
+  workdir TEXT,
   policy_profile TEXT,
   default_model TEXT,
   status TEXT NOT NULL DEFAULT 'active'
@@ -186,6 +187,26 @@ CREATE TABLE IF NOT EXISTS agent_permission_grants (
   expires_at TEXT CHECK (expires_at IS NULL OR (expires_at GLOB '????-??-??T??:??:??*Z' AND datetime(expires_at) IS NOT NULL))
 );
 
+CREATE TABLE IF NOT EXISTS subagent_creation_requests (
+  id TEXT PRIMARY KEY,
+  source_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  source_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  source_conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  channel_instance_id TEXT NOT NULL REFERENCES channel_instances(id) ON DELETE RESTRICT,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  initial_task TEXT NOT NULL,
+  workdir TEXT NOT NULL,
+  initial_extra_scopes_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_subagent_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  failure_reason TEXT,
+  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
+  updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
+  decided_at TEXT CHECK (decided_at IS NULL OR (decided_at GLOB '????-??-??T??:??:??*Z' AND datetime(decided_at) IS NOT NULL)),
+  expires_at TEXT CHECK (expires_at IS NULL OR (expires_at GLOB '????-??-??T??:??:??*Z' AND datetime(expires_at) IS NOT NULL))
+);
+
 CREATE TABLE IF NOT EXISTS auth_events (
   id TEXT PRIMARY KEY,
   conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
@@ -224,5 +245,9 @@ CREATE INDEX IF NOT EXISTS idx_approval_session_status_created
   ON approval_ledger(requested_by_session_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_grants_owner_exp
   ON agent_permission_grants(owner_agent_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_subagent_creation_requests_status_created
+  ON subagent_creation_requests(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_subagent_creation_requests_source_session
+  ON subagent_creation_requests(source_session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_auth_events_time
   ON auth_events(created_at);

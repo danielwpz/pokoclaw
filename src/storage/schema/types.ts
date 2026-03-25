@@ -11,6 +11,7 @@ import type {
   cronJobs,
   messages,
   sessions,
+  subagentCreationRequests,
   taskRuns,
 } from "@/src/storage/schema/tables.js";
 
@@ -43,6 +44,9 @@ export type NewApprovalRecord = InferInsertModel<typeof approvalLedger>;
 
 export type AgentPermissionGrant = InferSelectModel<typeof agentPermissionGrants>;
 export type NewAgentPermissionGrant = InferInsertModel<typeof agentPermissionGrants>;
+
+export type SubagentCreationRequest = InferSelectModel<typeof subagentCreationRequests>;
+export type NewSubagentCreationRequest = InferInsertModel<typeof subagentCreationRequests>;
 
 export type AuthEvent = InferSelectModel<typeof authEvents>;
 export type NewAuthEvent = InferInsertModel<typeof authEvents>;

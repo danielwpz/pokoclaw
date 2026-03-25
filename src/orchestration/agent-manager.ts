@@ -8,6 +8,15 @@ import {
   projectRuntimeEvent,
 } from "@/src/orchestration/outbound-events.js";
 import {
+  type ApproveSubagentCreationRequestInput,
+  type CreatedSubagent,
+  type CreateSubagentInput,
+  type DenySubagentCreationRequestInput,
+  type SubagentConversationSurfaceProvisioner,
+  SubagentManager,
+  type SubmittedSubagentCreationRequest,
+} from "@/src/orchestration/subagents.js";
+import {
   type CreatedTaskExecution,
   type CreateTaskExecutionInput,
   createTaskExecution,
@@ -41,6 +50,7 @@ export interface AgentManagerIngress {
 export interface AgentManagerDependencies {
   storage: StorageDb;
   ingress: AgentManagerIngress;
+  subagentProvisioner?: SubagentConversationSurfaceProvisioner;
 }
 
 // AgentManager is the orchestration-facing runtime entrypoint.
@@ -106,6 +116,43 @@ export class AgentManager {
     return created;
   }
 
+  submitSubagentCreationRequest(params: CreateSubagentInput): SubmittedSubagentCreationRequest {
+    const manager = new SubagentManager({
+      storage: this.deps.storage,
+      ingress: this.deps.ingress,
+      ...(this.deps.subagentProvisioner == null
+        ? {}
+        : { provisioner: this.deps.subagentProvisioner }),
+    });
+    return manager.submitCreateRequest(params);
+  }
+
+  approveSubagentCreationRequest(
+    input: ApproveSubagentCreationRequestInput,
+  ): Promise<CreatedSubagent> {
+    if (this.deps.subagentProvisioner == null) {
+      throw new Error("Cannot create subagents without a configured conversation provisioner");
+    }
+
+    const manager = new SubagentManager({
+      storage: this.deps.storage,
+      ingress: this.deps.ingress,
+      provisioner: this.deps.subagentProvisioner,
+    });
+    return manager.approveCreateRequest(input);
+  }
+
+  denySubagentCreationRequest(input: DenySubagentCreationRequestInput) {
+    const manager = new SubagentManager({
+      storage: this.deps.storage,
+      ingress: this.deps.ingress,
+      ...(this.deps.subagentProvisioner == null
+        ? {}
+        : { provisioner: this.deps.subagentProvisioner }),
+    });
+    return manager.denyCreateRequest(input);
+  }
+
   createCronTaskExecutionFromJob(input: {
     cronJobId: string;
     createdAt?: Date;
@@ -124,9 +171,9 @@ export class AgentManager {
       branchId: cronJob.targetBranchId,
       cronJobId: cronJob.id,
       contextMode: cronJob.contextMode,
-      attempt: input.attempt,
       inputJson: cronJob.payloadJson,
-      createdAt: input.createdAt,
+      ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
     });
 
     logger.info("created cron task execution", {

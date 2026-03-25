@@ -20,7 +20,7 @@ import type {
   AgentModelTurnInput,
   AgentModelTurnResult,
 } from "@/src/agent/loop.js";
-import { getAllowedToolsForSessionPurpose } from "@/src/agent/session-policy.js";
+import { filterVisibleToolsForSession } from "@/src/agent/session-policy.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
@@ -41,6 +41,8 @@ export interface PiBridgeRunTurnInput {
   compactSummary: string | null;
   messages: Message[];
   tools: ToolRegistry;
+  sessionPurpose?: string;
+  agentKind?: string | null;
   signal: AbortSignal;
   onTextDelta?: (event: PiBridgeTextDelta) => void;
 }
@@ -62,7 +64,7 @@ export class PiBridge {
     // normalized assistant result that the rest of the app can persist directly.
     const model = toPiModel(input.model);
     const tools = input.model.supportsTools
-      ? buildPiTools(input.tools, input.sessionPurpose)
+      ? buildPiTools(input.tools, input.sessionPurpose, input.agentKind)
       : null;
     const context = {
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
@@ -117,7 +119,7 @@ export class PiBridge {
   ): Promise<PiBridgeRunTurnResult> {
     const model = toPiModel(input.model);
     const tools = input.model.supportsTools
-      ? buildPiTools(input.tools, input.sessionPurpose)
+      ? buildPiTools(input.tools, input.sessionPurpose, input.agentKind)
       : null;
     const context = {
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
@@ -220,6 +222,7 @@ export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunn
       compactSummary: input.compactSummary,
       messages: input.messages,
       ...(input.sessionPurpose == null ? {} : { sessionPurpose: input.sessionPurpose }),
+      ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
       tools: this.tools,
       signal: input.signal,
       ...(input.onTextDelta ? { onTextDelta: input.onTextDelta } : {}),
@@ -250,14 +253,17 @@ function buildPiContextMessages(compactSummary: string | null, messages: Message
   ];
 }
 
-function buildPiTools(registry: ToolRegistry, sessionPurpose?: string): Tool[] {
+function buildPiTools(
+  registry: ToolRegistry,
+  sessionPurpose?: string,
+  agentKind?: string | null,
+): Tool[] {
   // We expose the tool schema to pi for tool selection, but actual execution
   // still happens in our loop after pi emits toolCall blocks.
-  const allowedTools = getAllowedToolsForSessionPurpose(sessionPurpose ?? "");
-  const visibleTools =
-    allowedTools == null
-      ? registry.list()
-      : registry.list().filter((tool) => allowedTools.includes(tool.name));
+  const visibleTools = filterVisibleToolsForSession(registry.list(), {
+    purpose: sessionPurpose ?? "",
+    ...(agentKind === undefined ? {} : { agentKind }),
+  });
 
   return visibleTools.map((tool) => ({
     name: tool.name,

@@ -117,11 +117,12 @@ describe("task run lifecycle", () => {
 
   test("throws when settling an unknown task run", async () => {
     handle = await createTestDatabase(import.meta.url);
-    seedFixture(handle);
+    const currentHandle = handle;
+    seedFixture(currentHandle);
 
     expect(() =>
       completeTaskExecution({
-        db: handle.storage.db,
+        db: currentHandle.storage.db,
         taskRunId: "missing_run",
       }),
     ).toThrow("Cannot settle unknown task run missing_run");

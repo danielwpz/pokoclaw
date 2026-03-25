@@ -23,6 +23,7 @@ export interface ToolExecutionContext {
   sessionId: string;
   conversationId: string;
   ownerAgentId?: string | null;
+  agentKind?: string | null;
   cwd?: string;
   securityConfig: SecurityConfig;
   storage: StorageDb;
@@ -42,6 +43,24 @@ export interface ToolRuntimeControl {
     reasonText?: string | null;
     decidedAt?: Date;
   }): boolean;
+  requestSubagentCreation?(input: {
+    sourceSessionId: string;
+    title: string;
+    description: string;
+    initialTask: string;
+    cwd?: string;
+    initialExtraScopes?: Array<
+      | { kind: "fs.read" | "fs.write"; path: string }
+      | { kind: "db.read" | "db.write"; database: "system" }
+      | { kind: "bash.full_access"; prefix: string[] }
+    >;
+  }): Promise<{
+    requestId: string;
+    title: string;
+    workdir: string;
+    status: "pending_confirmation";
+    expiresAt: string | null;
+  }>;
 }
 
 export interface ToolExecutionApprovalState {
