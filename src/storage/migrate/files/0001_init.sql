@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS conversation_branches (
 CREATE TABLE IF NOT EXISTS agents (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
+  main_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   kind TEXT NOT NULL
     CHECK (kind IN ('main', 'sub')),
   display_name TEXT,
@@ -52,6 +53,9 @@ CREATE TABLE IF NOT EXISTS agents (
   archived_at TEXT CHECK (archived_at IS NULL OR (archived_at GLOB '????-??-??T??:??:??*Z' AND datetime(archived_at) IS NOT NULL))
 );
 
+CREATE INDEX IF NOT EXISTS idx_agents_main_agent
+  ON agents(main_agent_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -59,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   owner_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   purpose TEXT NOT NULL,
   context_mode TEXT NOT NULL DEFAULT 'isolated',
+  approval_for_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   forked_from_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   fork_source_seq INTEGER,
   status TEXT NOT NULL DEFAULT 'active',
@@ -94,6 +99,9 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   UNIQUE(session_id, seq)
 );
+
+CREATE INDEX IF NOT EXISTS idx_sessions_approval_for_status_updated
+  ON sessions(approval_for_session_id, status, updated_at);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
   id TEXT PRIMARY KEY,

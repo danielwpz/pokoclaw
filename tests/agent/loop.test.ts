@@ -11,6 +11,7 @@ import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { toolRecoverableError } from "@/src/tools/core/errors.js";
@@ -283,6 +284,76 @@ describe("agent loop", () => {
 
     expect(result.events.some((event) => event.type === "tool_call_completed")).toBe(true);
     expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(false);
+  });
+
+  test("blocks disallowed tools inside approval sessions", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_approval",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "approval",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_system",
+      sessionId: "sess_approval",
+      seq: 1,
+      role: "user",
+      messageType: "approval_request",
+      visibility: "hidden_system",
+      payloadJson: '{"content":"review this delegated approval"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        turnCount += 1;
+        if (turnCount === 1) {
+          return makeAssistantResult({
+            content: [
+              { type: "toolCall", id: "tool_1", name: "bash", arguments: { command: "pwd" } },
+            ],
+            stopReason: "toolUse",
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_approval", scenario: "chat" });
+
+    const rows = messagesRepo.listBySession("sess_approval");
+    const toolRow = rows.find((row) => row.role === "tool");
+    expect(toolRow).toBeDefined();
+    const payload = JSON.parse(toolRow?.payloadJson ?? "{}");
+    expect(payload.isError).toBe(true);
+    expect(payload.details).toMatchObject({
+      code: "tool_not_allowed_for_session_purpose",
+      toolName: "bash",
+      sessionPurpose: "approval",
+    });
   });
 
   test("continues after bash tool calls and persists tool results", async () => {
@@ -891,6 +962,109 @@ describe("agent loop", () => {
     });
   });
 
+  test("routes task-session approval requests to the main agent target", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    const approvalsRepo = new ApprovalsRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_task",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "task",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_task",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"perform the task"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_task_perm",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: LOOP_PROTECTED_FILE,
+                      scope: "exact",
+                      access: "write",
+                    },
+                  ],
+                  justification: "Need to write the requested note.",
+                },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "approved" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(createRequestPermissionsTool());
+
+    const emittedEvents: Array<{
+      type: string;
+      approvalId?: string;
+      approvalTarget?: "user" | "main_agent";
+    }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_task", scenario: "chat" });
+    const approvalId = Number(await waitForApprovalRequested(emittedEvents));
+    const approvalRecord = approvalsRepo.getById(approvalId);
+
+    expect(approvalRecord?.approvalTarget).toBe("main_agent");
+    expect(emittedEvents.find((event) => event.type === "approval_requested")?.approvalTarget).toBe(
+      "main_agent",
+    );
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId,
+        decision: "approve",
+        actor: "main_agent",
+        rawInput: "approve",
+        grantedBy: "main_agent",
+      }),
+    ).toBe(true);
+
+    await runPromise;
+  });
+
   test("queues steer input during a streaming text turn and handles it in the next turn", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
@@ -951,9 +1125,14 @@ describe("agent loop", () => {
 
     const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
     await delay(5);
-    expect(loop.enqueueSteerInput({ sessionId: "sess_1", content: "Use a short answer." })).toBe(
-      true,
-    );
+    expect(
+      loop.enqueueSteerInput({
+        sessionId: "sess_1",
+        content: "Use a short answer.",
+        messageType: "approval_request",
+        visibility: "hidden_system",
+      }),
+    ).toBe(true);
 
     const result = await runPromise;
 
@@ -964,6 +1143,8 @@ describe("agent loop", () => {
     expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toEqual({
       content: "Use a short answer.",
     });
+    expect(rows[2]?.messageType).toBe("approval_request");
+    expect(rows[2]?.visibility).toBe("hidden_system");
     expect(result.events.filter((event) => event.type === "turn_completed")).toHaveLength(2);
   });
 

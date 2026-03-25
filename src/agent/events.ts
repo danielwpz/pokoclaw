@@ -139,6 +139,7 @@ export interface CompactionFailedEvent extends AgentRuntimeEventBase {
 export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
   type: "approval_requested";
   approvalId: string;
+  approvalTarget: "user" | "main_agent";
   title: string;
   reasonText: string;
   options: string[];

@@ -1,15 +1,25 @@
 export interface SteerInput {
   content: string;
+  messageType?: string;
+  visibility?: string;
   createdAt?: Date;
 }
 
 export class SessionSteerQueueRegistry {
   private readonly queues = new Map<string, SteerInput[]>();
 
-  enqueue(input: { sessionId: string; content: string; createdAt?: Date }): void {
+  enqueue(input: {
+    sessionId: string;
+    content: string;
+    messageType?: string;
+    visibility?: string;
+    createdAt?: Date;
+  }): void {
     const queue = this.queues.get(input.sessionId) ?? [];
     queue.push({
       content: input.content,
+      ...(input.messageType == null ? {} : { messageType: input.messageType }),
+      ...(input.visibility == null ? {} : { visibility: input.visibility }),
       ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
     });
     this.queues.set(input.sessionId, queue);

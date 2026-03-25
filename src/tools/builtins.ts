@@ -6,6 +6,7 @@ import { createGrepTool } from "@/src/tools/grep.js";
 import { createLsTool } from "@/src/tools/ls.js";
 import { createReadTool } from "@/src/tools/read.js";
 import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
+import { createReviewPermissionRequestTool } from "@/src/tools/review-permission-request.js";
 import { createWriteTool } from "@/src/tools/write.js";
 
 export function createBuiltinToolRegistry(): ToolRegistry {
@@ -18,5 +19,6 @@ export function createBuiltinToolRegistry(): ToolRegistry {
   registry.register(createFindTool());
   registry.register(createGrepTool());
   registry.register(createRequestPermissionsTool());
+  registry.register(createReviewPermissionRequestTool());
   return registry;
 }

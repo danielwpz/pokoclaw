@@ -29,6 +29,19 @@ export interface ToolExecutionContext {
   abortSignal?: AbortSignal;
   toolCallId?: string;
   approvalState?: ToolExecutionApprovalState;
+  runtimeControl?: ToolRuntimeControl;
+}
+
+export interface ToolRuntimeControl {
+  submitApprovalDecision(input: {
+    approvalId: number;
+    decision: "approve" | "deny";
+    actor: string;
+    rawInput?: string | null;
+    grantedBy?: "user" | "main_agent";
+    reasonText?: string | null;
+    decidedAt?: Date;
+  }): boolean;
 }
 
 export interface ToolExecutionApprovalState {

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -12,6 +12,7 @@ export interface CreateSessionInput {
   ownerAgentId?: string | null;
   purpose: string;
   contextMode?: string;
+  approvalForSessionId?: string | null;
   forkedFromSessionId?: string | null;
   forkSourceSeq?: number | null;
   status?: string;
@@ -27,6 +28,15 @@ export interface CreateSessionInput {
 export interface ListConversationSessionsOptions {
   statuses?: string[];
   limit?: number;
+}
+
+export interface FindLatestSessionByOwnerOptions {
+  purpose?: string;
+  statuses?: string[];
+}
+
+export interface FindLatestApprovalSessionOptions {
+  statuses?: string[];
 }
 
 export interface UpdateSessionCompactionInput {
@@ -59,6 +69,7 @@ export class SessionsRepo {
       ownerAgentId: input.ownerAgentId ?? null,
       purpose: input.purpose,
       contextMode: input.contextMode ?? "isolated",
+      approvalForSessionId: input.approvalForSessionId ?? null,
       forkedFromSessionId: input.forkedFromSessionId ?? null,
       forkSourceSeq: normalizeOptionalNonNegativeInteger("forkSourceSeq", input.forkSourceSeq),
       status: input.status ?? "active",
@@ -105,6 +116,53 @@ export class SessionsRepo {
       .orderBy(asc(sessions.createdAt))
       .limit(limit)
       .all();
+  }
+
+  findLatestByOwnerAgent(
+    ownerAgentId: string,
+    options: FindLatestSessionByOwnerOptions = {},
+  ): Session | null {
+    const predicates = [eq(sessions.ownerAgentId, ownerAgentId)];
+
+    if (options.purpose != null) {
+      predicates.push(eq(sessions.purpose, options.purpose));
+    }
+
+    if ((options.statuses?.length ?? 0) > 0) {
+      predicates.push(inArray(sessions.status, options.statuses ?? []));
+    }
+
+    return (
+      this.db
+        .select()
+        .from(sessions)
+        .where(and(...predicates))
+        .orderBy(desc(sessions.updatedAt), desc(sessions.createdAt), desc(sessions.id))
+        .get() ?? null
+    );
+  }
+
+  findLatestApprovalSessionForSource(
+    approvalForSessionId: string,
+    options: FindLatestApprovalSessionOptions = {},
+  ): Session | null {
+    const predicates = [
+      eq(sessions.approvalForSessionId, approvalForSessionId),
+      eq(sessions.purpose, "approval"),
+    ];
+
+    if ((options.statuses?.length ?? 0) > 0) {
+      predicates.push(inArray(sessions.status, options.statuses ?? []));
+    }
+
+    return (
+      this.db
+        .select()
+        .from(sessions)
+        .where(and(...predicates))
+        .orderBy(desc(sessions.updatedAt), desc(sessions.createdAt), desc(sessions.id))
+        .get() ?? null
+    );
   }
 
   updateCompaction(input: UpdateSessionCompactionInput): void {

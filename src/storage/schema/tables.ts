@@ -82,6 +82,9 @@ export const agents = sqliteTable("agents", {
     .notNull()
     .unique()
     .references(() => conversations.id, { onDelete: "cascade" }),
+  mainAgentId: text("main_agent_id").references((): AnySQLiteColumn => agents.id, {
+    onDelete: "set null",
+  }),
   kind: text("kind").notNull(),
   displayName: text("display_name"),
   policyProfile: text("policy_profile"),
@@ -104,6 +107,12 @@ export const sessions = sqliteTable(
     ownerAgentId: text("owner_agent_id").references(() => agents.id, { onDelete: "set null" }),
     purpose: text("purpose").notNull(),
     contextMode: text("context_mode").notNull().default("isolated"),
+    approvalForSessionId: text("approval_for_session_id").references(
+      (): AnySQLiteColumn => sessions.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     forkedFromSessionId: text("forked_from_session_id").references(
       (): AnySQLiteColumn => sessions.id,
       {
@@ -124,6 +133,11 @@ export const sessions = sqliteTable(
     index("idx_sessions_branch_status_updated").on(table.branchId, table.status, table.updatedAt),
     index("idx_sessions_conversation_status_updated").on(
       table.conversationId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("idx_sessions_approval_for_status_updated").on(
+      table.approvalForSessionId,
       table.status,
       table.updatedAt,
     ),

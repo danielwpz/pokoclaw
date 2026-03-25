@@ -120,6 +120,51 @@ describe("sessions repo", () => {
     expect(rows.map((row) => row.id)).toEqual(["sess_1"]);
   });
 
+  test("findLatestByOwnerAgent returns the latest matching session", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const repo = new SessionsRepo(handle.storage.db);
+    seedConversationFixture(handle);
+    handle.storage.sqlite.exec(`
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-22T00:00:00.000Z');
+    `);
+
+    repo.create({
+      id: "sess_old",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      updatedAt: new Date("2026-03-22T00:00:03.000Z"),
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+    repo.create({
+      id: "sess_task",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "task",
+      updatedAt: new Date("2026-03-22T00:00:04.000Z"),
+      createdAt: new Date("2026-03-22T00:00:02.000Z"),
+    });
+    repo.create({
+      id: "sess_new",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      updatedAt: new Date("2026-03-22T00:00:05.000Z"),
+      createdAt: new Date("2026-03-22T00:00:03.000Z"),
+    });
+
+    const session = repo.findLatestByOwnerAgent("agent_1", {
+      purpose: "chat",
+      statuses: ["active"],
+    });
+
+    expect(session?.id).toBe("sess_new");
+  });
+
   test("rejects invalid compaction cursor values", async () => {
     handle = await createTestDatabase(import.meta.url);
     const repo = new SessionsRepo(handle.storage.db);

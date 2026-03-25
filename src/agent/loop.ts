@@ -21,7 +21,9 @@ import type {
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
-import { AGENT_SYSTEM_PROMPT } from "@/src/agent/system-prompt.js";
+import { assertToolAllowedForSessionPurpose } from "@/src/agent/session-policy.js";
+import { buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
+import { requestToolApproval } from "@/src/agent/tool-approval.js";
 import type { CompactionConfig, SecurityConfig } from "@/src/config/schema.js";
 import {
   type ApprovalResponseInput,
@@ -31,7 +33,7 @@ import {
 import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-queue.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
-import { describePermissionScope, type PermissionRequest } from "@/src/security/scope.js";
+import type { PermissionRequest } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
@@ -47,6 +49,7 @@ import {
 import type { ToolRegistry } from "@/src/tools/core/registry.js";
 import {
   type ToolExecutionApprovalState,
+  type ToolExecutionContext,
   type ToolResult,
   textToolResult,
 } from "@/src/tools/core/types.js";
@@ -121,14 +124,6 @@ export interface AgentLoopDependencies {
   emitEvent?: (event: AgentRuntimeEvent) => void;
 }
 
-interface ApprovalResumePayload {
-  toolCallId: string;
-  toolName: string;
-  toolArgs: unknown;
-  turn: number;
-  runId: string;
-}
-
 interface ExecutedToolCall {
   result: ToolResult;
   isError: boolean;
@@ -164,9 +159,39 @@ export class AgentLoop {
     return this.approvalWaits.resolveApproval(input);
   }
 
+  private createToolExecutionContext(input: {
+    sessionId: string;
+    conversationId: string;
+    ownerAgentId?: string | null;
+    signal: AbortSignal;
+    toolCallId: string;
+    approvalState?: ToolExecutionApprovalState;
+  }): ToolExecutionContext {
+    return {
+      sessionId: input.sessionId,
+      conversationId: input.conversationId,
+      cwd: POKECLAW_WORKSPACE_DIR,
+      securityConfig: this.deps.securityConfig,
+      storage: this.deps.storage,
+      abortSignal: input.signal,
+      toolCallId: input.toolCallId,
+      ...(input.ownerAgentId === undefined ? {} : { ownerAgentId: input.ownerAgentId }),
+      ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
+      runtimeControl: {
+        submitApprovalDecision: (decision) => this.submitApprovalResponse(decision),
+      },
+    };
+  }
+
   // Runtime-level steer injection. Session lanes call this while a run is
   // active so the new message can be inserted at the next safe boundary.
-  enqueueSteerInput(input: { sessionId: string; content: string; createdAt?: Date }): boolean {
+  enqueueSteerInput(input: {
+    sessionId: string;
+    content: string;
+    messageType?: string;
+    visibility?: string;
+    createdAt?: Date;
+  }): boolean {
     if (!this.deps.cancel.isActive(input.sessionId)) {
       return false;
     }
@@ -245,7 +270,9 @@ export class AgentLoop {
               conversationId: context.session.conversationId,
               scenario: input.scenario,
               model,
-              systemPrompt: AGENT_SYSTEM_PROMPT,
+              systemPrompt: buildAgentSystemPrompt({
+                sessionPurpose: context.session.purpose,
+              }),
               compactSummary: context.compactSummary,
               messages,
               signal: handle.signal,
@@ -682,19 +709,20 @@ export class AgentLoop {
 
     while (true) {
       try {
+        assertToolAllowedForSessionPurpose({
+          purpose: input.context.session.purpose,
+          toolName: input.toolCall.name,
+        });
         const result = await this.deps.tools.execute(
           input.toolCall.name,
-          {
+          this.createToolExecutionContext({
             sessionId: input.input.sessionId,
             conversationId: input.context.session.conversationId,
             ownerAgentId: input.context.session.ownerAgentId,
-            cwd: POKECLAW_WORKSPACE_DIR,
-            securityConfig: this.deps.securityConfig,
-            storage: this.deps.storage,
-            abortSignal: input.signal,
+            signal: input.signal,
             toolCallId: input.toolCall.id,
             ...(approvalState == null ? {} : { approvalState }),
-          },
+          }),
           input.toolCall.args,
         );
 
@@ -708,17 +736,22 @@ export class AgentLoop {
           throw error;
         }
 
-        const approval = await this.requestApproval({
+        const approval = await requestToolApproval({
+          storage: this.deps.storage,
+          security: this.security,
+          approvalWaits: this.approvalWaits,
+          sessions: this.deps.sessions,
+          approvalTimeoutMs: this.approvalTimeoutMs,
           runInput: input.input,
-          context: input.context,
+          session: input.context.session,
           toolCall: input.toolCall,
           turn: input.turn,
           runId: input.runId,
           request: error.request,
           reasonText: error.reasonText,
           ...(error.approvalTitle == null ? {} : { approvalTitle: error.approvalTitle }),
-          events: input.events,
           signal: input.signal,
+          recordEvent: (event) => this.recordEvent(input.events, event),
         });
 
         if (approval.decision === "approve") {
@@ -802,134 +835,6 @@ export class AgentLoop {
     }
   }
 
-  private async requestApproval(input: {
-    runInput: RunAgentLoopInput;
-    context: ReturnType<AgentSessionService["getContext"]>;
-    toolCall: AgentToolCall;
-    turn: number;
-    runId: string;
-    request: PermissionRequest;
-    reasonText: string;
-    approvalTitle?: string;
-    events: AgentRuntimeEvent[];
-    signal: AbortSignal;
-  }): Promise<ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest }> {
-    // Approval is modeled as pause/resume, not as a finished tool failure.
-    // We persist the request for durability, then wait on the in-memory hot
-    // path so normal approve/deny responses can resume the same tool call.
-    const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + this.approvalTimeoutMs);
-    const resumePayloadJson = JSON.stringify({
-      toolCallId: input.toolCall.id,
-      toolName: input.toolCall.name,
-      toolArgs: input.toolCall.args,
-      turn: input.turn,
-      runId: input.runId,
-    } satisfies ApprovalResumePayload);
-    const approvalId = this.security.createApprovalRequest({
-      ownerAgentId: input.context.session.ownerAgentId ?? "",
-      requestedBySessionId: input.runInput.sessionId,
-      request: input.request,
-      approvalTarget: "user",
-      reasonText: input.reasonText,
-      createdAt,
-      expiresAt,
-      resumePayloadJson,
-    });
-    logger.info("approval requested for tool call", {
-      sessionId: input.runInput.sessionId,
-      approvalId,
-      toolName: input.toolCall.name,
-      scopeCount: input.request.scopes.length,
-      scope:
-        input.request.scopes[0] == null
-          ? undefined
-          : describePermissionScope(input.request.scopes[0]),
-      runId: input.runId,
-    });
-
-    const waitPromise = this.approvalWaits.beginWait({
-      sessionId: input.runInput.sessionId,
-      approvalId,
-      timeoutMs: this.approvalTimeoutMs,
-    });
-
-    this.deps.sessions.updateStatus({
-      id: input.runInput.sessionId,
-      status: "paused",
-      updatedAt: createdAt,
-    });
-
-    this.recordEvent(input.events, {
-      type: "approval_requested",
-      approvalId: String(approvalId),
-      title: input.approvalTitle ?? buildApprovalTitle(input.request),
-      reasonText: input.reasonText,
-      options: ["Approve for 7 days", "Approve permanently", "Deny"],
-      expiresAt: expiresAt.toISOString(),
-      sessionId: input.runInput.sessionId,
-      conversationId: input.context.session.conversationId,
-      branchId: input.context.session.branchId,
-      runId: input.runId,
-    });
-
-    const onAbort = () => {
-      this.approvalWaits.cancelSession({
-        sessionId: input.runInput.sessionId,
-        actor: "system:cancel",
-        reasonText: "Run cancelled while waiting for approval.",
-        decidedAt: new Date(),
-      });
-    };
-    input.signal.addEventListener("abort", onAbort, { once: true });
-
-    try {
-      const outcome = await waitPromise;
-      if (input.signal.aborted && outcome.actor === "system:cancel") {
-        this.security.resolveApproval({
-          approvalId,
-          status: "cancelled",
-          reasonText: outcome.reasonText,
-          decidedAt: outcome.decidedAt,
-        });
-        throwIfAborted(input.signal);
-      }
-
-      this.recordEvent(input.events, {
-        type: "approval_resolved",
-        approvalId: String(approvalId),
-        decision: outcome.decision,
-        actor: outcome.actor,
-        rawInput: outcome.rawInput,
-        sessionId: input.runInput.sessionId,
-        conversationId: input.context.session.conversationId,
-        branchId: input.context.session.branchId,
-        runId: input.runId,
-      });
-      logger.info("approval resolved for tool call", {
-        sessionId: input.runInput.sessionId,
-        approvalId,
-        toolName: input.toolCall.name,
-        decision: outcome.decision,
-        actor: outcome.actor,
-        runId: input.runId,
-      });
-
-      return {
-        ...outcome,
-        approvalId,
-        request: input.request,
-      };
-    } finally {
-      input.signal.removeEventListener("abort", onAbort);
-      this.deps.sessions.updateStatus({
-        id: input.runInput.sessionId,
-        status: "active",
-        updatedAt: new Date(),
-      });
-    }
-  }
-
   private async finishPermissionRequestAfterApproval(input: {
     input: {
       input: RunAgentLoopInput;
@@ -1001,18 +906,19 @@ export class AgentLoop {
         retriedToolName: retryTarget.name,
         runId: input.input.runId,
       });
+      assertToolAllowedForSessionPurpose({
+        purpose: input.input.context.session.purpose,
+        toolName: retryTarget.name,
+      });
       const retriedResult = await this.deps.tools.execute(
         retryTarget.name,
-        {
+        this.createToolExecutionContext({
           sessionId: input.input.input.sessionId,
           conversationId: input.input.context.session.conversationId,
           ownerAgentId: input.input.context.session.ownerAgentId,
-          cwd: POKECLAW_WORKSPACE_DIR,
-          securityConfig: this.deps.securityConfig,
-          storage: this.deps.storage,
-          abortSignal: input.input.signal,
+          signal: input.input.signal,
           toolCallId: retryTarget.id,
-        },
+        }),
         retryTarget.args,
       );
 
@@ -1113,11 +1019,11 @@ export class AgentLoop {
         messageId,
         seq: nextSeq,
         role: "user",
-        messageType: "text",
-        visibility: "user_visible",
         payload: {
           content: queued.content,
         } satisfies AgentUserPayload,
+        messageType: queued.messageType ?? "text",
+        visibility: queued.visibility ?? "user_visible",
         createdAt: queued.createdAt ?? new Date(),
       });
       nextSeq += 1;
@@ -1238,15 +1144,6 @@ function findAssistantToolCallById(messages: Message[], toolCallId: string): Age
   }
 
   return null;
-}
-
-function buildApprovalTitle(request: PermissionRequest): string {
-  const firstScope = request.scopes[0];
-  if (request.scopes.length === 1 && firstScope != null) {
-    return `Approval required: ${describePermissionScope(firstScope)}`;
-  }
-
-  return `Approval required for ${request.scopes.length} permissions`;
 }
 
 function summarizeTranscriptTail(messages: Message[], maxMessages: number = 6) {
