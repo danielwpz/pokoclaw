@@ -13,9 +13,10 @@ import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
-import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/errors.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
-import { defineTool, textToolResult } from "@/src/tools/types.js";
+import { toolRecoverableError } from "@/src/tools/core/errors.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { defineTool, textToolResult } from "@/src/tools/core/types.js";
+import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -134,6 +135,8 @@ async function waitForApprovalRequested(
 
   throw new Error("Approval request was not emitted");
 }
+
+const LOOP_PROTECTED_FILE = "/tmp/pokeclaw-loop-protected.txt";
 
 describe("agent loop", () => {
   let handle: TestDatabaseHandle | null = null;
@@ -553,7 +556,7 @@ describe("agent loop", () => {
     expect(cancel.isActive("sess_1")).toBe(false);
   });
 
-  test("pauses for approval, resumes the same tool call, and inserts queued steer input", async () => {
+  test("request_permissions pauses for approval, retries the blocked tool, and inserts queued steer input", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
 
@@ -589,6 +592,31 @@ describe("agent loop", () => {
           });
         }
 
+        if (modelTurnCount === 2) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_2",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: LOOP_PROTECTED_FILE,
+                      scope: "exact",
+                      access: "write",
+                    },
+                  ],
+                  justification: "Need to write the requested note.",
+                  retryToolCallId: "tool_1",
+                },
+              },
+            ],
+          });
+        }
+
         secondTurnLastUserContent =
           JSON.parse(messages.at(-1)?.payloadJson ?? "{}").content ?? null;
         return makeAssistantResult({
@@ -606,11 +634,19 @@ describe("agent loop", () => {
         execute() {
           toolExecuteCount += 1;
           if (toolExecuteCount === 1) {
-            throw toolApprovalRequired({
-              request: {
-                scopes: [{ kind: "fs.write", path: `${POKECLAW_WORKSPACE_DIR}/**` }],
-              },
-              reasonText: "This tool needs approval to continue: Write workspace.",
+            throw toolRecoverableError("Write access is missing for workspace notes.", {
+              code: "permission_denied",
+              requestable: true,
+              failedToolCallId: "tool_1",
+              summary: "Write access is missing for workspace notes.",
+              entries: [
+                {
+                  resource: "filesystem",
+                  path: LOOP_PROTECTED_FILE,
+                  scope: "exact",
+                  access: "write",
+                },
+              ],
             });
           }
 
@@ -618,6 +654,7 @@ describe("agent loop", () => {
         },
       }),
     );
+    tools.register(createRequestPermissionsTool());
 
     const emittedEvents: Array<{ type: string; approvalId?: string; decision?: string }> = [];
     const loop = new AgentLoop({
@@ -665,18 +702,35 @@ describe("agent loop", () => {
     expect(sessionsRepo.getById("sess_1")?.status).toBe("active");
 
     const rows = messagesRepo.listBySession("sess_1");
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(7);
     expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
       toolCallId: "tool_1",
       toolName: "gated",
+      isError: true,
+      details: {
+        code: "permission_denied",
+      },
+    });
+    expect(JSON.parse(rows[3]?.payloadJson ?? "{}")).toMatchObject({
+      content: [
+        {
+          type: "toolCall",
+          id: "tool_2",
+          name: "request_permissions",
+        },
+      ],
+    });
+    expect(JSON.parse(rows[4]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_2",
+      toolName: "request_permissions",
       isError: false,
     });
-    expect(JSON.parse(rows[3]?.payloadJson ?? "{}")).toEqual({
+    expect(JSON.parse(rows[5]?.payloadJson ?? "{}")).toEqual({
       content: "Please keep it short.",
     });
   });
 
-  test("writes an error tool result when approval is denied", async () => {
+  test("writes an error request_permissions tool result when approval is denied", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
 
@@ -710,6 +764,31 @@ describe("agent loop", () => {
           });
         }
 
+        if (modelTurnCount === 2) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_2",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: LOOP_PROTECTED_FILE,
+                      scope: "exact",
+                      access: "read",
+                    },
+                  ],
+                  justification: "Need to read the protected file.",
+                  retryToolCallId: "tool_1",
+                },
+              },
+            ],
+          });
+        }
+
         return makeAssistantResult({
           content: [{ type: "text", text: "The user denied the request." }],
         });
@@ -723,15 +802,24 @@ describe("agent loop", () => {
         description: "Needs approval first",
         inputSchema: NO_ARGS_TOOL_SCHEMA,
         execute() {
-          throw toolApprovalRequired({
-            request: {
-              scopes: [{ kind: "fs.read", path: `${POKECLAW_WORKSPACE_DIR}/notes.txt` }],
-            },
-            reasonText: "Need approval to read the protected file.",
+          throw toolRecoverableError("Read access is missing for the protected file.", {
+            code: "permission_denied",
+            requestable: true,
+            failedToolCallId: "tool_1",
+            summary: "Read access is missing for the protected file.",
+            entries: [
+              {
+                resource: "filesystem",
+                path: LOOP_PROTECTED_FILE,
+                scope: "exact",
+                access: "read",
+              },
+            ],
           });
         },
       }),
     );
+    tools.register(createRequestPermissionsTool());
 
     const emittedEvents: Array<{ type: string; approvalId?: string; decision?: string }> = [];
     const loop = new AgentLoop({
@@ -769,15 +857,37 @@ describe("agent loop", () => {
         (event) => event.type === "approval_resolved" && event.decision === "deny",
       ),
     ).toBe(true);
-    expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(false);
+    expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(true);
 
     const rows = messagesRepo.listBySession("sess_1");
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(6);
     expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
       toolCallId: "tool_1",
       toolName: "gated",
       isError: true,
-      content: [{ type: "text", text: "The user denied this permission request." }],
+      details: {
+        code: "permission_denied",
+      },
+    });
+    expect(JSON.parse(rows[3]?.payloadJson ?? "{}")).toMatchObject({
+      content: [
+        {
+          type: "toolCall",
+          id: "tool_2",
+          name: "request_permissions",
+        },
+      ],
+    });
+    expect(JSON.parse(rows[4]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_2",
+      toolName: "request_permissions",
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining("<permission_request_result>"),
+        },
+      ],
     });
   });
 

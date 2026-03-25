@@ -23,7 +23,7 @@ import type {
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
-import type { ToolRegistry } from "@/src/tools/registry.js";
+import type { ToolRegistry } from "@/src/tools/core/registry.js";
 
 const COMPACTION_SUMMARY_PREFIX = "[Context Summary]";
 const PERMISSIVE_TOOL_PARAMETERS = Type.Object({}, { additionalProperties: true });
@@ -36,6 +36,7 @@ export interface PiBridgeTextDelta {
 
 export interface PiBridgeRunTurnInput {
   model: ResolvedModel;
+  systemPrompt?: string;
   compactSummary: string | null;
   messages: Message[];
   tools: ToolRegistry;
@@ -61,6 +62,7 @@ export class PiBridge {
     const model = toPiModel(input.model);
     const tools = input.model.supportsTools ? buildPiTools(input.tools) : null;
     const context = {
+      ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
       messages: buildPiContextMessages(input.compactSummary, input.messages),
     };
     if (tools != null) {
@@ -74,6 +76,7 @@ export class PiBridge {
       tools: tools?.length ?? 0,
       hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
     });
+    logLlmRequestContext("stream", input, context.messages, tools);
 
     try {
       const stream = streamSimple(model, context, buildPiStreamOptions(input.model, input.signal));
@@ -112,6 +115,7 @@ export class PiBridge {
     const model = toPiModel(input.model);
     const tools = input.model.supportsTools ? buildPiTools(input.tools) : null;
     const context = {
+      ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
       messages: buildPiContextMessages(input.compactSummary, input.messages),
     };
     if (tools != null) {
@@ -125,6 +129,7 @@ export class PiBridge {
       tools: tools?.length ?? 0,
       hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
     });
+    logLlmRequestContext("complete", input, context.messages, tools);
 
     try {
       const finalMessage = await completeSimple(
@@ -206,6 +211,7 @@ export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunn
   runTurn(input: AgentModelTurnInput): Promise<AgentModelTurnResult> {
     return this.bridge.streamTurn({
       model: input.model,
+      ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
       compactSummary: input.compactSummary,
       messages: input.messages,
       tools: this.tools,
@@ -262,6 +268,37 @@ function buildPiStreamOptions(model: ResolvedModel, signal: AbortSignal) {
   }
 
   return options;
+}
+
+function logLlmRequestContext(
+  mode: "stream" | "complete",
+  input: PiBridgeRunTurnInput,
+  messages: ReturnType<typeof buildPiContextMessages>,
+  tools: Tool[] | null,
+) {
+  logger.debug(
+    [
+      `llm ${mode} request dump`,
+      `model_id=${input.model.id}`,
+      `provider=${input.model.provider.id}`,
+      "system_prompt:",
+      input.systemPrompt == null || input.systemPrompt.length === 0
+        ? "<empty>"
+        : input.systemPrompt,
+      "messages:",
+      JSON.stringify(messages, null, 2),
+      "tools:",
+      JSON.stringify(
+        (tools ?? []).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+        null,
+        2,
+      ),
+    ].join("\n"),
+  );
 }
 
 function toPiModel(model: ResolvedModel): Model<Api> {

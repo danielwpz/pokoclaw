@@ -13,6 +13,7 @@ describe("builtin tools", () => {
     expect(registry.has("ls")).toBe(true);
     expect(registry.has("find")).toBe(true);
     expect(registry.has("grep")).toBe(true);
+    expect(registry.has("request_permissions")).toBe(true);
     expect(registry.list().map((tool) => tool.name)).toEqual([
       "bash",
       "read",
@@ -21,6 +22,7 @@ describe("builtin tools", () => {
       "ls",
       "find",
       "grep",
+      "request_permissions",
     ]);
   });
 });

@@ -1,5 +1,9 @@
 import type { PermissionRequest } from "@/src/security/scope.js";
-import type { ToolContentBlock } from "@/src/tools/types.js";
+import type { ToolContentBlock, ToolExecutionApprovalState } from "@/src/tools/core/types.js";
+import {
+  isPermissionDeniedDetails,
+  renderPermissionBlock,
+} from "@/src/tools/helpers/permission-block.js";
 
 export type ToolFailureKind =
   // A tool-declared, recoverable failure that should be returned to the model
@@ -19,6 +23,10 @@ export interface ToolFailureShape {
 export interface ToolApprovalRequiredShape {
   request: PermissionRequest;
   reasonText: string;
+  retryToolCallId?: string;
+  approvalTitle?: string;
+  grantOnApprove?: boolean;
+  approvalState?: ToolExecutionApprovalState;
 }
 
 export class ToolFailure extends Error {
@@ -50,12 +58,26 @@ export class ToolFailure extends Error {
 export class ToolApprovalRequired extends Error {
   readonly request: PermissionRequest;
   readonly reasonText: string;
+  readonly retryToolCallId?: string;
+  readonly approvalTitle?: string;
+  readonly grantOnApprove: boolean;
+  readonly approvalState?: ToolExecutionApprovalState;
 
   constructor(shape: ToolApprovalRequiredShape) {
     super(shape.reasonText);
     this.name = "ToolApprovalRequired";
     this.request = shape.request;
     this.reasonText = shape.reasonText;
+    this.grantOnApprove = shape.grantOnApprove ?? true;
+    if (shape.retryToolCallId !== undefined) {
+      this.retryToolCallId = shape.retryToolCallId;
+    }
+    if (shape.approvalTitle !== undefined) {
+      this.approvalTitle = shape.approvalTitle;
+    }
+    if (shape.approvalState !== undefined) {
+      this.approvalState = shape.approvalState;
+    }
   }
 }
 
@@ -74,7 +96,6 @@ export function toolApprovalRequired(shape: ToolApprovalRequiredShape): ToolAppr
   return new ToolApprovalRequired(shape);
 }
 
-// Backwards-compatible alias while the tool layer is still being filled in.
 export const toolExecutionError = toolRecoverableError;
 
 export function toolInternalError(message: string, details?: unknown): ToolFailure {
@@ -94,15 +115,32 @@ export function normalizeToolFailure(error: unknown): ToolFailure {
   const rawMessage = getErrorMessage(error);
   const message = rawMessage.trim().length > 0 ? rawMessage : "Unknown tool execution failure";
 
-  // TODO: permission / approval is intentionally not modeled as a tool error.
-  // Once ../sandbox-runtime exposes a stable policy outcome, permission blocks
-  // should be handled by a separate pause/resume approval flow above this layer.
   return toolInternalError("Tool execution failed due to an internal runtime error.", {
     rawMessage: message,
   });
 }
 
 export function buildToolFailureContent(failure: ToolFailure): ToolContentBlock[] {
+  if (isPermissionDeniedDetails(failure.details)) {
+    return [
+      {
+        type: "text",
+        text: renderPermissionBlock({
+          requestable: failure.details.requestable,
+          summary: failure.details.summary,
+          entries: failure.details.entries,
+          ...(failure.details.guidance == null ? {} : { guidance: failure.details.guidance }),
+          ...(failure.details.failedToolCallId == null
+            ? {}
+            : { failedToolCallId: failure.details.failedToolCallId }),
+          ...(failure.details.bashContext == null
+            ? {}
+            : { bashContext: failure.details.bashContext }),
+        }),
+      },
+    ];
+  }
+
   return [
     {
       type: "text",

@@ -10,7 +10,7 @@ import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
 import {
   createTestDatabase,
   destroyTestDatabase,

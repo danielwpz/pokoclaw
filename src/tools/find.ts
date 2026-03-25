@@ -1,14 +1,13 @@
 import { stat } from "node:fs/promises";
 import { type Static, Type } from "@sinclair/typebox";
-
-import { createFilesystemAccessController, formatDisplayPath } from "@/src/tools/common.js";
-import { toolRecoverableError } from "@/src/tools/errors.js";
+import { toolRecoverableError } from "@/src/tools/core/errors.js";
+import { defineTool, textToolResult } from "@/src/tools/core/types.js";
+import { createFilesystemAccessController, formatDisplayPath } from "@/src/tools/helpers/common.js";
 import {
   matchesFindPattern,
   toDisplayRelativePath,
   walkDirectory,
-} from "@/src/tools/fs-helpers.js";
-import { defineTool, textToolResult } from "@/src/tools/types.js";
+} from "@/src/tools/helpers/fs-helpers.js";
 
 const DEFAULT_LIMIT = 200;
 const FIND_TYPE_VALUES = ["any", "file", "directory"] as const;

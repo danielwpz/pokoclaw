@@ -15,7 +15,7 @@ import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import { buildSandboxConfigForAgent, executeSandboxedBash } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
-import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
+import type { ToolFailure } from "@/src/tools/core/errors.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -303,11 +303,21 @@ describe("sandbox config compilation", () => {
         timeoutMs: 10_000,
       }),
     ).rejects.toMatchObject({
-      name: "ToolApprovalRequired",
-      request: {
-        scopes: [{ kind: "fs.write", path: expectedBlockedPath }],
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        entries: [
+          {
+            resource: "filesystem",
+            path: expectedBlockedPath,
+            scope: "exact",
+            access: "write",
+          },
+        ],
       },
-    } satisfies Partial<ToolApprovalRequired>);
+    } satisfies Partial<ToolFailure>);
   });
 
   test("turns hard-denied filesystem sandbox blocks into recoverable tool failures", async () => {
@@ -380,7 +390,7 @@ describe("sandbox config compilation", () => {
     ).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
-      message: "The bash command is blocked by network policy: 169.254.169.254:80",
+      message: "Network access is blocked for 169.254.169.254:80",
     } satisfies Partial<ToolFailure>);
   });
 

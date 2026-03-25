@@ -1,9 +1,8 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { type Static, Type } from "@sinclair/typebox";
-
-import { createFilesystemAccessController, formatDisplayPath } from "@/src/tools/common.js";
-import { toolRecoverableError } from "@/src/tools/errors.js";
-import { defineTool, textToolResult } from "@/src/tools/types.js";
+import { toolRecoverableError } from "@/src/tools/core/errors.js";
+import { defineTool, textToolResult } from "@/src/tools/core/types.js";
+import { createFilesystemAccessController, formatDisplayPath } from "@/src/tools/helpers/common.js";
 
 export const EDIT_TOOL_SCHEMA = Type.Object(
   {

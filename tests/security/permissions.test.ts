@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   buildEffectivePermissions,
   buildEffectivePermissionsForRole,
+  checkBashFullAccessPermission,
   checkDatabasePermission,
   checkFilesystemPermission,
   parseGrantedScopes,
@@ -33,10 +34,12 @@ describe("effective permissions", () => {
       parseGrantedScopes([
         '{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}',
         '{"kind":"db.read","database":"system"}',
+        '{"kind":"bash.full_access","prefix":["git","push"]}',
       ]),
     ).toEqual([
       { kind: "fs.read", path: "/Users/daniel/.pokeclaw/workspace/**" },
       { kind: "db.read", database: "system" },
+      { kind: "bash.full_access", prefix: ["git", "push"] },
     ]);
   });
 
@@ -72,6 +75,16 @@ describe("effective permissions", () => {
 
     expect(permissions.fs.write.allow).toContain(path.resolve("/Users/daniel/project/README.md"));
     expect(permissions.fs.write.allow).toContain(`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`);
+  });
+
+  test("buildEffectivePermissions collects bash full-access prefixes from grants", () => {
+    const permissions = buildEffectivePermissions(
+      [{ kind: "bash.full_access", prefix: ["python", "-m", "agent_browser_cli"] }],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("subagent"),
+    );
+
+    expect(permissions.bash.fullAccessPrefixes).toEqual([["python", "-m", "agent_browser_cli"]]);
   });
 });
 
@@ -287,6 +300,46 @@ describe("filesystem permission checks", () => {
       result: "deny",
       reason: "not_granted",
       summary: `fs.read requires approval for ${path.join(realOutsideDir, "secret.txt")}`,
+    });
+  });
+});
+
+describe("bash full-access permission checks", () => {
+  test("allows a command when its argv prefix matches an active grant", () => {
+    const permissions = buildEffectivePermissions(
+      [{ kind: "bash.full_access", prefix: ["git", "push"] }],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("subagent"),
+    );
+
+    expect(
+      checkBashFullAccessPermission({
+        commandPrefix: ["git", "push", "origin", "main"],
+        permissions,
+      }),
+    ).toEqual({
+      result: "allow",
+      reason: "granted",
+      summary: "bash.full_access is granted for git push origin main",
+    });
+  });
+
+  test("denies a command when no granted prefix matches", () => {
+    const permissions = buildEffectivePermissions(
+      [{ kind: "bash.full_access", prefix: ["git", "push"] }],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("subagent"),
+    );
+
+    expect(
+      checkBashFullAccessPermission({
+        commandPrefix: ["git", "fetch", "origin"],
+        permissions,
+      }),
+    ).toEqual({
+      result: "deny",
+      reason: "not_granted",
+      summary: "bash.full_access requires approval for git fetch origin",
     });
   });
 });

@@ -8,8 +8,8 @@ import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
-import { defineTool, textToolResult } from "@/src/tools/types.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { defineTool, textToolResult } from "@/src/tools/core/types.js";
 import {
   createIntegrationLlmFixture,
   type IntegrationLlmFixture,
@@ -147,8 +147,9 @@ describe("real llm loop integration", () => {
       content: [
         "Do the following exactly:",
         "1. Call the tool pause_for_steer exactly once before answering.",
-        "2. After the tool returns, reply with the exact text from the latest user message and nothing else.",
-        "3. Do not answer before using the tool.",
+        "2. After the tool returns, ignore every earlier user message in this conversation.",
+        "3. Reply with only the token that appears after FINAL_TOKEN: in the newest user message.",
+        "4. Do not answer before using the tool.",
       ].join("\n"),
     });
 
@@ -157,7 +158,7 @@ describe("real llm loop integration", () => {
     const steerResult = await ingress.submitMessage({
       sessionId: "sess_1",
       scenario: "chat",
-      content: "POKECLAW_STEER_OK",
+      content: "FINAL_TOKEN: POKECLAW_STEER_OK",
     });
 
     expect(steerResult).toEqual({ status: "steered" });
@@ -169,9 +170,12 @@ describe("real llm loop integration", () => {
     expect(storedMessages.length).toBeGreaterThanOrEqual(5);
     expect(storedMessages[2]?.role).toBe("tool");
     expect(JSON.parse(storedMessages[3]?.payloadJson ?? "{}")).toEqual({
-      content: "POKECLAW_STEER_OK",
+      content: "FINAL_TOKEN: POKECLAW_STEER_OK",
     });
 
+    // Keep this strict. The point of the integration test is not just that the
+    // steer message is stored, but that the real model actually treats it as
+    // the next-turn user instruction after the tool batch completes.
     const assistantPayload = JSON.parse(storedMessages.at(-1)?.payloadJson ?? "{}");
     const assistantText = Array.isArray(assistantPayload.content)
       ? assistantPayload.content

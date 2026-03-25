@@ -6,8 +6,8 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
-import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
+import type { ToolFailure } from "@/src/tools/core/errors.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createWriteTool } from "@/src/tools/write.js";
 import {
   createTestDatabase,
@@ -105,7 +105,18 @@ describe("write tool", () => {
     ).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
-      message: `The write request is blocked by system policy: ${path.join(POKECLAW_SYSTEM_DIR, "config.toml")}`,
+      details: {
+        code: "permission_denied",
+        requestable: false,
+        entries: [
+          {
+            resource: "filesystem",
+            path: path.join(POKECLAW_SYSTEM_DIR, "config.toml"),
+            scope: "exact",
+            access: "write",
+          },
+        ],
+      },
     } satisfies Partial<ToolFailure>);
   });
 
@@ -134,16 +145,20 @@ describe("write tool", () => {
         },
       ),
     ).rejects.toMatchObject({
-      name: "ToolApprovalRequired",
-      reasonText: expect.stringContaining("This tool needs approval to continue:"),
-      request: {
-        scopes: [
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        entries: [
           {
-            kind: "fs.write",
+            resource: "filesystem",
             path: await resolveExpectedToolAbsolutePath(path.join(tempDir, "outside.txt")),
+            scope: "exact",
+            access: "write",
           },
         ],
       },
-    } satisfies Partial<ToolApprovalRequired>);
+    } satisfies Partial<ToolFailure>);
   });
 });

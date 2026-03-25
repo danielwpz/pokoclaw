@@ -3,7 +3,7 @@ import {
   type ToolDefinition,
   type ToolExecutionContext,
   type ToolResult,
-} from "@/src/tools/types.js";
+} from "@/src/tools/core/types.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition<unknown, unknown>>();

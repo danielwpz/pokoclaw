@@ -6,9 +6,9 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
+import type { ToolFailure } from "@/src/tools/core/errors.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createEditTool } from "@/src/tools/edit.js";
-import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -158,7 +158,18 @@ describe("edit tool", () => {
     ).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
-      message: `The read request is blocked by system policy: ${path.join(POKECLAW_SYSTEM_DIR, "config.toml")}`,
+      details: {
+        code: "permission_denied",
+        requestable: false,
+        entries: [
+          {
+            resource: "filesystem",
+            path: path.join(POKECLAW_SYSTEM_DIR, "config.toml"),
+            scope: "exact",
+            access: "read",
+          },
+        ],
+      },
     } satisfies Partial<ToolFailure>);
   });
 
@@ -192,13 +203,20 @@ describe("edit tool", () => {
         },
       ),
     ).rejects.toMatchObject({
-      name: "ToolApprovalRequired",
-      request: {
-        scopes: [
-          { kind: "fs.read", path: expectedAbsolutePath },
-          { kind: "fs.write", path: expectedAbsolutePath },
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        entries: [
+          {
+            resource: "filesystem",
+            path: expectedAbsolutePath,
+            scope: "exact",
+            access: "read_write",
+          },
         ],
       },
-    } satisfies Partial<ToolApprovalRequired>);
+    } satisfies Partial<ToolFailure>);
   });
 });

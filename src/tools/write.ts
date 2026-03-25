@@ -1,10 +1,13 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
-
-import { formatDisplayPath, requireFilesystemAccess, resolveToolCwd } from "@/src/tools/common.js";
-import { toolRecoverableError } from "@/src/tools/errors.js";
-import { defineTool, textToolResult } from "@/src/tools/types.js";
+import { toolRecoverableError } from "@/src/tools/core/errors.js";
+import { defineTool, textToolResult } from "@/src/tools/core/types.js";
+import {
+  formatDisplayPath,
+  requireFilesystemAccess,
+  resolveToolCwd,
+} from "@/src/tools/helpers/common.js";
 
 export const WRITE_TOOL_SCHEMA = Type.Object(
   {

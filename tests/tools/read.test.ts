@@ -6,9 +6,9 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
 import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
-import type { ToolApprovalRequired, ToolFailure } from "@/src/tools/errors.js";
+import type { ToolFailure } from "@/src/tools/core/errors.js";
+import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createReadTool } from "@/src/tools/read.js";
-import { ToolRegistry } from "@/src/tools/registry.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -132,7 +132,18 @@ describe("read tool", () => {
     ).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
-      message: `The read request is blocked by system policy: ${path.join(POKECLAW_SYSTEM_DIR, "config.toml")}`,
+      details: {
+        code: "permission_denied",
+        requestable: false,
+        entries: [
+          {
+            resource: "filesystem",
+            path: path.join(POKECLAW_SYSTEM_DIR, "config.toml"),
+            scope: "exact",
+            access: "read",
+          },
+        ],
+      },
     } satisfies Partial<ToolFailure>);
   });
 
@@ -160,16 +171,20 @@ describe("read tool", () => {
         { path: "private.txt" },
       ),
     ).rejects.toMatchObject({
-      name: "ToolApprovalRequired",
-      reasonText: expect.stringContaining("This tool needs approval to continue:"),
-      request: {
-        scopes: [
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        entries: [
           {
-            kind: "fs.read",
+            resource: "filesystem",
             path: await resolveExpectedToolAbsolutePath(path.join(tempDir, "private.txt")),
+            scope: "exact",
+            access: "read",
           },
         ],
       },
-    } satisfies Partial<ToolApprovalRequired>);
+    } satisfies Partial<ToolFailure>);
   });
 });
