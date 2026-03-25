@@ -46,7 +46,9 @@ export {
   type StorageDb,
 } from "@/src/storage/db/client.js";
 export { getProductionDatabasePath, getTestDatabasePath } from "@/src/storage/db/paths.js";
+export { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 export { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 export { type AppendMessageInput, MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 export { PermissionGrantsRepo } from "@/src/storage/repos/permission-grants.repo.js";
 export { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+export { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";

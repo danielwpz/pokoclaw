@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { AGENT_SYSTEM_PROMPT, buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
 import {
+  buildApprovalReviewSection,
   buildBashFullAccessSection,
   buildOperatingModelSection,
   buildPermissionsSection,
@@ -56,6 +57,17 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("Do not bypass approval or permission mechanisms.");
   });
 
+  test("builds a dedicated approval-session prompt without normal tool escalation guidance", () => {
+    const prompt = buildAgentSystemPrompt({ sessionPurpose: "approval" });
+
+    expect(prompt).toContain("## Approval Review");
+    expect(prompt).toContain("review_permission_request");
+    expect(prompt).not.toContain("## Permissions");
+    expect(prompt).not.toContain("## Bash Full Access");
+    expect(prompt).not.toContain("call request_permissions");
+    expect(prompt).not.toContain('sandboxMode="full_access"');
+  });
+
   test("future section builders stay empty until their features are implemented", () => {
     expect(buildWorkspaceRuntimeSection()).toBe("");
     expect(buildProjectContextSection()).toBe("");
@@ -66,6 +78,7 @@ describe("agent system prompt", () => {
     expect(buildOperatingModelSection()).not.toBe("");
     expect(buildToolUsageSection()).not.toBe("");
     expect(buildPermissionsSection()).not.toBe("");
+    expect(buildApprovalReviewSection()).not.toBe("");
     expect(buildBashFullAccessSection()).not.toBe("");
     expect(buildSafetySection()).not.toBe("");
   });

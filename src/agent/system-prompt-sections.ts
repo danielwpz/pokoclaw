@@ -52,6 +52,16 @@ export function buildBashFullAccessSection(): string {
   ]);
 }
 
+export function buildApprovalReviewSection(): string {
+  return renderSection("Approval Review", [
+    "- This session exists only to review delegated approval requests from unattended runs.",
+    "- Do not continue the task itself here. Only inspect the request, investigate with the allowed read-only tools if necessary, and then approve or deny it.",
+    "- Use review_permission_request to record the decision.",
+    "- Every approval or denial must include a short reason for audit and later review.",
+    "- This session may include recent approval history for the same unattended run. Use it as context, but prioritize the latest user intent from the forked main-agent chat context.",
+  ]);
+}
+
 export function buildSafetySection(): string {
   return renderSection("Safety", [
     "- Do not bypass approval or permission mechanisms.",

@@ -42,6 +42,14 @@ export const agentsRelations = relations(agents, ({ one, many }) => ({
     fields: [agents.conversationId],
     references: [conversations.id],
   }),
+  mainAgent: one(agents, {
+    fields: [agents.mainAgentId],
+    references: [agents.id],
+    relationName: "agent_main_agent",
+  }),
+  managedAgents: many(agents, {
+    relationName: "agent_main_agent",
+  }),
   cronJobs: many(cronJobs),
   taskRuns: many(taskRuns),
   approvals: many(approvalLedger),

@@ -15,6 +15,8 @@ export interface SubmitSessionMessageInput {
   sessionId: string;
   scenario: ModelScenario;
   content: string;
+  messageType?: string;
+  visibility?: string;
   createdAt?: Date;
   maxTurns?: number;
 }
@@ -51,6 +53,8 @@ export class InMemorySessionLane {
       const steered = this.deps.loop.enqueueSteerInput({
         sessionId: input.sessionId,
         content: input.content,
+        ...(input.messageType == null ? {} : { messageType: input.messageType }),
+        ...(input.visibility == null ? {} : { visibility: input.visibility }),
         ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
       });
       if (steered) {
@@ -73,8 +77,8 @@ export class InMemorySessionLane {
       payloadJson: JSON.stringify({
         content: input.content,
       }),
-      messageType: "text",
-      visibility: "user_visible",
+      messageType: input.messageType ?? "text",
+      visibility: input.visibility ?? "user_visible",
       createdAt: input.createdAt ?? new Date(),
     });
 
