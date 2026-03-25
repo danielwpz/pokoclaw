@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS agents (
   kind TEXT NOT NULL
     CHECK (kind IN ('main', 'sub')),
   display_name TEXT,
+  description TEXT,
   policy_profile TEXT,
   default_model TEXT,
   status TEXT NOT NULL DEFAULT 'active'
@@ -145,6 +146,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   status TEXT NOT NULL,
   priority INTEGER NOT NULL DEFAULT 0,
   attempt INTEGER NOT NULL DEFAULT 1,
+  description TEXT,
   input_json TEXT,
   result_summary TEXT,
   error_text TEXT,

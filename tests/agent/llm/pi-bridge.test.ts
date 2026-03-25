@@ -243,6 +243,79 @@ describe("pi bridge", () => {
     expect(model.baseUrl).toBe("https://api.anthropic.com");
   });
 
+  test("only exposes approval-session tools to the model during approval turns", async () => {
+    const finalMessage = {
+      role: "assistant" as const,
+      api: "anthropic-messages" as const,
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5-20250929",
+      stopReason: "stop" as const,
+      content: [{ type: "text" as const, text: "ok" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream(
+        [{ type: "done", reason: "stop", message: finalMessage }],
+        finalMessage,
+      ),
+    );
+
+    const bridge = new PiBridge();
+    await bridge.streamTurn({
+      model: createResolvedModel(),
+      compactSummary: null,
+      messages: [createStoredUserMessage()],
+      tools: new ToolRegistry([
+        defineTool({
+          name: "bash",
+          description: "Run a shell command",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            throw new Error("not used");
+          },
+        }),
+        defineTool({
+          name: "read",
+          description: "Read a file",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            throw new Error("not used");
+          },
+        }),
+        defineTool({
+          name: "review_permission_request",
+          description: "Review a delegated approval request",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            throw new Error("not used");
+          },
+        }),
+      ]),
+      sessionPurpose: "approval",
+      signal: new AbortController().signal,
+    });
+
+    const [, context] = streamSimpleMock.mock.calls[0] as [
+      ResolvedModel,
+      { tools: Array<{ name: string }> },
+    ];
+    expect(context.tools.map((tool) => tool.name)).toEqual(["read", "review_permission_request"]);
+  });
+
   test("normalizes pi stopReason errors into AgentLlmError", async () => {
     const finalMessage = {
       role: "assistant" as const,

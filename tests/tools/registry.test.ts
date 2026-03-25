@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import type { ToolFailure } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/core/types.js";
 import {
@@ -102,7 +103,15 @@ describe("tool registry", () => {
         },
         { path: 123, unexpected: true },
       ),
-    ).rejects.toThrow(/read_file args are invalid/i);
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      message: expect.stringMatching(/read_file args are invalid/i),
+      details: {
+        code: "invalid_tool_args",
+        toolName: "read_file",
+      },
+    } satisfies Partial<ToolFailure>);
   });
 
   test("rejects duplicate registrations and missing tools", async () => {
@@ -142,7 +151,15 @@ describe("tool registry", () => {
         },
         {},
       ),
-    ).rejects.toThrow("Tool not found: missing");
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      message: "Tool not found: missing",
+      details: {
+        code: "tool_not_found",
+        toolName: "missing",
+      },
+    } satisfies Partial<ToolFailure>);
   });
 
   test("tool result helpers build text and json payloads", () => {

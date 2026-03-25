@@ -26,10 +26,10 @@ function seedFixture(handle: TestDatabaseHandle): void {
       ('conv_main', 'ci_1', 'chat_main', 'dm', '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'),
       ('conv_sub', 'ci_1', 'chat_sub', 'group', '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z');
 
-    INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+    INSERT INTO agents (id, conversation_id, main_agent_id, kind, description, created_at)
     VALUES
-      ('agent_main', 'conv_main', NULL, 'main', '2026-03-25T00:00:00.000Z'),
-      ('agent_sub', 'conv_sub', 'agent_main', 'sub', '2026-03-25T00:00:00.000Z');
+      ('agent_main', 'conv_main', NULL, 'main', 'Primary assistant for this DM.', '2026-03-25T00:00:00.000Z'),
+      ('agent_sub', 'conv_sub', 'agent_main', 'sub', 'Focused helper for the sub conversation.', '2026-03-25T00:00:00.000Z');
   `);
 }
 
@@ -58,6 +58,18 @@ describe("agents repo", () => {
       const repo = new AgentsRepo(handle.storage.db);
 
       expect(repo.listByMainAgent("agent_main").map((agent) => agent.id)).toEqual(["agent_sub"]);
+    });
+  });
+
+  test("returns persisted agent descriptions", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const repo = new AgentsRepo(handle.storage.db);
+
+      expect(repo.getById("agent_main")?.description).toBe("Primary assistant for this DM.");
+      expect(repo.getById("agent_sub")?.description).toBe(
+        "Focused helper for the sub conversation.",
+      );
     });
   });
 });

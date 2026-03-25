@@ -1,10 +1,7 @@
-import { eq } from "drizzle-orm";
-
-import { type AgentRuntimeRole, normalizeAgentKindToRuntimeRole } from "@/src/security/policy.js";
+import { resolveSessionLiveStateFromSession } from "@/src/runtime/live-state.js";
+import type { AgentRuntimeRole } from "@/src/security/policy.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
-import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
-import { agents } from "@/src/storage/schema/tables.js";
 import type { Session } from "@/src/storage/schema/types.js";
 
 const logger = createSubsystemLogger("runtime/approval-routing");
@@ -30,8 +27,12 @@ export function resolveApprovalRouteForSession(input: {
   db: StorageDb;
   session: Session;
 }): ResolvedApprovalRoute {
-  const ownerRole = resolveOwnerRole(input.db, input.session.ownerAgentId);
-  const taskRun = new TaskRunsRepo(input.db).getByExecutionSessionId(input.session.id);
+  const state = resolveSessionLiveStateFromSession({
+    db: input.db,
+    session: input.session,
+  });
+  const ownerRole = state.ownerRole;
+  const taskRun = state.taskRun;
 
   if (taskRun != null) {
     switch (taskRun.runType) {
@@ -101,16 +102,6 @@ export function resolveApprovalRouteForSession(input: {
       taskRunId: null,
     },
   });
-}
-
-function resolveOwnerRole(db: StorageDb, ownerAgentId: string | null): AgentRuntimeRole {
-  if (ownerAgentId == null || ownerAgentId.trim().length === 0) {
-    return "subagent";
-  }
-
-  const row =
-    db.select({ kind: agents.kind }).from(agents).where(eq(agents.id, ownerAgentId)).get() ?? null;
-  return normalizeAgentKindToRuntimeRole(row?.kind);
 }
 
 function logResolvedRoute(input: {

@@ -1,8 +1,19 @@
 import { resolveOrCreateMainAgentApprovalSession } from "@/src/orchestration/approval-session.js";
+import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
 import { describePermissionScope, parsePermissionRequestJson } from "@/src/security/scope.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
+import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
+import type { Message } from "@/src/storage/schema/types.js";
+
+const logger = createSubsystemLogger("orchestration/delegated-approval");
+const APPROVAL_SESSION_MAX_DECISION_REMINDERS = 1;
+const AUTO_DENY_REASON = "Approval review session ended without an explicit decision.";
 
 export interface DelegatedApprovalDeliveryResult {
   status:
@@ -17,6 +28,7 @@ export interface DelegatedApprovalDeliveryResult {
 
 export interface DelegatedApprovalMessageIngress {
   submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult>;
+  submitApprovalDecision(input: ApprovalResponseInput): boolean;
 }
 
 export async function deliverDelegatedApprovalRequest(input: {
@@ -61,22 +73,28 @@ export async function deliverDelegatedApprovalRequest(input: {
     };
   }
 
-  await input.ingress.submitMessage({
-    sessionId: approvalSession.session.id,
-    scenario: "chat",
-    content: renderDelegatedApprovalMessage({
-      approvalId: approval.id,
+  const requestMessage = renderDelegatedApprovalMessage({
+    approvalId: approval.id,
+    ownerAgentId: approval.ownerAgentId,
+    reasonText: approval.reasonText,
+    requestedScopeJson: approval.requestedScopeJson,
+    context: buildDelegatedApprovalContext({
+      db: input.db,
+      sourceSessionId: approval.requestedBySessionId,
       ownerAgentId: approval.ownerAgentId,
-      reasonText: approval.reasonText,
-      requestedScopeJson: approval.requestedScopeJson,
-      history: listRecentApprovalHistory({
-        approvalsRepo,
-        sourceSessionId: approval.requestedBySessionId,
-        currentApprovalId: approval.id,
-      }),
     }),
-    messageType: "approval_request",
-    visibility: "hidden_system",
+    history: listRecentApprovalHistory({
+      approvalsRepo,
+      sourceSessionId: approval.requestedBySessionId,
+      currentApprovalId: approval.id,
+    }),
+  });
+  await driveApprovalSessionToDecision({
+    approvalsRepo,
+    ingress: input.ingress,
+    approvalId: approval.id,
+    approvalSessionId: approvalSession.session.id,
+    initialMessage: requestMessage,
   });
 
   return {
@@ -86,11 +104,73 @@ export async function deliverDelegatedApprovalRequest(input: {
   };
 }
 
+async function driveApprovalSessionToDecision(input: {
+  approvalsRepo: ApprovalsRepo;
+  ingress: DelegatedApprovalMessageIngress;
+  approvalId: number;
+  approvalSessionId: string;
+  initialMessage: string;
+}): Promise<void> {
+  for (let reminder = 0; reminder <= APPROVAL_SESSION_MAX_DECISION_REMINDERS; reminder += 1) {
+    const content =
+      reminder === 0
+        ? input.initialMessage
+        : renderApprovalDecisionReminder({
+            approvalId: input.approvalId,
+          });
+    const messageType = reminder === 0 ? "approval_request" : "approval_followup";
+
+    try {
+      await input.ingress.submitMessage({
+        sessionId: input.approvalSessionId,
+        scenario: "chat",
+        content,
+        messageType,
+        visibility: "hidden_system",
+      });
+    } catch (error) {
+      logger.warn("approval session run failed before decision", {
+        approvalId: input.approvalId,
+        approvalSessionId: input.approvalSessionId,
+        reminder,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const approval = input.approvalsRepo.getById(input.approvalId);
+    if (approval == null || approval.status !== "pending") {
+      return;
+    }
+
+    logger.info("approval session ended without explicit decision", {
+      approvalId: input.approvalId,
+      approvalSessionId: input.approvalSessionId,
+      reminder,
+    });
+  }
+
+  const matched = input.ingress.submitApprovalDecision({
+    approvalId: input.approvalId,
+    decision: "deny",
+    actor: "system:approval_session_auto_deny",
+    rawInput: null,
+    reasonText: AUTO_DENY_REASON,
+    decidedAt: new Date(),
+  });
+
+  logger.warn("auto-denied delegated approval after missing decision", {
+    approvalId: input.approvalId,
+    approvalSessionId: input.approvalSessionId,
+    matched,
+  });
+}
+
 export function renderDelegatedApprovalMessage(input: {
   approvalId: number;
   ownerAgentId: string;
   reasonText: string | null;
   requestedScopeJson: string;
+  context?: DelegatedApprovalContext;
   history?: ApprovalHistoryItem[];
 }): string {
   const request = parsePermissionRequestJson(input.requestedScopeJson);
@@ -117,6 +197,10 @@ export function renderDelegatedApprovalMessage(input: {
     "</delegated_approval_request>",
   ];
 
+  if (input.context != null && hasDelegatedApprovalContext(input.context)) {
+    rendered.push("", ...renderDelegatedApprovalContext(input.context));
+  }
+
   if (history.length > 0) {
     rendered.push(
       "",
@@ -141,6 +225,23 @@ interface ApprovalHistoryItem {
   decision: "approved" | "denied";
   permissions: string;
   reason: string;
+}
+
+interface DelegatedApprovalContext {
+  sessionPurpose?: string;
+  agentKind?: string;
+  agentDescription?: string;
+  taskRunId?: string;
+  runType?: string;
+  taskDescription?: string;
+  taskInputSummary?: string;
+  recentTranscript?: DelegatedTranscriptEntry[];
+}
+
+interface DelegatedTranscriptEntry {
+  seq: number;
+  role: string;
+  summary: string;
 }
 
 function listRecentApprovalHistory(input: {
@@ -172,4 +273,245 @@ function listRecentApprovalHistory(input: {
         reason: approval.reasonText ?? "No reason recorded.",
       };
     });
+}
+
+function buildDelegatedApprovalContext(input: {
+  db: StorageDb;
+  sourceSessionId: string;
+  ownerAgentId: string;
+}): DelegatedApprovalContext {
+  const agentsRepo = new AgentsRepo(input.db);
+  const messagesRepo = new MessagesRepo(input.db);
+  const sessionsRepo = new SessionsRepo(input.db);
+  const taskRunsRepo = new TaskRunsRepo(input.db);
+
+  const agent = agentsRepo.getById(input.ownerAgentId);
+  const sourceSession = sessionsRepo.getById(input.sourceSessionId);
+  const taskRun = taskRunsRepo.getByExecutionSessionId(input.sourceSessionId);
+  const recentTranscript = messagesRepo
+    .listBySession(input.sourceSessionId)
+    .slice(-5)
+    .map((message) => summarizeTranscriptMessage(message))
+    .filter((entry): entry is DelegatedTranscriptEntry => entry != null);
+
+  return {
+    ...(sourceSession == null ? {} : { sessionPurpose: sourceSession.purpose }),
+    ...(agent?.kind == null ? {} : { agentKind: agent.kind }),
+    ...(agent?.description == null ? {} : { agentDescription: agent.description }),
+    ...(taskRun?.id == null ? {} : { taskRunId: taskRun.id }),
+    ...(taskRun?.runType == null ? {} : { runType: taskRun.runType }),
+    ...(taskRun?.description == null ? {} : { taskDescription: taskRun.description }),
+    ...(taskRun?.inputJson == null
+      ? {}
+      : { taskInputSummary: summarizeTaskInput(taskRun.inputJson) }),
+    ...(recentTranscript.length === 0 ? {} : { recentTranscript }),
+  };
+}
+
+function hasDelegatedApprovalContext(input: DelegatedApprovalContext): boolean {
+  return (
+    input.sessionPurpose != null ||
+    input.agentKind != null ||
+    input.agentDescription != null ||
+    input.taskRunId != null ||
+    input.runType != null ||
+    input.taskDescription != null ||
+    input.taskInputSummary != null ||
+    (input.recentTranscript?.length ?? 0) > 0
+  );
+}
+
+function renderDelegatedApprovalContext(input: DelegatedApprovalContext): string[] {
+  const lines = ["<task_context>"];
+
+  if (input.sessionPurpose != null) {
+    lines.push(`  <session_purpose>${escapeXmlText(input.sessionPurpose)}</session_purpose>`);
+  }
+  if (input.agentKind != null) {
+    lines.push(`  <agent_kind>${escapeXmlText(input.agentKind)}</agent_kind>`);
+  }
+  if (input.agentDescription != null) {
+    lines.push("  <agent_description>");
+    lines.push(`    ${indentXmlText(input.agentDescription, 4)}`);
+    lines.push("  </agent_description>");
+  }
+  if (input.taskRunId != null) {
+    lines.push(`  <task_run_id>${escapeXmlText(input.taskRunId)}</task_run_id>`);
+  }
+  if (input.runType != null) {
+    lines.push(`  <run_type>${escapeXmlText(input.runType)}</run_type>`);
+  }
+  if (input.taskDescription != null) {
+    lines.push("  <task_description>");
+    lines.push(`    ${indentXmlText(input.taskDescription, 4)}`);
+    lines.push("  </task_description>");
+  }
+  if (input.taskInputSummary != null) {
+    lines.push("  <task_input>");
+    lines.push(`    ${indentXmlText(input.taskInputSummary, 4)}`);
+    lines.push("  </task_input>");
+  }
+  lines.push("</task_context>");
+
+  if ((input.recentTranscript?.length ?? 0) === 0) {
+    return lines;
+  }
+
+  lines.push("", "<recent_task_transcript>");
+  for (const message of input.recentTranscript ?? []) {
+    lines.push("  <message>");
+    lines.push(`    <seq>${message.seq}</seq>`);
+    lines.push(`    <role>${escapeXmlText(message.role)}</role>`);
+    lines.push("    <summary>");
+    lines.push(`      ${indentXmlText(message.summary, 6)}`);
+    lines.push("    </summary>");
+    lines.push("  </message>");
+  }
+  lines.push("</recent_task_transcript>");
+  return lines;
+}
+
+function renderApprovalDecisionReminder(input: { approvalId: number }): string {
+  return [
+    "<approval_decision_required>",
+    `  <approval_id>${input.approvalId}</approval_id>`,
+    "",
+    "  <guidance>",
+    "    The approval is still pending.",
+    "    You may inspect available read-only tools if needed, but you must now call review_permission_request exactly once.",
+    "    Do not continue the task itself.",
+    "  </guidance>",
+    "</approval_decision_required>",
+  ].join("\n");
+}
+
+function summarizeTranscriptMessage(message: Message): DelegatedTranscriptEntry | null {
+  try {
+    const payload = JSON.parse(message.payloadJson) as Record<string, unknown>;
+    switch (message.role) {
+      case "user":
+        return {
+          seq: message.seq,
+          role: "user",
+          summary: summarizeFreeText(payload.content),
+        };
+      case "assistant":
+        return {
+          seq: message.seq,
+          role: "assistant",
+          summary: summarizeAssistantPayload(payload.content),
+        };
+      case "tool":
+        return {
+          seq: message.seq,
+          role: "tool",
+          summary: summarizeToolPayload(payload),
+        };
+      default:
+        return null;
+    }
+  } catch {
+    return {
+      seq: message.seq,
+      role: message.role,
+      summary: truncateText(message.payloadJson, 240),
+    };
+  }
+}
+
+function summarizeAssistantPayload(content: unknown): string {
+  if (!Array.isArray(content)) {
+    return "Assistant turn.";
+  }
+
+  const textParts: string[] = [];
+  const toolCalls: string[] = [];
+  for (const block of content) {
+    if (typeof block !== "object" || block == null) {
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      textParts.push(truncateText(record.text, 140));
+      continue;
+    }
+    if (record.type === "toolCall") {
+      const argsSummary =
+        record.arguments == null
+          ? ""
+          : ` args=${truncateText(JSON.stringify(record.arguments), 100)}`;
+      toolCalls.push(`assistant requested a tool action${argsSummary}`);
+    }
+  }
+
+  const parts = [];
+  if (textParts.length > 0) {
+    parts.push(`text=${textParts.join(" | ")}`);
+  }
+  if (toolCalls.length > 0) {
+    parts.push(`tool_calls=${toolCalls.join(", ")}`);
+  }
+  return parts.length === 0 ? "Assistant turn." : parts.join(" ; ");
+}
+
+function summarizeToolPayload(payload: Record<string, unknown>): string {
+  const isError = payload.isError === true;
+  const details = payload.details;
+  if (isPermissionDeniedDetails(details)) {
+    return `blocked by permissions: ${details.summary}`;
+  }
+
+  const content = Array.isArray(payload.content) ? payload.content : [];
+  const text = content
+    .map((block) => {
+      if (typeof block !== "object" || block == null) {
+        return "";
+      }
+      const record = block as Record<string, unknown>;
+      return record.type === "text" && typeof record.text === "string" ? record.text : "";
+    })
+    .filter((entry) => entry.length > 0)
+    .join(" | ");
+
+  return `${isError ? "tool error" : "tool result"}: ${truncateText(text, 180)}`;
+}
+
+function isPermissionDeniedDetails(value: unknown): value is { summary: string } {
+  if (typeof value !== "object" || value == null) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return candidate.code === "permission_denied" && typeof candidate.summary === "string";
+}
+
+function summarizeTaskInput(inputJson: string): string {
+  try {
+    return truncateText(JSON.stringify(JSON.parse(inputJson)), 240);
+  } catch {
+    return truncateText(inputJson, 240);
+  }
+}
+
+function summarizeFreeText(value: unknown): string {
+  return typeof value === "string" ? truncateText(value, 220) : "Non-text user content.";
+}
+
+function truncateText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function escapeXmlText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function indentXmlText(value: string, spaces: number): string {
+  const prefix = " ".repeat(spaces);
+  const normalized = value.length === 0 ? "" : escapeXmlText(value);
+  return normalized.split("\n").join(`\n${prefix}`);
 }

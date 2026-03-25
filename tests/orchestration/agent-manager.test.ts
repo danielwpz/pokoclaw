@@ -155,7 +155,7 @@ describe("AgentManager", () => {
           approvalId: 1,
         }),
       });
-      expect(submitted).toHaveLength(1);
+      expect(submitted).toHaveLength(2);
       expect(submitted[0]).toMatchObject({
         sessionId: createMainAgentApprovalSessionId({
           sourceSessionId: "sess_sub",
@@ -163,6 +163,15 @@ describe("AgentManager", () => {
         }),
         scenario: "chat",
         messageType: "approval_request",
+        visibility: "hidden_system",
+      });
+      expect(submitted[1]).toMatchObject({
+        sessionId: createMainAgentApprovalSessionId({
+          sourceSessionId: "sess_sub",
+          approvalId: 1,
+        }),
+        scenario: "chat",
+        messageType: "approval_followup",
         visibility: "hidden_system",
       });
     });
@@ -200,6 +209,278 @@ describe("AgentManager", () => {
 
     expect(result).toBeNull();
     expect(submitMessage).not.toHaveBeenCalled();
+  });
+
+  test("exposes live session and task-run state for orchestration consumers", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id,
+          execution_session_id, status, started_at
+        ) VALUES (
+          'run_delegate', 'delegate', 'agent_sub', 'conv_sub', 'branch_sub',
+          'sess_sub', 'running', '2026-03-25T00:00:02.500Z'
+        );
+      `);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      expect(manager.getSessionLiveState("sess_sub")).toMatchObject({
+        session: { id: "sess_sub" },
+        ownerAgentId: "agent_sub",
+        ownerRole: "subagent",
+        mainAgentId: "agent_main",
+        taskRun: { id: "run_delegate", runType: "delegate" },
+      });
+
+      expect(manager.getTaskRunLiveState("run_delegate")).toMatchObject({
+        taskRun: { id: "run_delegate", executionSessionId: "sess_sub" },
+        executionSession: { id: "sess_sub" },
+        ownerRole: "subagent",
+        mainAgentId: "agent_main",
+      });
+    });
+  });
+
+  test("creates task executions through the orchestration entrypoint", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id,
+          schedule_kind, schedule_value, payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron', '0 * * * *', '{}', '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
+        );
+      `);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const created = manager.createTaskExecution({
+        runType: "cron",
+        ownerAgentId: "agent_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        cronJobId: "cron_1",
+        initiatorSessionId: "sess_main",
+        inputJson: '{"job":"daily-finance"}',
+        createdAt: new Date("2026-03-25T00:00:05.000Z"),
+      });
+
+      expect(created.executionSession).toMatchObject({
+        purpose: "task",
+        ownerAgentId: "agent_sub",
+        conversationId: "conv_sub",
+      });
+      expect(created.taskRun).toMatchObject({
+        runType: "cron",
+        ownerAgentId: "agent_sub",
+        executionSessionId: created.executionSession.id,
+        initiatorSessionId: "sess_main",
+        cronJobId: "cron_1",
+        status: "running",
+      });
+
+      expect(manager.getTaskRunLiveState(created.taskRun.id)).toMatchObject({
+        taskRun: { id: created.taskRun.id, executionSessionId: created.executionSession.id },
+        executionSession: { id: created.executionSession.id },
+        ownerRole: "subagent",
+        mainAgentId: "agent_main",
+      });
+    });
+  });
+
+  test("rejects task execution creation for unknown agents", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      expect(() =>
+        manager.createTaskExecution({
+          runType: "system",
+          ownerAgentId: "missing_agent",
+          conversationId: "conv_sub",
+          branchId: "branch_sub",
+        }),
+      ).toThrow("Cannot create task execution for unknown agent missing_agent");
+    });
+  });
+
+  test("settles task executions through the orchestration entrypoint", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const created = manager.createTaskExecution({
+        runType: "system",
+        ownerAgentId: "agent_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        createdAt: new Date("2026-03-25T00:00:05.000Z"),
+      });
+
+      const settled = manager.completeTaskExecution({
+        taskRunId: created.taskRun.id,
+        resultSummary: "finished",
+        finishedAt: new Date("2026-03-25T00:00:08.000Z"),
+      });
+
+      expect(settled.taskRun).toMatchObject({
+        id: created.taskRun.id,
+        status: "completed",
+        resultSummary: "finished",
+        durationMs: 3000,
+      });
+      expect(settled.executionSession).toMatchObject({
+        id: created.executionSession.id,
+        status: "completed",
+      });
+      expect(manager.getTaskRunLiveState(created.taskRun.id)?.taskRun.status).toBe("completed");
+    });
+  });
+
+  test("creates cron task executions from cron job definitions", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id,
+          schedule_kind, schedule_value, context_mode, payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_2', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron', '*/5 * * * *', 'group', '{"job":"reconcile"}',
+          '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
+        );
+      `);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const created = manager.createCronTaskExecutionFromJob({
+        cronJobId: "cron_2",
+        attempt: 4,
+        createdAt: new Date("2026-03-25T00:00:10.000Z"),
+      });
+
+      expect(created.executionSession).toMatchObject({
+        purpose: "task",
+        contextMode: "group",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        ownerAgentId: "agent_sub",
+      });
+      expect(created.taskRun).toMatchObject({
+        runType: "cron",
+        cronJobId: "cron_2",
+        attempt: 4,
+        inputJson: '{"job":"reconcile"}',
+        ownerAgentId: "agent_sub",
+      });
+    });
+  });
+
+  test("rejects cron task execution creation for unknown cron jobs", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      expect(() =>
+        manager.createCronTaskExecutionFromJob({
+          cronJobId: "missing_cron",
+        }),
+      ).toThrow("Cannot create task execution for unknown cron job missing_cron");
+    });
+  });
+
+  test("projects raw runtime events with live orchestration context", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id,
+          execution_session_id, status, started_at
+        ) VALUES (
+          'run_delegate', 'delegate', 'agent_sub', 'conv_sub', 'branch_sub',
+          'sess_sub', 'running', '2026-03-25T00:00:02.500Z'
+        );
+      `);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const envelope = manager.projectRuntimeEvent({
+        type: "turn_completed",
+        eventId: "evt_1",
+        createdAt: "2026-03-25T00:00:03.000Z",
+        sessionId: "sess_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        runId: "run_delegate",
+        turn: 1,
+        toolCallsRequested: 1,
+        toolExecutions: 1,
+      });
+
+      expect(envelope).toMatchObject({
+        target: { conversationId: "conv_sub", branchId: "branch_sub" },
+        session: { sessionId: "sess_sub", purpose: "task" },
+        agent: {
+          ownerAgentId: "agent_sub",
+          ownerRole: "subagent",
+          mainAgentId: "agent_main",
+        },
+        taskRun: {
+          taskRunId: "run_delegate",
+          runType: "delegate",
+        },
+        event: { type: "turn_completed" },
+      });
+    });
   });
 
   test("returns null for invalid delegated approval ids", async () => {

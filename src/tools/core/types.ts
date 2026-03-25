@@ -62,6 +62,23 @@ export interface ToolDefinition<TArgs = unknown, TDetails = unknown> {
   ): Promise<ToolResult<TDetails>> | ToolResult<TDetails>;
 }
 
+export class ToolArgumentValidationError extends Error {
+  constructor(
+    readonly toolName: string,
+    readonly validationMessage: string,
+  ) {
+    super(`${toolName} args are invalid: ${validationMessage}`);
+    this.name = "ToolArgumentValidationError";
+  }
+}
+
+export class ToolLookupError extends Error {
+  constructor(readonly toolName: string) {
+    super(`Tool not found: ${toolName}`);
+    this.name = "ToolLookupError";
+  }
+}
+
 export function defineTool<TInputSchema extends TSchema, TDetails = unknown>(input: {
   name: string;
   description: string;
@@ -83,7 +100,7 @@ export function parseToolArgs<TInputSchema extends TSchema>(
   if (!Check(schema, normalizedInput)) {
     const firstError = Errors(schema, normalizedInput).First();
     const message = firstError?.message ?? "Input does not match the declared schema";
-    throw new Error(`${toolName} args are invalid: ${message}`);
+    throw new ToolArgumentValidationError(toolName, message);
   }
 
   return normalizedInput as Static<TInputSchema>;

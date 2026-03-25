@@ -17,7 +17,6 @@ export const REVIEW_PERMISSION_REQUEST_TOOL_SCHEMA = Type.Object(
     }),
     reason: Type.String({
       minLength: 3,
-      maxLength: 200,
       description: "A short human-readable reason for the approval decision.",
     }),
   },

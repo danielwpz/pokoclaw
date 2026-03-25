@@ -80,6 +80,7 @@ export interface AgentModelTurnInput {
   sessionId: string;
   conversationId: string;
   scenario: ModelScenario;
+  sessionPurpose?: string;
   model: ResolvedModel;
   systemPrompt?: string;
   compactSummary: string | null;
@@ -518,6 +519,22 @@ export class AgentLoop {
           } catch (error) {
             throwIfAborted(handle.signal);
             const failure = normalizeToolFailure(error);
+            if (failure.kind === "internal_error") {
+              logger.warn("internal tool failure", {
+                sessionId: input.sessionId,
+                turn: turn + 1,
+                toolCallId: toolCall.id,
+                toolName: toolCall.name,
+                raw: failure.rawMessage ?? failure.message,
+                errorName: error instanceof Error ? error.name : typeof error,
+                errorMessage: error instanceof Error ? error.message : String(error),
+                stackTop:
+                  error instanceof Error && typeof error.stack === "string"
+                    ? truncateLogText(error.stack.split("\n").slice(0, 3).join(" | "), 220)
+                    : undefined,
+                runId,
+              });
+            }
             this.recordEvent(events, {
               type: "tool_call_failed",
               turn: turn + 1,

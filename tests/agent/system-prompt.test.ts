@@ -1,13 +1,16 @@
 import { describe, expect, test } from "vitest";
 import { AGENT_SYSTEM_PROMPT, buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
 import {
+  buildApprovalAgentIdentitySection,
+  buildApprovalAgentOperatingModelSection,
   buildApprovalReviewSection,
   buildBashFullAccessSection,
-  buildOperatingModelSection,
   buildPermissionsSection,
   buildProjectContextSection,
   buildSafetySection,
   buildSkillsSection,
+  buildTaskAgentIdentitySection,
+  buildTaskAgentOperatingModelSection,
   buildToolUsageSection,
   buildWorkspaceRuntimeSection,
 } from "@/src/agent/system-prompt-sections.js";
@@ -45,6 +48,23 @@ describe("agent system prompt", () => {
     expect(safetyIndex).toBeGreaterThan(bashIndex);
   });
 
+  test("builds a distinct approval-agent identity and operating model", () => {
+    const taskPrompt = buildAgentSystemPrompt();
+    const approvalPrompt = buildAgentSystemPrompt({ sessionPurpose: "approval" });
+
+    expect(taskPrompt).toContain("You are Pokeclaw, an agent that completes the user's request");
+    expect(approvalPrompt).toContain(
+      "You are Pokeclaw Approval Reviewer, a dedicated approval agent.",
+    );
+    expect(approvalPrompt).toContain(
+      "Your job is to review permission requests from other runs, not to continue those tasks.",
+    );
+    expect(taskPrompt).not.toContain("Pokeclaw Approval Reviewer");
+    expect(approvalPrompt).not.toContain(
+      "You are Pokeclaw, an agent that completes the user's request",
+    );
+  });
+
   test("includes the currently required permission and bash guidance", () => {
     const prompt = buildAgentSystemPrompt();
 
@@ -62,6 +82,7 @@ describe("agent system prompt", () => {
 
     expect(prompt).toContain("## Approval Review");
     expect(prompt).toContain("review_permission_request");
+    expect(prompt).toContain("You must finish by calling review_permission_request");
     expect(prompt).not.toContain("## Permissions");
     expect(prompt).not.toContain("## Bash Full Access");
     expect(prompt).not.toContain("call request_permissions");
@@ -75,7 +96,10 @@ describe("agent system prompt", () => {
   });
 
   test("current filled section builders remain non-empty", () => {
-    expect(buildOperatingModelSection()).not.toBe("");
+    expect(buildTaskAgentIdentitySection()).not.toBe("");
+    expect(buildApprovalAgentIdentitySection()).not.toBe("");
+    expect(buildTaskAgentOperatingModelSection()).not.toBe("");
+    expect(buildApprovalAgentOperatingModelSection()).not.toBe("");
     expect(buildToolUsageSection()).not.toBe("");
     expect(buildPermissionsSection()).not.toBe("");
     expect(buildApprovalReviewSection()).not.toBe("");
