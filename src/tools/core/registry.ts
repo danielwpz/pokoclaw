@@ -1,7 +1,10 @@
+import { normalizeToolFailure } from "@/src/tools/core/errors.js";
 import {
   parseToolArgs,
+  ToolArgumentValidationError,
   type ToolDefinition,
   type ToolExecutionContext,
+  ToolLookupError,
   type ToolResult,
 } from "@/src/tools/core/types.js";
 
@@ -37,7 +40,7 @@ export class ToolRegistry {
   getRequired(name: string): ToolDefinition {
     const tool = this.get(name);
     if (tool == null) {
-      throw new Error(`Tool not found: ${name}`);
+      throw new ToolLookupError(name);
     }
 
     return tool;
@@ -52,10 +55,18 @@ export class ToolRegistry {
     context: ToolExecutionContext,
     rawArgs: unknown,
   ): Promise<ToolResult> {
-    const tool = this.getRequired(name);
-    const args =
-      tool.inputSchema == null ? rawArgs : parseToolArgs(tool.name, tool.inputSchema, rawArgs);
+    try {
+      const tool = this.getRequired(name);
+      const args =
+        tool.inputSchema == null ? rawArgs : parseToolArgs(tool.name, tool.inputSchema, rawArgs);
 
-    return await tool.execute(context, args);
+      return await tool.execute(context, args);
+    } catch (error) {
+      if (error instanceof ToolLookupError || error instanceof ToolArgumentValidationError) {
+        throw normalizeToolFailure(error);
+      }
+
+      throw error;
+    }
   }
 }

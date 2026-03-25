@@ -1562,6 +1562,99 @@ describe("agent loop", () => {
     });
   });
 
+  test("returns invalid tool args to the model instead of failing the run", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"run read_file with a bad path first, then recover"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turn = 0;
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        turn += 1;
+        if (turn === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "read_file",
+                arguments: { path: 123 },
+              },
+            ],
+          });
+        }
+
+        const toolMessages = input.messages.filter((message) => message.role === "tool");
+        expect(toolMessages).toHaveLength(1);
+        expect(toolMessages[0]?.payloadJson ?? "").toContain("read_file args are invalid");
+
+        return makeAssistantResult({
+          stopReason: "stop",
+          content: [{ type: "text", text: "recovered" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "read_file",
+        description: "Reads a file",
+        inputSchema: Type.Object(
+          {
+            path: Type.String(),
+          },
+          { additionalProperties: false },
+        ),
+        execute() {
+          return textToolResult("ok");
+        },
+      }),
+    );
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(result.events.some((event) => event.type === "run_failed")).toBe(false);
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(4);
+    expect(rows[2]?.role).toBe("tool");
+    expect(rows[2]?.payloadJson ?? "").toContain("read_file args are invalid");
+    expect(rows[2]?.payloadJson ?? "").toContain('"isError":true');
+    expect(rows[3]?.role).toBe("assistant");
+    expect(rows[3]?.payloadJson ?? "").toContain("recovered");
+  });
+
   test("requests compaction when the session context crosses the threshold", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);

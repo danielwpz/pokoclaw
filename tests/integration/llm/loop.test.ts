@@ -79,7 +79,8 @@ describe("real llm loop integration", () => {
     const storedMessages = messagesRepo.listBySession("sess_1");
     expect(storedMessages).toHaveLength(2);
     expect(result.toolExecutions).toBe(0);
-    expect(result.events.some((event) => event.type === "assistant_message_delta")).toBe(true);
+    expect(result.events.some((event) => event.type === "assistant_message_started")).toBe(true);
+    expect(result.events.some((event) => event.type === "assistant_message_completed")).toBe(true);
     expect(result.events.at(-1)?.type).toBe("run_completed");
 
     const assistantPayload = JSON.parse(storedMessages[1]?.payloadJson ?? "{}");

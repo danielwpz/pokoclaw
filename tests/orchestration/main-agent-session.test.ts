@@ -86,4 +86,30 @@ describe("main agent session resolution", () => {
       expect(resolved).toBeNull();
     });
   });
+
+  test("resolves the latest main-agent chat session when the owner is already the main agent", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const sessionsRepo = new SessionsRepo(handle.storage.db);
+      sessionsRepo.create({
+        id: "sess_main_paused",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        ownerAgentId: "agent_main",
+        purpose: "chat",
+        status: "paused",
+        createdAt: new Date("2026-03-25T00:00:05.000Z"),
+        updatedAt: new Date("2026-03-25T00:00:06.000Z"),
+      });
+
+      const resolved = resolveMainAgentChatSessionForAgent({
+        db: handle.storage.db,
+        ownerAgentId: "agent_main",
+      });
+
+      expect(resolved).not.toBeNull();
+      expect(resolved?.mainAgentId).toBe("agent_main");
+      expect(resolved?.session.id).toBe("sess_main_paused");
+    });
+  });
 });

@@ -1,14 +1,16 @@
 import {
+  buildApprovalAgentIdentitySection,
+  buildApprovalAgentOperatingModelSection,
   buildApprovalReviewSection,
   buildBashFullAccessSection,
   buildFutureRuntimeSections,
-  buildIdentitySection,
   buildMemorySection,
-  buildOperatingModelSection,
   buildPermissionsSection,
   buildProjectContextSection,
   buildSafetySection,
   buildSkillsSection,
+  buildTaskAgentIdentitySection,
+  buildTaskAgentOperatingModelSection,
   buildToolUsageSection,
   buildWorkspaceRuntimeSection,
 } from "@/src/agent/system-prompt-sections.js";
@@ -21,27 +23,10 @@ interface BuildAgentSystemPromptInput {
   sessionPurpose?: string;
 }
 
-// Keep the prompt assembled from small section builders so we can expand it
-// incrementally without turning it back into one large opaque string blob.
-export function buildAgentSystemPrompt(input: BuildAgentSystemPromptInput = {}): string {
-  if (input.sessionPurpose === "approval") {
-    return joinSections([
-      buildIdentitySection(),
-      buildOperatingModelSection(),
-      buildToolUsageSection(),
-      buildApprovalReviewSection(),
-      buildSafetySection(),
-      buildWorkspaceRuntimeSection(),
-      buildProjectContextSection(),
-      buildMemorySection(),
-      buildSkillsSection(),
-      buildFutureRuntimeSections(),
-    ]);
-  }
-
+function buildTaskAgentSystemPrompt(): string {
   return joinSections([
-    buildIdentitySection(),
-    buildOperatingModelSection(),
+    buildTaskAgentIdentitySection(),
+    buildTaskAgentOperatingModelSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
     buildBashFullAccessSection(),
@@ -52,6 +37,30 @@ export function buildAgentSystemPrompt(input: BuildAgentSystemPromptInput = {}):
     buildSkillsSection(),
     buildFutureRuntimeSections(),
   ]);
+}
+
+function buildApprovalAgentSystemPrompt(): string {
+  return joinSections([
+    buildApprovalAgentIdentitySection(),
+    buildApprovalAgentOperatingModelSection(),
+    buildToolUsageSection(),
+    buildApprovalReviewSection(),
+    buildSafetySection(),
+    buildWorkspaceRuntimeSection(),
+    buildProjectContextSection(),
+    buildMemorySection(),
+    buildSkillsSection(),
+    buildFutureRuntimeSections(),
+  ]);
+}
+
+// Keep the prompt assembled from purpose-specific builders so each runtime role
+// can evolve into a distinct agent setup instead of accumulating branchy patch
+// logic inside one shared prompt body.
+export function buildAgentSystemPrompt(input: BuildAgentSystemPromptInput = {}): string {
+  return input.sessionPurpose === "approval"
+    ? buildApprovalAgentSystemPrompt()
+    : buildTaskAgentSystemPrompt();
 }
 
 export const AGENT_SYSTEM_PROMPT = buildAgentSystemPrompt();

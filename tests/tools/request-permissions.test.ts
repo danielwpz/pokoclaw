@@ -248,4 +248,47 @@ describe("request_permissions tool", () => {
       },
     } satisfies Partial<ToolApprovalRequired>);
   });
+
+  test("accepts a long justification without an arbitrary max length cap", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+
+    const registry = new ToolRegistry([createRequestPermissionsTool()]);
+    const longJustification =
+      "Need temporary read access to this exact file because the current task is blocked on checking the data shape, " +
+      "and the approval record should preserve enough context for later audit, review, and debugging if the user asks " +
+      "why the delegated agent requested this scope in the first place.";
+
+    await expect(
+      registry.execute(
+        "request_permissions",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          entries: [
+            {
+              resource: "filesystem",
+              path: "/tmp/requested.txt",
+              scope: "exact",
+              access: "read",
+            },
+          ],
+          justification: longJustification,
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      reasonText: longJustification,
+      request: {
+        scopes: [{ kind: "fs.read", path: "/tmp/requested.txt" }],
+      },
+    } satisfies Partial<ToolApprovalRequired>);
+  });
 });

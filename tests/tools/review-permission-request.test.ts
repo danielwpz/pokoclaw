@@ -107,6 +107,49 @@ describe("review_permission_request tool", () => {
     ]);
   });
 
+  test("accepts a long audit reason without an arbitrary max length cap", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture();
+    const registry = new ToolRegistry([createReviewPermissionRequestTool()]);
+    const submitApprovalDecision = vi.fn().mockReturnValue(true);
+    const longReason =
+      "This delegated request is denied because the requested path is unrelated to the active homepage i18n task, " +
+      "targets a wallet/private-key location, and does not fit the task scope. The approval agent should record " +
+      "that mismatch clearly so future audit and review can understand why this access was rejected.";
+
+    const result = await registry.execute(
+      "review_permission_request",
+      {
+        sessionId: "sess_approval",
+        conversationId: "conv_main",
+        ownerAgentId: "agent_main",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        runtimeControl: { submitApprovalDecision },
+      },
+      {
+        approvalId: 1,
+        decision: "deny",
+        reason: longReason,
+      },
+    );
+
+    expect(submitApprovalDecision).toHaveBeenCalledTimes(1);
+    expect(submitApprovalDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: 1,
+        decision: "deny",
+        reasonText: longReason,
+      }),
+    );
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `Recorded deny for approval 1. Reason: ${longReason}`,
+      },
+    ]);
+  });
+
   test("rejects approvals that do not belong to the current approval session source run", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture();

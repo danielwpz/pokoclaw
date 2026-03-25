@@ -20,6 +20,7 @@ import type {
   AgentModelTurnInput,
   AgentModelTurnResult,
 } from "@/src/agent/loop.js";
+import { getAllowedToolsForSessionPurpose } from "@/src/agent/session-policy.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
@@ -60,7 +61,9 @@ export class PiBridge {
     // into pi input, forwards the streaming events we care about, and returns a
     // normalized assistant result that the rest of the app can persist directly.
     const model = toPiModel(input.model);
-    const tools = input.model.supportsTools ? buildPiTools(input.tools) : null;
+    const tools = input.model.supportsTools
+      ? buildPiTools(input.tools, input.sessionPurpose)
+      : null;
     const context = {
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
       messages: buildPiContextMessages(input.compactSummary, input.messages),
@@ -113,7 +116,9 @@ export class PiBridge {
     input: Omit<PiBridgeRunTurnInput, "onTextDelta">,
   ): Promise<PiBridgeRunTurnResult> {
     const model = toPiModel(input.model);
-    const tools = input.model.supportsTools ? buildPiTools(input.tools) : null;
+    const tools = input.model.supportsTools
+      ? buildPiTools(input.tools, input.sessionPurpose)
+      : null;
     const context = {
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
       messages: buildPiContextMessages(input.compactSummary, input.messages),
@@ -214,6 +219,7 @@ export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunn
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
       compactSummary: input.compactSummary,
       messages: input.messages,
+      ...(input.sessionPurpose == null ? {} : { sessionPurpose: input.sessionPurpose }),
       tools: this.tools,
       signal: input.signal,
       ...(input.onTextDelta ? { onTextDelta: input.onTextDelta } : {}),
@@ -244,10 +250,16 @@ function buildPiContextMessages(compactSummary: string | null, messages: Message
   ];
 }
 
-function buildPiTools(registry: ToolRegistry): Tool[] {
+function buildPiTools(registry: ToolRegistry, sessionPurpose?: string): Tool[] {
   // We expose the tool schema to pi for tool selection, but actual execution
   // still happens in our loop after pi emits toolCall blocks.
-  return registry.list().map((tool) => ({
+  const allowedTools = getAllowedToolsForSessionPurpose(sessionPurpose ?? "");
+  const visibleTools =
+    allowedTools == null
+      ? registry.list()
+      : registry.list().filter((tool) => allowedTools.includes(tool.name));
+
+  return visibleTools.map((tool) => ({
     name: tool.name,
     description: tool.description,
     parameters: isObject(tool.inputSchema)

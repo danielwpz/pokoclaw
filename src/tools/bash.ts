@@ -44,7 +44,6 @@ export const BASH_TOOL_SCHEMA = Type.Object(
     justification: Type.Optional(
       Type.String({
         minLength: 1,
-        maxLength: 200,
         description:
           "Required when requesting full_access. Keep it short and explain why full access is necessary for the current user request.",
       }),

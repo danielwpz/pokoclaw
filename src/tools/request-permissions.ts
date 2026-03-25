@@ -48,7 +48,6 @@ export const REQUEST_PERMISSIONS_TOOL_SCHEMA = Type.Object(
     }),
     justification: Type.String({
       minLength: 8,
-      maxLength: 200,
       description:
         "A short human-readable reason for why this permission is necessary for the current user request.",
     }),

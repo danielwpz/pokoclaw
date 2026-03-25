@@ -1,5 +1,10 @@
 import type { PermissionRequest } from "@/src/security/scope.js";
-import type { ToolContentBlock, ToolExecutionApprovalState } from "@/src/tools/core/types.js";
+import {
+  ToolArgumentValidationError,
+  type ToolContentBlock,
+  type ToolExecutionApprovalState,
+  ToolLookupError,
+} from "@/src/tools/core/types.js";
 import {
   isPermissionDeniedDetails,
   renderPermissionBlock,
@@ -110,6 +115,21 @@ export function toolInternalError(message: string, details?: unknown): ToolFailu
 export function normalizeToolFailure(error: unknown): ToolFailure {
   if (error instanceof ToolFailure) {
     return error;
+  }
+
+  if (error instanceof ToolArgumentValidationError) {
+    return toolRecoverableError(error.message, {
+      code: "invalid_tool_args",
+      toolName: error.toolName,
+      validationMessage: error.validationMessage,
+    });
+  }
+
+  if (error instanceof ToolLookupError) {
+    return toolRecoverableError(error.message, {
+      code: "tool_not_found",
+      toolName: error.toolName,
+    });
   }
 
   const rawMessage = getErrorMessage(error);

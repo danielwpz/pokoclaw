@@ -5,6 +5,7 @@ import {
   renderDelegatedApprovalMessage,
 } from "@/src/orchestration/delegated-approval.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
+import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import {
   createTestDatabase,
@@ -36,15 +37,31 @@ function seedFixture(handle: TestDatabaseHandle): void {
       ('branch_main', 'conv_main', 'dm_main', 'main', '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'),
       ('branch_sub', 'conv_sub', 'group_main', 'main', '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z');
 
-    INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+    INSERT INTO agents (id, conversation_id, main_agent_id, kind, description, created_at)
     VALUES
-      ('agent_main', 'conv_main', NULL, 'main', '2026-03-25T00:00:00.000Z'),
-      ('agent_sub', 'conv_sub', 'agent_main', 'sub', '2026-03-25T00:00:00.000Z');
+      ('agent_main', 'conv_main', NULL, 'main', 'Primary DM assistant.', '2026-03-25T00:00:00.000Z'),
+      ('agent_sub', 'conv_sub', 'agent_main', 'sub', 'Handles delegated file update tasks.', '2026-03-25T00:00:00.000Z');
 
     INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, context_mode, status, compact_cursor, created_at, updated_at)
     VALUES
       ('sess_main', 'conv_main', 'branch_main', 'agent_main', 'chat', 'isolated', 'active', 0, '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:01.000Z'),
       ('sess_task', 'conv_sub', 'branch_sub', 'agent_sub', 'task', 'isolated', 'active', 0, '2026-03-25T00:00:01.000Z', '2026-03-25T00:00:02.000Z');
+
+    INSERT INTO task_runs (
+      id, run_type, owner_agent_id, conversation_id, branch_id, execution_session_id,
+      status, description, input_json, started_at
+    ) VALUES (
+      'run_1', 'delegate', 'agent_sub', 'conv_sub', 'branch_sub', 'sess_task',
+      'running', 'Update the task output file requested by the user.',
+      '{"goal":"update demo output","targetPath":"/tmp/demo.txt"}',
+      '2026-03-25T00:00:01.000Z'
+    );
+
+    INSERT INTO messages (id, session_id, seq, role, payload_json, created_at)
+    VALUES
+      ('msg_task_user', 'sess_task', 1, 'user', '{"content":"Update /tmp/demo.txt for the delegated task."}', '2026-03-25T00:00:01.100Z'),
+      ('msg_task_assistant', 'sess_task', 2, 'assistant', '{"content":[{"type":"toolCall","id":"tool_1","name":"write","arguments":{"path":"/tmp/demo.txt"}}]}', '2026-03-25T00:00:01.200Z'),
+      ('msg_task_tool', 'sess_task', 3, 'tool', '{"toolCallId":"tool_1","toolName":"write","content":[{"type":"text","text":"Write access is missing for /tmp/demo.txt"}],"isError":true,"details":{"code":"permission_denied","summary":"Write access is missing for /tmp/demo.txt"}}', '2026-03-25T00:00:01.300Z');
 
     INSERT INTO approval_ledger (
       owner_agent_id, requested_by_session_id, requested_scope_json, approval_target, status,
@@ -68,12 +85,34 @@ describe("delegated approval orchestration", () => {
       ownerAgentId: "agent_sub",
       reasonText: "Need to update the requested task output.",
       requestedScopeJson: '{"scopes":[{"kind":"fs.write","path":"/tmp/demo.txt"}]}',
+      context: {
+        sessionPurpose: "task",
+        agentKind: "sub",
+        agentDescription: "Handles delegated file update tasks.",
+        taskRunId: "run_1",
+        runType: "delegate",
+        taskDescription: "Update the task output file requested by the user.",
+        taskInputSummary: '{"goal":"update demo output"}',
+        recentTranscript: [
+          { seq: 1, role: "user", summary: "Update /tmp/demo.txt for the delegated task." },
+          {
+            seq: 2,
+            role: "tool",
+            summary: "blocked by permissions: Write access is missing for /tmp/demo.txt",
+          },
+        ],
+      },
     });
 
     expect(text).toContain("<delegated_approval_request>");
     expect(text).toContain("<approval_id>12</approval_id>");
     expect(text).toContain("Need to update the requested task output.");
     expect(text).toContain("Write /tmp/demo.txt");
+    expect(text).toContain("<task_context>");
+    expect(text).toContain("Handles delegated file update tasks.");
+    expect(text).toContain("Update the task output file requested by the user.");
+    expect(text).toContain("<recent_task_transcript>");
+    expect(text).toContain("blocked by permissions: Write access is missing for /tmp/demo.txt");
   });
 
   test("delivers a main-agent-targeted approval request into a dedicated approval session", async () => {
@@ -81,10 +120,20 @@ describe("delegated approval orchestration", () => {
       seedFixture(handle);
 
       const submitted: SubmitMessageInput[] = [];
+      const approvalsRepo = new ApprovalsRepo(handle.storage.db);
       const ingress = {
         async submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
           submitted.push(input);
+          approvalsRepo.resolve({
+            id: 1,
+            status: "approved",
+            reasonText: "Approved during test delivery.",
+            decidedAt: new Date("2026-03-25T00:00:02.500Z"),
+          });
           return { status: "steered" };
+        },
+        submitApprovalDecision() {
+          return true;
         },
       } as const;
 
@@ -113,6 +162,13 @@ describe("delegated approval orchestration", () => {
         visibility: "hidden_system",
       });
       expect(submitted[0]?.content).toContain("<delegated_approval_request>");
+      expect(submitted[0]?.content).toContain("<task_context>");
+      expect(submitted[0]?.content).toContain("Handles delegated file update tasks.");
+      expect(submitted[0]?.content).toContain("Update the task output file requested by the user.");
+      expect(submitted[0]?.content).toContain("<recent_task_transcript>");
+      expect(submitted[0]?.content).toContain(
+        "blocked by permissions: Write access is missing for /tmp/demo.txt",
+      );
 
       const sessionsRepo = new SessionsRepo(handle.storage.db);
       const approvalSession = sessionsRepo.getById(
@@ -146,10 +202,25 @@ describe("delegated approval orchestration", () => {
       `);
 
       const submitted: SubmitMessageInput[] = [];
+      const approvalsRepo = new ApprovalsRepo(handle.storage.db);
       const ingress = {
         async submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
           submitted.push(input);
+          const approvalIdMatch = input.content.match(/<approval_id>(\d+)<\/approval_id>/u);
+          const approvalId =
+            approvalIdMatch?.[1] == null ? null : Number.parseInt(approvalIdMatch[1], 10);
+          if (approvalId != null && Number.isFinite(approvalId)) {
+            approvalsRepo.resolve({
+              id: approvalId,
+              status: "approved",
+              reasonText: "Approved during test delivery.",
+              decidedAt: new Date("2026-03-25T00:00:03.500Z"),
+            });
+          }
           return { status: "steered" };
+        },
+        submitApprovalDecision() {
+          return true;
         },
       } as const;
 
@@ -204,10 +275,20 @@ describe("delegated approval orchestration", () => {
       `);
 
       const submitted: SubmitMessageInput[] = [];
+      const approvalsRepo = new ApprovalsRepo(handle.storage.db);
       const ingress = {
         async submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
           submitted.push(input);
+          approvalsRepo.resolve({
+            id: 1,
+            status: "approved",
+            reasonText: "Approved during test delivery.",
+            decidedAt: new Date("2026-03-25T00:00:02.500Z"),
+          });
           return { status: "steered" };
+        },
+        submitApprovalDecision() {
+          return true;
         },
       } as const;
 
@@ -223,6 +304,60 @@ describe("delegated approval orchestration", () => {
         "Approved because the file is part of the daily finance task.",
       );
       expect(submitted[0]?.content).toContain("Read /tmp/archive.csv");
+    });
+  });
+
+  test("auto-denies when the approval session finishes without an explicit decision", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+
+      const submitted: SubmitMessageInput[] = [];
+      const decisions: Array<{ approvalId: number; decision: string; reasonText: string | null }> =
+        [];
+      const approvalsRepo = new ApprovalsRepo(handle.storage.db);
+
+      const ingress = {
+        async submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
+          submitted.push(input);
+          return { status: "steered" };
+        },
+        submitApprovalDecision(input: {
+          approvalId: number;
+          decision: "approve" | "deny";
+          reasonText?: string | null;
+        }) {
+          decisions.push({
+            approvalId: input.approvalId,
+            decision: input.decision,
+            reasonText: input.reasonText ?? null,
+          });
+          approvalsRepo.resolve({
+            id: input.approvalId,
+            status: "denied",
+            reasonText: input.reasonText ?? null,
+            decidedAt: new Date("2026-03-25T00:00:02.800Z"),
+          });
+          return true;
+        },
+      } as const;
+
+      await deliverDelegatedApprovalRequest({
+        db: handle.storage.db,
+        ingress,
+        approvalId: 1,
+      });
+
+      expect(submitted).toHaveLength(2);
+      expect(submitted[0]?.messageType).toBe("approval_request");
+      expect(submitted[1]?.messageType).toBe("approval_followup");
+      expect(submitted[1]?.content).toContain("<approval_decision_required>");
+      expect(decisions).toEqual([
+        {
+          approvalId: 1,
+          decision: "deny",
+          reasonText: "Approval review session ended without an explicit decision.",
+        },
+      ]);
     });
   });
 });
