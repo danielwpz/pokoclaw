@@ -59,6 +59,29 @@
 
 ## 2. Agent核心：框架与LLM `DONE`
 
+### 2.0 进程入口与启动装配 `DONE`
+
+- [x] `main.ts` 只承担进程级职责
+  - 加载配置
+  - 初始化 storage
+  - 启动 runtime bootstrap
+  - 监听 `SIGINT` / `SIGTERM`
+  - 触发 graceful shutdown
+- [x] 真实 runtime 对象装配收敛在 `src/runtime/bootstrap.ts`
+  - 组装 `AgentLoop`
+  - 组装 builtin tools / `PiAgentModelRunner`
+  - 组装 `SessionRuntimeIngress`
+  - 组装 `AgentManager`
+  - 组装 `CronService`
+- [x] `main.ts` 不承载业务逻辑
+  - 不做 task/cron/orchestration 规则判断
+  - 不直接实现调度、状态机或 channel 语义
+  - 只负责“把系统启动起来并在退出时收干净”
+- [x] graceful shutdown 当前口径
+  - 收到 `SIGINT` / `SIGTERM` 后停止 `CronService` 新扫描
+  - 等待 in-flight cron run 落账完成后再退出进程
+  - storage 在 runtime 停稳后关闭
+
 ### 2.1 框架与工具集
 
 - [x] Agent框架：**pi-mono**（与openclaw相同）
