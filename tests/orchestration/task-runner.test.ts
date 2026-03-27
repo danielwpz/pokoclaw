@@ -242,6 +242,100 @@ describe("TaskExecutionRunner", () => {
     });
   });
 
+  test("includes recent cron run summaries in cron kickoff messages", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    const db = requireHandle(handle).storage.db;
+
+    const created = createTaskExecution({
+      db,
+      params: {
+        runType: "cron",
+        ownerAgentId: "agent_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        cronJobId: "cron_1",
+        inputJson: JSON.stringify({
+          taskDefinition:
+            "看到这条消息意味着现在要执行日报任务。请汇总昨天完成的事项并生成一条可直接发送给用户的日报。",
+          recentRuns: {
+            lastRun: {
+              startedAt: "2026-03-27T08:00:00.000Z",
+              status: "failed",
+              error: "Slack API timeout",
+            },
+            lastSuccessfulRun: {
+              startedAt: "2026-03-26T08:00:00.000Z",
+              status: "completed",
+              summary: "Posted the daily report with 5 items.",
+            },
+          },
+        }),
+      },
+    });
+
+    const runner = new TaskExecutionRunner({
+      ingress: {
+        submitMessage: vi.fn(async (input) => {
+          expect(input).toMatchObject({
+            sessionId: created.executionSession.id,
+            scenario: "cron",
+            messageType: "cron_kickoff",
+            visibility: "hidden_system",
+          });
+          expect(input.content).toContain("<task_definition>");
+          expect(input.content).toContain("看到这条消息意味着现在要执行日报任务");
+          expect(input.content).toContain("<recent_runs>");
+          expect(input.content).toContain("<last_run>");
+          expect(input.content).toContain("Slack API timeout");
+          expect(input.content).toContain("<last_successful_run>");
+          expect(input.content).toContain("Posted the daily report with 5 items.");
+          expect(input.content).toContain("You are running in background mode");
+          expect(input.content).toContain("The final response is the primary user-facing output");
+          return {
+            status: "started" as const,
+            messageId: "msg_1",
+            run: {
+              runId: "run_loop_1",
+              sessionId: created.executionSession.id,
+              scenario: "cron" as const,
+              modelId: "test-model",
+              appendedMessageIds: [],
+              toolExecutions: 0,
+              compaction: {
+                shouldCompact: false,
+                reason: null,
+                thresholdTokens: 1000,
+                effectiveWindow: 2000,
+              },
+              events: [],
+            },
+          };
+        }),
+      },
+      lifecycle: {
+        completeTaskExecution: (input) =>
+          completeTaskExecution({
+            db,
+            ...input,
+          }),
+        failTaskExecution: (input) =>
+          failTaskExecution({
+            db,
+            ...input,
+          }),
+        cancelTaskExecution: (input) =>
+          cancelTaskExecution({
+            db,
+            ...input,
+          }),
+      },
+    });
+
+    const result = await runner.runCreatedTaskExecution({ created });
+    expect(result.status).toBe("completed");
+  });
+
   test("fails the task execution when its execution session is unexpectedly already active", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);

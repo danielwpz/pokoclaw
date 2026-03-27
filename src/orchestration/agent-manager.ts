@@ -1,4 +1,5 @@
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
+import { extractCronTaskDefinition } from "@/src/cron/payload.js";
 import { CronService } from "@/src/cron/service.js";
 import {
   type DelegatedApprovalDeliveryResult,
@@ -40,6 +41,7 @@ import {
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import { TaskExecutionRunner, type TaskExecutionRunResult } from "@/src/tasks/runner.js";
 
 const logger = createSubsystemLogger("orchestration/agent-manager");
@@ -161,10 +163,29 @@ export class AgentManager {
     attempt?: number;
   }): CreatedTaskExecution {
     const cronJobsRepo = new CronJobsRepo(this.deps.storage);
+    const taskRunsRepo = new TaskRunsRepo(this.deps.storage);
     const cronJob = cronJobsRepo.getById(input.cronJobId);
     if (cronJob == null) {
       throw new Error(`Cannot create task execution for unknown cron job ${input.cronJobId}`);
     }
+
+    const recentRuns = taskRunsRepo.listByCronJobId(cronJob.id, 8);
+    const lastSettledRun = recentRuns.find((run) => run.status !== "running") ?? null;
+    const lastSuccessfulRun =
+      recentRuns.find((run) => run.status === "completed" && run.id !== lastSettledRun?.id) ??
+      (lastSettledRun?.status === "completed" ? lastSettledRun : null);
+
+    const cronInput = {
+      taskDefinition: extractCronTaskDefinition(cronJob.payloadJson),
+    };
+    const inputJson = JSON.stringify({
+      ...cronInput,
+      recentRuns: {
+        lastRun: lastSettledRun == null ? null : summarizeCronTaskRunForKickoff(lastSettledRun),
+        lastSuccessfulRun:
+          lastSuccessfulRun == null ? null : summarizeCronTaskRunForKickoff(lastSuccessfulRun),
+      },
+    });
 
     const created = this.createTaskExecution({
       runType: "cron",
@@ -173,7 +194,7 @@ export class AgentManager {
       branchId: cronJob.targetBranchId,
       cronJobId: cronJob.id,
       contextMode: cronJob.contextMode,
-      inputJson: cronJob.payloadJson,
+      inputJson,
       ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
       ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
     });
@@ -348,4 +369,18 @@ function logSettledTaskExecution(
     ownerAgentId: settled.taskRun.ownerAgentId,
     durationMs: settled.taskRun.durationMs,
   });
+}
+
+function summarizeCronTaskRunForKickoff(run: {
+  startedAt: string;
+  status: string;
+  resultSummary: string | null;
+  errorText: string | null;
+}) {
+  return {
+    startedAt: run.startedAt,
+    status: run.status,
+    summary: run.resultSummary,
+    error: run.errorText,
+  };
 }

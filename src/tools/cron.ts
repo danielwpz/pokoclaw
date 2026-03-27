@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type Static, Type } from "@sinclair/typebox";
 
+import { extractCronTaskDefinition, serializeCronTaskDefinition } from "@/src/cron/payload.js";
 import { resolveInitialNextRunAt } from "@/src/cron/schedule.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -36,7 +37,13 @@ export const CRON_TOOL_SCHEMA = Type.Object(
     scheduleKind: Type.Optional(CRON_SCHEDULE_KIND_SCHEMA),
     scheduleValue: Type.Optional(Type.String({ minLength: 1 })),
     timezone: Type.Optional(Type.String({ minLength: 1 })),
-    prompt: Type.Optional(Type.String({ minLength: 1 })),
+    prompt: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Free-form task definition for the future cron run. Write it so that when this exact message is seen again later, the agent can independently understand why it was triggered, what it should do now, and how to complete it without ambiguity. Prefer clear background, goal, completion standard, important constraints, and any useful reference steps, but do not force a rigid format.",
+      }),
+    ),
     enabled: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
@@ -48,7 +55,7 @@ export function createCronTool() {
   return defineTool({
     name: "cron",
     description:
-      "Create, inspect, update, pause, resume, remove, and manually run scheduled cron jobs that belong to the current agent context.",
+      "Create, inspect, update, pause, resume, remove, and manually run scheduled cron jobs that belong to the current agent context. When creating or updating a cron job, write the task definition as a future-facing instruction for yourself: when this text is seen again at runtime, it should clearly explain the background, what should be done now, what good completion looks like, and any important constraints or reference steps.",
     inputSchema: CRON_TOOL_SCHEMA,
     async execute(context, args) {
       const resolved = resolveCronCaller(context);
@@ -91,7 +98,7 @@ export function createCronTool() {
             timezone: args.timezone ?? null,
             enabled: args.enabled ?? true,
             contextMode: resolved.callerAgent.kind === "sub" ? "group" : "isolated",
-            payloadJson: JSON.stringify({ prompt }),
+            payloadJson: serializeCronTaskDefinition(prompt),
             nextRunAt: (args.enabled ?? true) ? nextRunAt : null,
             createdAt: now,
             updatedAt: now,
@@ -327,7 +334,7 @@ function buildUpdatePatch(job: CronJob, args: CronToolArgs) {
     patch.timezone = args.timezone.trim();
   }
   if (args.prompt !== undefined) {
-    patch.payloadJson = JSON.stringify({ prompt: args.prompt.trim() });
+    patch.payloadJson = serializeCronTaskDefinition(args.prompt);
   }
 
   if (hasScheduleFields) {
@@ -387,10 +394,6 @@ function formatCronJobForOutput(job: CronJob) {
 }
 
 function extractPrompt(payloadJson: string): string | null {
-  try {
-    const parsed = JSON.parse(payloadJson) as { prompt?: unknown };
-    return typeof parsed.prompt === "string" ? parsed.prompt : null;
-  } catch {
-    return null;
-  }
+  const taskDefinition = extractCronTaskDefinition(payloadJson);
+  return taskDefinition.length > 0 ? taskDefinition : null;
 }
