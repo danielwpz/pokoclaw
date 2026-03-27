@@ -16,6 +16,7 @@ describe("builtin tools", () => {
     expect(registry.has("request_permissions")).toBe(true);
     expect(registry.has("review_permission_request")).toBe(true);
     expect(registry.has("create_subagent")).toBe(true);
+    expect(registry.has("cron")).toBe(true);
     expect(registry.list().map((tool) => tool.name)).toEqual([
       "bash",
       "read",
@@ -27,6 +28,7 @@ describe("builtin tools", () => {
       "request_permissions",
       "review_permission_request",
       "create_subagent",
+      "cron",
     ]);
   });
 });

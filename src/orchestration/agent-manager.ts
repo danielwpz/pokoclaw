@@ -1,4 +1,5 @@
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
+import { CronService } from "@/src/cron/service.js";
 import {
   type DelegatedApprovalDeliveryResult,
   deliverDelegatedApprovalRequest,
@@ -39,6 +40,7 @@ import {
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
+import { TaskExecutionRunner, type TaskExecutionRunResult } from "@/src/tasks/runner.js";
 
 const logger = createSubsystemLogger("orchestration/agent-manager");
 
@@ -188,6 +190,40 @@ export class AgentManager {
     return created;
   }
 
+  runCreatedTaskExecution(input: {
+    created: CreatedTaskExecution;
+    createdAt?: Date;
+  }): Promise<TaskExecutionRunResult> {
+    return this.createTaskExecutionRunner().runCreatedTaskExecution(input);
+  }
+
+  runTaskExecution(params: CreateTaskExecutionInput): Promise<TaskExecutionRunResult> {
+    const created = this.createTaskExecution(params);
+    return this.runCreatedTaskExecution({
+      created,
+      ...(params.createdAt === undefined ? {} : { createdAt: params.createdAt }),
+    });
+  }
+
+  runCronTaskExecutionFromJob(input: {
+    cronJobId: string;
+    createdAt?: Date;
+    attempt?: number;
+  }): Promise<TaskExecutionRunResult> {
+    const created = this.createCronTaskExecutionFromJob(input);
+    return this.runCreatedTaskExecution({
+      created,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    });
+  }
+
+  runCronJobNow(input: { jobId: string }) {
+    return new CronService({
+      storage: this.deps.storage,
+      agentManager: this,
+    }).runJobNow(input.jobId);
+  }
+
   completeTaskExecution(input: {
     taskRunId: string;
     resultSummary?: string | null;
@@ -287,6 +323,17 @@ export class AgentManager {
     });
 
     return result;
+  }
+
+  private createTaskExecutionRunner(): TaskExecutionRunner {
+    return new TaskExecutionRunner({
+      ingress: this.deps.ingress,
+      lifecycle: {
+        completeTaskExecution: (input) => this.completeTaskExecution(input),
+        failTaskExecution: (input) => this.failTaskExecution(input),
+        cancelTaskExecution: (input) => this.cancelTaskExecution(input),
+      },
+    });
   }
 }
 

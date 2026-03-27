@@ -18,6 +18,11 @@ async function withHandle(fn: (handle: TestDatabaseHandle) => Promise<void>): Pr
   }
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 function seedFixture(handle: TestDatabaseHandle): void {
   handle.storage.sqlite.exec(`
     INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
@@ -304,6 +309,71 @@ describe("AgentManager", () => {
     });
   });
 
+  test("runs delegated task executions through the orchestration entrypoint", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+
+      const submitMessage = vi.fn(
+        async (input: SubmitMessageInput): Promise<SubmitMessageResult> => {
+          expect(input).toMatchObject({
+            scenario: "subagent",
+            messageType: "task_kickoff",
+            visibility: "hidden_system",
+          });
+          expect(input.content).toContain("<task_execution>");
+
+          return {
+            status: "started",
+            messageId: "msg_task_1",
+            run: {
+              runId: "run_loop_1",
+              sessionId: input.sessionId,
+              scenario: "subagent",
+              modelId: "test-model",
+              appendedMessageIds: [],
+              toolExecutions: 0,
+              compaction: {
+                shouldCompact: false,
+                reason: null,
+                thresholdTokens: 1000,
+                effectiveWindow: 2000,
+              },
+              events: [],
+            },
+          };
+        },
+      );
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const result = await manager.runTaskExecution({
+        runType: "delegate",
+        ownerAgentId: "agent_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        description: "Review the incoming repository changes.",
+        createdAt: new Date("2026-03-25T00:00:05.000Z"),
+      });
+
+      expect(result.status).toBe("completed");
+      expect(submitMessage).toHaveBeenCalledOnce();
+      expect(result.settled.taskRun).toMatchObject({
+        runType: "delegate",
+        status: "completed",
+      });
+      expect(result.settled.executionSession).toMatchObject({
+        purpose: "task",
+        status: "completed",
+      });
+    });
+  });
+
   test("rejects task execution creation for unknown agents", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
@@ -412,6 +482,81 @@ describe("AgentManager", () => {
     });
   });
 
+  test("runs cron task executions from cron job definitions", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id,
+          schedule_kind, schedule_value, context_mode, payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_2', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron', '*/5 * * * *', 'group', '{"job":"reconcile"}',
+          '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
+        );
+      `);
+
+      const submitMessage = vi.fn(
+        async (input: SubmitMessageInput): Promise<SubmitMessageResult> => {
+          expect(input).toMatchObject({
+            scenario: "cron",
+            messageType: "cron_kickoff",
+            visibility: "hidden_system",
+          });
+          expect(input.content).toContain("<run_type>cron</run_type>");
+
+          return {
+            status: "started",
+            messageId: "msg_cron_1",
+            run: {
+              runId: "run_loop_cron_1",
+              sessionId: input.sessionId,
+              scenario: "cron",
+              modelId: "test-model",
+              appendedMessageIds: [],
+              toolExecutions: 0,
+              compaction: {
+                shouldCompact: false,
+                reason: null,
+                thresholdTokens: 1000,
+                effectiveWindow: 2000,
+              },
+              events: [],
+            },
+          };
+        },
+      );
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const result = await manager.runCronTaskExecutionFromJob({
+        cronJobId: "cron_2",
+        attempt: 2,
+        createdAt: new Date("2026-03-25T00:00:10.000Z"),
+      });
+
+      expect(result.status).toBe("completed");
+      expect(submitMessage).toHaveBeenCalledOnce();
+      expect(result.settled.taskRun).toMatchObject({
+        runType: "cron",
+        cronJobId: "cron_2",
+        status: "completed",
+        attempt: 2,
+      });
+      expect(result.settled.executionSession).toMatchObject({
+        purpose: "task",
+        contextMode: "group",
+        status: "completed",
+      });
+    });
+  });
+
   test("rejects cron task execution creation for unknown cron jobs", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
@@ -429,6 +574,71 @@ describe("AgentManager", () => {
           cronJobId: "missing_cron",
         }),
       ).toThrow("Cannot create task execution for unknown cron job missing_cron");
+    });
+  });
+
+  test("manually runs cron jobs through CronService semantics", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id,
+          schedule_kind, schedule_value, context_mode, payload_json, next_run_at, created_at, updated_at
+        ) VALUES (
+          'cron_2', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron', '*/5 * * * *', 'group', '{"prompt":"reconcile"}',
+          '2026-03-25T00:05:00.000Z', '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
+        );
+      `);
+
+      const submitMessage = vi.fn(
+        async (input: SubmitMessageInput): Promise<SubmitMessageResult> => ({
+          status: "started",
+          messageId: "msg_cron_1",
+          run: {
+            runId: "run_loop_cron_1",
+            sessionId: input.sessionId,
+            scenario: "cron",
+            modelId: "test-model",
+            appendedMessageIds: [],
+            toolExecutions: 0,
+            compaction: {
+              shouldCompact: false,
+              reason: null,
+              thresholdTokens: 1000,
+              effectiveWindow: 2000,
+            },
+            events: [],
+          },
+        }),
+      );
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const result = await manager.runCronJobNow({
+        jobId: "cron_2",
+      });
+
+      expect(result).toEqual({
+        accepted: true,
+        cronJobId: "cron_2",
+      });
+      expect(submitMessage).toHaveBeenCalledOnce();
+      await flushMicrotasks();
+
+      const row = handle.storage.sqlite
+        .prepare("SELECT running_at, last_status FROM cron_jobs WHERE id = ?")
+        .get("cron_2") as { running_at: string | null; last_status: string | null };
+      expect(row).toEqual({
+        running_at: null,
+        last_status: "completed",
+      });
     });
   });
 

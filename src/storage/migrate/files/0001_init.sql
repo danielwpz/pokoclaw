@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     CHECK (context_mode IN ('group', 'isolated')),
   payload_json TEXT NOT NULL,
   next_run_at TEXT CHECK (next_run_at IS NULL OR (next_run_at GLOB '????-??-??T??:??:??*Z' AND datetime(next_run_at) IS NOT NULL)),
+  running_at TEXT CHECK (running_at IS NULL OR (running_at GLOB '????-??-??T??:??:??*Z' AND datetime(running_at) IS NOT NULL)),
   last_run_at TEXT CHECK (last_run_at IS NULL OR (last_run_at GLOB '????-??-??T??:??:??*Z' AND datetime(last_run_at) IS NOT NULL)),
   last_status TEXT,
   last_output TEXT,

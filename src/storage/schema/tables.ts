@@ -201,6 +201,7 @@ export const cronJobs = sqliteTable(
     contextMode: text("context_mode").notNull().default("isolated"),
     payloadJson: text("payload_json").notNull(),
     nextRunAt: text("next_run_at"),
+    runningAt: text("running_at"),
     lastRunAt: text("last_run_at"),
     lastStatus: text("last_status"),
     lastOutput: text("last_output"),

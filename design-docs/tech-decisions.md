@@ -429,7 +429,8 @@
   - **系统命令**：`/status`, `/stop`, `/restart`, `/help` 在HTTP webhook handler层直接处理，不经过agent管道
     - Node.js事件循环是异步的，即使agent在等LLM响应，HTTP请求仍可处理
     - 这些命令在飞书bot创建时预配置
-    - **`/stop` 为最高优先级抢占命令**：作用于当前conversation的全部运行单元（前台回复 + 后台TaskAgent/Cron run + 进行中的tool call）
+    - **`/stop` 为最高优先级抢占命令**：当前默认产品语义为作用于当前conversation的全部运行单元（前台回复 + 后台TaskAgent/Cron run + 进行中的tool call）
+    - 但实现上不应把 `/stop` 写死为 conversation-only；router/orchestration 应按 `target_scope` 封装，便于未来扩展到 `thread / branch / session / task_run`
     - 执行`/stop`时立即触发conversation级取消并清理：停止重试队列、终止子进程树、将相关任务卡片更新为`stopped`终态
   - **重启后恢复**：检查消息cursor，告知用户"有N条未读消息，需要处理吗？"由用户决定
   - **LLM API故障**：重试（指数退避），失败后通知用户"AI服务异常，消息已记录，恢复后处理"，后台持续重试
@@ -533,27 +534,54 @@
 > 本节定义框架层的状态采集与查询基础设施。状态如何渲染给用户（飞书卡片样式、更新频率等）见 Section 8。
 
 - [x] LiveState 运行时状态注册表
-  - 单进程架构，所有agent运行在同一个Node.js进程，框架在内存中维护每个agent的实时状态
-  - 框架在agent loop关键点自动更新（发LLM请求、收到chunk、开始/结束tool call），agent本身无感知
-  - **LLM streaming tap**：数据流本来就经过我们的代码，在流过时同时写入LiveState
-    - 累计token数、当前token rate（滚动平均）
-    - 最后一个chunk的时间戳（距今2秒 vs 距今30秒——后者说明可能卡住）
-    - partial response buffer（已生成内容的尾部）
-    - 模型名称
-  - **Tool执行 tap**：bash命令通过sandbox跑，stdout/stderr本来就是stream，挂增量buffer
-    - 原始命令字符串、子进程PID
-    - stdoutTail / stderrTail（最后N行）
-    - 进程存活状态、已运行时长
-    - PID暴露给主Agent，使其可直接用ps/top查看进程状态，甚至kill（利用已有bash能力，不需要特殊工具）
-  - 操作完成后自动清理
+  - 单进程架构下，仍保留内存 LiveState，专门承接**易丢失、运行中才有价值**的实时诊断信息
+  - 框架在agent loop关键点自动更新（发LLM请求、收到delta、开始/结束tool call、bash收到输出），agent本身无感知
+  - LiveState 第一版重点放：
+    - LLM最近一次delta时间、是否仍在持续输出、少量输出尾部
+    - 当前活跃tool / bash命令
+    - bash的stdoutTail / stderrTail（最后N行）
+    - 最近输出时间、已运行时长
+  - **第一版不把bash实时输出chunk落SQLite**
+    - 这是运行中诊断信息，不是durable事实
+    - 进程重启后不承诺恢复live tail；最终bash结果仍按普通tool result进入消息/历史持久化
+  - approval“等待多久”这类值不做冗余持久化，只保留时间锚点，查询时现算
+- [x] SQLite 里的可查询状态快照
+  - 可观测性不能只靠内存；需要一层**面向查询的durable当前态**
+  - 继续复用现有事实表：
+    - `sessions`
+    - `task_runs`
+    - `messages`
+    - `approval_ledger`
+  - 另增一张轻量 `runtime_status_snapshots`，专门存“当前可回答用户问题的状态快照”，而不是把高频状态字段散落写回多张业务事实表
+  - 第一版建议快照字段只放高价值时间锚点和状态字段，例如：
+    - `current_state`
+    - `current_summary`
+    - `needs_user_action`
+    - `waiting_reason`
+    - `active_approval_id`
+    - `current_tool_name`
+    - `current_bash_command`
+    - `last_activity_at`
+    - `last_output_at`
+    - `llm_started_at`
+    - `llm_first_token_at`
+    - `llm_last_delta_at`
+    - `last_error_summary`
+    - `stalled_flag`
 - [x] 状态查询渠道
-  - `/status` 系统命令：webhook handler层直接处理，读内存LiveState，不经过agent管道
-  - 主Agent `check_agent_status` 工具：读LiveState（实时）+ 查SQLite（历史消息和tool call记录），合并给出完整画面
+  - `/status` 系统命令：webhook handler层直接处理，读 `runtime_status_snapshots` + 内存LiveState，不经过agent管道
+  - 主Agent不把整套状态查询规则常驻在system prompt里，而是通过一个内置**系统观测/巡检 skill**按需加载
+    - 该skill先提供目录级能力说明，再按需下钻到查询路径、判断规则、证据来源
+    - 第一版数据访问优先复用受控 `db.read`（system DB）和少量runtime helper，而不是堆很多专用状态工具
   - 飞书卡片实时更新：框架定期从LiveState读取并刷新卡片（渲染细节见Section 8）
 - [x] 主Agent对SubAgent的深度诊断
-  - LiveState → "现在在干什么"（当前phase、LLM streaming进度、tool执行状态）
-  - SQLite对话历史 → "之前干了什么"（所有消息、tool call记录都在DB中）
-  - bash深度诊断：通过LiveState获取PID → 用自己的bash执行ps/top等命令独立判断（agent有上下文理解能力，能区分"命令本来就该跑很久"和"明显卡住了"）
+  - `runtime_status_snapshots` → “现在大体在干什么”（当前state、是否等待用户、最近活动时间、是否疑似卡住）
+  - LiveState → “运行中细节”（LLM最近delta、bash最近输出tail）
+  - SQLite历史事实 → “之前做过什么”（消息、最终tool result、审批记录）
+  - 第一版优先回答用户真正关心的几类问题：
+    - 谁在跑、谁在等我、谁有问题
+    - 某个任务当前在做什么、最近是否还有进展、卡在哪里
+    - 为什么要批权限、为什么刚才失败、bash最终报了什么错
 
 ### 4.5 运营配置
 
@@ -579,8 +607,16 @@
   - `croner`（npm）用于cron表达式解析，支持时区、秒级精度，OpenClaw已验证
   - `at`（一次性）和 `every`（间隔）用简单时间戳算术处理，不需要库
   - 三种调度类型：`at` / `every` / `cron`
-  - Timer-based调度：计算最近一个job的nextRunAtMs，setTimeout精确等待，不轮询
-    - 上限clamp 60秒，防止系统时钟跳变或进程挂起后的漂移
+  - 第一版采用**分钟级轻量 scanner**
+    - 每分钟扫描一次 `enabled && next_run_at <= now` 的 job
+    - scanner 只负责发现 due job、原子 claim、异步 kickoff，不等待任务执行完成
+    - 不做 mutation-triggered rescan；`add / update / remove / pause / resume` 只改 DB，由下一轮 scanner 自然接管
+    - `force run` 不走 scheduler，直接走手动触发入口
+  - **重启/离线错过触发时间的口径**
+    - 已经过去的 missed run 默认**不自动补跑**
+    - 重启后调度器只恢复未来调度，不追补历史槽位
+    - 后续可以补一个产品提示：系统恢复后主动告诉用户“有N个定时任务错过了”，并让用户决定是否现在手动执行
+    - 这条提醒是后续产品增强，不阻塞当前主干实现；当前阶段只需要把 missed 情况记录清楚即可
 
 ### 5.2 TaskAgent统一执行引擎
 
@@ -589,6 +625,7 @@
   - 引擎职责：创建独立session → 注入调用者提供的context → 独立执行 → 向调用者汇报 → 提权/卡片/打断
   - **引擎本身不关心触发方式**，只管执行：
     - CronService调用：注入对话历史 + cron运行记录 + cron prompt → 定时任务
+    - 手动 `run(job)`：复用同一条 cron kickoff 路径，只是 `trigger_kind = manual`
     - 任意Agent调用：注入任务描述 + 必要上下文 → 委派子任务
   - 定时任务**不在主对话线中执行**，避免阻塞用户对话和上下文污染
   - 触发时从目标SubAgent的session fork一份独立session
@@ -609,13 +646,27 @@
 - [x] 任务创建与管理
   - Agent通过专用cron tool创建/管理（list / add / update / remove / run）
   - 用户通过自然语言对话创建（"每天早上8点review PR"），agent理解后调用tool
+  - **归属解析规则**
+    - `cron_job.owner_agent_id` 只能绑定长期 agent：`main` 或某个 `sub`
+    - `cron_job.target_conversation_id` = owner agent 的主对话面（主DM / SubAgent群）
+    - `cron_job.target_branch_id` = owner agent 主对话面的 main branch
+    - cron job 不绑定 TaskAgent、approval session、临时 thread
+  - **第一版权限边界**
+    - `add / update / remove` 先限制为 owner 自己操作自己的 job
+    - 主Agent第一版只做管理动作：查看、观测、手动运行、暂停/恢复
+    - 先不支持主Agent直接替某个已有 SubAgent 创建 cron job，避免在缺少该 SubAgent 当前上下文的情况下写入错误的长期任务定义
   - 支持手动触发（force run）
+    - 手动触发不是修改 `next_run_at`，而是直接创建一次新的 `task_run`
+    - 自动触发与手动触发共用同一条执行主链；区别只体现在触发来源元信息（如 `trigger_kind = scheduled | manual`）
+    - 手动触发默认不改变原有 schedule，对后续自动调度无副作用
+    - 主Agent和SubAgent都可发起手动触发，但真正执行仍按该 job 的归属 agent 上下文运行
 
 ### 5.4 失败处理、重试与禁用策略
 
 - [x] 错误处理与重试
   - **并发防护**：`runningAtMs` 互斥标记，同一job不会并发执行
-    - Timer tick时lazy检查：超过2小时的runningAtMs标记自动清除（防crash后永久锁死）
+    - scanner claim / 手动 `run(job)` 都必须复用同一套互斥检查
+    - lazy检查：超过2小时的runningAtMs标记自动清除（防crash后永久锁死）
   - **重试策略**（参考ZeroClaw模式）：
     - 权限/安全策略错误 → 不盲目重试，进入提权流程（见下方）
     - 其他所有错误 → 重试N次，指数退避（如30s → 1m → 5m），带jitter
@@ -1013,9 +1064,13 @@
   - **格式**：沿用行业标准 SKILL.md（YAML frontmatter + Markdown内容），与OpenClaw/Nanobot/ZeroClaw兼容
   - **渐进式加载**（行业标准做法，非某一家独有）：
     - Level 1：所有skill的name+description始终注入system prompt（让agent知道有什么能力）
-    - Level 2：agent按需读取skill完整内容（通过read_file等工具）
+    - Level 2：agent按需读取skill完整内容（通过read_file等工具），获得具体工作流/SOP
+    - Level 3：只有在任务真的需要时，再读取长参考资料、schema/query guide、脚本、案例等资源
     - 如果skill有 `.note.md` → Level 1中额外注入note的summary字段，告知agent有定制笔记及位置
   - **依赖检测**：参考OpenClaw的metadata（requires.bins、requires.env等），加载时检查依赖是否满足
+- [x] Skill不只是“外部领域能力”，也可以是**内部系统能力**
+  - 例如主Agent的“系统观测/巡检”skill：本质上是一套状态查询与解释工作流，而不是一个单独数据库tool
+  - 这类skill的目标是让agent先知道“去哪查、按什么顺序查、怎么把证据翻译成用户能懂的话”，而不是把整份系统状态手册常驻注入
 - [x] Skill来源与加载路径
   - **产品workspace目录**（`~/.pokeclaw/skills/`）：主加载路径，clawhub等工具通过`--workdir`参数安装到此
   - 内置skill：打包在产品中

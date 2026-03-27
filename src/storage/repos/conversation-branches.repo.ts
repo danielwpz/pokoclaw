@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -42,6 +42,24 @@ export class ConversationBranchesRepo {
     return (
       this.db.select().from(conversationBranches).where(eq(conversationBranches.id, id)).get() ??
       null
+    );
+  }
+
+  findByConversationAndBranchKey(
+    conversationId: string,
+    branchKey: string,
+  ): ConversationBranch | null {
+    return (
+      this.db
+        .select()
+        .from(conversationBranches)
+        .where(
+          and(
+            eq(conversationBranches.conversationId, conversationId),
+            eq(conversationBranches.branchKey, branchKey),
+          ),
+        )
+        .get() ?? null
     );
   }
 }

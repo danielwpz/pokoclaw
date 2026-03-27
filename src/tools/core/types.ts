@@ -61,6 +61,10 @@ export interface ToolRuntimeControl {
     status: "pending_confirmation";
     expiresAt: string | null;
   }>;
+  runCronJobNow?(input: { jobId: string }): Promise<{
+    accepted: boolean;
+    cronJobId: string;
+  }>;
 }
 
 export interface ToolExecutionApprovalState {
