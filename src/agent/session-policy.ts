@@ -24,6 +24,10 @@ export function isToolAllowedForSession(input: {
     return input.purpose === "chat" && input.agentKind === "main";
   }
 
+  if (input.toolName === "cron") {
+    return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
+  }
+
   return true;
 }
 

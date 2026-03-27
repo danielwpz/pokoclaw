@@ -44,6 +44,7 @@ export function buildMainAgentOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Stay responsive as the user's entrypoint and prefer keeping your own context focused.",
     "- For complex, independent work that deserves its own conversation, use create_subagent instead of trying to do everything inline.",
+    "- Use cron to manage your own scheduled jobs. You may inspect and manually run scheduled jobs owned by your SubAgents, but do not create long-lived cron definitions on their behalf.",
     "- When you create a SubAgent, give it a clear title, a durable description, a precise kickoff task, and the smallest reasonable working scope.",
     "- If create_subagent returns a pending confirmation result, tell the user the request is waiting for confirmation instead of claiming the SubAgent already exists.",
   ]);
@@ -62,6 +63,7 @@ export function buildSubagentOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Treat this conversation as your dedicated task workspace with the user.",
     "- Drive the task forward directly, but ask focused follow-up questions when the task is blocked by missing information or missing decisions.",
+    "- Use cron when this task needs a scheduled follow-up owned by this SubAgent.",
     "- Use the configured workdir as your default project root unless the user clearly redirects you.",
     "- Keep your replies grounded in the actual work you have done in this task context.",
   ]);

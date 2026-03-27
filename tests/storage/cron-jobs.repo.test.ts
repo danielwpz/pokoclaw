@@ -57,4 +57,83 @@ describe("cron jobs repo", () => {
     });
     expect(repo.getById("missing_cron")).toBeNull();
   });
+
+  test("claims due jobs only when enabled and not already running", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const repo = new CronJobsRepo(handle.storage.db);
+    repo.update({
+      id: "cron_1",
+      nextRunAt: new Date("2026-03-26T01:00:00.000Z"),
+    });
+
+    const claimed = repo.claimDueRun({
+      id: "cron_1",
+      now: new Date("2026-03-26T01:05:00.000Z"),
+      nextRunAt: new Date("2026-03-26T02:00:00.000Z"),
+    });
+    expect(claimed).toMatchObject({
+      id: "cron_1",
+      runningAt: "2026-03-26T01:05:00.000Z",
+      nextRunAt: "2026-03-26T02:00:00.000Z",
+    });
+
+    const duplicate = repo.claimDueRun({
+      id: "cron_1",
+      now: new Date("2026-03-26T01:06:00.000Z"),
+      nextRunAt: new Date("2026-03-26T03:00:00.000Z"),
+    });
+    expect(duplicate).toBeNull();
+  });
+
+  test("manual claim can run disabled jobs without changing schedule", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const repo = new CronJobsRepo(handle.storage.db);
+    repo.update({
+      id: "cron_1",
+      enabled: false,
+      nextRunAt: new Date("2026-03-26T05:00:00.000Z"),
+    });
+
+    const claimed = repo.claimManualRun({
+      id: "cron_1",
+      now: new Date("2026-03-26T01:05:00.000Z"),
+    });
+
+    expect(claimed).toMatchObject({
+      id: "cron_1",
+      runningAt: "2026-03-26T01:05:00.000Z",
+      nextRunAt: "2026-03-26T05:00:00.000Z",
+      enabled: false,
+    });
+  });
+
+  test("clearStaleRunning marks stale claims as missed", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const repo = new CronJobsRepo(handle.storage.db);
+    repo.update({
+      id: "cron_1",
+      nextRunAt: new Date("2026-03-26T05:00:00.000Z"),
+    });
+    repo.claimManualRun({
+      id: "cron_1",
+      now: new Date("2026-03-26T01:05:00.000Z"),
+    });
+
+    const cleared = repo.clearStaleRunning({
+      now: new Date("2026-03-26T05:00:00.000Z"),
+      staleBefore: new Date("2026-03-26T03:00:00.000Z"),
+    });
+
+    expect(cleared).toBe(1);
+    expect(repo.getById("cron_1")).toMatchObject({
+      runningAt: null,
+      lastStatus: "missed",
+    });
+  });
 });
