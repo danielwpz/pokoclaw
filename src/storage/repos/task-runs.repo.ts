@@ -93,6 +93,16 @@ export class TaskRunsRepo {
       .all();
   }
 
+  listByCronJobId(cronJobId: string, limit = 20): TaskRun[] {
+    return this.db
+      .select()
+      .from(taskRuns)
+      .where(eq(taskRuns.cronJobId, cronJobId))
+      .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
+      .limit(limit)
+      .all();
+  }
+
   updateStatus(input: UpdateTaskRunStatusInput): void {
     this.db
       .update(taskRuns)

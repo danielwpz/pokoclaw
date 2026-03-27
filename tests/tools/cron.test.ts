@@ -110,7 +110,7 @@ describe("cron tool", () => {
       owner_agent_id: "agent_sub",
       target_conversation_id: "conv_sub",
       target_branch_id: "branch_sub",
-      payload_json: '{"prompt":"Review open pull requests."}',
+      payload_json: "Review open pull requests.",
     });
   });
 

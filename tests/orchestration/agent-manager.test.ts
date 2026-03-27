@@ -476,8 +476,14 @@ describe("AgentManager", () => {
         runType: "cron",
         cronJobId: "cron_2",
         attempt: 4,
-        inputJson: '{"job":"reconcile"}',
         ownerAgentId: "agent_sub",
+      });
+      expect(JSON.parse(created.taskRun.inputJson ?? "{}")).toMatchObject({
+        taskDefinition: '{"job":"reconcile"}',
+        recentRuns: {
+          lastRun: null,
+          lastSuccessfulRun: null,
+        },
       });
     });
   });
@@ -574,6 +580,67 @@ describe("AgentManager", () => {
           cronJobId: "missing_cron",
         }),
       ).toThrow("Cannot create task execution for unknown cron job missing_cron");
+    });
+  });
+
+  test("injects recent cron run context into new cron task executions", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id,
+          schedule_kind, schedule_value, context_mode, payload_json, next_run_at, created_at, updated_at
+        ) VALUES (
+          'cron_2', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron', '*/5 * * * *', 'group', '{"prompt":"reconcile"}',
+          '2026-03-25T00:05:00.000Z', '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id,
+          cron_job_id, execution_session_id, status, result_summary, error_text, started_at, finished_at
+        ) VALUES
+        (
+          'run_success_1', 'cron', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron_2', NULL, 'completed', 'Posted report successfully', NULL,
+          '2026-03-24T00:05:00.000Z', '2026-03-24T00:05:10.000Z'
+        ),
+        (
+          'run_failed_1', 'cron', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron_2', NULL, 'failed', NULL, 'Slack API timeout',
+          '2026-03-25T00:05:00.000Z', '2026-03-25T00:05:12.000Z'
+        );
+      `);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const created = manager.createCronTaskExecutionFromJob({
+        cronJobId: "cron_2",
+      });
+
+      const input = JSON.parse(created.taskRun.inputJson ?? "{}") as {
+        taskDefinition?: string;
+        recentRuns?: {
+          lastRun?: { status?: string; error?: string | null };
+          lastSuccessfulRun?: { status?: string; summary?: string | null };
+        };
+      };
+
+      expect(input.taskDefinition).toBe("reconcile");
+      expect(input.recentRuns?.lastRun).toMatchObject({
+        status: "failed",
+        error: "Slack API timeout",
+      });
+      expect(input.recentRuns?.lastSuccessfulRun).toMatchObject({
+        status: "completed",
+        summary: "Posted report successfully",
+      });
     });
   });
 
