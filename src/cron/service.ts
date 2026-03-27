@@ -117,6 +117,20 @@ export class CronService {
     };
   }
 
+  async drain(): Promise<void> {
+    const inFlight = Array.from(this.inFlightRuns);
+    if (inFlight.length === 0) {
+      logger.debug("cron drain completed immediately because there were no in-flight runs");
+      return;
+    }
+
+    logger.info("waiting for in-flight cron runs to settle", {
+      inFlightRuns: inFlight.length,
+    });
+    await Promise.allSettled(inFlight);
+    logger.info("all in-flight cron runs settled");
+  }
+
   list(options: ListCronJobsOptions = {}): CronJob[] {
     const jobs = this.repo().list(options);
     logger.debug("listed cron jobs", {
