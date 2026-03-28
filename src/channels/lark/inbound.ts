@@ -951,12 +951,111 @@ function parseLarkMessageContent(messageType: string, content: string): string {
         return typeof parsed.file_key === "string" ? `[文件 ${parsed.file_key}]` : "[文件]";
       case "post":
         return "[富文本]";
+      case "interactive": {
+        const interactiveText = parseLarkInteractiveContent(parsed);
+        return interactiveText.length > 0 ? interactiveText : "[卡片消息]";
+      }
       default:
-        return "";
+        return parseLarkUnknownContent(messageType, parsed, content);
     }
   } catch {
-    return "";
+    return content.trim().length > 0 ? `[${messageType}消息]` : "";
   }
+}
+
+function parseLarkInteractiveContent(parsed: Record<string, unknown>): string {
+  const fragments: string[] = [];
+  const seen = new Set<string>();
+  const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+  if (title.length > 0) {
+    fragments.push(title);
+    seen.add(title);
+  }
+
+  const textNodes: string[] = [];
+  collectLarkTextNodes(parsed.elements, textNodes);
+  const dedupedNodes = textNodes.filter((text) => {
+    if (seen.has(text)) {
+      return false;
+    }
+    seen.add(text);
+    return true;
+  });
+  if (dedupedNodes.length > 0) {
+    fragments.push(dedupedNodes.join(" "));
+  }
+
+  return fragments.join("\n").trim();
+}
+
+function collectLarkTextNodes(value: unknown, sink: string[]): void {
+  if (sink.length >= 8) {
+    return;
+  }
+
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text.length > 0) {
+      sink.push(text);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLarkTextNodes(item, sink);
+      if (sink.length >= 8) {
+        return;
+      }
+    }
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  if (typeof value.text === "string") {
+    const text = value.text.trim();
+    if (text.length > 0) {
+      sink.push(text);
+    }
+  }
+  if (typeof value.content === "string" && typeof value.text !== "string") {
+    const content = value.content.trim();
+    if (content.length > 0) {
+      sink.push(content);
+    }
+  }
+
+  const children = [
+    value.elements,
+    value.children,
+    value.fields,
+    value.rows,
+    value.columns,
+    value.extra,
+  ];
+  for (const nested of children) {
+    collectLarkTextNodes(nested, sink);
+    if (sink.length >= 8) {
+      return;
+    }
+  }
+}
+
+function parseLarkUnknownContent(
+  messageType: string,
+  parsed: Record<string, unknown>,
+  rawContent: string,
+): string {
+  if (typeof parsed.text === "string" && parsed.text.trim().length > 0) {
+    return parsed.text.trim();
+  }
+  if (typeof parsed.title === "string" && parsed.title.trim().length > 0) {
+    return parsed.title.trim();
+  }
+  return rawContent.trim().length > 0 ? `[${messageType}消息]` : "";
 }
 
 function parseLarkMessageCreatedAt(value: unknown): Date | undefined {
@@ -1013,6 +1112,11 @@ async function buildInboundMessageContent(
         });
 
   if (quoted == null) {
+    logger.warn("falling back because quoted lark message could not be resolved", {
+      installationId: input.installationId,
+      parentMessageId,
+      threadId: normalized.threadId,
+    });
     return [
       "用户引用了一条消息，但系统未能读取原文。",
       "",
@@ -1023,7 +1127,7 @@ async function buildInboundMessageContent(
   return ["用户引用了一条消息：", quoted.text, "", `用户的新消息：${normalized.text}`].join("\n");
 }
 
-function createLarkQuoteMessageFetcher(input: {
+export function createLarkQuoteMessageFetcher(input: {
   installationId: string;
   clients: {
     getOrCreate(installationId: string): LarkSdkClient;
@@ -1035,6 +1139,8 @@ function createLarkQuoteMessageFetcher(input: {
       const response = (await client.sdk.im.message.get({
         path: { message_id: messageId },
       })) as {
+        code?: number;
+        msg?: string;
         data?: {
           items?: Array<{
             msg_type?: string;
@@ -1044,15 +1150,42 @@ function createLarkQuoteMessageFetcher(input: {
           }>;
         };
       };
+      if (typeof response.code === "number" && response.code !== 0) {
+        logger.warn("lark quote message.get returned non-zero code", {
+          installationId: input.installationId,
+          messageId,
+          code: response.code,
+          msg: response.msg ?? null,
+        });
+      }
       const item = response.data?.items?.[0];
       if (item == null) {
+        logger.warn("lark quote message.get returned no item", {
+          installationId: input.installationId,
+          messageId,
+          code: response.code ?? null,
+          msg: response.msg ?? null,
+        });
         return null;
       }
 
       const messageType = typeof item.msg_type === "string" ? item.msg_type : "text";
       const rawContent = typeof item.body?.content === "string" ? item.body.content : "";
+      if (rawContent.length === 0) {
+        logger.warn("lark quote message item has empty content", {
+          installationId: input.installationId,
+          messageId,
+          messageType,
+        });
+      }
       const text = parseLarkMessageContent(messageType, rawContent);
       if (text.length === 0) {
+        logger.warn("lark quote message parsing produced empty text", {
+          installationId: input.installationId,
+          messageId,
+          messageType,
+          rawContentPreview: truncateLogText(rawContent, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
+        });
         return null;
       }
 
