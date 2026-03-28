@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
-
+import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
@@ -40,6 +40,9 @@ export interface CreateLarkInboundRuntimeInput {
   storage: StorageDb;
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
   wsClientFactory?: (installation: ConfiguredLarkInstallation) => Lark.WSClient;
 }
 
@@ -66,6 +69,7 @@ export interface LarkMessageReceiveEvent {
     chat_id?: string;
     chat_type?: string;
     thread_id?: string;
+    parent_id?: string;
     message_type?: string;
     create_time?: string;
     content?: string;
@@ -75,11 +79,18 @@ export interface LarkMessageReceiveEvent {
 export interface NormalizedLarkTextMessage {
   chatId: string;
   messageId: string;
+  parentMessageId: string | null;
+  threadId: string | null;
   senderOpenId: string | null;
   senderType: string | null;
   chatType: string | null;
   text: string;
   createdAt?: Date;
+}
+
+interface LarkQuotedMessage {
+  messageType: string;
+  text: string;
 }
 
 export interface NormalizedLarkCardAction {
@@ -122,11 +133,19 @@ export function normalizeLarkTextMessage(
   }
 
   const contentRaw = typeof message.content === "string" ? message.content : "";
-  const text = parseLarkTextContent(contentRaw);
+  const text = parseLarkMessageContent(messageType, contentRaw);
   if (text.length === 0) {
     return { skipReason: "text message content is empty" };
   }
 
+  const parentMessageId =
+    typeof message.parent_id === "string" && message.parent_id.trim().length > 0
+      ? message.parent_id.trim()
+      : null;
+  const threadId =
+    typeof message.thread_id === "string" && message.thread_id.trim().length > 0
+      ? message.thread_id.trim()
+      : null;
   const sender = isRecord(data.sender) ? data.sender : null;
   const senderId = sender != null && isRecord(sender.sender_id) ? sender.sender_id : null;
   const senderOpenId =
@@ -141,6 +160,8 @@ export function normalizeLarkTextMessage(
   return {
     chatId,
     messageId,
+    parentMessageId,
+    threadId,
     senderOpenId,
     senderType,
     chatType,
@@ -154,6 +175,10 @@ export function createLarkMessageReceiveHandler(input: {
   storage: StorageDb;
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
+  quoteMessageFetcher?: (input: {
+    installationId: string;
+    messageId: string;
+  }) => Promise<LarkQuotedMessage | null>;
 }): (data: unknown) => Promise<void> {
   return async (data: unknown) => {
     const normalized = normalizeLarkTextMessage(data);
@@ -233,6 +258,8 @@ export function createLarkMessageReceiveHandler(input: {
       installationId: input.installationId,
       chatId: normalized.chatId,
       messageId: normalized.messageId,
+      parentMessageId: normalized.parentMessageId,
+      threadId: normalized.threadId,
       sessionId: session.id,
       conversationId: surface.conversationId,
       branchId: surface.branchId,
@@ -240,10 +267,12 @@ export function createLarkMessageReceiveHandler(input: {
       contentPreview: truncateLogText(normalized.text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
     });
 
+    const content = await buildInboundMessageContent(normalized, input);
+
     await input.ingress.submitMessage({
       sessionId: session.id,
       scenario: "chat",
-      content: normalized.text,
+      content,
       ...(normalized.createdAt == null ? {} : { createdAt: normalized.createdAt }),
     });
   };
@@ -465,6 +494,14 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           storage: input.storage,
           ingress: input.ingress,
           control: input.control,
+          ...(input.clients == null
+            ? {}
+            : {
+                quoteMessageFetcher: createLarkQuoteMessageFetcher({
+                  installationId: installation.installationId,
+                  clients: input.clients,
+                }),
+              }),
         });
         const onCardAction = createLarkCardActionHandler({
           installationId: installation.installationId,
@@ -813,21 +850,34 @@ function pairInitialLarkInstallation(input: {
   });
 }
 
-function parseLarkTextContent(content: string): string {
+function parseLarkMessageContent(messageType: string, content: string): string {
   if (content.length === 0) {
     return "";
   }
 
   try {
     const parsed = JSON.parse(content);
-    if (isRecord(parsed) && typeof parsed.text === "string") {
-      return parsed.text.trim();
+    if (!isRecord(parsed)) {
+      return "";
+    }
+
+    switch (messageType) {
+      case "text":
+        return typeof parsed.text === "string" ? parsed.text.trim() : "";
+      case "image":
+        return typeof parsed.image_key === "string" ? `[图片 ${parsed.image_key}]` : "[图片]";
+      case "audio":
+        return typeof parsed.file_key === "string" ? `[语音 ${parsed.file_key}]` : "[语音]";
+      case "file":
+        return typeof parsed.file_key === "string" ? `[文件 ${parsed.file_key}]` : "[文件]";
+      case "post":
+        return "[富文本]";
+      default:
+        return "";
     }
   } catch {
     return "";
   }
-
-  return "";
 }
 
 function parseLarkMessageCreatedAt(value: unknown): Date | undefined {
@@ -849,6 +899,92 @@ function truncateLogText(text: string, maxLength: number): string {
   }
 
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+async function buildInboundMessageContent(
+  normalized: NormalizedLarkTextMessage,
+  input: {
+    installationId: string;
+    quoteMessageFetcher?: (input: {
+      installationId: string;
+      messageId: string;
+    }) => Promise<LarkQuotedMessage | null>;
+  },
+): Promise<string> {
+  const parentMessageId = normalized.parentMessageId;
+  const isQuote = parentMessageId != null && normalized.threadId == null;
+  if (!isQuote) {
+    return normalized.text;
+  }
+
+  const quoted =
+    input.quoteMessageFetcher == null
+      ? null
+      : await input.quoteMessageFetcher({
+          installationId: input.installationId,
+          messageId: parentMessageId,
+        });
+
+  if (quoted == null) {
+    return [
+      "用户引用了一条消息，但系统未能读取原文。",
+      "",
+      `用户的新消息：${normalized.text}`,
+    ].join("\n");
+  }
+
+  return ["用户引用了一条消息：", quoted.text, "", `用户的新消息：${normalized.text}`].join("\n");
+}
+
+function createLarkQuoteMessageFetcher(input: {
+  installationId: string;
+  clients: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): (input: { installationId: string; messageId: string }) => Promise<LarkQuotedMessage | null> {
+  return async ({ messageId }) => {
+    try {
+      const client = input.clients.getOrCreate(input.installationId);
+      const response = (await client.sdk.im.message.get({
+        path: { message_id: messageId },
+      })) as {
+        data?: {
+          items?: Array<{
+            msg_type?: string;
+            body?: {
+              content?: string;
+            };
+          }>;
+        };
+      };
+      const item = response.data?.items?.[0];
+      if (item == null) {
+        return null;
+      }
+
+      const messageType = typeof item.msg_type === "string" ? item.msg_type : "text";
+      const rawContent = typeof item.body?.content === "string" ? item.body.content : "";
+      const text = parseLarkMessageContent(messageType, rawContent);
+      if (text.length === 0) {
+        return null;
+      }
+
+      logger.info("resolved quoted lark message", {
+        installationId: input.installationId,
+        messageId,
+        messageType,
+        contentPreview: truncateLogText(text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
+      });
+      return { messageType, text };
+    } catch (error) {
+      logger.warn("failed to resolve quoted lark message", {
+        installationId: input.installationId,
+        messageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
