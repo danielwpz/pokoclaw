@@ -33,4 +33,9 @@ export const DEFAULT_CONFIG: RawConfig = {
       hardDenyHosts: [],
     },
   },
+  channels: {
+    lark: {
+      installations: {},
+    },
+  },
 };

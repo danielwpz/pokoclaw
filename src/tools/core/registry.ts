@@ -1,4 +1,5 @@
-import { normalizeToolFailure } from "@/src/tools/core/errors.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
+import { isToolApprovalRequired, normalizeToolFailure } from "@/src/tools/core/errors.js";
 import {
   parseToolArgs,
   ToolArgumentValidationError,
@@ -7,6 +8,8 @@ import {
   ToolLookupError,
   type ToolResult,
 } from "@/src/tools/core/types.js";
+
+const logger = createSubsystemLogger("tools");
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition<unknown, unknown>>();
@@ -55,18 +58,103 @@ export class ToolRegistry {
     context: ToolExecutionContext,
     rawArgs: unknown,
   ): Promise<ToolResult> {
+    const startedAt = Date.now();
+    logger.info("tool execution started", {
+      toolName: name,
+      toolCallId: context.toolCallId,
+      sessionId: context.sessionId,
+      conversationId: context.conversationId,
+      cwd: context.cwd,
+      args: truncateSerialized(rawArgs),
+    });
+
     try {
       const tool = this.getRequired(name);
       const args =
         tool.inputSchema == null ? rawArgs : parseToolArgs(tool.name, tool.inputSchema, rawArgs);
 
-      return await tool.execute(context, args);
+      const result = await tool.execute(context, args);
+      logger.info("tool execution finished", {
+        toolName: name,
+        toolCallId: context.toolCallId,
+        sessionId: context.sessionId,
+        success: true,
+        durationMs: Date.now() - startedAt,
+        result: summarizeToolResult(result),
+      });
+
+      return result;
     } catch (error) {
-      if (error instanceof ToolLookupError || error instanceof ToolArgumentValidationError) {
-        throw normalizeToolFailure(error);
+      if (isToolApprovalRequired(error)) {
+        logger.info("tool execution waiting for approval", {
+          toolName: name,
+          toolCallId: context.toolCallId,
+          sessionId: context.sessionId,
+          durationMs: Date.now() - startedAt,
+          reason: truncateText(error.reasonText, 160),
+        });
+        throw error;
       }
 
+      if (error instanceof ToolLookupError || error instanceof ToolArgumentValidationError) {
+        const normalized = normalizeToolFailure(error);
+        logger.warn("tool execution finished", {
+          toolName: name,
+          toolCallId: context.toolCallId,
+          sessionId: context.sessionId,
+          success: false,
+          durationMs: Date.now() - startedAt,
+          errorKind: normalized.kind,
+          errorMessage: truncateText(normalized.message, 160),
+        });
+        throw normalized;
+      }
+
+      logger.warn("tool execution finished", {
+        toolName: name,
+        toolCallId: context.toolCallId,
+        sessionId: context.sessionId,
+        success: false,
+        durationMs: Date.now() - startedAt,
+        errorMessage: truncateText(error instanceof Error ? error.message : String(error), 160),
+      });
       throw error;
     }
   }
+}
+
+function summarizeToolResult(result: ToolResult): string {
+  return truncateSerialized(
+    result.content.map((block) =>
+      block.type === "text"
+        ? { type: "text", text: block.text }
+        : { type: "json", json: block.json },
+    ),
+    240,
+  );
+}
+
+function truncateSerialized(value: unknown, maxLength: number = 240): string {
+  const serialized = safeSerialize(value);
+  return truncateText(serialized, maxLength);
+}
+
+function safeSerialize(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 }

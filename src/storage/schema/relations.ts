@@ -6,9 +6,11 @@ import {
   approvalLedger,
   authEvents,
   channelInstances,
+  channelSurfaces,
   conversationBranches,
   conversations,
   cronJobs,
+  larkObjectBindings,
   messages,
   sessions,
   subagentCreationRequests,
@@ -26,6 +28,8 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
     references: [channelInstances.id],
   }),
   branches: many(conversationBranches),
+  channelSurfaces: many(channelSurfaces),
+  larkObjectBindings: many(larkObjectBindings),
   sessions: many(sessions),
   taskRuns: many(taskRuns),
   subagentCreationRequests: many(subagentCreationRequests),
@@ -36,8 +40,21 @@ export const conversationBranchesRelations = relations(conversationBranches, ({ 
     fields: [conversationBranches.conversationId],
     references: [conversations.id],
   }),
+  channelSurfaces: many(channelSurfaces),
+  larkObjectBindings: many(larkObjectBindings),
   sessions: many(sessions),
   taskRuns: many(taskRuns),
+}));
+
+export const channelSurfacesRelations = relations(channelSurfaces, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [channelSurfaces.conversationId],
+    references: [conversations.id],
+  }),
+  branch: one(conversationBranches, {
+    fields: [channelSurfaces.branchId],
+    references: [conversationBranches.id],
+  }),
 }));
 
 export const agentsRelations = relations(agents, ({ one, many }) => ({
@@ -156,6 +173,17 @@ export const authEventsRelations = relations(authEvents, ({ one }) => ({
   agent: one(agents, {
     fields: [authEvents.agentId],
     references: [agents.id],
+  }),
+}));
+
+export const larkObjectBindingsRelations = relations(larkObjectBindings, ({ one }) => ({
+  conversation: one(conversations, {
+    fields: [larkObjectBindings.conversationId],
+    references: [conversations.id],
+  }),
+  branch: one(conversationBranches, {
+    fields: [larkObjectBindings.branchId],
+    references: [conversationBranches.id],
   }),
 }));
 

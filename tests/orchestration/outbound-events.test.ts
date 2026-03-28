@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "vitest";
 
-import { projectRuntimeEvent } from "@/src/orchestration/outbound-events.js";
+import { projectRuntimeEvent, projectTaskRunEvent } from "@/src/orchestration/outbound-events.js";
+import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -90,6 +92,17 @@ describe("outbound runtime events", () => {
       taskRun: {
         taskRunId: "run_1",
         runType: "delegate",
+        status: "running",
+        executionSessionId: "sess_task",
+      },
+      run: {
+        runId: "run_1",
+      },
+      object: {
+        messageId: null,
+        toolCallId: null,
+        toolName: null,
+        approvalId: null,
       },
       event: {
         type: "run_completed",
@@ -136,9 +149,78 @@ describe("outbound runtime events", () => {
       taskRun: {
         taskRunId: null,
         runType: null,
+        status: null,
+        executionSessionId: null,
+      },
+      run: {
+        runId: "run_missing",
+      },
+      object: {
+        messageId: null,
+        toolCallId: null,
+        toolName: null,
+        approvalId: null,
       },
       event: {
         type: "run_failed",
+      },
+    });
+  });
+
+  test("projects task run lifecycle events with stable ownership and task context", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const taskRun = new TaskRunsRepo(handle.storage.db).getById("run_1");
+    const executionSession = new SessionsRepo(handle.storage.db).getById("sess_task");
+    if (taskRun == null || executionSession == null) {
+      throw new Error("Expected seeded task run and execution session.");
+    }
+
+    const envelope = projectTaskRunEvent({
+      db: handle.storage.db,
+      event: {
+        type: "task_run_started",
+        taskRunId: "run_1",
+        runType: "delegate",
+        status: "running",
+        startedAt: "2026-03-26T00:00:02.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: null,
+        executionSessionId: "sess_task",
+      },
+      taskRun,
+      executionSession,
+    });
+
+    expect(envelope).toMatchObject({
+      kind: "task_run_event",
+      target: {
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+      },
+      session: {
+        sessionId: "sess_task",
+        purpose: "task",
+      },
+      agent: {
+        ownerAgentId: "agent_sub",
+        ownerRole: "subagent",
+        mainAgentId: "agent_main",
+      },
+      taskRun: {
+        taskRunId: "run_1",
+        runType: "delegate",
+        status: "running",
+        executionSessionId: "sess_task",
+      },
+      run: {
+        runId: null,
+      },
+      event: {
+        type: "task_run_started",
+        executionSessionId: "sess_task",
       },
     });
   });

@@ -2,10 +2,13 @@ import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
+import { createLarkChannelRuntime, type LarkChannelRuntime } from "@/src/channels/lark/channel.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { CronService } from "@/src/cron/service.js";
 import { AgentManager, type AgentManagerDependencies } from "@/src/orchestration/agent-manager.js";
+import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
 import {
   createRuntimeOrchestrationBridge,
@@ -24,6 +27,8 @@ export interface RuntimeBootstrap {
   readonly ingress: SessionRuntimeIngress;
   readonly manager: AgentManager;
   readonly cron: CronService;
+  readonly lark: LarkChannelRuntime;
+  readonly outboundEventBus: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   start(): void;
   shutdown(): Promise<void>;
 }
@@ -39,6 +44,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const sessions = new SessionsRepo(input.storage);
   const tools = createBuiltinToolRegistry();
   const bridge = createRuntimeOrchestrationBridge();
+  const outboundEventBus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
   const loop = new AgentLoop({
     sessions: new AgentSessionService(sessions, messages),
     messages,
@@ -60,6 +66,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const manager = new AgentManager({
     storage: input.storage,
     ingress,
+    outboundEventBus,
     ...(input.subagentProvisioner == null
       ? {}
       : { subagentProvisioner: input.subagentProvisioner }),
@@ -70,6 +77,11 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     storage: input.storage,
     agentManager: manager,
   });
+  const lark = createLarkChannelRuntime({
+    config: input.config.channels.lark,
+    storage: input.storage,
+    ingress,
+  });
 
   let started = false;
   let shuttingDown: Promise<void> | null = null;
@@ -79,6 +91,8 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     ingress,
     manager,
     cron,
+    lark,
+    outboundEventBus,
     start() {
       if (started) {
         logger.debug("runtime bootstrap start skipped because it is already running");
@@ -86,11 +100,13 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       }
 
       cron.start();
+      lark.start();
       started = true;
       logger.info("runtime bootstrap started", {
         providerCount: Object.keys(input.config.providers).length,
         modelCount: input.config.models.catalog.length,
         toolCount: tools.list().length,
+        larkInstallations: lark.status().configuredInstallations,
       });
     },
     shutdown() {
@@ -107,6 +123,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
         logger.info("runtime bootstrap shutting down", {
           inFlightCronRuns: cron.status().inFlightRuns,
         });
+        await lark.shutdown();
         cron.stop();
         await cron.drain();
         started = false;

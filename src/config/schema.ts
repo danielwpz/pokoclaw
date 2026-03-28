@@ -66,12 +66,30 @@ export interface SecurityConfig {
   network: SecurityNetworkConfig;
 }
 
+export type LarkConnectionMode = "websocket" | "webhook";
+
+export interface LarkInstallationConfig {
+  enabled: boolean;
+  appId?: string;
+  appSecret?: string;
+  connectionMode: LarkConnectionMode;
+}
+
+export interface LarkChannelConfig {
+  installations: Record<string, LarkInstallationConfig>;
+}
+
+export interface ChannelsConfig {
+  lark: LarkChannelConfig;
+}
+
 export interface RawConfig {
   logging: LoggingConfig;
   providers: Record<string, ProviderConfig>;
   models: ModelsConfig;
   compaction: CompactionConfig;
   security: SecurityConfig;
+  channels: ChannelsConfig;
 }
 
 export type SecretValueTree = {
@@ -152,18 +170,35 @@ interface SecurityConfigInput {
   network?: unknown;
 }
 
+interface LarkInstallationConfigInput {
+  enabled?: unknown;
+  appId?: unknown;
+  appSecret?: unknown;
+  connectionMode?: unknown;
+}
+
+interface LarkChannelConfigInput {
+  installations?: unknown;
+}
+
+interface ChannelsConfigInput {
+  lark?: unknown;
+}
+
 interface FileConfigInput {
   logging?: unknown;
   providers?: unknown;
   models?: unknown;
   compaction?: unknown;
   security?: unknown;
+  channels?: unknown;
 }
 
 export type SecretsFileInput = Record<string, unknown>;
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const MODEL_SCENARIOS = ["chat", "compaction", "subagent", "cron"] as const;
+const LARK_CONNECTION_MODES: readonly LarkConnectionMode[] = ["websocket", "webhook"];
 
 export function isLogLevel(value: unknown): value is LogLevel {
   return typeof value === "string" && LOG_LEVELS.includes(value as LogLevel);
@@ -179,7 +214,14 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   }
 
   const config = input as FileConfigInput;
-  const allowedRootKeys = new Set(["logging", "providers", "models", "compaction", "security"]);
+  const allowedRootKeys = new Set([
+    "logging",
+    "providers",
+    "models",
+    "compaction",
+    "security",
+    "channels",
+  ]);
   for (const key of Object.keys(config)) {
     if (!allowedRootKeys.has(key)) {
       throw new Error(`config.toml contains unknown top-level key: ${key}`);
@@ -191,6 +233,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   const models = validateModelsConfig(config.models, defaults.models, providers);
   const compaction = validateCompactionConfig(config.compaction, defaults.compaction);
   const security = validateSecurityConfig(config.security, defaults.security);
+  const channels = validateChannelsConfig(config.channels, defaults.channels);
 
   if (compaction.reserveTokensFloor > compaction.reserveTokens) {
     throw new Error("config.toml compaction.reserveTokensFloor cannot exceed reserveTokens");
@@ -202,6 +245,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     models,
     compaction,
     security,
+    channels,
   };
 }
 
@@ -234,6 +278,16 @@ function cloneRawConfig(config: RawConfig): RawConfig {
       network: {
         overrideHardDenyHosts: config.security.network.overrideHardDenyHosts,
         hardDenyHosts: [...config.security.network.hardDenyHosts],
+      },
+    },
+    channels: {
+      lark: {
+        installations: Object.fromEntries(
+          Object.entries(config.channels.lark.installations).map(([key, installation]) => [
+            key,
+            { ...installation },
+          ]),
+        ),
       },
     },
   };
@@ -602,6 +656,141 @@ function validateSecurityConfig(input: unknown, defaults: SecurityConfig): Secur
     filesystem: validateSecurityFilesystemConfig(config.filesystem, defaults.filesystem),
     network: validateSecurityNetworkConfig(config.network, defaults.network),
   };
+}
+
+function validateChannelsConfig(input: unknown, defaults: ChannelsConfig): ChannelsConfig {
+  if (input == null) {
+    return {
+      lark: {
+        installations: Object.fromEntries(
+          Object.entries(defaults.lark.installations).map(([key, installation]) => [
+            key,
+            { ...installation },
+          ]),
+        ),
+      },
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml channels must be a table/object");
+  }
+
+  const config = input as ChannelsConfigInput;
+  assertAllowedKeys(config, new Set(["lark"]), "config.toml channels");
+
+  return {
+    lark: validateLarkChannelConfig(config.lark, defaults.lark),
+  };
+}
+
+function validateLarkChannelConfig(input: unknown, defaults: LarkChannelConfig): LarkChannelConfig {
+  if (input == null) {
+    return {
+      installations: Object.fromEntries(
+        Object.entries(defaults.installations).map(([key, installation]) => [
+          key,
+          { ...installation },
+        ]),
+      ),
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml channels.lark must be a table/object");
+  }
+
+  const config = input as LarkChannelConfigInput;
+  assertAllowedKeys(config, new Set(["installations"]), "config.toml channels.lark");
+
+  if (config.installations == null) {
+    return {
+      installations: Object.fromEntries(
+        Object.entries(defaults.installations).map(([key, installation]) => [
+          key,
+          { ...installation },
+        ]),
+      ),
+    };
+  }
+
+  if (!isPlainObject(config.installations)) {
+    throw new Error("config.toml channels.lark.installations must be a table/object");
+  }
+
+  const installations: Record<string, LarkInstallationConfig> = {};
+  for (const [installationId, rawInstallation] of Object.entries(config.installations)) {
+    installations[installationId] = validateLarkInstallationConfig(
+      installationId,
+      rawInstallation,
+      defaults.installations[installationId],
+    );
+  }
+
+  return { installations };
+}
+
+function validateLarkInstallationConfig(
+  installationId: string,
+  input: unknown,
+  defaults?: LarkInstallationConfig,
+): LarkInstallationConfig {
+  if (!isPlainObject(input)) {
+    throw new Error(
+      `config.toml channels.lark.installations.${installationId} must be a table/object`,
+    );
+  }
+
+  const config = input as LarkInstallationConfigInput;
+  assertAllowedKeys(
+    config,
+    new Set(["enabled", "appId", "appSecret", "connectionMode"]),
+    `config.toml channels.lark.installations.${installationId}`,
+  );
+
+  const resolved: LarkInstallationConfig = {
+    enabled: defaults?.enabled ?? true,
+    connectionMode: defaults?.connectionMode ?? "websocket",
+    ...(defaults?.appId == null ? {} : { appId: defaults.appId }),
+    ...(defaults?.appSecret == null ? {} : { appSecret: defaults.appSecret }),
+  };
+
+  if (config.enabled != null) {
+    resolved.enabled = validateBoolean(
+      config.enabled,
+      `config.toml channels.lark.installations.${installationId}.enabled`,
+    );
+  }
+
+  const appId = validateOptionalNonEmptyString(
+    config.appId,
+    `config.toml channels.lark.installations.${installationId}.appId`,
+  );
+  if (appId != null) {
+    resolved.appId = appId;
+  }
+
+  const appSecret = validateOptionalNonEmptyString(
+    config.appSecret,
+    `config.toml channels.lark.installations.${installationId}.appSecret`,
+  );
+  if (appSecret != null) {
+    resolved.appSecret = appSecret;
+  }
+
+  if (config.connectionMode != null) {
+    if (
+      typeof config.connectionMode !== "string" ||
+      !LARK_CONNECTION_MODES.includes(config.connectionMode as LarkConnectionMode)
+    ) {
+      throw new Error(
+        `config.toml channels.lark.installations.${installationId}.connectionMode must be websocket or webhook`,
+      );
+    }
+    resolved.connectionMode = config.connectionMode as LarkConnectionMode;
+  }
+
+  return resolved;
 }
 
 function validateSecurityFilesystemConfig(

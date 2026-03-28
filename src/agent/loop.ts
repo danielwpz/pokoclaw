@@ -269,6 +269,16 @@ export class AgentLoop {
         let response: AgentModelTurnResult;
 
         while (true) {
+          logger.info("requesting assistant response", {
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            scenario: input.scenario,
+            turn: turn + 1,
+            runId,
+            assistantMessageId,
+            modelId: model.id,
+          });
           this.recordEvent(events, {
             type: "assistant_message_started",
             turn: turn + 1,
@@ -415,6 +425,19 @@ export class AgentLoop {
         nextSeq += 1;
         messages.push(assistantMessage);
         appendedMessageIds.push(assistantMessageId);
+        logger.info("assistant response completed", {
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          scenario: input.scenario,
+          turn: turn + 1,
+          runId,
+          assistantMessageId,
+          modelId: model.id,
+          stopReason: response.stopReason,
+          toolCalls: toolCalls.length,
+          textPreview: truncateLogText(assistantText, 96),
+        });
         this.recordEvent(events, {
           type: "assistant_message_completed",
           turn: turn + 1,
@@ -699,6 +722,17 @@ export class AgentLoop {
         branchId: context.session.branchId,
         runId,
       });
+      logger.info("session run completed", {
+        sessionId: input.sessionId,
+        conversationId: context.session.conversationId,
+        branchId: context.session.branchId,
+        scenario: input.scenario,
+        modelId: model.id,
+        runId,
+        appendedMessages: appendedMessageIds.length,
+        toolExecutions,
+        compactionRequested,
+      });
 
       return {
         runId,
@@ -723,6 +757,16 @@ export class AgentLoop {
         conversationId: context.session.conversationId,
         branchId: context.session.branchId,
         runId,
+      });
+      logger.error("session run failed", {
+        sessionId: input.sessionId,
+        conversationId: context.session.conversationId,
+        branchId: context.session.branchId,
+        scenario: input.scenario,
+        modelId: model.id,
+        runId,
+        errorKind: normalizedError.kind,
+        errorMessage: normalizedError.message,
       });
       throw error;
     } finally {

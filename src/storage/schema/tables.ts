@@ -76,6 +76,39 @@ export const conversationBranches = sqliteTable(
   ],
 );
 
+export const channelSurfaces = sqliteTable(
+  "channel_surfaces",
+  {
+    id: text("id").primaryKey(),
+    channelType: text("channel_type").notNull(),
+    channelInstallationId: text("channel_installation_id").notNull(),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    branchId: text("branch_id")
+      .notNull()
+      .references(() => conversationBranches.id, { onDelete: "cascade" }),
+    surfaceKey: text("surface_key").notNull(),
+    surfaceObjectJson: text("surface_object_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uidx_channel_surfaces_internal").on(
+      table.channelType,
+      table.channelInstallationId,
+      table.conversationId,
+      table.branchId,
+    ),
+    uniqueIndex("uidx_channel_surfaces_lookup").on(
+      table.channelType,
+      table.channelInstallationId,
+      table.surfaceKey,
+    ),
+    index("idx_channel_surfaces_conversation_branch").on(table.conversationId, table.branchId),
+  ],
+);
+
 export const agents = sqliteTable("agents", {
   id: text("id").primaryKey(),
   conversationId: text("conversation_id")
@@ -365,4 +398,51 @@ export const authEvents = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [index("idx_auth_events_time").on(table.createdAt)],
+);
+
+export const larkObjectBindings = sqliteTable(
+  "lark_object_bindings",
+  {
+    id: text("id").primaryKey(),
+    channelInstallationId: text("channel_installation_id").notNull(),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    branchId: text("branch_id")
+      .notNull()
+      .references(() => conversationBranches.id, { onDelete: "cascade" }),
+    internalObjectKind: text("internal_object_kind").notNull(),
+    internalObjectId: text("internal_object_id").notNull(),
+    larkMessageId: text("lark_message_id"),
+    larkOpenMessageId: text("lark_open_message_id"),
+    larkCardId: text("lark_card_id"),
+    threadRootMessageId: text("thread_root_message_id"),
+    cardElementId: text("card_element_id"),
+    lastSequence: integer("last_sequence"),
+    status: text("status").notNull().default("active"),
+    metadataJson: text("metadata_json"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uidx_lark_object_bindings_internal").on(
+      table.channelInstallationId,
+      table.internalObjectKind,
+      table.internalObjectId,
+    ),
+    uniqueIndex("uidx_lark_object_bindings_message").on(
+      table.channelInstallationId,
+      table.larkMessageId,
+    ),
+    uniqueIndex("uidx_lark_object_bindings_open_message").on(
+      table.channelInstallationId,
+      table.larkOpenMessageId,
+    ),
+    uniqueIndex("uidx_lark_object_bindings_card").on(table.channelInstallationId, table.larkCardId),
+    index("idx_lark_object_bindings_conversation_branch").on(table.conversationId, table.branchId),
+    index("idx_lark_object_bindings_thread_root").on(
+      table.channelInstallationId,
+      table.threadRootMessageId,
+    ),
+  ],
 );

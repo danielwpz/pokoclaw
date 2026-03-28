@@ -47,6 +47,12 @@ export class AgentsRepo {
     return this.db.select().from(agents).where(eq(agents.id, id)).get() ?? null;
   }
 
+  findByConversationId(conversationId: string): Agent | null {
+    return (
+      this.db.select().from(agents).where(eq(agents.conversationId, conversationId)).get() ?? null
+    );
+  }
+
   resolveMainAgentId(agentId: string): string | null {
     const agent = this.getById(agentId);
     if (agent == null) {
