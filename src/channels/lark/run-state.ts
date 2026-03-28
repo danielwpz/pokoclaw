@@ -84,6 +84,8 @@ export function reduceLarkRunState(
       return onToolCallFailed(state, envelope.event);
     case "run_completed":
       return finalizeRun(state, "completed");
+    case "run_cancelled":
+      return finalizeRun(state, "cancelled");
     case "run_failed":
       return finalizeRun(state, "failed");
     default:
@@ -395,6 +397,7 @@ export function shouldHandleLarkRuntimeEvent(envelope: OrchestratedRuntimeEventE
     envelope.event.type === "tool_call_completed" ||
     envelope.event.type === "tool_call_failed" ||
     envelope.event.type === "run_completed" ||
+    envelope.event.type === "run_cancelled" ||
     envelope.event.type === "run_failed"
   );
 }

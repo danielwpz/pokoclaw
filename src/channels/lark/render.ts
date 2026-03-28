@@ -93,7 +93,7 @@ function buildCard(
     };
   }
 
-  const footerElements = renderFooter(state.footerStatus, state.terminal);
+  const footerElements = renderFooter(state.footerStatus, state.terminal, state.runId);
   if (footerElements.length > 0) {
     elements.push({ tag: "hr" }, ...footerElements);
   }
@@ -293,6 +293,7 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
 function renderFooter(
   status: LarkFooterStatus,
   terminal: LarkRunState["terminal"],
+  runId: string,
 ): Array<Record<string, unknown>> {
   const elements: Array<Record<string, unknown>> = [];
   if (status === "thinking") {
@@ -314,7 +315,7 @@ function renderFooter(
       tag: "button",
       text: { tag: "plain_text", content: "⏹ 停止" },
       type: "danger",
-      value: { action: "stop_run_placeholder" },
+      value: { action: "stop_run", runId },
     });
   }
   return elements;

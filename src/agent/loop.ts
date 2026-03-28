@@ -31,6 +31,7 @@ import {
   SessionApprovalWaitRegistry,
 } from "@/src/runtime/approval-waits.js";
 import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import type { RuntimeControlService } from "@/src/runtime/control.js";
 import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-queue.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import type { PermissionRequest } from "@/src/security/scope.js";
@@ -127,6 +128,7 @@ export interface AgentLoopDependencies {
   approvalTimeoutMs?: number;
   approvalGrantTtlMs?: number;
   runtimeControl?: Omit<ToolRuntimeControl, "submitApprovalDecision">;
+  control?: RuntimeControlService;
   emitEvent?: (event: AgentRuntimeEvent) => void;
 }
 
@@ -227,6 +229,13 @@ export class AgentLoop {
     let toolExecutions = 0;
     let nextSeq = this.deps.messages.getNextSeq(input.sessionId);
     const runId = randomUUID();
+    this.deps.control?.beginRun({
+      runId,
+      sessionId: input.sessionId,
+      conversationId: context.session.conversationId,
+      branchId: context.session.branchId,
+      scenario: input.scenario,
+    });
     let compactionRequested = false;
     let latestCompaction = decideCompaction({
       contextTokens: 0,
@@ -749,6 +758,34 @@ export class AgentLoop {
         events,
       };
     } catch (error) {
+      if (handle.signal.aborted) {
+        const signalReason = handle.signal.reason;
+        const reason =
+          typeof signalReason === "string" && signalReason.length > 0
+            ? signalReason
+            : getErrorMessage(error);
+        this.recordEvent(events, {
+          type: "run_cancelled",
+          scenario: input.scenario,
+          modelId: model.id,
+          reason,
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          runId,
+        });
+        logger.warn("session run cancelled", {
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          scenario: input.scenario,
+          modelId: model.id,
+          runId,
+          reason,
+        });
+        throw error;
+      }
+
       const normalizedError = toRunFailure(error);
       this.recordEvent(events, {
         type: "run_failed",
@@ -775,6 +812,7 @@ export class AgentLoop {
       throw error;
     } finally {
       this.steerQueue.clear(input.sessionId);
+      this.deps.control?.finishRun(runId);
       handle.finish();
     }
   }

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createLarkChannelRuntime } from "@/src/channels/lark/channel.js";
+import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import { RuntimeControlService } from "@/src/runtime/control.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import {
   createTestDatabase,
@@ -42,6 +44,7 @@ describe("Lark channel runtime", () => {
       ingress: {
         submitMessage: vi.fn(async () => ({ status: "started" as const })),
       },
+      control: new RuntimeControlService(new SessionRunAbortRegistry()),
       outboundEventBus: new RuntimeEventBus(),
       wsClientFactory: () =>
         ({

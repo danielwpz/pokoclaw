@@ -8,6 +8,7 @@ import { CronService } from "@/src/cron/service.js";
 import { AgentManager, type AgentManagerDependencies } from "@/src/orchestration/agent-manager.js";
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import { RuntimeControlService } from "@/src/runtime/control.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
 import {
@@ -28,6 +29,7 @@ export interface RuntimeBootstrap {
   readonly manager: AgentManager;
   readonly cron: CronService;
   readonly lark: LarkChannelRuntime;
+  readonly control: RuntimeControlService;
   readonly outboundEventBus: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   start(): void;
   shutdown(): Promise<void>;
@@ -45,17 +47,20 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const tools = createBuiltinToolRegistry();
   const bridge = createRuntimeOrchestrationBridge();
   const outboundEventBus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+  const cancel = new SessionRunAbortRegistry();
+  const control = new RuntimeControlService(cancel);
   const loop = new AgentLoop({
     sessions: new AgentSessionService(sessions, messages),
     messages,
     models: new ProviderRegistry(input.config),
     tools,
-    cancel: new SessionRunAbortRegistry(),
+    cancel,
     modelRunner: new PiAgentModelRunner(new PiBridge(), tools),
     storage: input.storage,
     securityConfig: input.config.security,
     compaction: input.config.compaction,
     runtimeControl: bridge.runtimeControl,
+    control,
     emitEvent: bridge.emitRuntimeEvent,
   });
 
@@ -81,6 +86,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     config: input.config.channels.lark,
     storage: input.storage,
     ingress,
+    control,
     outboundEventBus,
   });
 
@@ -93,6 +99,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     manager,
     cron,
     lark,
+    control,
     outboundEventBus,
     start() {
       if (started) {
