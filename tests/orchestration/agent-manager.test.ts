@@ -150,7 +150,6 @@ describe("AgentManager", () => {
         approvalTarget: "main_agent",
         title: "Need approval",
         reasonText: "Need to update the requested task output.",
-        options: [],
         expiresAt: null,
       });
 
@@ -210,7 +209,6 @@ describe("AgentManager", () => {
       approvalTarget: "user",
       title: "Need approval",
       reasonText: "Need permission.",
-      options: [],
       expiresAt: null,
     });
 
@@ -896,7 +894,6 @@ describe("AgentManager", () => {
       approvalTarget: "main_agent",
       title: "Need approval",
       reasonText: "Need permission.",
-      options: [],
       expiresAt: null,
     });
 

@@ -1,7 +1,14 @@
 import { describe, expect, test } from "vitest";
-import { buildLarkRenderedRunCard, renderLarkRunCard } from "@/src/channels/lark/render.js";
+import { createLarkApprovalStateFromRequest } from "@/src/channels/lark/approval-state.js";
+import {
+  buildLarkRenderedApprovalCard,
+  buildLarkRenderedRunCard,
+  renderLarkRunCard,
+} from "@/src/channels/lark/render.js";
 import {
   LARK_ASSISTANT_PLACEHOLDER_TEXT,
+  markLarkRunApprovalResolved,
+  markLarkRunAwaitingApproval,
   reduceLarkRunState,
 } from "@/src/channels/lark/run-state.js";
 import type { OrchestratedRuntimeEventEnvelope } from "@/src/orchestration/outbound-events.js";
@@ -514,6 +521,172 @@ describe("lark run state", () => {
           element.tag === "collapsible_panel" && JSON.stringify(element.header).includes("思考"),
       ),
     ).toBe(false);
+  });
+
+  test("marks the prior run card as waiting approval and hides stop button", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_approval_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_approval_1",
+      }),
+    );
+    state = markLarkRunAwaitingApproval(state);
+
+    const cardText = JSON.stringify(renderLarkRunCard(state));
+    expect(cardText).toContain("等待授权");
+    expect(cardText).toContain("当前执行已暂停");
+    expect(cardText).not.toContain("⏹ 停止");
+  });
+
+  test("marks the prior run card as continued or denied after approval resolution", () => {
+    const base = markLarkRunAwaitingApproval(
+      reduceLarkRunState(
+        null,
+        makeEnvelope({
+          type: "assistant_message_started",
+          eventId: "evt_approval_2",
+          createdAt: "2026-03-28T00:00:00.000Z",
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          branchId: "branch_1",
+          runId: "run_1",
+          turn: 1,
+          messageId: "msg_approval_2",
+        }),
+      ),
+    );
+
+    const approvedText = JSON.stringify(
+      renderLarkRunCard(markLarkRunApprovalResolved(base, "approve")),
+    );
+    expect(approvedText).toContain("已获授权");
+    expect(approvedText).toContain("新的卡片");
+    expect(approvedText).not.toContain("⏹ 停止");
+
+    const deniedText = JSON.stringify(renderLarkRunCard(markLarkRunApprovalResolved(base, "deny")));
+    expect(deniedText).toContain("已拒绝");
+    expect(deniedText).toContain("本次执行已停止");
+    expect(deniedText).not.toContain("⏹ 停止");
+  });
+
+  test("renders request_permissions inside the run transcript while awaiting approval", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_perm_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_perm_1",
+        toolName: "request_permissions",
+        args: { reason: "need access" },
+      }),
+    );
+    state = markLarkRunAwaitingApproval(state);
+
+    const cardText = JSON.stringify(renderLarkRunCard(state));
+    expect(cardText).toContain("请求授权");
+    expect(cardText).toContain("等待你的授权");
+    expect(cardText).toContain("等待授权");
+  });
+
+  test("renders standalone approval cards with rich header styling and actions", () => {
+    const approvalState = createLarkApprovalStateFromRequest({
+      event: {
+        type: "approval_requested",
+        eventId: "evt_approval_card_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_1",
+        approvalTarget: "user",
+        title: "需要授权",
+        reasonText: "当前操作需要你的授权才能继续。",
+        expiresAt: null,
+      },
+      sourceRunCardObjectId: "run_1:seg:1",
+    });
+
+    const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
+    expect(cardText).toContain('"template":"blue"');
+    expect(cardText).toContain("lock_chat_filled");
+    expect(cardText).toContain("### 需要你的授权");
+    expect(cardText).toContain("**操作**");
+    expect(cardText).toContain("**原因**");
+    expect(cardText).toContain("允许 1天");
+    expect(cardText).toContain("允许 永久");
+    expect(cardText).toContain("拒绝");
+  });
+
+  test("formats single-path approval titles with bold access and code-wrapped path", () => {
+    const approvalState = createLarkApprovalStateFromRequest({
+      event: {
+        type: "approval_requested",
+        eventId: "evt_approval_card_fmt_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_fmt_1",
+        approvalTarget: "user",
+        title: "Approval required: Write /Users/daniel/Desktop/test-new-2.js",
+        reasonText: "当前操作需要你的授权才能继续。",
+        expiresAt: null,
+      },
+      sourceRunCardObjectId: "run_1:seg:1",
+    });
+
+    const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
+    expect(cardText).toContain(
+      "Approval required: **Write** `/Users/daniel/Desktop/test-new-2.js`",
+    );
+  });
+
+  test("does not repeat resolved approval state text inside the card body", () => {
+    const approvalState = createLarkApprovalStateFromRequest({
+      event: {
+        type: "approval_requested",
+        eventId: "evt_approval_card_fmt_2",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_fmt_2",
+        approvalTarget: "user",
+        title: "Approval required: Write /Users/daniel/Desktop/test-new-2.js",
+        reasonText: "当前操作需要你的授权才能继续。",
+        expiresAt: null,
+      },
+      sourceRunCardObjectId: "run_1:seg:1",
+    });
+
+    const resolved = {
+      ...approvalState,
+      resolved: true as const,
+      decision: "approve" as const,
+      actor: "user:test",
+    };
+
+    const cardText = JSON.stringify(buildLarkRenderedApprovalCard(resolved).card);
+    expect(cardText).not.toContain("### 已授权");
+    expect(cardText).toContain("授权请求 — 授权成功");
+    expect(cardText).toContain("**结果**：agent 将继续执行。");
   });
 
   test("renders stop button while running and removes it after completion", () => {

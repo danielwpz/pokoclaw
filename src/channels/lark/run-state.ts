@@ -41,6 +41,15 @@ export interface LarkReasoningState {
   active: boolean;
 }
 
+export type LarkRunTerminal =
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "awaiting_approval"
+  | "continued"
+  | "denied";
+
 export interface LarkRunState {
   runId: string;
   conversationId: string;
@@ -51,7 +60,7 @@ export interface LarkRunState {
   activeToolSequenceBlockId: string | null;
   footerStatus: LarkFooterStatus;
   reasoning: LarkReasoningState;
-  terminal: "running" | "completed" | "failed" | "cancelled";
+  terminal: LarkRunTerminal;
 }
 
 export const LARK_ASSISTANT_PLACEHOLDER_TEXT = "_正在思考..._";
@@ -338,6 +347,51 @@ function finalizeRun(
   };
 }
 
+export function markLarkRunAwaitingApproval(state: LarkRunState): LarkRunState {
+  return {
+    ...state,
+    blocks: finalizeActiveToolSequenceIfNeeded(state.blocks, state.activeToolSequenceBlockId),
+    activeAssistantMessageId: null,
+    activeToolSequenceBlockId: null,
+    footerStatus: null,
+    reasoning: {
+      ...state.reasoning,
+      active: false,
+      expanded: false,
+    },
+    terminal: "awaiting_approval",
+  };
+}
+
+export function markLarkRunApprovalResolved(
+  state: LarkRunState,
+  decision: "approve" | "deny",
+): LarkRunState {
+  return {
+    ...state,
+    blocks: resolvePendingPermissionRequestTools(state.blocks, decision),
+    activeAssistantMessageId: null,
+    activeToolSequenceBlockId: null,
+    footerStatus: null,
+    reasoning: {
+      ...state.reasoning,
+      active: false,
+      expanded: false,
+    },
+    terminal: decision === "approve" ? "continued" : "denied",
+  };
+}
+
+export function hasVisibleLarkRunBlocks(state: LarkRunState): boolean {
+  return state.blocks.some((block) => {
+    if (block.kind === "assistant_text") {
+      return block.text.trim().length > 0;
+    }
+
+    return block.tools.length > 0;
+  });
+}
+
 function finalizeActiveToolSequenceIfNeeded(
   blocks: Array<LarkAssistantTextBlock | LarkToolSequenceBlock>,
   blockId: string | null,
@@ -358,6 +412,40 @@ function appendReasoningContent(existing: string, next: string): string {
     return next;
   }
   return `${existing}\n\n${next}`;
+}
+
+function resolvePendingPermissionRequestTools(
+  blocks: Array<LarkAssistantTextBlock | LarkToolSequenceBlock>,
+  decision: "approve" | "deny",
+): Array<LarkAssistantTextBlock | LarkToolSequenceBlock> {
+  return blocks.map((block) => {
+    if (block.kind !== "tool_sequence") {
+      return block;
+    }
+
+    return {
+      ...block,
+      tools: block.tools.map((tool) => {
+        if (tool.toolName !== "request_permissions" || tool.status !== "running") {
+          return tool;
+        }
+
+        return decision === "approve"
+          ? {
+              ...tool,
+              status: "completed",
+              result: {
+                status: "approved",
+              },
+            }
+          : {
+              ...tool,
+              status: "failed",
+              errorMessage: "用户拒绝了这次授权请求。",
+            };
+      }),
+    };
+  });
 }
 
 function createAssistantTextBlock(
