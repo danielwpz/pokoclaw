@@ -222,7 +222,7 @@ export function createLarkOutboundRuntime(
           runCardObjectId,
           snapshotKey,
         });
-        logger.info("discarded empty lark run card segment", {
+        logger.debug("discarded empty lark run card segment", {
           runId: state.runId,
           runCardObjectId,
           channelInstallationId: surface.channelInstallationId,
@@ -265,7 +265,7 @@ export function createLarkOutboundRuntime(
             data: JSON.stringify(rendered.card),
           },
         });
-        logger.info("created lark cardkit card response", {
+        logger.debug("created lark cardkit card response", {
           runId: state.runId,
           runCardObjectId,
           channelInstallationId: surface.channelInstallationId,
@@ -285,7 +285,7 @@ export function createLarkOutboundRuntime(
           continue;
         }
 
-        logger.info("sending lark card reference message", {
+        logger.debug("sending lark card reference message", {
           runId: state.runId,
           runCardObjectId,
           channelInstallationId: surface.channelInstallationId,
@@ -386,7 +386,7 @@ export function createLarkOutboundRuntime(
           activeAssistantElementId: activeAssistantBlockId,
           activeAssistantText,
         });
-        logger.info("streamed lark run card content", {
+        logger.debug("streamed lark run card content", {
           runId: state.runId,
           runCardObjectId,
           channelInstallationId: surface.channelInstallationId,
@@ -428,7 +428,7 @@ export function createLarkOutboundRuntime(
         activeAssistantElementId: activeAssistantBlockId,
         activeAssistantText,
       });
-      logger.info("updated lark run card", {
+      logger.debug("updated lark run card", {
         runId: state.runId,
         runCardObjectId,
         channelInstallationId: surface.channelInstallationId,
@@ -482,7 +482,7 @@ export function createLarkOutboundRuntime(
             data: JSON.stringify(rendered.card),
           },
         });
-        logger.info("created lark approval cardkit response", {
+        logger.debug("created lark approval cardkit response", {
           approvalId,
           runId: state.runId,
           channelInstallationId: surface.channelInstallationId,
@@ -565,7 +565,7 @@ export function createLarkOutboundRuntime(
           runId: state.runId,
         }),
       });
-      logger.info("updated standalone lark approval card", {
+      logger.debug("updated standalone lark approval card", {
         approvalId,
         runId: state.runId,
         channelInstallationId: surface.channelInstallationId,
@@ -581,7 +581,7 @@ export function createLarkOutboundRuntime(
     const runCardObjectId = `${runId}:seg:${nextIndex}`;
     activeRunSegmentByRunId.set(runId, runCardObjectId);
     latestRunSegmentByRunId.set(runId, runCardObjectId);
-    logger.info("opened lark run card segment", {
+    logger.debug("opened lark run card segment", {
       runId,
       runCardObjectId,
       segmentIndex: nextIndex,
@@ -628,7 +628,7 @@ export function createLarkOutboundRuntime(
           runStates.set(sourceRunCardObjectId, markLarkRunAwaitingApproval(existingRunState));
           activeRunSegmentByRunId.delete(runId);
           latestRunSegmentByRunId.set(runId, sourceRunCardObjectId);
-          logger.info("finalized lark run card segment awaiting approval", {
+          logger.debug("finalized lark run card segment awaiting approval", {
             runId,
             approvalId,
             sourceRunCardObjectId,
@@ -645,7 +645,7 @@ export function createLarkOutboundRuntime(
         }),
       );
       latestApprovalByRunId.set(runId, approvalId);
-      logger.info("queued standalone lark approval card", {
+      logger.debug("queued standalone lark approval card", {
         runId,
         approvalId,
         sourceRunCardObjectId,
@@ -670,7 +670,7 @@ export function createLarkOutboundRuntime(
           previousApprovalState.sourceRunCardObjectId,
           markLarkRunApprovalResolved(sourceRunState, event.decision),
         );
-        logger.info("updated prior lark run card segment after approval resolution", {
+        logger.debug("updated prior lark run card segment after approval resolution", {
           runId,
           approvalId,
           sourceRunCardObjectId: previousApprovalState.sourceRunCardObjectId,
