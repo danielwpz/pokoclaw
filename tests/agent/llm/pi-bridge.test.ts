@@ -1,6 +1,6 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AgentLlmError } from "@/src/agent/llm/errors.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import { PiBridge } from "@/src/agent/llm/pi-bridge.js";
@@ -12,6 +12,9 @@ const { completeSimpleMock, streamSimpleMock } = vi.hoisted(() => ({
   completeSimpleMock: vi.fn(),
   streamSimpleMock: vi.fn(),
 }));
+const { upstreamStreamMock } = vi.hoisted(() => ({
+  upstreamStreamMock: vi.fn(),
+}));
 
 const NO_ARGS_TOOL_SCHEMA = Type.Object({}, { additionalProperties: false });
 
@@ -21,6 +24,15 @@ vi.mock("@mariozechner/pi-ai", async () => {
     ...actual,
     completeSimple: completeSimpleMock,
     streamSimple: streamSimpleMock,
+  };
+});
+vi.mock("@/src/agent/llm/upstream-openai.js", async () => {
+  const actual = await vi.importActual<typeof import("@/src/agent/llm/upstream-openai.js")>(
+    "@/src/agent/llm/upstream-openai.js",
+  );
+  return {
+    ...actual,
+    streamWithNormalizedUpstreamUsage: upstreamStreamMock,
   };
 });
 
@@ -82,9 +94,16 @@ function createAssistantEventStream(events: AssistantMessageEvent[], result: Ass
 }
 
 describe("pi bridge", () => {
+  beforeEach(() => {
+    upstreamStreamMock.mockImplementation((model, context, options) =>
+      streamSimpleMock(model, context, options),
+    );
+  });
+
   afterEach(() => {
     completeSimpleMock.mockReset();
     streamSimpleMock.mockReset();
+    upstreamStreamMock.mockReset();
   });
 
   test("streams text deltas and returns a normalized assistant result", async () => {
@@ -311,7 +330,7 @@ describe("pi bridge", () => {
       signal: new AbortController().signal,
     });
 
-    const [effectiveModel] = streamSimpleMock.mock.calls.at(-1) as [
+    const [effectiveModel] = upstreamStreamMock.mock.calls.at(-1) as [
       { api: string; baseUrl: string },
     ];
     expect(effectiveModel.api).toBe("openai-completions");
@@ -369,7 +388,7 @@ describe("pi bridge", () => {
       signal: new AbortController().signal,
     });
 
-    const [effectiveModel] = streamSimpleMock.mock.calls.at(-1) as [
+    const [effectiveModel] = upstreamStreamMock.mock.calls.at(-1) as [
       { api: string; baseUrl: string },
     ];
     expect(effectiveModel.api).toBe("openai-responses");
