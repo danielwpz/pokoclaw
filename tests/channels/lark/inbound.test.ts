@@ -65,9 +65,36 @@ describe("lark inbound message handling", () => {
     expect(normalizeLarkTextMessage(makeTextEvent(" hello "))).toMatchObject({
       chatId: "oc_chat_1",
       messageId: "om_msg_1",
+      parentMessageId: null,
+      threadId: null,
       senderOpenId: "ou_sender",
       senderType: "user",
       text: "hello",
+    });
+  });
+
+  test("recognizes quote replies by parent_id without thread_id", () => {
+    expect(
+      normalizeLarkTextMessage({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_msg_quote",
+          parent_id: "om_parent_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "为什么这里这样写？" }),
+        },
+      }),
+    ).toMatchObject({
+      messageId: "om_msg_quote",
+      parentMessageId: "om_parent_1",
+      threadId: null,
+      text: "为什么这里这样写？",
     });
   });
 
@@ -99,6 +126,111 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_chat_1",
         scenario: "chat",
         content: "hello from lark",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
+  test("expands quote replies by fetching the referenced message text", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const quoteMessageFetcher = vi.fn(async () => ({
+        messageType: "text",
+        text: "被引用的原消息内容",
+      }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        quoteMessageFetcher,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_msg_quote_1",
+          parent_id: "om_parent_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "请看这条引用消息" }),
+        },
+      });
+
+      expect(quoteMessageFetcher).toHaveBeenCalledExactlyOnceWith({
+        installationId: "default",
+        messageId: "om_parent_1",
+      });
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_chat_1",
+        scenario: "chat",
+        content: "用户引用了一条消息：\n被引用的原消息内容\n\n用户的新消息：请看这条引用消息",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
+  test("falls back gracefully when quoted message lookup fails", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const quoteMessageFetcher = vi.fn(async () => null);
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        quoteMessageFetcher,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_msg_quote_2",
+          parent_id: "om_parent_2",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "请继续" }),
+        },
+      });
+
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_chat_1",
+        scenario: "chat",
+        content: "用户引用了一条消息，但系统未能读取原文。\n\n用户的新消息：请继续",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
     });

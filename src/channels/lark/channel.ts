@@ -59,6 +59,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     storage: input.storage,
     ingress: input.ingress,
     control: input.control,
+    clients,
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
   });
   const outbound = createLarkOutboundRuntime({
