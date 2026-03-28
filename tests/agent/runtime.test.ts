@@ -156,6 +156,94 @@ describe("session runtime ingress", () => {
     });
   });
 
+  test("includes the newest user message even when session history exceeds 500 messages", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    const cancel = new SessionRunAbortRegistry();
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+
+    for (let seq = 1; seq <= 505; seq += 1) {
+      messagesRepo.append({
+        id: `msg_${seq}`,
+        sessionId: "sess_1",
+        seq,
+        role: seq % 2 === 0 ? "assistant" : "user",
+        ...(seq % 2 === 0
+          ? {
+              provider: "anthropic_main",
+              model: "claude-sonnet-4-5",
+              modelApi: "anthropic-messages",
+              stopReason: "stop" as const,
+              usage: {
+                input: 10,
+                output: 5,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 15,
+              },
+              payloadJson: JSON.stringify({
+                content: [{ type: "text", text: `assistant-${seq}` }],
+              }),
+            }
+          : {
+              payloadJson: JSON.stringify({
+                content: `user-${seq}`,
+              }),
+            }),
+        createdAt: new Date(`2026-03-22T00:00:${String((seq - 1) % 60).padStart(2, "0")}.000Z`),
+      });
+    }
+
+    let lastUserContent: string | null = null;
+    let messageCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn({ messages }) {
+        messageCount = messages.length;
+        lastUserContent = JSON.parse(messages.at(-1)?.payloadJson ?? "{}").content ?? null;
+        return makeAssistantResult({
+          content: [{ type: "text", text: "ok" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel,
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const ingress = new SessionRuntimeIngress({
+      loop,
+      messages: messagesRepo,
+    });
+
+    const result = await ingress.submitMessage({
+      sessionId: "sess_1",
+      scenario: "chat",
+      content: "latest-user-message",
+    });
+
+    expect(result.status).toBe("started");
+    expect(messageCount).toBe(506);
+    expect(lastUserContent).toBe("latest-user-message");
+  });
+
   test("steers new user input into an active run instead of starting a second run", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);

@@ -209,6 +209,38 @@ describe("messages repo", () => {
     );
   });
 
+  test("listBySession does not silently drop newest messages once a session exceeds 500 rows", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const repo = new MessagesRepo(handle.storage.db);
+
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_1', 'lark', 'acct_a', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_1', 'chat_1', 'dm', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+      INSERT INTO sessions (id, conversation_id, branch_id, purpose, created_at, updated_at)
+      VALUES ('sess_1', 'conv_1', 'branch_1', 'chat', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+    `);
+
+    for (let seq = 1; seq <= 506; seq += 1) {
+      repo.append({
+        id: `msg_${seq}`,
+        sessionId: "sess_1",
+        seq,
+        role: seq % 2 === 0 ? "assistant" : "user",
+        payloadJson: JSON.stringify({ content: `message-${seq}` }),
+        createdAt: new Date(`2026-03-22T00:00:${String((seq - 1) % 60).padStart(2, "0")}.000Z`),
+      });
+    }
+
+    const rows = repo.listBySession("sess_1");
+    expect(rows).toHaveLength(506);
+    expect(rows.at(0)?.id).toBe("msg_1");
+    expect(rows.at(-1)?.id).toBe("msg_506");
+  });
+
   test("rejects invalid structured usage at runtime", async () => {
     handle = await createTestDatabase(import.meta.url);
     const repo = new MessagesRepo(handle.storage.db);

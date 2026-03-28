@@ -3,7 +3,6 @@ import {
   type AssistantMessage,
   completeSimple,
   type Model,
-  streamSimple,
   type Tool,
   Type,
 } from "@mariozechner/pi-ai";
@@ -15,6 +14,7 @@ import type {
 import { normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
 import { type AgentAssistantContentBlock, buildPiMessages } from "@/src/agent/llm/messages.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
+import { streamWithNormalizedUpstreamUsage } from "@/src/agent/llm/upstream-openai.js";
 import type {
   AgentModelRunner,
   AgentModelTurnInput,
@@ -90,7 +90,7 @@ export class PiBridge {
     // logLlmRequestContext("stream", input, context.messages, tools);
 
     try {
-      const stream = streamSimple(
+      const stream = streamWithNormalizedUpstreamUsage(
         model,
         context,
         buildPiStreamOptions(input.model, input.signal, { enableReasoning: true }),

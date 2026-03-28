@@ -41,6 +41,7 @@
     "better-sqlite3": "^12.8.0",
     "croner": "^10.0.1",
     "drizzle-orm": "^0.45.1",
+    "openai": "6.26.0",
     "toml": "^3.0.0"
   }
 }

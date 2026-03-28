@@ -81,16 +81,18 @@ export class MessagesRepo {
   }
 
   listBySession(sessionId: string, options: ListSessionMessagesOptions = {}): Message[] {
-    const limit = options.limit ?? 500;
     const afterSeq = options.afterSeq ?? 0;
-
-    return this.db
+    const query = this.db
       .select()
       .from(messages)
       .where(and(eq(messages.sessionId, sessionId), gt(messages.seq, afterSeq)))
-      .orderBy(asc(messages.seq))
-      .limit(limit)
-      .all();
+      .orderBy(asc(messages.seq));
+
+    if (options.limit != null) {
+      return query.limit(options.limit).all();
+    }
+
+    return query.all();
   }
 
   getNextSeq(sessionId: string): number {
