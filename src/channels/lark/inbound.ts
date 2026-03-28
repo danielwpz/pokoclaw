@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
 
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
+import type { RuntimeControlService } from "@/src/runtime/control.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -29,6 +30,7 @@ export interface CreateLarkInboundRuntimeInput {
   installations: ConfiguredLarkInstallation[];
   storage: StorageDb;
   ingress: LarkInboundIngress;
+  control: RuntimeControlService;
   wsClientFactory?: (installation: ConfiguredLarkInstallation) => Lark.WSClient;
 }
 
@@ -69,6 +71,12 @@ export interface NormalizedLarkTextMessage {
   chatType: string | null;
   text: string;
   createdAt?: Date;
+}
+
+export interface NormalizedLarkCardAction {
+  action: string;
+  runId: string | null;
+  actorOpenId: string | null;
 }
 
 export function buildLarkChatSurfaceKey(chatId: string): string {
@@ -134,6 +142,7 @@ export function createLarkMessageReceiveHandler(input: {
   installationId: string;
   storage: StorageDb;
   ingress: LarkInboundIngress;
+  control: RuntimeControlService;
 }): (data: unknown) => Promise<void> {
   return async (data: unknown) => {
     const normalized = normalizeLarkTextMessage(data);
@@ -190,6 +199,25 @@ export function createLarkMessageReceiveHandler(input: {
       return;
     }
 
+    if (normalized.text === "/stop") {
+      const result = input.control.stopConversation({
+        conversationId: surface.conversationId,
+        actor:
+          normalized.senderOpenId == null
+            ? `lark:${input.installationId}:unknown`
+            : `lark:${input.installationId}:${normalized.senderOpenId}`,
+        reasonText: "stop requested from lark command",
+      });
+      logger.info("processed lark stop command", {
+        installationId: input.installationId,
+        chatId: normalized.chatId,
+        messageId: normalized.messageId,
+        conversationId: surface.conversationId,
+        acceptedCount: result.acceptedCount,
+      });
+      return;
+    }
+
     logger.info("submitting lark inbound message to runtime ingress", {
       installationId: input.installationId,
       chatId: normalized.chatId,
@@ -207,6 +235,94 @@ export function createLarkMessageReceiveHandler(input: {
       content: normalized.text,
       ...(normalized.createdAt == null ? {} : { createdAt: normalized.createdAt }),
     });
+  };
+}
+
+export function normalizeLarkCardAction(
+  data: unknown,
+): NormalizedLarkCardAction | { skipReason: string } {
+  if (!isRecord(data)) {
+    return { skipReason: "card action payload is not an object" };
+  }
+
+  const action = isRecord(data.action) ? data.action : null;
+  const value = action != null && isRecord(action.value) ? action.value : null;
+  const actionName = typeof value?.action === "string" ? value.action.trim() : "";
+  if (actionName.length === 0) {
+    return { skipReason: "card action is missing action name" };
+  }
+
+  const runId = typeof value?.runId === "string" && value.runId.length > 0 ? value.runId : null;
+  const operator = isRecord(data.operator) ? data.operator : null;
+  const actorOpenId =
+    operator != null && typeof operator.open_id === "string" && operator.open_id.length > 0
+      ? operator.open_id
+      : null;
+
+  return {
+    action: actionName,
+    runId,
+    actorOpenId,
+  };
+}
+
+export function createLarkCardActionHandler(input: {
+  installationId: string;
+  control: RuntimeControlService;
+}): (data: unknown) => Promise<unknown> {
+  return async (data: unknown) => {
+    const normalized = normalizeLarkCardAction(data);
+    if ("skipReason" in normalized) {
+      logger.debug("ignoring lark card action", {
+        installationId: input.installationId,
+        reason: normalized.skipReason,
+      });
+      return null;
+    }
+
+    if (normalized.action !== "stop_run") {
+      logger.debug("ignoring unsupported lark card action", {
+        installationId: input.installationId,
+        action: normalized.action,
+      });
+      return null;
+    }
+
+    if (normalized.runId == null) {
+      logger.warn("ignoring stop card action without run id", {
+        installationId: input.installationId,
+        action: normalized.action,
+      });
+      return {
+        toast: {
+          type: "error",
+          content: "无法识别要停止的运行",
+        },
+      };
+    }
+
+    const result = input.control.stopRun({
+      runId: normalized.runId,
+      actor:
+        normalized.actorOpenId == null
+          ? `lark:${input.installationId}:unknown`
+          : `lark:${input.installationId}:${normalized.actorOpenId}`,
+      reasonText: "stop requested from lark card action",
+    });
+
+    logger.info("processed lark stop card action", {
+      installationId: input.installationId,
+      action: normalized.action,
+      runId: normalized.runId,
+      accepted: result.accepted,
+    });
+
+    return {
+      toast: {
+        type: result.accepted ? "success" : "info",
+        content: result.accepted ? "正在停止..." : "该运行已结束或无法停止",
+      },
+    };
   };
 }
 
@@ -252,20 +368,47 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           installationId: installation.installationId,
           storage: input.storage,
           ingress: input.ingress,
+          control: input.control,
+        });
+        const onCardAction = createLarkCardActionHandler({
+          installationId: installation.installationId,
+          control: input.control,
         });
 
         const dispatcher = new Lark.EventDispatcher({}).register({
           "im.message.receive_v1": (data: unknown) => {
             void onMessage(data).catch((error: unknown) => {
+              if (isAbortLikeError(error)) {
+                logger.info("lark inbound message run was cancelled", {
+                  installationId: installation.installationId,
+                  reason: error instanceof Error ? error.message : String(error),
+                });
+                return;
+              }
+
               logger.error("failed to process lark inbound message", {
                 installationId: installation.installationId,
                 error: error instanceof Error ? error.message : String(error),
               });
             });
           },
+          "card.action.trigger": (data: unknown) =>
+            onCardAction(data).catch((error: unknown) => {
+              logger.error("failed to process lark card action", {
+                installationId: installation.installationId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return {
+                toast: {
+                  type: "error",
+                  content: "操作失败",
+                },
+              };
+            }),
         } as Record<string, (data: unknown) => void>);
 
         const socket = wsClientFactory(installation);
+        patchWsClientForCardCallbacks(socket);
         socket.start({ eventDispatcher: dispatcher });
         sockets.set(installation.installationId, socket);
 
@@ -304,6 +447,33 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
         activeSockets: sockets.size,
       };
     },
+  };
+}
+
+function patchWsClientForCardCallbacks(socket: Lark.WSClient): void {
+  const candidate = socket as unknown as {
+    handleEventData?: (data: unknown) => unknown;
+  };
+  if (typeof candidate.handleEventData !== "function") {
+    return;
+  }
+
+  const original = candidate.handleEventData.bind(socket);
+  candidate.handleEventData = (data: unknown) => {
+    if (isRecord(data) && Array.isArray(data.headers)) {
+      data.headers = data.headers.map((header) => {
+        if (isRecord(header) && header.key === "type" && header.value === "card") {
+          return {
+            ...header,
+            value: "event",
+          };
+        }
+
+        return header;
+      });
+    }
+
+    return original(data);
   };
 }
 
@@ -586,4 +756,12 @@ function truncateLogText(text: string, maxLength: number): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value != null && !Array.isArray(value);
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return error.name === "AbortError" || /(aborted|stop requested|cancelled)/i.test(error.message);
+  }
+
+  return typeof error === "string" && /(aborted|stop requested|cancelled)/i.test(error);
 }

@@ -607,6 +607,7 @@ describe("agent loop", () => {
       }),
     );
 
+    const emittedEvents: Array<{ type: string; reason?: string }> = [];
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
       messages: messagesRepo,
@@ -617,6 +618,9 @@ describe("agent loop", () => {
       storage: handle.storage.db,
       securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
     });
 
     const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
@@ -625,6 +629,11 @@ describe("agent loop", () => {
 
     await expect(runPromise).rejects.toThrow();
     expect(cancel.isActive("sess_1")).toBe(false);
+    expect(emittedEvents.at(-1)).toMatchObject({
+      type: "run_cancelled",
+      reason: "stop requested",
+    });
+    expect(emittedEvents.some((event) => event.type === "run_failed")).toBe(false);
   });
 
   test("request_permissions pauses for approval, retries the blocked tool, and inserts queued steer input", async () => {

@@ -2,9 +2,12 @@ import { describe, expect, test, vi } from "vitest";
 
 import {
   buildLarkChatSurfaceKey,
+  createLarkCardActionHandler,
   createLarkMessageReceiveHandler,
   normalizeLarkTextMessage,
 } from "@/src/channels/lark/inbound.js";
+import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import { RuntimeControlService } from "@/src/runtime/control.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import {
   createTestDatabase,
@@ -87,6 +90,7 @@ describe("lark inbound message handling", () => {
         installationId: "default",
         storage: handle.storage.db,
         ingress: { submitMessage },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
       await handler(makeTextEvent("hello from lark"));
@@ -109,6 +113,7 @@ describe("lark inbound message handling", () => {
         installationId: "default",
         storage: handle.storage.db,
         ingress: { submitMessage },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
       await handler(makeTextEvent("hello again"));
@@ -138,6 +143,7 @@ describe("lark inbound message handling", () => {
         installationId: "default",
         storage: handle.storage.db,
         ingress: { submitMessage },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
       await handler(makeTextEvent("hello first pair"));
@@ -174,6 +180,7 @@ describe("lark inbound message handling", () => {
         installationId: "default",
         storage: handle.storage.db,
         ingress: { submitMessage },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
       await handler({
@@ -212,6 +219,7 @@ describe("lark inbound message handling", () => {
         installationId: "default",
         storage: handle.storage.db,
         ingress: { submitMessage },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
       await handler({
@@ -228,6 +236,89 @@ describe("lark inbound message handling", () => {
       });
 
       expect(submitMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  test("routes /stop to control service instead of runtime ingress", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const control = {
+        stopConversation: vi.fn(() => ({
+          acceptedCount: 1,
+          conversationId: "conv_main",
+          runIds: ["run_1"],
+          sessionIds: ["sess_chat_1"],
+        })),
+      } as unknown as RuntimeControlService;
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage },
+        control,
+      });
+
+      await handler(makeTextEvent("/stop"));
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(control.stopConversation).toHaveBeenCalledExactlyOnceWith({
+        conversationId: "conv_main",
+        actor: "lark:default:ou_sender",
+        reasonText: "stop requested from lark command",
+      });
+    });
+  });
+});
+
+describe("lark card actions", () => {
+  test("routes stop button callbacks to control service", async () => {
+    const control = {
+      stopRun: vi.fn(() => ({
+        accepted: true,
+        runId: "run_123",
+        sessionId: "sess_123",
+        conversationId: "conv_123",
+      })),
+    } as unknown as RuntimeControlService;
+
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      control,
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "stop_run",
+          runId: "run_123",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(control.stopRun).toHaveBeenCalledExactlyOnceWith({
+      runId: "run_123",
+      actor: "lark:default:ou_sender",
+      reasonText: "stop requested from lark card action",
+    });
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "正在停止...",
+      },
     });
   });
 });

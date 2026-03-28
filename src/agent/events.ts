@@ -43,6 +43,13 @@ export interface RunFailedEvent extends AgentRuntimeEventBase {
   retryable: boolean;
 }
 
+export interface RunCancelledEvent extends AgentRuntimeEventBase {
+  type: "run_cancelled";
+  scenario: ModelScenario;
+  modelId: string;
+  reason: string;
+}
+
 export interface TurnStartedEvent extends AgentRuntimeEventBase {
   type: "turn_started";
   turn: number;
@@ -160,6 +167,7 @@ export type AgentRuntimeEvent =
   | RunStartedEvent
   | RunCompletedEvent
   | RunFailedEvent
+  | RunCancelledEvent
   | TurnStartedEvent
   | TurnCompletedEvent
   | AssistantMessageStartedEvent
@@ -179,6 +187,7 @@ export type AgentRuntimeEventInput =
   | Omit<RunStartedEvent, "eventId" | "createdAt">
   | Omit<RunCompletedEvent, "eventId" | "createdAt">
   | Omit<RunFailedEvent, "eventId" | "createdAt">
+  | Omit<RunCancelledEvent, "eventId" | "createdAt">
   | Omit<TurnStartedEvent, "eventId" | "createdAt">
   | Omit<TurnCompletedEvent, "eventId" | "createdAt">
   | Omit<AssistantMessageStartedEvent, "eventId" | "createdAt">
