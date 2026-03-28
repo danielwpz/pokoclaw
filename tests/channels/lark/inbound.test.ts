@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
+import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
   buildLarkChatSurfaceKey,
   createLarkCardActionHandler,
@@ -8,6 +9,7 @@ import {
 } from "@/src/channels/lark/inbound.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
+import type { RuntimeStatusService } from "@/src/runtime/status.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import {
   createTestDatabase,
@@ -409,6 +411,107 @@ describe("lark inbound message handling", () => {
         actor: "lark:default:ou_sender",
         reasonText: "stop requested from lark command",
       });
+    });
+  });
+
+  test("routes /status to the status service and sends a direct lark text reply", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const create = vi.fn(async () => ({ data: { message_id: "om_status_1" } }));
+      const status = {
+        getConversationStatus: vi.fn(() => ({
+          conversationId: "conv_main",
+          sessionId: "sess_chat_1",
+          model: {
+            configuredModelId: "openrouter-gpt5.4",
+            providerId: "openrouter",
+            upstreamModelId: "openai/gpt-5.4",
+            modelApi: "openai-responses",
+            supportsReasoning: true,
+            source: "scenario_default" as const,
+          },
+          sessionUsage: {
+            input: 100,
+            output: 20,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 120,
+            cost: {
+              input: 0.001,
+              output: 0.002,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0.003,
+            },
+          },
+          latestTurnUsage: null,
+          activeRuns: [],
+          pendingApprovals: [],
+        })),
+      } satisfies Pick<RuntimeStatusService, "getConversationStatus">;
+      const clients = {
+        getOrCreate: vi.fn(() => ({
+          sdk: {
+            im: {
+              message: {
+                create,
+              },
+            },
+          },
+        })),
+      } as unknown as { getOrCreate(installationId: string): LarkSdkClient };
+
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        status: status as unknown as RuntimeStatusService,
+        clients,
+      });
+
+      await handler(makeTextEvent("/status"));
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(status.getConversationStatus).toHaveBeenCalledExactlyOnceWith({
+        conversationId: "conv_main",
+        sessionId: "sess_chat_1",
+        scenario: "chat",
+      });
+      expect(create).toHaveBeenCalledOnce();
+      const firstCall = create.mock.calls[0] as [Record<string, unknown>] | undefined;
+      expect(firstCall?.[0]).toMatchObject({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: "oc_chat_1",
+          msg_type: "interactive",
+        },
+      });
+      const content = JSON.parse(
+        String((firstCall?.[0] as { data?: { content?: string } } | undefined)?.data?.content),
+      ) as {
+        header?: { title?: { content?: string } };
+        body?: { elements?: Array<{ tag?: string; content?: string }> };
+      };
+      expect(content.header?.title?.content).toBe("当前状态");
+      const markdown = (content.body?.elements ?? [])
+        .filter((element) => element.tag === "markdown")
+        .map((element) => element.content ?? "")
+        .join("\n");
+      expect(markdown).toContain("openrouter-gpt5.4");
+      expect(markdown).toContain("**版本**");
     });
   });
 });

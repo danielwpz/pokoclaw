@@ -133,4 +133,10 @@ export class RuntimeControlService {
       sessionIds: stopped.map((run) => run.sessionId),
     };
   }
+
+  listActiveRunsByConversation(conversationId: string): ActiveRunRecord[] {
+    return Array.from(this.runsByRunId.values()).filter(
+      (run) => run.conversationId === conversationId,
+    );
+  }
 }

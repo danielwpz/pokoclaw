@@ -3,6 +3,10 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
+import {
+  buildConversationStatusPresentation,
+  type RuntimeStatusService,
+} from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -41,6 +45,7 @@ export interface CreateLarkInboundRuntimeInput {
   storage: StorageDb;
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
+  status?: RuntimeStatusService;
   clients?: {
     getOrCreate(installationId: string): LarkSdkClient;
   };
@@ -176,6 +181,10 @@ export function createLarkMessageReceiveHandler(input: {
   storage: StorageDb;
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
+  status?: RuntimeStatusService;
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
   quoteMessageFetcher?: (input: {
     installationId: string;
     messageId: string;
@@ -251,6 +260,36 @@ export function createLarkMessageReceiveHandler(input: {
         messageId: normalized.messageId,
         conversationId: surface.conversationId,
         acceptedCount: result.acceptedCount,
+      });
+      return;
+    }
+
+    if (normalized.text === "/status") {
+      if (input.status == null) {
+        logger.warn("ignoring lark status command because no status service is configured", {
+          installationId: input.installationId,
+          chatId: normalized.chatId,
+          messageId: normalized.messageId,
+        });
+        return;
+      }
+      const snapshot = input.status.getConversationStatus({
+        conversationId: surface.conversationId,
+        sessionId: session.id,
+        scenario: "chat",
+      });
+      await sendLarkStatusCard({
+        installationId: input.installationId,
+        chatId: normalized.chatId,
+        presentation: buildConversationStatusPresentation(snapshot),
+        ...(input.clients == null ? {} : { clients: input.clients }),
+      });
+      logger.info("processed lark status command", {
+        installationId: input.installationId,
+        chatId: normalized.chatId,
+        messageId: normalized.messageId,
+        conversationId: surface.conversationId,
+        sessionId: session.id,
       });
       return;
     }
@@ -513,6 +552,8 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           storage: input.storage,
           ingress: input.ingress,
           control: input.control,
+          ...(input.clients == null ? {} : { clients: input.clients }),
+          ...(input.status == null ? {} : { status: input.status }),
           ...(input.clients == null
             ? {}
             : {
@@ -1031,6 +1072,63 @@ function createLarkQuoteMessageFetcher(input: {
       return null;
     }
   };
+}
+
+async function sendLarkStatusCard(input: {
+  installationId: string;
+  chatId: string;
+  presentation: {
+    title: string;
+    summary: string;
+    markdownSections: string[];
+  };
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<void> {
+  if (input.clients == null) {
+    logger.warn("cannot send lark status card because no sdk clients are configured", {
+      installationId: input.installationId,
+      chatId: input.chatId,
+    });
+    return;
+  }
+
+  const client = input.clients.getOrCreate(input.installationId);
+  const card = {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      wide_screen_mode: false,
+      summary: {
+        content: input.presentation.summary,
+      },
+    },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: input.presentation.title,
+      },
+      template: "turquoise",
+    },
+    body: {
+      elements: input.presentation.markdownSections.flatMap((section, index) => [
+        ...(index === 0 ? [] : [{ tag: "hr" as const }]),
+        {
+          tag: "markdown",
+          content: section,
+        },
+      ]),
+    },
+  };
+  await client.sdk.im.message.create({
+    params: { receive_id_type: "chat_id" },
+    data: {
+      receive_id: input.chatId,
+      msg_type: "interactive",
+      content: JSON.stringify(card),
+    },
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
