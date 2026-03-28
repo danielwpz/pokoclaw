@@ -1,4 +1,4 @@
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, desc, eq, gt } from "drizzle-orm";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { messages } from "@/src/storage/schema/tables.js";
@@ -93,6 +93,17 @@ export class MessagesRepo {
     }
 
     return query.all();
+  }
+
+  getLatestAssistantBySession(sessionId: string): Message | null {
+    return (
+      this.db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), eq(messages.role, "assistant")))
+        .orderBy(desc(messages.seq))
+        .get() ?? null
+    );
   }
 
   getNextSeq(sessionId: string): number {

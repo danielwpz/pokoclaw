@@ -1,0 +1,229 @@
+import { describe, expect, test } from "vitest";
+import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import type { AppConfig } from "@/src/config/schema.js";
+import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import { RuntimeControlService } from "@/src/runtime/control.js";
+import {
+  buildConversationStatusPresentation,
+  formatConversationStatusText,
+  RuntimeStatusService,
+} from "@/src/runtime/status.js";
+import {
+  createTestDatabase,
+  destroyTestDatabase,
+  type TestDatabaseHandle,
+} from "@/tests/storage/helpers/test-db.js";
+
+async function withHandle(fn: (handle: TestDatabaseHandle) => Promise<void>): Promise<void> {
+  const handle = await createTestDatabase(import.meta.url);
+  try {
+    await fn(handle);
+  } finally {
+    await destroyTestDatabase(handle);
+  }
+}
+
+function createConfig(): AppConfig {
+  return {
+    logging: {
+      level: "info",
+      useColors: false,
+    },
+    providers: {
+      openrouter: {
+        api: "openai-responses",
+        baseUrl: "https://openrouter.ai/api/v1",
+        apiKey: "test-key",
+      },
+    },
+    models: {
+      catalog: [
+        {
+          id: "openrouter-gpt5.4",
+          provider: "openrouter",
+          upstreamId: "openai/gpt-5.4",
+          contextWindow: 400_000,
+          maxOutputTokens: 32_000,
+          supportsTools: true,
+          supportsVision: false,
+          supportsReasoning: true,
+        },
+      ],
+      scenarios: {
+        chat: ["openrouter-gpt5.4"],
+        compaction: ["openrouter-gpt5.4"],
+        subagent: ["openrouter-gpt5.4"],
+        cron: ["openrouter-gpt5.4"],
+      },
+    },
+    compaction: {
+      reserveTokens: 60_000,
+      keepRecentTokens: 40_000,
+      reserveTokensFloor: 60_000,
+      recentTurnsPreserve: 3,
+    },
+    security: {
+      filesystem: {
+        overrideHardDenyRead: false,
+        overrideHardDenyWrite: false,
+        hardDenyRead: [],
+        hardDenyWrite: [],
+      },
+      network: {
+        overrideHardDenyHosts: false,
+        hardDenyHosts: [],
+      },
+    },
+    channels: {
+      lark: {
+        installations: {},
+      },
+    },
+    secrets: {},
+  };
+}
+
+describe("runtime status service", () => {
+  test("aggregates current session usage, active runs, and pending approvals", async () => {
+    await withHandle(async (handle) => {
+      handle.storage.sqlite.exec(`
+        INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+        VALUES ('ci_1', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+        VALUES ('conv_1', 'ci_1', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+        VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO agents (id, conversation_id, kind, default_model, created_at)
+        VALUES ('agent_1', 'conv_1', 'main', 'openrouter-gpt5.4', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, status,
+          compact_cursor, compact_summary_usage_json, created_at, updated_at
+        ) VALUES (
+          'sess_chat', 'conv_1', 'branch_1', 'agent_1', 'chat', 'active',
+          10,
+          '{"input":1000,"output":200,"cacheRead":3000,"cacheWrite":0,"totalTokens":4200,"cost":{"input":0.01,"output":0.02,"cacheRead":0,"cacheWrite":0,"total":0.03}}',
+          '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+        );
+
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+        ) VALUES (
+          'sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active',
+          '2026-03-28T00:01:00.000Z', '2026-03-28T00:01:00.000Z'
+        );
+
+        INSERT INTO messages (
+          id, session_id, seq, role, message_type, visibility, provider, model, model_api, stop_reason,
+          payload_json, token_input, token_output, token_cache_read, token_cache_write, token_total, usage_json, created_at
+        ) VALUES (
+          'msg_a_1', 'sess_chat', 11, 'assistant', 'text', 'user_visible', 'openrouter', 'openai/gpt-5.4', 'openai-responses', 'stop',
+          '{"content":[{"type":"text","text":"hello"}]}',
+          50, 10, 5, 0, 65,
+          '{"input":50,"output":10,"cacheRead":5,"cacheWrite":0,"totalTokens":65,"cost":{"input":0.001,"output":0.002,"cacheRead":0.0001,"cacheWrite":0,"total":0.0031}}',
+          '2026-03-28T00:02:00.000Z'
+        );
+
+        INSERT INTO approval_ledger (
+          owner_agent_id, requested_by_session_id, requested_scope_json, approval_target, status, reason_text, created_at
+        ) VALUES (
+          'agent_1', 'sess_task', '{}', 'user', 'pending', 'Approval required: Write /tmp/demo.js', '2026-03-28T00:03:00.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, execution_session_id, status, started_at
+        ) VALUES (
+          'task_run_1', 'delegate', 'agent_1', 'conv_1', 'branch_1', 'sess_task', 'running', '2026-03-28T00:04:00.000Z'
+        );
+      `);
+
+      const control = new RuntimeControlService(new SessionRunAbortRegistry());
+      control.beginRun({
+        runId: "run_chat_1",
+        sessionId: "sess_chat",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+      control.beginRun({
+        runId: "run_task_1",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+
+      const service = new RuntimeStatusService({
+        storage: handle.storage.db,
+        control,
+        models: new ProviderRegistry(createConfig()),
+      });
+
+      const snapshot = service.getConversationStatus({
+        conversationId: "conv_1",
+        sessionId: "sess_chat",
+        scenario: "chat",
+      });
+
+      expect(snapshot.model).toMatchObject({
+        configuredModelId: "openrouter-gpt5.4",
+        providerId: "openrouter",
+        upstreamModelId: "openai/gpt-5.4",
+        modelApi: "openai-responses",
+        supportsReasoning: true,
+        source: "latest_assistant",
+      });
+      expect(snapshot.latestTurnUsage).toMatchObject({
+        totalTokens: 65,
+        cost: {
+          total: 0.0031,
+        },
+      });
+      expect(snapshot.sessionUsage).toMatchObject({
+        totalTokens: 4265,
+        input: 1050,
+        output: 210,
+        cacheRead: 3005,
+        cost: {
+          total: 0.0331,
+        },
+      });
+      expect(snapshot.activeRuns).toEqual([
+        expect.objectContaining({
+          runId: "run_chat_1",
+          sessionPurpose: "chat",
+          taskRunId: null,
+        }),
+        expect.objectContaining({
+          runId: "run_task_1",
+          sessionPurpose: "task",
+          taskRunId: "task_run_1",
+          taskRunType: "delegate",
+          taskRunStatus: "running",
+        }),
+      ]);
+      expect(snapshot.pendingApprovals).toEqual([
+        expect.objectContaining({
+          approvalId: 1,
+          approvalTarget: "user",
+        }),
+      ]);
+
+      const text = formatConversationStatusText(snapshot);
+      expect(text).toContain("当前状态");
+      expect(text).toContain("openrouter-gpt5.4 / openai/gpt-5.4 / openrouter / openai-responses");
+      expect(text).toContain("当前 session 累计");
+      expect(text).toContain("待处理授权");
+      expect(text).toContain("#1 (user) Approval required: Write /tmp/demo.js");
+
+      const presentation = buildConversationStatusPresentation(snapshot);
+      expect(presentation.title).toBe("当前状态");
+      expect(presentation.summary).toBe("存在活跃 run");
+      expect(presentation.markdownSections.join("\n")).toContain("**版本**");
+      expect(presentation.markdownSections.join("\n")).toContain("openrouter-gpt5.4");
+    });
+  });
+});

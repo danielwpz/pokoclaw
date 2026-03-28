@@ -19,6 +19,7 @@ import type { LarkChannelConfig } from "@/src/config/schema.js";
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
+import type { RuntimeStatusService } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 
@@ -46,6 +47,7 @@ export interface CreateLarkChannelRuntimeInput {
   storage: StorageDb;
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
+  status?: RuntimeStatusService;
   outboundEventBus: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   wsClientFactory?: (installation: ConfiguredLarkInstallation) => Lark.WSClient;
 }
@@ -59,6 +61,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     storage: input.storage,
     ingress: input.ingress,
     control: input.control,
+    ...(input.status == null ? {} : { status: input.status }),
     clients,
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
   });

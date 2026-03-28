@@ -15,6 +15,7 @@ import {
   createRuntimeOrchestrationBridge,
   type RuntimeOrchestrationBridge,
 } from "@/src/runtime/orchestration-bridge.js";
+import { RuntimeStatusService } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
@@ -30,6 +31,7 @@ export interface RuntimeBootstrap {
   readonly cron: CronService;
   readonly lark: LarkChannelRuntime;
   readonly control: RuntimeControlService;
+  readonly status: RuntimeStatusService;
   readonly outboundEventBus: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   start(): void;
   shutdown(): Promise<void>;
@@ -49,10 +51,16 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const outboundEventBus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
   const cancel = new SessionRunAbortRegistry();
   const control = new RuntimeControlService(cancel);
+  const models = new ProviderRegistry(input.config);
+  const status = new RuntimeStatusService({
+    storage: input.storage,
+    control,
+    models,
+  });
   const loop = new AgentLoop({
     sessions: new AgentSessionService(sessions, messages),
     messages,
-    models: new ProviderRegistry(input.config),
+    models,
     tools,
     cancel,
     modelRunner: new PiAgentModelRunner(new PiBridge(), tools),
@@ -87,6 +95,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     storage: input.storage,
     ingress,
     control,
+    status,
     outboundEventBus,
   });
 
@@ -100,6 +109,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     cron,
     lark,
     control,
+    status,
     outboundEventBus,
     start() {
       if (started) {
