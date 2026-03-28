@@ -5,6 +5,7 @@ import {
   buildLarkChatSurfaceKey,
   createLarkCardActionHandler,
   createLarkMessageReceiveHandler,
+  createLarkQuoteMessageFetcher,
   normalizeLarkTextMessage,
 } from "@/src/channels/lark/inbound.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
@@ -235,6 +236,55 @@ describe("lark inbound message handling", () => {
         content: "用户引用了一条消息，但系统未能读取原文。\n\n用户的新消息：请继续",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
+    });
+  });
+
+  test("parses interactive quoted messages through message.get", async () => {
+    const get = vi.fn(async () => ({
+      data: {
+        items: [
+          {
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                title: "当前状态",
+                elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]],
+              }),
+            },
+          },
+        ],
+      },
+    }));
+    const clients = {
+      getOrCreate: vi.fn(() => ({
+        sdk: {
+          im: {
+            message: {
+              get,
+            },
+          },
+        },
+      })),
+    } as unknown as {
+      getOrCreate(installationId: string): LarkSdkClient;
+    };
+
+    const fetcher = createLarkQuoteMessageFetcher({
+      installationId: "default",
+      clients,
+    });
+
+    const quoted = await fetcher({
+      installationId: "default",
+      messageId: "om_parent_interactive",
+    });
+
+    expect(get).toHaveBeenCalledExactlyOnceWith({
+      path: { message_id: "om_parent_interactive" },
+    });
+    expect(quoted).toEqual({
+      messageType: "interactive",
+      text: "当前状态\n请升级至最新版本客户端，以查看内容",
     });
   });
 
