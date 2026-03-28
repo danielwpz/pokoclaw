@@ -28,11 +28,16 @@ import type { ToolRegistry } from "@/src/tools/core/registry.js";
 
 const COMPACTION_SUMMARY_PREFIX = "[Context Summary]";
 const PERMISSIVE_TOOL_PARAMETERS = Type.Object({}, { additionalProperties: true });
+const DEFAULT_REASONING_LEVEL = "medium";
 const logger = createSubsystemLogger("llm-bridge");
 
 export interface PiBridgeTextDelta {
   delta: string;
   accumulatedText: string;
+}
+
+export interface PiBridgeThinkingDelta {
+  delta: string;
 }
 
 export interface PiBridgeRunTurnInput {
@@ -45,6 +50,7 @@ export interface PiBridgeRunTurnInput {
   agentKind?: string | null;
   signal: AbortSignal;
   onTextDelta?: (event: PiBridgeTextDelta) => void;
+  onThinkingDelta?: (event: PiBridgeThinkingDelta) => void;
 }
 
 export interface PiBridgeRunTurnResult {
@@ -84,18 +90,29 @@ export class PiBridge {
     // logLlmRequestContext("stream", input, context.messages, tools);
 
     try {
-      const stream = streamSimple(model, context, buildPiStreamOptions(input.model, input.signal));
+      const stream = streamSimple(
+        model,
+        context,
+        buildPiStreamOptions(input.model, input.signal, { enableReasoning: true }),
+      );
       let accumulatedText = "";
       for await (const event of stream) {
-        if (event.type !== "text_delta") {
-          continue;
+        switch (event.type) {
+          case "text_delta":
+            accumulatedText += event.delta;
+            input.onTextDelta?.({
+              delta: event.delta,
+              accumulatedText,
+            });
+            break;
+          case "thinking_delta":
+            input.onThinkingDelta?.({
+              delta: event.delta,
+            });
+            break;
+          default:
+            break;
         }
-
-        accumulatedText += event.delta;
-        input.onTextDelta?.({
-          delta: event.delta,
-          accumulatedText,
-        });
       }
 
       const finalMessage = await stream.result();
@@ -142,7 +159,7 @@ export class PiBridge {
       const finalMessage = await completeSimple(
         model,
         context,
-        buildPiStreamOptions(input.model, input.signal),
+        buildPiStreamOptions(input.model, input.signal, { enableReasoning: true }),
       );
       logger.debug("non-stream llm turn finished", {
         modelId: input.model.id,
@@ -180,7 +197,9 @@ export class PiBridge {
             },
           ],
         },
-        buildPiStreamOptions(input.model, input.signal ?? new AbortController().signal),
+        buildPiStreamOptions(input.model, input.signal ?? new AbortController().signal, {
+          enableReasoning: false,
+        }),
       );
 
       const normalized = normalizeAssistantResult(finalMessage, "complete");
@@ -226,6 +245,7 @@ export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunn
       tools: this.tools,
       signal: input.signal,
       ...(input.onTextDelta ? { onTextDelta: input.onTextDelta } : {}),
+      ...(input.onThinkingDelta ? { onThinkingDelta: input.onThinkingDelta } : {}),
     });
   }
 
@@ -274,8 +294,19 @@ function buildPiTools(
   }));
 }
 
-function buildPiStreamOptions(model: ResolvedModel, signal: AbortSignal) {
-  const options = {
+function buildPiStreamOptions(
+  model: ResolvedModel,
+  signal: AbortSignal,
+  input: {
+    enableReasoning: boolean;
+  },
+) {
+  const options: {
+    signal: AbortSignal;
+    sessionId: string;
+    apiKey?: string;
+    reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  } = {
     signal,
     sessionId: model.id,
   };
@@ -285,6 +316,10 @@ function buildPiStreamOptions(model: ResolvedModel, signal: AbortSignal) {
     });
   }
 
+  if (input.enableReasoning && model.supportsReasoning) {
+    options.reasoning = DEFAULT_REASONING_LEVEL;
+  }
+
   return options;
 }
 
@@ -292,7 +327,7 @@ function toPiModel(model: ResolvedModel): Model<Api> {
   return {
     id: model.upstreamId,
     name: model.id,
-    api: model.provider.api as Api,
+    api: resolvePiApi(model),
     provider: model.provider.id,
     baseUrl: resolvePiBaseUrl(model),
     reasoning: model.supportsReasoning,
@@ -306,6 +341,27 @@ function toPiModel(model: ResolvedModel): Model<Api> {
     contextWindow: model.contextWindow,
     maxTokens: model.maxOutputTokens,
   };
+}
+
+function resolvePiApi(model: ResolvedModel): Api {
+  if (shouldUseOpenAICompletions(model)) {
+    return "openai-completions";
+  }
+
+  return model.provider.api as Api;
+}
+
+function shouldUseOpenAICompletions(model: ResolvedModel): boolean {
+  if (model.provider.api !== "openai-responses") {
+    return false;
+  }
+
+  return !isGptFamilyModel(model);
+}
+
+function isGptFamilyModel(model: ResolvedModel): boolean {
+  const normalizedIds = [model.id, model.upstreamId].map((value) => value.toLowerCase());
+  return normalizedIds.some((value) => value.includes("gpt"));
 }
 
 function resolvePiBaseUrl(model: ResolvedModel): string {

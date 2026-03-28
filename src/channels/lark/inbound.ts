@@ -16,6 +16,7 @@ const logger = createSubsystemLogger("channels/lark-inbound");
 
 const LARK_CHANNEL_TYPE = "lark";
 const LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH = 144;
+const LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH = 320;
 
 export interface LarkInboundIngress {
   submitMessage(input: {
@@ -326,14 +327,32 @@ export function createLarkCardActionHandler(input: {
   control: RuntimeControlService;
 }): (data: unknown) => Promise<unknown> {
   return async (data: unknown) => {
+    logger.debug("received raw lark card action callback", {
+      installationId: input.installationId,
+      payloadPreview: truncateLogText(safeJson(data), LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH),
+    });
+
     const normalized = normalizeLarkCardAction(data);
     if ("skipReason" in normalized) {
       logger.debug("ignoring lark card action", {
         installationId: input.installationId,
         reason: normalized.skipReason,
+        payloadPreview: truncateLogText(safeJson(data), LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH),
       });
       return null;
     }
+
+    logger.info("received lark card action", {
+      installationId: input.installationId,
+      action: normalized.action,
+      runId: normalized.runId,
+      approvalId: normalized.approvalId,
+      grantTtl: normalized.grantTtl,
+      actor:
+        normalized.actorOpenId == null
+          ? `lark:${input.installationId}:unknown`
+          : `lark:${input.installationId}:${normalized.actorOpenId}`,
+    });
 
     if (
       normalized.action !== "stop_run" &&
@@ -526,8 +545,17 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
               });
             });
           },
-          "card.action.trigger": (data: unknown) =>
-            onCardAction(data).catch((error: unknown) => {
+          "im.message.message_read_v1": () => {},
+          "card.action.trigger": (data: unknown) => {
+            logger.debug("dispatching lark card action callback", {
+              installationId: installation.installationId,
+              payloadPreview: truncateLogText(
+                safeJson(data),
+                LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH,
+              ),
+            });
+
+            return onCardAction(data).catch((error: unknown) => {
               logger.error("failed to process lark card action", {
                 installationId: installation.installationId,
                 error: error instanceof Error ? error.message : String(error),
@@ -538,7 +566,8 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
                   content: "操作失败",
                 },
               };
-            }),
+            });
+          },
         } as Record<string, (data: unknown) => void>);
 
         const socket = wsClientFactory(installation);
@@ -595,6 +624,15 @@ function patchWsClientForCardCallbacks(socket: Lark.WSClient): void {
   const original = candidate.handleEventData.bind(socket);
   candidate.handleEventData = (data: unknown) => {
     if (isRecord(data) && Array.isArray(data.headers)) {
+      const isCardPacket = data.headers.some(
+        (header) => isRecord(header) && header.key === "type" && header.value === "card",
+      );
+      if (isCardPacket) {
+        logger.debug("received lark ws card callback packet", {
+          payloadPreview: truncateLogText(safeJson(data), LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH),
+        });
+      }
+
       data.headers = data.headers.map((header) => {
         if (isRecord(header) && header.key === "type" && header.value === "card") {
           return {
@@ -899,6 +937,14 @@ function truncateLogText(text: string, maxLength: number): string {
   }
 
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 async function buildInboundMessageContent(

@@ -143,6 +143,27 @@ describe("agent system prompt", () => {
     expect(buildSafetySection()).not.toBe("");
   });
 
+  test("teaches agents that one run may interleave visible replies and tool calls", () => {
+    const task = buildTaskAgentOperatingModelSection();
+    const main = buildMainAgentOperatingModelSection();
+    const sub = buildSubagentOperatingModelSection();
+
+    for (const section of [task, main, sub]) {
+      expect(section).toContain(
+        "One ongoing run may include multiple visible assistant replies separated by tool calls.",
+      );
+      expect(section).toContain(
+        "If the user asks you to report an intermediate result and then continue",
+      );
+      expect(section).toContain(
+        "That intermediate report may appear in the same assistant turn that also requests the next tool call.",
+      );
+      expect(section).toContain(
+        "Do not invent an extra confirmation boundary unless the user explicitly asks",
+      );
+    }
+  });
+
   test("exports the built prompt as a stable constant", () => {
     expect(AGENT_SYSTEM_PROMPT).toBe(
       buildAgentSystemPrompt({

@@ -559,6 +559,79 @@ describe("agent loop", () => {
     ]);
   });
 
+  test("emits streamed reasoning deltas and does not duplicate final reasoning text", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        input.onThinkingDelta?.({
+          delta: "Let me think...",
+        });
+        input.onTextDelta?.({
+          delta: "hello",
+          accumulatedText: "hello",
+        });
+
+        return makeAssistantResult({
+          content: [
+            { type: "thinking", thinking: "Let me think..." },
+            { type: "text", text: "hello" },
+          ],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(
+      result.events.filter((event) => event.type === "assistant_reasoning_delta"),
+    ).toMatchObject([
+      {
+        type: "assistant_reasoning_delta",
+        delta: "Let me think...",
+      },
+    ]);
+
+    expect(
+      result.events.find((event) => event.type === "assistant_message_completed"),
+    ).toMatchObject({
+      type: "assistant_message_completed",
+      reasoningText: null,
+      text: "hello",
+    });
+  });
+
   test("propagates cancellation through the active session run", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);

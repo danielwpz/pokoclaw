@@ -2,6 +2,7 @@ import type {
   AssistantMessageCompletedEvent,
   AssistantMessageDeltaEvent,
   AssistantMessageStartedEvent,
+  AssistantReasoningDeltaEvent,
   ToolCallCompletedEvent,
   ToolCallFailedEvent,
   ToolCallStartedEvent,
@@ -61,6 +62,8 @@ export interface LarkRunState {
   footerStatus: LarkFooterStatus;
   reasoning: LarkReasoningState;
   terminal: LarkRunTerminal;
+  terminalErrorKind: string | null;
+  terminalMessage: string | null;
 }
 
 export const LARK_ASSISTANT_PLACEHOLDER_TEXT = "_正在思考..._";
@@ -83,6 +86,8 @@ export function reduceLarkRunState(
       return onAssistantMessageStarted(state, envelope.event);
     case "assistant_message_delta":
       return onAssistantMessageDelta(state, envelope.event);
+    case "assistant_reasoning_delta":
+      return onAssistantReasoningDelta(state, envelope.event);
     case "assistant_message_completed":
       return onAssistantMessageCompleted(state, envelope.event);
     case "tool_call_started":
@@ -92,11 +97,11 @@ export function reduceLarkRunState(
     case "tool_call_failed":
       return onToolCallFailed(state, envelope.event);
     case "run_completed":
-      return finalizeRun(state, "completed");
+      return finalizeRun(state, envelope.event);
     case "run_cancelled":
-      return finalizeRun(state, "cancelled");
+      return finalizeRun(state, envelope.event);
     case "run_failed":
-      return finalizeRun(state, "failed");
+      return finalizeRun(state, envelope.event);
     default:
       return state;
   }
@@ -123,6 +128,8 @@ function createInitialRunState(input: {
       active: false,
     },
     terminal: "running",
+    terminalErrorKind: null,
+    terminalMessage: null,
   };
 }
 
@@ -139,6 +146,8 @@ function onAssistantMessageStarted(
       active: false,
       expanded: false,
     },
+    terminalErrorKind: null,
+    terminalMessage: null,
   };
 }
 
@@ -181,6 +190,26 @@ function onAssistantMessageDelta(
       ...state.reasoning,
       active: false,
       expanded: false,
+    },
+    terminalErrorKind: null,
+    terminalMessage: null,
+  };
+}
+
+function onAssistantReasoningDelta(
+  state: LarkRunState,
+  event: AssistantReasoningDeltaEvent,
+): LarkRunState {
+  return {
+    ...state,
+    footerStatus: "thinking",
+    reasoning: {
+      content:
+        event.delta.length === 0
+          ? state.reasoning.content
+          : `${state.reasoning.content}${event.delta}`,
+      active: true,
+      expanded: true,
     },
   };
 }
@@ -330,8 +359,17 @@ function hasRunningTool(
 
 function finalizeRun(
   state: LarkRunState,
-  terminal: "completed" | "failed" | "cancelled",
+  event:
+    | (OrchestratedRuntimeEventEnvelope["event"] & { type: "run_completed" })
+    | (OrchestratedRuntimeEventEnvelope["event"] & { type: "run_failed" })
+    | (OrchestratedRuntimeEventEnvelope["event"] & { type: "run_cancelled" }),
 ): LarkRunState {
+  const terminal =
+    event.type === "run_completed"
+      ? "completed"
+      : event.type === "run_failed"
+        ? "failed"
+        : "cancelled";
   return {
     ...state,
     blocks: finalizeActiveToolSequenceIfNeeded(state.blocks, state.activeToolSequenceBlockId),
@@ -344,6 +382,13 @@ function finalizeRun(
       expanded: false,
     },
     terminal,
+    terminalErrorKind: event.type === "run_failed" ? event.errorKind : null,
+    terminalMessage:
+      event.type === "run_failed"
+        ? event.errorMessage
+        : event.type === "run_cancelled"
+          ? event.reason
+          : null,
   };
 }
 
@@ -360,6 +405,8 @@ export function markLarkRunAwaitingApproval(state: LarkRunState): LarkRunState {
       expanded: false,
     },
     terminal: "awaiting_approval",
+    terminalErrorKind: null,
+    terminalMessage: null,
   };
 }
 
@@ -379,6 +426,8 @@ export function markLarkRunApprovalResolved(
       expanded: false,
     },
     terminal: decision === "approve" ? "continued" : "denied",
+    terminalErrorKind: null,
+    terminalMessage: decision === "deny" ? "用户拒绝了这次授权请求。" : null,
   };
 }
 
@@ -390,6 +439,16 @@ export function hasVisibleLarkRunBlocks(state: LarkRunState): boolean {
 
     return block.tools.length > 0;
   });
+}
+
+export function hasVisibleLarkRunTerminalState(state: LarkRunState): boolean {
+  return (
+    state.terminal === "awaiting_approval" ||
+    state.terminal === "continued" ||
+    state.terminal === "denied" ||
+    state.terminal === "failed" ||
+    state.terminal === "cancelled"
+  );
 }
 
 function finalizeActiveToolSequenceIfNeeded(
@@ -480,6 +539,7 @@ export function shouldHandleLarkRuntimeEvent(envelope: OrchestratedRuntimeEventE
   return (
     envelope.event.type === "assistant_message_started" ||
     envelope.event.type === "assistant_message_delta" ||
+    envelope.event.type === "assistant_reasoning_delta" ||
     envelope.event.type === "assistant_message_completed" ||
     envelope.event.type === "tool_call_started" ||
     envelope.event.type === "tool_call_completed" ||

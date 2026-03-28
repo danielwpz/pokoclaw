@@ -495,6 +495,84 @@ describe("lark run state", () => {
     ).toBe(true);
   });
 
+  test("streams reasoning into the shared top reasoning area before assistant text completes", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_reason_stream_start",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_stream_1",
+      }),
+    );
+
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "assistant_reasoning_delta",
+        eventId: "evt_reason_stream_delta_1",
+        createdAt: "2026-03-28T00:00:00.200Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_stream_1",
+        delta: "Let me think",
+      }),
+    );
+
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "assistant_reasoning_delta",
+        eventId: "evt_reason_stream_delta_2",
+        createdAt: "2026-03-28T00:00:00.400Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_stream_1",
+        delta: "...",
+      }),
+    );
+
+    expect(state.reasoning).toMatchObject({
+      content: "Let me think...",
+      active: true,
+      expanded: true,
+    });
+
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_reason_stream_text",
+        createdAt: "2026-03-28T00:00:00.600Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_stream_1",
+        delta: "hello",
+        accumulatedText: "hello",
+      }),
+    );
+
+    expect(state.reasoning).toMatchObject({
+      content: "Let me think...",
+      active: false,
+      expanded: false,
+    });
+  });
+
   test("does not render an empty reasoning block when no reasoning text exists", () => {
     const state = reduceLarkRunState(
       null,
@@ -854,5 +932,89 @@ describe("lark run state", () => {
     expect(JSON.stringify(toolPanel)).toContain("**Command**");
     expect(JSON.stringify(toolPanel)).toContain("**Stdout**");
     expect(JSON.stringify(toolPanel)).not.toContain('"content": [');
+  });
+
+  test("renders terminal failure details even when no transcript blocks exist", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_fail_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "run_failed",
+        eventId: "evt_fail_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        errorKind: "upstream",
+        errorMessage: "403 Key limit exceeded (daily limit).",
+        retryable: false,
+      }),
+    );
+
+    const rendered = buildLarkRenderedRunCard(state);
+    const cardText = JSON.stringify(rendered.card);
+    expect(cardText).toContain("执行失败");
+    expect(cardText).toContain("403 Key limit exceeded (daily limit).");
+    expect(rendered.card.config).toMatchObject({
+      summary: { content: "已失败" },
+    });
+  });
+
+  test("renders terminal cancellation details even when no transcript blocks exist", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_cancel_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "run_cancelled",
+        eventId: "evt_cancel_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        reason: "stop requested from lark card action",
+      }),
+    );
+
+    const rendered = buildLarkRenderedRunCard(state);
+    const cardText = JSON.stringify(rendered.card);
+    expect(cardText).toContain("已停止");
+    expect(cardText).toContain("stop requested from lark card action");
+    expect(rendered.card.config).toMatchObject({
+      summary: { content: "已停止" },
+    });
   });
 });

@@ -76,6 +76,13 @@ export interface AssistantMessageDeltaEvent extends AgentRuntimeEventBase {
   accumulatedText: string;
 }
 
+export interface AssistantReasoningDeltaEvent extends AgentRuntimeEventBase {
+  type: "assistant_reasoning_delta";
+  turn: number;
+  messageId: string;
+  delta: string;
+}
+
 export interface AssistantMessageCompletedEvent extends AgentRuntimeEventBase {
   type: "assistant_message_completed";
   turn: number;
@@ -171,6 +178,7 @@ export type AgentRuntimeEvent =
   | TurnCompletedEvent
   | AssistantMessageStartedEvent
   | AssistantMessageDeltaEvent
+  | AssistantReasoningDeltaEvent
   | AssistantMessageCompletedEvent
   | ToolCallStartedEvent
   | ToolCallCompletedEvent
@@ -191,6 +199,7 @@ export type AgentRuntimeEventInput =
   | Omit<TurnCompletedEvent, "eventId" | "createdAt">
   | Omit<AssistantMessageStartedEvent, "eventId" | "createdAt">
   | Omit<AssistantMessageDeltaEvent, "eventId" | "createdAt">
+  | Omit<AssistantReasoningDeltaEvent, "eventId" | "createdAt">
   | Omit<AssistantMessageCompletedEvent, "eventId" | "createdAt">
   | Omit<ToolCallStartedEvent, "eventId" | "createdAt">
   | Omit<ToolCallCompletedEvent, "eventId" | "createdAt">

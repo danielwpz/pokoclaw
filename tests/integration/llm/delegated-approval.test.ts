@@ -276,6 +276,7 @@ describe("real llm delegated approval integration", () => {
       sessionId: harness.created.executionSession.id,
       scenario: "subagent",
       content: [
+        "This is a permission-flow integration test. If the tool returns a requestable <permission_block>, you should request that permission instead of refusing on your own.",
         "Follow these steps exactly:",
         `1. Call gated_read exactly once with path ${targetPath}.`,
         "2. If it returns a <permission_block>, call request_permissions exactly once.",
@@ -370,7 +371,8 @@ describe("real llm delegated approval integration", () => {
     const harness = await createHarness({
       handle,
       fixture,
-      taskDescription: "Add Chinese i18n support to /home/dev/homepage.",
+      taskDescription:
+        "Permission-flow denial validation for a delegated task. The goal is to request access, let the approval layer deny it, and surface the denial back to the task run.",
       taskInputJson: JSON.stringify({
         taskKind: "frontend_i18n",
         repoRoot: "/home/dev/homepage",
@@ -383,6 +385,7 @@ describe("real llm delegated approval integration", () => {
       sessionId: harness.created.executionSession.id,
       scenario: "subagent",
       content: [
+        "This is a permission-flow integration test. The path is intentionally sensitive so the approval layer can deny it. If the tool returns a requestable <permission_block>, you should still request it instead of refusing on your own.",
         "Follow these steps exactly:",
         `1. Call gated_read exactly once with path ${targetPath}.`,
         "2. If it returns a <permission_block>, call request_permissions exactly once.",

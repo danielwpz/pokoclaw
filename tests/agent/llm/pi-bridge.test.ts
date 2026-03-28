@@ -94,7 +94,10 @@ describe("pi bridge", () => {
       provider: "anthropic_main",
       model: "claude-sonnet-4-5-20250929",
       stopReason: "stop" as const,
-      content: [{ type: "text" as const, text: "hello world" }],
+      content: [
+        { type: "thinking" as const, thinking: "Let me think..." },
+        { type: "text" as const, text: "hello world" },
+      ],
       usage: {
         input: 10,
         output: 3,
@@ -115,14 +118,20 @@ describe("pi bridge", () => {
       createAssistantEventStream(
         [
           {
-            type: "text_delta",
+            type: "thinking_delta",
             contentIndex: 0,
+            delta: "Let me think...",
+            partial: finalMessage,
+          },
+          {
+            type: "text_delta",
+            contentIndex: 1,
             delta: "hello ",
             partial: finalMessage,
           },
           {
             type: "text_delta",
-            contentIndex: 0,
+            contentIndex: 1,
             delta: "world",
             partial: finalMessage,
           },
@@ -137,6 +146,7 @@ describe("pi bridge", () => {
     );
 
     const deltas: Array<{ delta: string; accumulatedText: string }> = [];
+    const thinkingDeltas: Array<{ delta: string }> = [];
     const bridge = new PiBridge();
     const result = await bridge.streamTurn({
       model: createResolvedModel(),
@@ -157,8 +167,12 @@ describe("pi bridge", () => {
       onTextDelta(event) {
         deltas.push(event);
       },
+      onThinkingDelta(event) {
+        thinkingDeltas.push(event);
+      },
     });
 
+    expect(thinkingDeltas).toEqual([{ delta: "Let me think..." }]);
     expect(deltas).toEqual([
       { delta: "hello ", accumulatedText: "hello " },
       { delta: "world", accumulatedText: "hello world" },
@@ -168,7 +182,10 @@ describe("pi bridge", () => {
       model: "claude-sonnet-4-5-20250929",
       modelApi: "anthropic-messages",
       stopReason: "stop",
-      content: [{ type: "text", text: "hello world" }],
+      content: [
+        { type: "thinking", thinking: "Let me think..." },
+        { type: "text", text: "hello world" },
+      ],
       usage: {
         input: 10,
         output: 3,
@@ -189,7 +206,7 @@ describe("pi bridge", () => {
     const [model, context, options] = streamSimpleMock.mock.calls[0] as [
       ResolvedModel,
       { systemPrompt?: string; messages: unknown[]; tools: unknown[] },
-      { apiKey: string; sessionId: string },
+      { apiKey: string; sessionId: string; reasoning: string },
     ];
     expect((model as unknown as { id: string }).id).toBe("claude-sonnet-4-5-20250929");
     expect(context.systemPrompt).toBe("system prompt");
@@ -197,6 +214,7 @@ describe("pi bridge", () => {
     expect(context.tools).toHaveLength(1);
     expect(options.apiKey).toBe("secret");
     expect(options.sessionId).toBe("anthropic_main/claude-sonnet-4-5");
+    expect(options.reasoning).toBe("medium");
   });
 
   test("derives a default baseUrl for anthropic providers", async () => {
@@ -241,6 +259,122 @@ describe("pi bridge", () => {
 
     const [model] = streamSimpleMock.mock.calls[0] as [{ baseUrl: string }];
     expect(model.baseUrl).toBe("https://api.anthropic.com");
+  });
+
+  test("routes non-gpt responses models through openai completions", async () => {
+    const finalMessage = {
+      role: "assistant" as const,
+      api: "openai-completions" as const,
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+      stopReason: "stop" as const,
+      content: [{ type: "text" as const, text: "ok" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream(
+        [{ type: "done", reason: "stop", message: finalMessage }],
+        finalMessage,
+      ),
+    );
+
+    const bridge = new PiBridge();
+    const result = await bridge.streamTurn({
+      model: createResolvedModel({
+        id: "openrouter-minimax2.7",
+        providerId: "openrouter",
+        upstreamId: "minimax/minimax-m2.7",
+        provider: {
+          id: "openrouter",
+          api: "openai-responses",
+          apiKey: "secret",
+          baseUrl: "https://openrouter.ai/api/v1",
+        },
+      }),
+      compactSummary: null,
+      messages: [createStoredUserMessage()],
+      tools: new ToolRegistry(),
+      signal: new AbortController().signal,
+    });
+
+    const [effectiveModel] = streamSimpleMock.mock.calls.at(-1) as [
+      { api: string; baseUrl: string },
+    ];
+    expect(effectiveModel.api).toBe("openai-completions");
+    expect(effectiveModel.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(result.modelApi).toBe("openai-completions");
+  });
+
+  test("keeps gpt responses models on the responses api", async () => {
+    const finalMessage = {
+      role: "assistant" as const,
+      api: "openai-responses" as const,
+      provider: "openrouter",
+      model: "openai/gpt-5.4",
+      stopReason: "stop" as const,
+      content: [{ type: "text" as const, text: "ok" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream(
+        [{ type: "done", reason: "stop", message: finalMessage }],
+        finalMessage,
+      ),
+    );
+
+    const bridge = new PiBridge();
+    const result = await bridge.streamTurn({
+      model: createResolvedModel({
+        id: "openrouter-gpt5.4",
+        providerId: "openrouter",
+        upstreamId: "openai/gpt-5.4",
+        provider: {
+          id: "openrouter",
+          api: "openai-responses",
+          apiKey: "secret",
+          baseUrl: "https://openrouter.ai/api/v1",
+        },
+      }),
+      compactSummary: null,
+      messages: [createStoredUserMessage()],
+      tools: new ToolRegistry(),
+      signal: new AbortController().signal,
+    });
+
+    const [effectiveModel] = streamSimpleMock.mock.calls.at(-1) as [
+      { api: string; baseUrl: string },
+    ];
+    expect(effectiveModel.api).toBe("openai-responses");
+    expect(effectiveModel.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(result.modelApi).toBe("openai-responses");
   });
 
   test("only exposes approval-session tools to the model during approval turns", async () => {
