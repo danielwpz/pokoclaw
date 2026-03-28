@@ -1,3 +1,4 @@
+import type { LarkApprovalState } from "@/src/channels/lark/approval-state.js";
 import {
   buildLarkAssistantElementId,
   LARK_ASSISTANT_PLACEHOLDER_TEXT,
@@ -17,8 +18,17 @@ export interface LarkRenderedRunCard {
   } | null;
 }
 
+export interface LarkRenderedApprovalCard {
+  card: Record<string, unknown>;
+  structureSignature: string;
+}
+
 export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> {
   return buildLarkRenderedRunCard(state).card;
+}
+
+export function renderLarkApprovalCard(state: LarkApprovalState): Record<string, unknown> {
+  return buildLarkRenderedApprovalCard(state).card;
 }
 
 export function buildLarkRenderedRunCard(state: LarkRunState): LarkRenderedRunCard {
@@ -29,6 +39,44 @@ export function buildLarkRenderedRunCard(state: LarkRunState): LarkRenderedRunCa
     card: full.card,
     structureSignature: JSON.stringify(normalized.card),
     activeAssistant: full.activeAssistant,
+  };
+}
+
+export function buildLarkRenderedApprovalCard(state: LarkApprovalState): LarkRenderedApprovalCard {
+  const approved = state.decision === "approve";
+  const denied = state.decision === "deny";
+  const card = {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      wide_screen_mode: false,
+      summary: {
+        content: summarizeApprovalState(state),
+      },
+    },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: state.resolved ? `授权请求 — ${approved ? "授权成功" : "已拒绝"}` : "授权请求",
+      },
+      subtitle: {
+        tag: "plain_text",
+        content: !state.resolved ? "请选择操作" : approved ? "(已允许)" : "(已拒绝)",
+      },
+      template: denied ? "red" : approved ? "green" : "blue",
+      icon: {
+        tag: "standard_icon",
+        token: denied ? "close_filled" : approved ? "yes_filled" : "lock_chat_filled",
+      },
+    },
+    body: {
+      elements: buildApprovalCardElements(state),
+    },
+  };
+
+  return {
+    card,
+    structureSignature: JSON.stringify(card),
   };
 }
 
@@ -70,7 +118,9 @@ function buildCard(
       continue;
     }
 
-    elements.push(...renderToolSequenceBlock(block));
+    if (block.kind === "tool_sequence") {
+      elements.push(...renderToolSequenceBlock(block));
+    }
   }
 
   if (
@@ -91,6 +141,11 @@ function buildCard(
       elementId,
       text: LARK_ASSISTANT_PLACEHOLDER_TEXT,
     };
+  }
+
+  const emptyTerminalPlaceholder = renderEmptyRunStatePlaceholder(state, hasVisibleTranscript);
+  if (emptyTerminalPlaceholder != null) {
+    elements.push(emptyTerminalPlaceholder);
   }
 
   const footerElements = renderFooter(state.footerStatus, state.terminal, state.runId);
@@ -181,6 +236,10 @@ function renderAssistantTextBlock(
 }
 
 function renderToolSequenceBlock(block: LarkToolSequenceBlock): Array<Record<string, unknown>> {
+  if (block.tools.length === 0) {
+    return [];
+  }
+
   if (!block.finalized || block.tools.length <= 2) {
     return block.tools.map((tool) => renderToolDetail(tool));
   }
@@ -207,9 +266,127 @@ function renderToolSequenceBlock(block: LarkToolSequenceBlock): Array<Record<str
   ];
 }
 
+function buildApprovalCardElements(state: LarkApprovalState): Array<Record<string, unknown>> {
+  const approved = state.decision === "approve";
+  const elements: Array<Record<string, unknown>> = [
+    {
+      tag: "markdown",
+      content: !state.resolved
+        ? [
+            "### 需要你的授权",
+            "",
+            `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+            "",
+            `**原因**：${state.reasonText}`,
+            ...(state.expiresAt == null ? [] : ["", `**有效期至**：\`${state.expiresAt}\``]),
+            "",
+            "> 你处理后，agent 才会继续执行。",
+          ].join("\n")
+        : approved
+          ? [
+              `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+              "",
+              "**结果**：agent 将继续执行。",
+            ].join("\n")
+          : [
+              `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+              "",
+              "**结果**：当前操作已停止。",
+            ].join("\n"),
+      text_size: "normal",
+    },
+  ];
+
+  if (state.resolved) {
+    elements.push({ tag: "hr" });
+  } else {
+    elements.push({ tag: "hr" });
+    elements.push({
+      tag: "column_set",
+      flex_mode: "none",
+      horizontal_align: "right",
+      columns: [
+        {
+          tag: "column",
+          width: "auto",
+          elements: [
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "允许 1天" },
+              type: "default",
+              size: "medium",
+              value: {
+                action: "approve_permission",
+                approvalId: state.approvalId,
+                grantTtl: "one_day",
+              },
+            },
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "允许 永久" },
+              type: "primary",
+              size: "medium",
+              value: {
+                action: "approve_permission",
+                approvalId: state.approvalId,
+                grantTtl: "permanent",
+              },
+            },
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "拒绝" },
+              type: "danger",
+              size: "medium",
+              value: {
+                action: "deny_permission",
+                approvalId: state.approvalId,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  return elements;
+}
+
+function renderEmptyRunStatePlaceholder(
+  state: LarkRunState,
+  hasVisibleTranscript: boolean,
+): Record<string, unknown> | null {
+  if (hasVisibleTranscript) {
+    return null;
+  }
+
+  if (state.terminal === "awaiting_approval") {
+    return {
+      tag: "markdown",
+      content: "🔐 **当前执行已暂停**\n\n等待你处理下方的授权卡。",
+    };
+  }
+
+  if (state.terminal === "continued") {
+    return {
+      tag: "markdown",
+      content: "✅ **已获得授权**\n\n后续执行会在新的卡片中继续。",
+    };
+  }
+
+  if (state.terminal === "denied") {
+    return {
+      tag: "markdown",
+      content: "❌ **授权已拒绝**\n\n本次执行已停止。",
+    };
+  }
+
+  return null;
+}
+
 function renderToolDetail(tool: LarkToolSequenceTool): Record<string, unknown> {
   const icon = tool.status === "completed" ? "✅" : tool.status === "failed" ? "❌" : "⏳";
   const summary = summarizeToolHeader(tool);
+  const label = summarizeToolLabel(tool);
 
   return {
     tag: "collapsible_panel",
@@ -217,7 +394,7 @@ function renderToolDetail(tool: LarkToolSequenceTool): Record<string, unknown> {
     header: {
       title: {
         tag: "markdown",
-        content: `${icon} **${tool.toolName}** — ${summary}`,
+        content: `${icon} **${label}** — ${summary}`,
       },
       vertical_align: "center",
       icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
@@ -237,7 +414,18 @@ function renderToolDetail(tool: LarkToolSequenceTool): Record<string, unknown> {
   };
 }
 
+function summarizeToolLabel(tool: LarkToolSequenceTool): string {
+  if (tool.toolName === "request_permissions") {
+    return "请求授权";
+  }
+
+  return tool.toolName;
+}
+
 function renderToolDetailContent(tool: LarkToolSequenceTool): string {
+  if (tool.toolName === "request_permissions") {
+    return renderPermissionRequestToolDetailContent(tool);
+  }
   if (tool.toolName === "bash") {
     return renderBashToolDetailContent(tool);
   }
@@ -288,6 +476,50 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
   }
 
   return content;
+}
+
+function renderPermissionRequestToolDetailContent(tool: LarkToolSequenceTool): string {
+  const args = isRecord(tool.args) ? tool.args : null;
+  const entries = Array.isArray(args?.entries) ? args.entries : [];
+  const justification =
+    typeof args?.justification === "string" && args.justification.trim().length > 0
+      ? args.justification.trim()
+      : null;
+
+  const lines: string[] = [];
+  if (justification != null) {
+    lines.push("**原因**");
+    lines.push(justification);
+  }
+
+  if (entries.length > 0) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push("**请求的权限**");
+    for (const entry of entries.slice(0, 8)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const path = typeof entry.path === "string" ? entry.path : "(unknown path)";
+      const access = typeof entry.access === "string" ? entry.access : "unknown_access";
+      const scope = typeof entry.scope === "string" ? entry.scope : "unknown_scope";
+      lines.push(`- \`${access}\` · \`${scope}\` · \`${path}\``);
+    }
+    if (entries.length > 8) {
+      lines.push(`- 还有 ${entries.length - 8} 项未展开`);
+    }
+  }
+
+  if (tool.status === "completed") {
+    lines.push("", "**结果**", "授权已通过，agent 将继续执行。");
+  } else if (tool.status === "failed") {
+    lines.push("", "**结果**", tool.errorMessage ?? "授权被拒绝或未完成。");
+  } else {
+    lines.push("", "**状态**", "等待你的授权。详见下方授权卡。");
+  }
+
+  return lines.join("\n");
 }
 
 function renderFooter(
@@ -344,6 +576,13 @@ function summarizeUnknown(value: unknown): string {
 
 function summarizeToolHeader(tool: LarkToolSequenceTool): string {
   const args = isRecord(tool.args) ? tool.args : null;
+  if (tool.toolName === "request_permissions") {
+    if (typeof args?.justification === "string" && args.justification.length > 0) {
+      return truncateText(args.justification, 80);
+    }
+    const entries = Array.isArray(args?.entries) ? args.entries : [];
+    return entries.length > 0 ? `请求 ${entries.length} 项额外权限` : "请求额外权限";
+  }
   if (tool.toolName === "bash" && typeof args?.command === "string" && args.command.length > 0) {
     return truncateText(args.command, 80);
   }
@@ -369,6 +608,15 @@ function summarizeRunState(state: LarkRunState): string {
   if (state.terminal === "cancelled") {
     return "已停止";
   }
+  if (state.terminal === "awaiting_approval") {
+    return "等待授权";
+  }
+  if (state.terminal === "continued") {
+    return "已获授权";
+  }
+  if (state.terminal === "denied") {
+    return "已拒绝";
+  }
   if (state.footerStatus === "thinking") {
     return "正在思考";
   }
@@ -383,6 +631,24 @@ function summarizeRunState(state: LarkRunState): string {
     return "正在输出内容";
   }
   return "运行中";
+}
+
+function summarizeApprovalState(state: LarkApprovalState): string {
+  if (!state.resolved) {
+    return "等待授权";
+  }
+  return state.decision === "approve" ? "授权成功" : "已拒绝";
+}
+
+function formatApprovalTitleMarkdown(title: string): string {
+  const match = title.match(/^Approval required:\s+(Read\/write|Read|Write)\s+(.+)$/i);
+  if (match == null) {
+    return title;
+  }
+
+  const access = match[1] ?? "";
+  const target = match[2] ?? "";
+  return `Approval required: **${access}** \`${target}\``;
 }
 
 function findActiveAssistantBlock(state: LarkRunState): LarkAssistantTextBlock | null {

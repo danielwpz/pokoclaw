@@ -43,6 +43,7 @@ describe("Lark channel runtime", () => {
       storage: handle.storage.db,
       ingress: {
         submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
       },
       control: new RuntimeControlService(new SessionRunAbortRegistry()),
       outboundEventBus: new RuntimeEventBus(),

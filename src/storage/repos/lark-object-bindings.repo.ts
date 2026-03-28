@@ -226,4 +226,30 @@ export class LarkObjectBindingsRepo {
       internalObjectId: input.internalObjectId,
     });
   }
+
+  deleteByInternalObject(input: {
+    channelInstallationId: string;
+    internalObjectKind: string;
+    internalObjectId: string;
+  }): boolean {
+    const result = this.db
+      .delete(larkObjectBindings)
+      .where(
+        and(
+          eq(larkObjectBindings.channelInstallationId, input.channelInstallationId),
+          eq(larkObjectBindings.internalObjectKind, input.internalObjectKind),
+          eq(larkObjectBindings.internalObjectId, input.internalObjectId),
+        ),
+      )
+      .run();
+
+    const deleted = (result.changes ?? 0) > 0;
+    logger.debug("deleted lark object binding", {
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+      deleted,
+    });
+    return deleted;
+  }
 }

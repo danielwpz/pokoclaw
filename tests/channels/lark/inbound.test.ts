@@ -89,7 +89,7 @@ describe("lark inbound message handling", () => {
       const handler = createLarkMessageReceiveHandler({
         installationId: "default",
         storage: handle.storage.db,
-        ingress: { submitMessage },
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
@@ -112,7 +112,7 @@ describe("lark inbound message handling", () => {
       const handler = createLarkMessageReceiveHandler({
         installationId: "default",
         storage: handle.storage.db,
-        ingress: { submitMessage },
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
@@ -142,7 +142,7 @@ describe("lark inbound message handling", () => {
       const handler = createLarkMessageReceiveHandler({
         installationId: "default",
         storage: handle.storage.db,
-        ingress: { submitMessage },
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
@@ -179,7 +179,7 @@ describe("lark inbound message handling", () => {
       const handler = createLarkMessageReceiveHandler({
         installationId: "default",
         storage: handle.storage.db,
-        ingress: { submitMessage },
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
@@ -218,7 +218,7 @@ describe("lark inbound message handling", () => {
       const handler = createLarkMessageReceiveHandler({
         installationId: "default",
         storage: handle.storage.db,
-        ingress: { submitMessage },
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
       });
 
@@ -265,7 +265,7 @@ describe("lark inbound message handling", () => {
       const handler = createLarkMessageReceiveHandler({
         installationId: "default",
         storage: handle.storage.db,
-        ingress: { submitMessage },
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
         control,
       });
 
@@ -282,6 +282,32 @@ describe("lark inbound message handling", () => {
 });
 
 describe("lark card actions", () => {
+  test("ignores unsupported card actions", async () => {
+    const submitApprovalDecision = vi.fn(() => true);
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision,
+      },
+      control: {} as RuntimeControlService,
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "unsupported_action",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(submitApprovalDecision).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
+
   test("routes stop button callbacks to control service", async () => {
     const control = {
       stopRun: vi.fn(() => ({
@@ -294,6 +320,10 @@ describe("lark card actions", () => {
 
     const handler = createLarkCardActionHandler({
       installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
+      },
       control,
     });
 
@@ -318,6 +348,216 @@ describe("lark card actions", () => {
       toast: {
         type: "success",
         content: "正在停止...",
+      },
+    });
+  });
+
+  test("returns an error toast when approval callbacks are missing approvalId", async () => {
+    const submitApprovalDecision = vi.fn(() => true);
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision,
+      },
+      control: {} as RuntimeControlService,
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "approve_permission",
+          grantTtl: "one_day",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(submitApprovalDecision).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      toast: {
+        type: "error",
+        content: "无法识别授权请求",
+      },
+    });
+  });
+
+  test("routes one-day approval callbacks to runtime ingress", async () => {
+    const submitApprovalDecision = vi.fn(
+      (_input: {
+        approvalId: number;
+        decision: "approve" | "deny";
+        actor: string;
+        rawInput?: string | null;
+        grantedBy?: "user" | "main_agent";
+        expiresAt?: Date | null;
+      }) => true,
+    );
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision,
+      },
+      control: {} as RuntimeControlService,
+    });
+
+    const before = Date.now();
+    const result = await handler({
+      action: {
+        value: {
+          action: "approve_permission",
+          approvalId: 123,
+          grantTtl: "one_day",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+    const after = Date.now();
+
+    expect(submitApprovalDecision).toHaveBeenCalledTimes(1);
+    const call = submitApprovalDecision.mock.calls[0];
+    expect(call).toBeDefined();
+    if (call == null) {
+      throw new Error("Expected approval decision call");
+    }
+    const input = call[0];
+    expect(input).toMatchObject({
+      approvalId: 123,
+      decision: "approve",
+      actor: "lark:default:ou_sender",
+      rawInput: "approve_1d",
+      grantedBy: "user",
+    });
+    expect(input.expiresAt).toBeInstanceOf(Date);
+    expect(input.expiresAt?.getTime()).toBeGreaterThanOrEqual(before + 24 * 60 * 60 * 1000 - 1000);
+    expect(input.expiresAt?.getTime()).toBeLessThanOrEqual(after + 24 * 60 * 60 * 1000 + 1000);
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "已允许 1天",
+      },
+    });
+  });
+
+  test("routes permanent approval callbacks to runtime ingress", async () => {
+    const submitApprovalDecision = vi.fn(() => true);
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision,
+      },
+      control: {} as RuntimeControlService,
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "approve_permission",
+          approvalId: 456,
+          grantTtl: "permanent",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(submitApprovalDecision).toHaveBeenCalledExactlyOnceWith({
+      approvalId: 456,
+      decision: "approve",
+      actor: "lark:default:ou_sender",
+      rawInput: "approve_permanent",
+      grantedBy: "user",
+      expiresAt: null,
+    });
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "已允许 永久",
+      },
+    });
+  });
+
+  test("routes deny approval callbacks to runtime ingress", async () => {
+    const submitApprovalDecision = vi.fn(() => true);
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision,
+      },
+      control: {} as RuntimeControlService,
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "deny_permission",
+          approvalId: 789,
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(submitApprovalDecision).toHaveBeenCalledExactlyOnceWith({
+      approvalId: 789,
+      decision: "deny",
+      actor: "lark:default:ou_sender",
+      rawInput: "deny",
+      grantedBy: "user",
+    });
+    expect(result).toEqual({
+      toast: {
+        type: "error",
+        content: "已拒绝",
+      },
+    });
+  });
+
+  test("returns an info toast when the approval request is no longer pending", async () => {
+    const submitApprovalDecision = vi.fn(() => false);
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision,
+      },
+      control: {} as RuntimeControlService,
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "approve_permission",
+          approvalId: 123,
+          grantTtl: "permanent",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(submitApprovalDecision).toHaveBeenCalledExactlyOnceWith({
+      approvalId: 123,
+      decision: "approve",
+      actor: "lark:default:ou_sender",
+      rawInput: "approve_permanent",
+      grantedBy: "user",
+      expiresAt: null,
+    });
+    expect(result).toEqual({
+      toast: {
+        type: "info",
+        content: "该授权请求已结束或无法处理",
       },
     });
   });

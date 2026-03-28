@@ -24,6 +24,15 @@ export interface LarkInboundIngress {
     content: string;
     createdAt?: Date;
   }): Promise<unknown>;
+  submitApprovalDecision(input: {
+    approvalId: number;
+    decision: "approve" | "deny";
+    actor: string;
+    rawInput?: string | null;
+    grantedBy?: "user" | "main_agent";
+    reasonText?: string | null;
+    expiresAt?: Date | null;
+  }): boolean;
 }
 
 export interface CreateLarkInboundRuntimeInput {
@@ -76,6 +85,8 @@ export interface NormalizedLarkTextMessage {
 export interface NormalizedLarkCardAction {
   action: string;
   runId: string | null;
+  approvalId: number | null;
+  grantTtl: "one_day" | "permanent" | null;
   actorOpenId: string | null;
 }
 
@@ -253,6 +264,15 @@ export function normalizeLarkCardAction(
   }
 
   const runId = typeof value?.runId === "string" && value.runId.length > 0 ? value.runId : null;
+  const approvalIdRaw = value?.approvalId;
+  const approvalId =
+    typeof approvalIdRaw === "number" && Number.isFinite(approvalIdRaw)
+      ? approvalIdRaw
+      : typeof approvalIdRaw === "string" && approvalIdRaw.length > 0
+        ? Number.parseInt(approvalIdRaw, 10)
+        : null;
+  const grantTtl =
+    value?.grantTtl === "one_day" || value?.grantTtl === "permanent" ? value.grantTtl : null;
   const operator = isRecord(data.operator) ? data.operator : null;
   const actorOpenId =
     operator != null && typeof operator.open_id === "string" && operator.open_id.length > 0
@@ -262,12 +282,18 @@ export function normalizeLarkCardAction(
   return {
     action: actionName,
     runId,
+    approvalId:
+      approvalId == null || Number.isNaN(approvalId) || !Number.isFinite(approvalId)
+        ? null
+        : approvalId,
+    grantTtl,
     actorOpenId,
   };
 }
 
 export function createLarkCardActionHandler(input: {
   installationId: string;
+  ingress: LarkInboundIngress;
   control: RuntimeControlService;
 }): (data: unknown) => Promise<unknown> {
   return async (data: unknown) => {
@@ -280,7 +306,11 @@ export function createLarkCardActionHandler(input: {
       return null;
     }
 
-    if (normalized.action !== "stop_run") {
+    if (
+      normalized.action !== "stop_run" &&
+      normalized.action !== "approve_permission" &&
+      normalized.action !== "deny_permission"
+    ) {
       logger.debug("ignoring unsupported lark card action", {
         installationId: input.installationId,
         action: normalized.action,
@@ -288,39 +318,105 @@ export function createLarkCardActionHandler(input: {
       return null;
     }
 
-    if (normalized.runId == null) {
-      logger.warn("ignoring stop card action without run id", {
+    if (normalized.action === "stop_run") {
+      if (normalized.runId == null) {
+        logger.warn("ignoring stop card action without run id", {
+          installationId: input.installationId,
+          action: normalized.action,
+        });
+        return {
+          toast: {
+            type: "error",
+            content: "无法识别要停止的运行",
+          },
+        };
+      }
+
+      const result = input.control.stopRun({
+        runId: normalized.runId,
+        actor:
+          normalized.actorOpenId == null
+            ? `lark:${input.installationId}:unknown`
+            : `lark:${input.installationId}:${normalized.actorOpenId}`,
+        reasonText: "stop requested from lark card action",
+      });
+
+      logger.info("processed lark stop card action", {
+        installationId: input.installationId,
+        action: normalized.action,
+        runId: normalized.runId,
+        accepted: result.accepted,
+      });
+
+      return {
+        toast: {
+          type: result.accepted ? "success" : "info",
+          content: result.accepted ? "正在停止..." : "该运行已结束或无法停止",
+        },
+      };
+    }
+
+    if (normalized.approvalId == null) {
+      logger.warn("ignoring approval card action without approval id", {
         installationId: input.installationId,
         action: normalized.action,
       });
       return {
         toast: {
           type: "error",
-          content: "无法识别要停止的运行",
+          content: "无法识别授权请求",
         },
       };
     }
 
-    const result = input.control.stopRun({
-      runId: normalized.runId,
-      actor:
-        normalized.actorOpenId == null
-          ? `lark:${input.installationId}:unknown`
-          : `lark:${input.installationId}:${normalized.actorOpenId}`,
-      reasonText: "stop requested from lark card action",
+    const actor =
+      normalized.actorOpenId == null
+        ? `lark:${input.installationId}:unknown`
+        : `lark:${input.installationId}:${normalized.actorOpenId}`;
+    const matched = input.ingress.submitApprovalDecision({
+      approvalId: normalized.approvalId,
+      decision: normalized.action === "deny_permission" ? "deny" : "approve",
+      actor,
+      rawInput:
+        normalized.action === "deny_permission"
+          ? "deny"
+          : normalized.grantTtl === "one_day"
+            ? "approve_1d"
+            : "approve_permanent",
+      grantedBy: "user",
+      ...(normalized.action === "deny_permission"
+        ? {}
+        : {
+            expiresAt:
+              normalized.grantTtl === "one_day" ? new Date(Date.now() + 24 * 60 * 60 * 1000) : null,
+          }),
     });
 
-    logger.info("processed lark stop card action", {
+    logger.info("processed lark approval card action", {
       installationId: input.installationId,
       action: normalized.action,
-      runId: normalized.runId,
-      accepted: result.accepted,
+      approvalId: normalized.approvalId,
+      grantTtl: normalized.grantTtl,
+      matched,
     });
 
     return {
       toast: {
-        type: result.accepted ? "success" : "info",
-        content: result.accepted ? "正在停止..." : "该运行已结束或无法停止",
+        type:
+          normalized.action === "deny_permission"
+            ? matched
+              ? "error"
+              : "info"
+            : matched
+              ? "success"
+              : "info",
+        content: !matched
+          ? "该授权请求已结束或无法处理"
+          : normalized.action === "deny_permission"
+            ? "已拒绝"
+            : normalized.grantTtl === "one_day"
+              ? "已允许 1天"
+              : "已允许 永久",
       },
     };
   };
@@ -372,6 +468,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
         });
         const onCardAction = createLarkCardActionHandler({
           installationId: installation.installationId,
+          ingress: input.ingress,
           control: input.control,
         });
 

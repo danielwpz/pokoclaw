@@ -178,7 +178,7 @@ describe("lark outbound runtime", () => {
     const binding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
       channelInstallationId: "default",
       internalObjectKind: "run_card",
-      internalObjectId: "run_1",
+      internalObjectId: "run_1:seg:1",
     });
     expect(binding?.larkMessageId).toBe("om_card_1");
     expect(binding?.larkCardId).toBe("card_1");
@@ -533,6 +533,551 @@ describe("lark outbound runtime", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     expect(streamContent).toHaveBeenCalledOnce();
+
+    await runtime.shutdown();
+  });
+
+  test("creates a standalone approval card and resumes in a new run card segment after approval", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { card_id: "card_run_1" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_approval_1" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_run_2" } });
+    const createMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { message_id: "om_run_1", open_message_id: "oom_run_1" } })
+      .mockResolvedValueOnce({
+        data: { message_id: "om_approval_1", open_message_id: "oom_approval_1" },
+      })
+      .mockResolvedValueOnce({ data: { message_id: "om_run_2", open_message_id: "oom_run_2" } });
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: streamContent },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_appr_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_appr_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+        delta: "hi",
+        accumulatedText: "hi",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    bus.publish(
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_appr_tool_1",
+        createdAt: "2026-03-28T00:00:01.500Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_request_1",
+        toolName: "request_permissions",
+        args: {
+          entries: [
+            {
+              resource: "filesystem",
+              path: "/tmp/secret.txt",
+              access: "write",
+              scope: "exact",
+            },
+          ],
+          justification: "Need to write the output file.",
+        },
+      }),
+    );
+
+    bus.publish(
+      makeEnvelope({
+        type: "approval_requested",
+        eventId: "evt_appr_3",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_1",
+        approvalTarget: "user",
+        title: "需要授权",
+        reasonText: "需要执行危险操作。",
+        expiresAt: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(createCard.mock.calls.at(1)?.[0])).toContain("授权请求");
+    expect(updateCard).toHaveBeenCalledOnce();
+    const oldRunCardTextAfterApproval = JSON.stringify(updateCard.mock.calls.at(0)?.[0]);
+    expect(oldRunCardTextAfterApproval).toContain("请求授权");
+    expect(oldRunCardTextAfterApproval).toContain("等待授权");
+    expect(oldRunCardTextAfterApproval).toContain("Need to write the output file.");
+
+    const firstRunBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_1:seg:1",
+    });
+    const approvalBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "approval_card",
+      internalObjectId: "approval_1",
+    });
+    expect(firstRunBinding?.larkCardId).toBe("card_run_1");
+    expect(approvalBinding?.larkCardId).toBe("card_approval_1");
+
+    bus.publish(
+      makeEnvelope({
+        type: "approval_resolved",
+        eventId: "evt_appr_4",
+        createdAt: "2026-03-28T00:00:03.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_1",
+        decision: "approve",
+        actor: "user:demo",
+        rawInput: "approve_1d",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(updateCard).toHaveBeenCalledTimes(3);
+
+    bus.publish(
+      makeEnvelope({
+        type: "tool_call_completed",
+        eventId: "evt_appr_4b",
+        createdAt: "2026-03-28T00:00:03.500Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_request_1",
+        toolName: "request_permissions",
+        messageId: "tool_msg_request_1",
+        result: { status: "approved" },
+      } as never),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_1:seg:2",
+      }),
+    ).toBeNull();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_appr_5",
+        createdAt: "2026-03-28T00:00:04.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_2",
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_appr_6",
+        createdAt: "2026-03-28T00:00:05.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_2",
+        delta: "done",
+        accumulatedText: "done",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(3);
+    const secondRunBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_1:seg:2",
+    });
+    expect(secondRunBinding?.larkCardId).toBe("card_run_2");
+
+    await runtime.shutdown();
+  });
+
+  test("does not create a continuation run card after denied approval", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { card_id: "card_run_1" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_approval_1" } });
+    const createMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { message_id: "om_run_1", open_message_id: "oom_run_1" } })
+      .mockResolvedValueOnce({
+        data: { message_id: "om_approval_1", open_message_id: "oom_approval_1" },
+      });
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: streamContent },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_deny_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_deny_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_request_1",
+        toolName: "request_permissions",
+        args: {
+          entries: [
+            {
+              resource: "filesystem",
+              path: "/tmp/secret.txt",
+              access: "write",
+              scope: "exact",
+            },
+          ],
+          justification: "Need to write the output file.",
+        },
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "approval_requested",
+        eventId: "evt_deny_3",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_1",
+        approvalTarget: "user",
+        title: "需要授权",
+        reasonText: "需要执行危险操作。",
+        expiresAt: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+
+    bus.publish(
+      makeEnvelope({
+        type: "approval_resolved",
+        eventId: "evt_deny_4",
+        createdAt: "2026-03-28T00:00:03.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_1",
+        decision: "deny",
+        actor: "user:demo",
+        rawInput: "deny",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(updateCard).toHaveBeenCalledTimes(2);
+
+    bus.publish(
+      makeEnvelope({
+        type: "tool_call_failed",
+        eventId: "evt_deny_5",
+        createdAt: "2026-03-28T00:00:04.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_request_1",
+        toolName: "request_permissions",
+        messageId: "tool_msg_request_1",
+        errorKind: "denied",
+        errorMessage: "denied",
+        rawErrorMessage: "用户拒绝了这次授权请求。",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_1:seg:2",
+      }),
+    ).toBeNull();
+
+    await runtime.shutdown();
+  });
+
+  test("deletes a placeholder-only run card when the segment closes without visible content", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: { card_id: "card_1" },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: { message_id: "om_card_1", open_message_id: "om_open_1" },
+    }));
+    const deleteMessage = vi.fn(async (_input: unknown) => ({}));
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: streamContent },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  delete: deleteMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_del_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+
+    bus.publish(
+      makeEnvelope({
+        type: "run_cancelled",
+        eventId: "evt_del_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        reason: "stop requested",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(deleteMessage).toHaveBeenCalledOnce();
+    expect(deleteMessage.mock.calls.at(0)?.[0]).toMatchObject({
+      path: { message_id: "om_card_1" },
+    });
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_1:seg:1",
+      }),
+    ).toBeNull();
 
     await runtime.shutdown();
   });

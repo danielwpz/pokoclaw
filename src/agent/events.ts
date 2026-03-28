@@ -151,7 +151,6 @@ export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
   approvalTarget: "user" | "main_agent";
   title: string;
   reasonText: string;
-  options: string[];
   expiresAt: string | null;
 }
 

@@ -94,7 +94,6 @@ export async function requestToolApproval(input: {
     approvalTarget: approvalRoute.target,
     title: input.approvalTitle ?? buildApprovalTitle(input.request),
     reasonText: input.reasonText,
-    options: ["Approve for 7 days", "Approve permanently", "Deny"],
     expiresAt: expiresAt.toISOString(),
     sessionId: input.runInput.sessionId,
     conversationId: input.session.conversationId,
