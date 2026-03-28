@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 
-import { toolInternalError, toolRecoverableError } from "@/src/tools/core/errors.js";
+import {
+  buildToolFailureContent,
+  normalizeToolFailure,
+  toolInternalError,
+  toolRecoverableError,
+} from "@/src/tools/core/errors.js";
 
 describe("tool errors", () => {
   test("derives recoverable tool error behavior from kind", () => {
@@ -19,5 +24,21 @@ describe("tool errors", () => {
     expect(error.message).toBe("runtime blew up");
     expect(error.shouldReturnToLlm).toBe(false);
     expect(error.retryable).toBe(false);
+  });
+
+  test("keeps raw internal runtime details when normalizing unexpected tool errors", () => {
+    const error = normalizeToolFailure(
+      new Error("EPERM: operation not permitted, scandir '/Users/daniel/.Trash'"),
+    );
+
+    expect(error.kind).toBe("internal_error");
+    expect(error.message).toBe("Tool execution failed due to an internal runtime error.");
+    expect(error.rawMessage).toBe("EPERM: operation not permitted, scandir '/Users/daniel/.Trash'");
+    expect(buildToolFailureContent(error)).toEqual([
+      {
+        type: "text",
+        text: "Tool execution failed due to an internal runtime error.\n\nRaw error: EPERM: operation not permitted, scandir '/Users/daniel/.Trash'",
+      },
+    ]);
   });
 });

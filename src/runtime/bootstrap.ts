@@ -81,6 +81,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     config: input.config.channels.lark,
     storage: input.storage,
     ingress,
+    outboundEventBus,
   });
 
   let started = false;

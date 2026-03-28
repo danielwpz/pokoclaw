@@ -6,6 +6,8 @@ import { createFilesystemAccessController, formatDisplayPath } from "@/src/tools
 import {
   matchesFindPattern,
   toDisplayRelativePath,
+  type WalkDirectoryResult,
+  type WalkWarning,
   walkDirectory,
 } from "@/src/tools/helpers/fs-helpers.js";
 
@@ -58,6 +60,11 @@ export interface FindToolDetails {
   visitedEntries: number;
   limit: number;
   limitReached: boolean;
+  warnings?: Array<{
+    path: string;
+    errorCode: string | null;
+    errorMessage: string;
+  }>;
 }
 
 export function createFindTool() {
@@ -98,34 +105,48 @@ export function createFindTool() {
       let visitedEntries = 0;
       let limitReached = false;
 
-      await walkDirectory({
-        rootPath: absolutePath,
-        onEntry: async (entry) => {
-          const decision = access.check({ kind: "fs.read", targetPath: entry.absolutePath });
-          if (decision.access.result === "deny") {
-            return entry.kind === "directory" ? "skip" : "continue";
-          }
+      let walkResult: WalkDirectoryResult;
+      try {
+        walkResult = await walkDirectory({
+          rootPath: absolutePath,
+          onEntry: async (entry) => {
+            const decision = access.check({ kind: "fs.read", targetPath: entry.absolutePath });
+            if (decision.access.result === "deny") {
+              return entry.kind === "directory" ? "skip" : "continue";
+            }
 
-          visitedEntries += 1;
+            visitedEntries += 1;
 
-          if (typeFilter !== "any" && entry.kind !== typeFilter) {
+            if (typeFilter !== "any" && entry.kind !== typeFilter) {
+              return;
+            }
+
+            if (!matchesFindPattern(pattern, entry.relativePath, entry.name)) {
+              return;
+            }
+
+            if (matches.length >= limit) {
+              limitReached = true;
+              return "stop";
+            }
+
+            const displayMatch = toDisplayRelativePath(absolutePath, entry.absolutePath);
+            matches.push(entry.kind === "directory" ? `${displayMatch}/` : displayMatch);
             return;
-          }
+          },
+        });
+      } catch (error) {
+        if (isUnreadablePathError(error)) {
+          throw toolRecoverableError(`Cannot read directory: ${displayPath}`, {
+            code: "path_not_readable",
+            path: absolutePath,
+            rawMessage: error instanceof Error ? error.message : String(error),
+          });
+        }
+        throw error;
+      }
 
-          if (!matchesFindPattern(pattern, entry.relativePath, entry.name)) {
-            return;
-          }
-
-          if (matches.length >= limit) {
-            limitReached = true;
-            return "stop";
-          }
-
-          const displayMatch = toDisplayRelativePath(absolutePath, entry.absolutePath);
-          matches.push(entry.kind === "directory" ? `${displayMatch}/` : displayMatch);
-          return;
-        },
-      });
+      const warnings = walkResult.warnings.map(toWarningDetails);
 
       if (matches.length === 0) {
         return textToolResult("(no matches)", {
@@ -137,12 +158,16 @@ export function createFindTool() {
           visitedEntries,
           limit,
           limitReached: false,
+          ...(warnings.length === 0 ? {} : { warnings }),
         });
       }
 
       let output = matches.join("\n");
       if (limitReached) {
         output += `\n\n(${limit} matches shown. Narrow the pattern or increase limit for more.)`;
+      }
+      if (warnings.length > 0) {
+        output += `\n\n${formatWalkWarnings(warnings)}`;
       }
 
       return textToolResult(output, {
@@ -154,6 +179,7 @@ export function createFindTool() {
         visitedEntries,
         limit,
         limitReached,
+        ...(warnings.length === 0 ? {} : { warnings }),
       });
     },
   });
@@ -161,4 +187,32 @@ export function createFindTool() {
 
 function isMissingPathError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function isUnreadablePathError(error: unknown): boolean {
+  return (
+    error instanceof Error && "code" in error && (error.code === "EPERM" || error.code === "EACCES")
+  );
+}
+
+function toWarningDetails(warning: WalkWarning) {
+  return {
+    path: warning.relativePath,
+    errorCode: warning.errorCode,
+    errorMessage: warning.errorMessage,
+  };
+}
+
+function formatWalkWarnings(
+  warnings: Array<{ path: string; errorCode: string | null; errorMessage: string }>,
+): string {
+  const count = warnings.length;
+  const sample = warnings
+    .slice(0, 3)
+    .map((warning) =>
+      warning.errorCode == null ? warning.path : `${warning.path} (${warning.errorCode})`,
+    )
+    .join(", ");
+  const suffix = count > 3 ? `, +${count - 3} more` : "";
+  return `Warning: skipped ${count} unreadable director${count === 1 ? "y" : "ies"}: ${sample}${suffix}`;
 }

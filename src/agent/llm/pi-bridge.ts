@@ -81,7 +81,7 @@ export class PiBridge {
       tools: tools?.length ?? 0,
       hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
     });
-    logLlmRequestContext("stream", input, context.messages, tools);
+    // logLlmRequestContext("stream", input, context.messages, tools);
 
     try {
       const stream = streamSimple(model, context, buildPiStreamOptions(input.model, input.signal));
@@ -136,7 +136,7 @@ export class PiBridge {
       tools: tools?.length ?? 0,
       hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
     });
-    logLlmRequestContext("complete", input, context.messages, tools);
+    // logLlmRequestContext("complete", input, context.messages, tools);
 
     try {
       const finalMessage = await completeSimple(
@@ -286,37 +286,6 @@ function buildPiStreamOptions(model: ResolvedModel, signal: AbortSignal) {
   }
 
   return options;
-}
-
-function logLlmRequestContext(
-  mode: "stream" | "complete",
-  input: PiBridgeRunTurnInput,
-  messages: ReturnType<typeof buildPiContextMessages>,
-  tools: Tool[] | null,
-) {
-  logger.debug(
-    [
-      `llm ${mode} request dump`,
-      `model_id=${input.model.id}`,
-      `provider=${input.model.provider.id}`,
-      "system_prompt:",
-      input.systemPrompt == null || input.systemPrompt.length === 0
-        ? "<empty>"
-        : input.systemPrompt,
-      "messages:",
-      JSON.stringify(messages, null, 2),
-      "tools:",
-      JSON.stringify(
-        (tools ?? []).map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-        })),
-        null,
-        2,
-      ),
-    ].join("\n"),
-  );
 }
 
 function toPiModel(model: ResolvedModel): Model<Api> {

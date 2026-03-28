@@ -74,6 +74,7 @@ export interface AssistantMessageCompletedEvent extends AgentRuntimeEventBase {
   turn: number;
   messageId: string;
   text: string;
+  reasoningText: string | null;
   toolCalls: AgentToolCall[];
   usage: MessageUsage | null;
 }
@@ -102,6 +103,7 @@ export interface ToolCallFailedEvent extends AgentRuntimeEventBase {
   toolName: string;
   errorKind: "recoverable_error" | "internal_error";
   errorMessage: string;
+  rawErrorMessage?: string | null;
   retryable: boolean;
 }
 

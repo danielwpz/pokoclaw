@@ -1556,6 +1556,12 @@ describe("agent loop", () => {
     const rows = messagesRepo.listBySession("sess_1");
     expect(rows).toHaveLength(2);
     expect(emittedEvents.some((event) => event.type === "tool_call_failed")).toBe(true);
+    expect(emittedEvents.find((event) => event.type === "tool_call_failed")).toMatchObject({
+      type: "tool_call_failed",
+      errorKind: "internal_error",
+      errorMessage: "Tool execution failed due to an internal runtime error.",
+      rawErrorMessage: "cannot read properties of undefined",
+    });
     expect(emittedEvents.at(-1)).toMatchObject({
       type: "run_failed",
       errorKind: "internal_error",

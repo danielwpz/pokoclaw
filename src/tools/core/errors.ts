@@ -135,8 +135,13 @@ export function normalizeToolFailure(error: unknown): ToolFailure {
   const rawMessage = getErrorMessage(error);
   const message = rawMessage.trim().length > 0 ? rawMessage : "Unknown tool execution failure";
 
-  return toolInternalError("Tool execution failed due to an internal runtime error.", {
+  return new ToolFailure({
+    kind: "internal_error",
+    message: "Tool execution failed due to an internal runtime error.",
     rawMessage: message,
+    details: {
+      rawMessage: message,
+    },
   });
 }
 
@@ -164,7 +169,10 @@ export function buildToolFailureContent(failure: ToolFailure): ToolContentBlock[
   return [
     {
       type: "text",
-      text: failure.message,
+      text:
+        failure.kind === "internal_error" && failure.rawMessage != null
+          ? `${failure.message}\n\nRaw error: ${failure.rawMessage}`
+          : failure.message,
     },
   ];
 }
