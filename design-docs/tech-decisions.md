@@ -945,6 +945,25 @@
     - runtime/orchestration -> adapter 的输出应是：`raw runtime event + 必要业务上下文 + 已决定的逻辑投递目标`
     - 而不是 runtime/orchestration 直接调用渠道 API，也不是 channel 直接操纵 agent loop
     - 更不是 orchestration 先拼一段“给人看的最终消息”再强塞给 adapter；那会把 channel 展示能力错误地上移到 orchestration 层
+  - **channel durable state 的抽象边界**
+    - 不做“万能 channel 对象大表”
+    - 只抽象真正稳定的 conversation-level 绑定
+    - 更细的 message/card/callback durable 锚点由各 channel 专属表维护
+  - **通用表：`channel_surfaces`**
+    - 作用：把内部 `conversation_id + branch_id` 绑定到某个具体 `channel_type + channel_installation_id` 的外部 surface
+    - 建议字段：
+      - `id`
+      - `channel_type`
+      - `channel_installation_id`
+      - `conversation_id`
+      - `branch_id`
+      - `surface_key`
+      - `surface_object_json`
+      - `created_at`
+      - `updated_at`
+    - 不在通用层展开 `chat_id` / `thread_id` / `topic_id` / `open_id` 等平台字段
+    - `surface_key` 是 channel 自定义的 lookup key，用于 inbound 反查；core 不解释其结构，但要求在同一 `channel_type + channel_installation_id` 下唯一
+    - `surface_object_json` 的 JSON 结构由各 channel 自己定义并严格维护
   - **所有跨层事件都要带完整上下文**
     - agent/runtime 侧：
       - `session_id`
@@ -954,7 +973,7 @@
       - `event_id`
       - `correlation_id`
     - channel/presentation 侧：
-      - `channel_instance_id`
+      - `channel_installation_id`
       - `external_chat_id`
       - `external_thread_id`
       - `external_message_id`
@@ -1164,7 +1183,7 @@
 ## 8. 中间层：消息适配与渲染 `TODO`
 
 > 基础设施（LiveState、steering、reaction/typing、查询渠道）已在 Section 4 确定。
-> 本节只回答一个问题：**runtime 事件如何经过 channel adapter 变成用户真正看到的消息、卡片和交互。**
+> 本节只回答一个问题：**runtime 与 channel 如何双向解耦，同时不把平台展示能力污染回 runtime。**
 
 ### 8.1 Runtime Event 与 Channel Adapter 的边界
 
@@ -1184,6 +1203,10 @@
     - `compaction_end`
     - `approval_requested`
     - `approval_resolved`
+    - `task_run_started`
+    - `task_run_completed`
+    - `task_run_failed`
+    - `task_run_cancelled`
     - `turn_start`
     - `turn_end`
     - `run_error`
@@ -1198,20 +1221,20 @@
     - 不让 runtime 直接调用飞书、微信等 channel API
     - 不让 channel 直接操纵 agent loop 内部状态
   - **channel adapter 的职责**：
-    - 聚合：把多个 runtime 事件组合成更适合该平台的展示
-    - 降级：平台不支持某能力时，改用保守展示方案
+    - 入站：把平台消息、thread 回复、按钮回调等翻译成统一 ingress command
+    - 出站：消费 runtime raw events，自行决定是否展示、如何聚合、如何降级
     - 节流：控制 patch / update 频率
     - 幂等：避免重复发送、重复 patch
-    - 交互回流：把按钮点击、文本回复等平台交互解析回统一 ingress command
+    - durable 锚点管理：维护平台消息/card/thread 与内部对象的绑定
   - **设计目标**：
     - runtime 保持纯语义
     - channel adapter 保持平台感知
     - transport 保持 API 感知
     - 三层不混用
-  - **参考口径**：
-    - 借 ZeroClaw 的“channel 是适配层”视角
-    - 但不照搬它把 draft/patch 动作抬成系统级事件的做法
-    - 我们更强调 runtime event 的纯语义性
+  - **当前结论**
+    - 现在不再增加额外“消息中间模型”抽象层
+    - 直接使用 `runtime event-bus + channel adapter`
+    - 入站走统一 ingress command，出站走 runtime raw events
 
 ### 8.2 实时过程反馈与平台差异化展示
 
@@ -1228,18 +1251,16 @@
       - tool call 细节可完全不展示
       - assistant delta 先缓存，turn 结束后一次性发送
       - approval 可退化为“回复 同意 / 拒绝”
-  - **因此本节的核心不是定义飞书 UI，而是定义“允许各 channel 自己打包 runtime 事件”**
+  - **因此本节的核心不是定义飞书 UI，而是定义“允许各 channel 自己消费同一组事实事件”**
   - 飞书卡片实时更新仍然是首要实现目标：
     - 将 LiveState（Section 4）和 runtime events 渲染为卡片
     - 当前 tool call
     - assistant 输出增量
     - 耗时、tokens、成本
-  - 更新频率、卡片样式、信息密度在飞书 API 调研后再具体定
+  - 更新频率、卡片样式、信息密度留给具体 channel adapter 决定
   - 每个 turn 结束后附上消耗数据（tokens / 费用）
-  - 回调与异步更新约束：
-    - 按钮交互优先使用 callback 返回 `card` 即时更新
-    - 进度流使用 `im.message.patch`
-    - 同一次状态变化不混用两条路径
+  - 不在本层定义 `patch` / `append` / `reply_in_thread` 之类展示动作
+    - 这些都属于 platform capability，不属于 runtime 事实
 
 ### 8.3 打断、停止与终态回写
 
@@ -1275,6 +1296,31 @@
   - approval、任务卡片、tool 进度这三类交互都必须有降级路径
   - 降级是 adapter 责任，不是 runtime 责任
 
+### 8.6 Channel Durable State 的边界
+
+- [ ] channel durable state 设计
+  - **只抽象真正稳定的 conversation-level 绑定**
+    - 通用表：`channel_surfaces`
+    - 作用：把内部 `conversation_id + branch_id` 绑定到某个具体 `channel_type + channel_installation_id` 的外部 surface
+  - **建议字段**
+    - `id`
+    - `channel_type`
+    - `channel_installation_id`
+    - `conversation_id`
+    - `branch_id`
+    - `surface_key`
+    - `surface_object_json`
+    - `created_at`
+    - `updated_at`
+  - **明确约束**
+    - 不在通用层展开 `chat_id` / `thread_id` / `topic_id` / `open_id` 等平台字段
+    - `surface_key` 只作为 channel 自定义 lookup key；通用层不解析其内部结构
+    - `surface_object_json` 的 JSON schema 由各 channel 自己定义并严格维护
+    - 不做“万能 channel 对象大表”
+  - **更细的 durable 锚点**
+    - `message/card/callback/thread-reply-anchor` 这类平台差异极大的对象，默认由各 channel 专属表维护
+    - 是否持久化、存哪些字段、如何恢复，由各 channel 自己决定
+
 ## 9. Channel层：飞书集成 `TODO`
 
 > 飞书是第一个真实工作 channel。Section 8 说的是通用边界；本节说的是“飞书具体要做到什么”。
@@ -1284,6 +1330,19 @@
 - [ ] 飞书SDK / API选型
   - 包装成本地 client，不把 SDK 细节扩散到业务层
   - inbound / outbound / cards / threads / reactions / typing 分模块实现
+  - 模块边界建议：
+    - `client.ts`：Lark SDK 包装
+    - `inbound.ts`：webhook / ws 消息与 callback 解析
+    - `outbound.ts`：消费 runtime event-bus，发文本/卡片/patch
+    - `cards.ts` / `cardkit.ts`：飞书卡片与流式更新封装
+    - `threads.ts`：thread 回复与 target 解析
+    - `typing.ts` / `reactions.ts`：能力补充
+  - 当前已落地的第一版边界：
+    - `client.ts` 只负责 installation 级 SDK client 管理
+    - `channel.ts` 负责飞书 channel runtime 的启动/关闭与模块装配
+    - `inbound.ts` 负责 websocket 普通消息接收、解析与路由
+    - `outbound.ts` 负责消费 runtime event-bus，并维护飞书侧的运行中卡片状态与发送节流
+  - 当前阶段只实现普通文本消息的 websocket 入站；webhook、callback、thread 解析后续补
 
 ### 9.2 富交互能力与审批展示
 
@@ -1295,6 +1354,29 @@
     - typing / reaction
     - approval 的按钮化交互
   - 但这些都属于 **adapter + transport** 的实现，不回流污染 runtime 事件定义
+  - 参考结论：
+    - thread 回复本质上仍然依赖 `message_id + reply_in_thread`
+    - CardKit 流式更新依赖 `card_id + element_id + sequence`
+    - 因此这些 durable 锚点不应提前抽象成通用表
+  - 当前阶段的飞书 outbound 选择：
+    - 不做 “raw event -> 直接 patch 某张旧卡” 的 if/else 逻辑
+    - 先维护一份结构化的 `LarkRunState`
+    - 再把 `LarkRunState` 渲染成飞书 CardKit card json
+    - 最后由发送层做 coalesce / 节流 / create / update / element streaming
+  - 当前 `LarkRunState` 的产品语义：
+    - 主 transcript 按真实时序渲染：`text -> tool -> text -> ...`
+    - `assistant` 文本直接展示，不折叠
+    - `reasoning` 统一放在顶部折叠区，不打散到 transcript 中
+    - `tool` 按连续序列聚合；序列 `<=2` 保持平铺，序列 `>2` 在结束后折叠为外层组，组内每个 tool 仍可查看详情
+    - footer 只保留轻量运行状态（如“正在思考”“正在调用工具”）和 stop 按钮占位
+  - 当前 streaming 路径：
+    - 首次发送使用 `cardkit.v1.card.create + im.message.create(type=card)`
+    - 后续 assistant delta 优先走 `cardElement.content`
+    - 结构变化或完成态再走 `card.update`
+    - `lark_object_bindings` 持久化 `card_id / message_id / element_id / sequence`
+  - 当前 reasoning 边界：
+    - 已支持“完成后的 reasoning 摘要/全文”进入顶部折叠区
+    - 实时 reasoning delta 还没有底层 runtime 事件支持；当前只能显示“思考中”状态，占位不伪造全文
 
 ### 9.3 群、thread 与对话载体
 
@@ -1302,6 +1384,9 @@
   - 主Agent DM 是系统入口
   - SubAgent 使用独立飞书群
   - TaskAgent 不建独立群，只附着在已有对话中展示
+  - durable 归属规则：
+    - 主Agent / SubAgent 的主对话面通过通用 `channel_surfaces` 绑定到飞书 chat
+    - TaskAgent 不拥有自己的长期 surface；其展示锚点附着在 owner 的主线或该次 run 的 thread 上
 
 ### 9.4 入站路由与目标解析
 
@@ -1315,14 +1400,44 @@
     - 卡片按钮回调
   - 普通聊天消息与任务干预消息要走不同 ingress command
   - 路由决策要保留结构化日志，便于排查误路由
+  - 入站必须异步：
+    - 平台回调先尽快 ack
+    - 再异步提交 `submitMessage(...)` / `submitApprovalDecision(...)` 等统一 ingress command
+  - 第一阶段最先打通的入站主链：
+    - 普通消息
+    - thread 回复
+    - approval 卡片按钮回调
+  - 当前已实现的最小入站主链：
+    - 只接 `im.message.receive_v1`
+    - 只处理 `message_type=text`
+    - 只把普通文本消息翻译成 `submitMessage(...)`
+    - installation 首次来消息时，自动完成 initial pairing
+  - 当前入站解析顺序：
+    - 飞书事件 -> 提取 `chat_id/message_id/text`
+    - `chat_id` -> `surface_key`
+    - `channel_surfaces` lookup
+    - 命中后解析到 `conversation_id + branch_id`
+    - 再按 `conversation/branch` 找最新 `chat` session
+    - 最后异步提交给 runtime ingress
+  - 第一阶段保留一个兼容回退：
+    - 如果 `channel_surfaces` 尚未存在
+    - 允许从 `channel_instances(provider=lark, account_key=installation_id) + conversations.external_chat_id + main branch`
+      反查已有主线对话
+    - 命中后立即补写 `channel_surfaces`
+    - 这是帮助迁移现有库数据的兼容桥，不改变长期以 `channel_surfaces` 为准的方向
 
 ### 9.5 飞书特有的实现约束
 
 - [ ] 飞书实现的额外约束
   - 飞书可以比其他 channel 展示更多过程，但仍然不能反过来定义 runtime 语义
+  - conversation/branch <-> 飞书外部会话面的 durable 绑定复用通用 `channel_surfaces`
+  - 飞书特有的 message/card/callback durable 锚点使用飞书专属表，不塞进通用表
+  - 建议第一版至少有一张飞书专属对象锚点表，负责：
+    - 内部 `message/task_run/approval` 与飞书 `message/card/thread-reply-anchor` 的 durable 绑定
+    - `message_id` / `open_message_id` / `card_id` / `element_id` / `sequence` 等平台字段
   - 飞书 adapter 需要负责：
     - 卡片锚点管理
-    - patch 频率控制
+    - patch / streaming 频率控制
     - callback 幂等处理
     - thread / message target 编码与回解
     - 富交互失败时的文本 fallback

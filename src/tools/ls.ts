@@ -12,14 +12,15 @@ export const LS_TOOL_SCHEMA = Type.Object(
     path: Type.Optional(
       Type.String({
         default: ".",
-        description: "Directory to list. Defaults to the current tool working directory.",
+        description:
+          "A single directory path to list. This tool only accepts a directory path, not shell command text. Defaults to the current tool working directory.",
       }),
     ),
     limit: Type.Optional(
       Type.Integer({
         minimum: 1,
         default: DEFAULT_LIMIT,
-        description: `Maximum number of visible entries to return. Defaults to ${DEFAULT_LIMIT}.`,
+        description: `Maximum number of visible entries to return from that directory. Defaults to ${DEFAULT_LIMIT}.`,
       }),
     ),
   },
@@ -40,7 +41,7 @@ export function createLsTool() {
   return defineTool({
     name: "ls",
     description:
-      "List directory contents. Returns visible entries sorted alphabetically and appends '/' to directories.",
+      "List the contents of one directory. Use this only for a simple directory listing by path. Do not pass command text, chained commands, pipes, `find`, `pwd`, or any other shell expression here. Returns visible entries sorted alphabetically and appends '/' to directories.",
     inputSchema: LS_TOOL_SCHEMA,
     async execute(context, args) {
       const access = createFilesystemAccessController(context);

@@ -6,12 +6,18 @@ import {
   type LarkInboundRuntime,
 } from "@/src/channels/lark/inbound.js";
 import {
+  createLarkOutboundRuntime,
+  type LarkOutboundRuntime,
+} from "@/src/channels/lark/outbound.js";
+import {
   type ConfiguredLarkInstallation,
   isConfiguredLarkInstallation,
   listConfiguredLarkInstallations,
   listEnabledLarkInstallations,
 } from "@/src/channels/lark/types.js";
 import type { LarkChannelConfig } from "@/src/config/schema.js";
+import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
+import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 
@@ -28,6 +34,7 @@ export interface LarkChannelRuntimeStatus {
 export interface LarkChannelRuntime {
   readonly clients: LarkClientRegistry;
   readonly inbound: LarkInboundRuntime;
+  readonly outbound: LarkOutboundRuntime;
   start(): void;
   shutdown(): Promise<void>;
   status(): LarkChannelRuntimeStatus;
@@ -37,6 +44,7 @@ export interface CreateLarkChannelRuntimeInput {
   config: LarkChannelConfig;
   storage: StorageDb;
   ingress: LarkInboundIngress;
+  outboundEventBus: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   wsClientFactory?: (installation: ConfiguredLarkInstallation) => Lark.WSClient;
 }
 
@@ -50,11 +58,17 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     ingress: input.ingress,
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
   });
+  const outbound = createLarkOutboundRuntime({
+    storage: input.storage,
+    outboundEventBus: input.outboundEventBus,
+    clients,
+  });
   let started = false;
 
   return {
     clients,
     inbound,
+    outbound,
     start() {
       if (started) {
         logger.debug("lark channel start skipped because it is already running");
@@ -70,6 +84,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
       }
 
       inbound.start();
+      outbound.start();
       started = true;
       logger.info("lark channel started", {
         enabledInstallations: enabledInstallations.length,
@@ -84,6 +99,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
         return;
       }
 
+      await outbound.shutdown();
       await inbound.shutdown();
       clients.clear();
       started = false;

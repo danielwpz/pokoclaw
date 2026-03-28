@@ -63,6 +63,7 @@ import {
 } from "@/src/tools/helpers/permission-block.js";
 
 const logger = createSubsystemLogger("agent-loop");
+const ASSISTANT_RESPONSE_LOG_PREVIEW_MAX_LENGTH = 144;
 
 // AgentLoop is the execution core for a single session run.
 // It owns model turns, tool execution, compaction hooks, and the runtime-side
@@ -386,6 +387,7 @@ export class AgentLoop {
         throwIfAborted(handle.signal);
 
         const assistantText = collectAssistantText(response.content);
+        const reasoningText = collectAssistantThinking(response.content);
         const toolCalls = collectAgentToolCalls(response.content);
         // Some runners will stream deltas incrementally, others may only return
         // the final assistant payload. We keep one event shape and only fall back
@@ -436,13 +438,14 @@ export class AgentLoop {
           modelId: model.id,
           stopReason: response.stopReason,
           toolCalls: toolCalls.length,
-          textPreview: truncateLogText(assistantText, 96),
+          textPreview: truncateLogText(assistantText, ASSISTANT_RESPONSE_LOG_PREVIEW_MAX_LENGTH),
         });
         this.recordEvent(events, {
           type: "assistant_message_completed",
           turn: turn + 1,
           messageId: assistantMessageId,
           text: assistantText,
+          reasoningText: reasoningText.length > 0 ? reasoningText : null,
           toolCalls,
           usage: response.usage,
           sessionId: input.sessionId,
@@ -585,6 +588,7 @@ export class AgentLoop {
               toolName: toolCall.name,
               errorKind: failure.kind,
               errorMessage: failure.message,
+              rawErrorMessage: failure.rawMessage ?? null,
               retryable: failure.retryable,
               sessionId: input.sessionId,
               conversationId: context.session.conversationId,
@@ -1198,6 +1202,13 @@ function appendMessageAndHydrate(input: {
 
 function collectAssistantText(content: AgentAssistantContentBlock[]): string {
   return content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
+}
+
+function collectAssistantThinking(content: AgentAssistantContentBlock[]): string {
+  return content
+    .flatMap((block) => (block.type === "thinking" ? [block.thinking] : []))
+    .join("\n")
+    .trim();
 }
 
 function collectAgentToolCalls(content: AgentAssistantContentBlock[]): AgentToolCall[] {

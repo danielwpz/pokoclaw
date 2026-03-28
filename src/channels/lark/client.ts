@@ -4,9 +4,13 @@ import { createSubsystemLogger } from "@/src/shared/logger.js";
 
 const logger = createSubsystemLogger("channels/lark-client");
 
+export interface LarkSdkClient {
+  sdk: Lark.Client;
+}
+
 export class LarkClientRegistry {
   private readonly installations = new Map<string, ConfiguredLarkInstallation>();
-  private readonly clients = new Map<string, Lark.Client>();
+  private readonly clients = new Map<string, LarkSdkClient>();
 
   constructor(installations: ConfiguredLarkInstallation[]) {
     for (const installation of installations) {
@@ -18,7 +22,7 @@ export class LarkClientRegistry {
     return Array.from(this.installations.values());
   }
 
-  getOrCreate(installationId: string): Lark.Client {
+  getOrCreate(installationId: string): LarkSdkClient {
     const existing = this.clients.get(installationId);
     if (existing != null) {
       return existing;
@@ -29,10 +33,12 @@ export class LarkClientRegistry {
       throw new Error(`Unknown Lark installation: ${installationId}`);
     }
 
-    const client = new Lark.Client({
-      appId: installation.appId,
-      appSecret: installation.appSecret,
-    });
+    const client: LarkSdkClient = {
+      sdk: new Lark.Client({
+        appId: installation.appId,
+        appSecret: installation.appSecret,
+      }),
+    };
     this.clients.set(installationId, client);
 
     logger.info("created lark sdk client", {

@@ -7,6 +7,8 @@ import {
   compileSearchPattern,
   matchesFindPattern,
   toDisplayRelativePath,
+  type WalkDirectoryResult,
+  type WalkWarning,
   walkDirectory,
 } from "@/src/tools/helpers/fs-helpers.js";
 
@@ -68,6 +70,11 @@ export interface GrepToolDetails {
   skippedBinaryFiles: number;
   limit: number;
   limitReached: boolean;
+  warnings?: Array<{
+    path: string;
+    errorCode: string | null;
+    errorMessage: string;
+  }>;
 }
 
 export function createGrepTool() {
@@ -104,8 +111,13 @@ export function createGrepTool() {
       let searchedFiles = 0;
       let skippedBinaryFiles = 0;
       let limitReached = false;
+      const warnings: Array<{
+        path: string;
+        errorCode: string | null;
+        errorMessage: string;
+      }> = [];
 
-      const searchFile = async (filePath: string, outputPath: string) => {
+      const searchFile = async (filePath: string, outputPath: string, required: boolean) => {
         const decision = access.check({ kind: "fs.read", targetPath: filePath });
         if (decision.access.result === "deny") {
           return;
@@ -115,7 +127,28 @@ export function createGrepTool() {
           return;
         }
 
-        const fileBuffer = await readFile(filePath);
+        let fileBuffer: Awaited<ReturnType<typeof readFile>>;
+        try {
+          fileBuffer = await readFile(filePath);
+        } catch (error) {
+          if (isUnreadablePathError(error)) {
+            if (required) {
+              throw toolRecoverableError(`Cannot read file: ${outputPath}`, {
+                code: "path_not_readable",
+                path: filePath,
+                rawMessage: error instanceof Error ? error.message : String(error),
+              });
+            }
+
+            warnings.push({
+              path: outputPath,
+              errorCode: error.code,
+              errorMessage: error.message,
+            });
+            return;
+          }
+          throw error;
+        }
         if (fileBuffer.includes(0)) {
           skippedBinaryFiles += 1;
           return;
@@ -140,27 +173,40 @@ export function createGrepTool() {
       };
 
       if (rootStats.isFile()) {
-        const stop = await searchFile(absolutePath, displayPath);
+        const stop = await searchFile(absolutePath, displayPath, true);
         if (stop === "stop") {
           limitReached = true;
         }
       } else if (rootStats.isDirectory()) {
-        await walkDirectory({
-          rootPath: absolutePath,
-          onEntry: async (entry) => {
-            const decision = access.check({ kind: "fs.read", targetPath: entry.absolutePath });
-            if (decision.access.result === "deny") {
-              return entry.kind === "directory" ? "skip" : "continue";
-            }
+        let walkResult: WalkDirectoryResult;
+        try {
+          walkResult = await walkDirectory({
+            rootPath: absolutePath,
+            onEntry: async (entry) => {
+              const decision = access.check({ kind: "fs.read", targetPath: entry.absolutePath });
+              if (decision.access.result === "deny") {
+                return entry.kind === "directory" ? "skip" : "continue";
+              }
 
-            if (entry.kind !== "file") {
-              return;
-            }
+              if (entry.kind !== "file") {
+                return;
+              }
 
-            const outputPath = toDisplayRelativePath(absolutePath, entry.absolutePath);
-            return await searchFile(entry.absolutePath, outputPath);
-          },
-        });
+              const outputPath = toDisplayRelativePath(absolutePath, entry.absolutePath);
+              return await searchFile(entry.absolutePath, outputPath, false);
+            },
+          });
+        } catch (error) {
+          if (isUnreadablePathError(error)) {
+            throw toolRecoverableError(`Cannot read directory: ${displayPath}`, {
+              code: "path_not_readable",
+              path: absolutePath,
+              rawMessage: error instanceof Error ? error.message : String(error),
+            });
+          }
+          throw error;
+        }
+        warnings.push(...walkResult.warnings.map(toWarningDetails));
       } else {
         throw toolRecoverableError(`Path is not a searchable file or directory: ${displayPath}`, {
           code: "unsupported_path_type",
@@ -181,12 +227,16 @@ export function createGrepTool() {
           skippedBinaryFiles,
           limit,
           limitReached: false,
+          ...(warnings.length === 0 ? {} : { warnings }),
         });
       }
 
       let output = lines.join("\n");
       if (limitReached) {
         output += `\n\n(${limit} matching lines shown. Narrow the query or increase limit for more.)`;
+      }
+      if (warnings.length > 0) {
+        output += `\n\n${formatWalkWarnings(warnings)}`;
       }
 
       return textToolResult(output, {
@@ -201,6 +251,7 @@ export function createGrepTool() {
         skippedBinaryFiles,
         limit,
         limitReached,
+        ...(warnings.length === 0 ? {} : { warnings }),
       });
     },
   });
@@ -221,4 +272,34 @@ function basename(value: string): string {
 
 function isMissingPathError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function isUnreadablePathError(
+  error: unknown,
+): error is Error & { code: "EPERM" | "EACCES"; message: string } {
+  return (
+    error instanceof Error && "code" in error && (error.code === "EPERM" || error.code === "EACCES")
+  );
+}
+
+function toWarningDetails(warning: WalkWarning) {
+  return {
+    path: warning.relativePath,
+    errorCode: warning.errorCode,
+    errorMessage: warning.errorMessage,
+  };
+}
+
+function formatWalkWarnings(
+  warnings: Array<{ path: string; errorCode: string | null; errorMessage: string }>,
+): string {
+  const count = warnings.length;
+  const sample = warnings
+    .slice(0, 3)
+    .map((warning) =>
+      warning.errorCode == null ? warning.path : `${warning.path} (${warning.errorCode})`,
+    )
+    .join(", ");
+  const suffix = count > 3 ? `, +${count - 3} more` : "";
+  return `Warning: skipped ${count} unreadable path${count === 1 ? "" : "s"}: ${sample}${suffix}`;
 }

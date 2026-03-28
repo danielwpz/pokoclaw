@@ -1,5 +1,9 @@
+import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
+
+const logger = createSubsystemLogger("tools/fs-helpers");
 
 export interface WalkEntry {
   absolutePath: string;
@@ -15,15 +19,27 @@ export interface WalkDirectoryOptions {
   onEntry: (entry: WalkEntry) => Promise<"continue" | "skip" | "stop" | undefined>;
 }
 
+export interface WalkWarning {
+  absolutePath: string;
+  relativePath: string;
+  errorCode: string | null;
+  errorMessage: string;
+}
+
+export interface WalkDirectoryResult {
+  warnings: WalkWarning[];
+}
+
 const DEFAULT_SKIPPED_DIRECTORY_NAMES = new Set([".git", "node_modules"]);
 
-export async function walkDirectory(options: WalkDirectoryOptions): Promise<void> {
+export async function walkDirectory(options: WalkDirectoryOptions): Promise<WalkDirectoryResult> {
   const maxEntries = options.maxEntries ?? Number.MAX_SAFE_INTEGER;
   const skipDirectoryNames = new Set(options.skipDirectoryNames ?? []);
   const queue: Array<{ absolutePath: string; relativePath: string }> = [
     { absolutePath: options.rootPath, relativePath: "" },
   ];
   let visitedEntries = 0;
+  const warnings: WalkWarning[] = [];
 
   while (queue.length > 0 && visitedEntries < maxEntries) {
     const current = queue.shift();
@@ -31,14 +47,39 @@ export async function walkDirectory(options: WalkDirectoryOptions): Promise<void
       break;
     }
 
-    const entries = await readdir(current.absolutePath, { withFileTypes: true });
+    let entries: Dirent<string>[];
+    try {
+      entries = await readdir(current.absolutePath, { withFileTypes: true });
+    } catch (error) {
+      if (isSkippableReadDirectoryError(error)) {
+        if (current.relativePath.length === 0) {
+          throw error;
+        }
+
+        const warning: WalkWarning = {
+          absolutePath: current.absolutePath,
+          relativePath: current.relativePath,
+          errorCode: getErrorCode(error),
+          errorMessage: error instanceof Error ? error.message : String(error),
+        };
+        warnings.push(warning);
+        logger.debug("skipping unreadable directory during recursive walk", {
+          path: current.absolutePath,
+          relativePath: current.relativePath,
+          errorCode: warning.errorCode,
+          errorMessage: warning.errorMessage,
+        });
+        continue;
+      }
+      throw error;
+    }
     entries.sort((left, right) =>
       left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
     );
 
     for (const dirent of entries) {
       if (visitedEntries >= maxEntries) {
-        return;
+        return { warnings };
       }
 
       const relativePath =
@@ -57,7 +98,7 @@ export async function walkDirectory(options: WalkDirectoryOptions): Promise<void
       visitedEntries += 1;
       const decision = await options.onEntry(entry);
       if (decision === "stop") {
-        return;
+        return { warnings };
       }
 
       if (
@@ -70,6 +111,21 @@ export async function walkDirectory(options: WalkDirectoryOptions): Promise<void
       }
     }
   }
+
+  return { warnings };
+}
+
+function isSkippableReadDirectoryError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  return code === "EPERM" || code === "EACCES" || code === "ENOENT";
+}
+
+function getErrorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error == null || !("code" in error)) {
+    return null;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
 }
 
 export function toDisplayRelativePath(rootPath: string, absolutePath: string): string {

@@ -136,4 +136,22 @@ export class ChannelSurfacesRepo {
 
     return surface;
   }
+
+  listByConversationBranch(input: {
+    channelType: string;
+    conversationId: string;
+    branchId: string;
+  }): ChannelSurface[] {
+    return this.db
+      .select()
+      .from(channelSurfaces)
+      .where(
+        and(
+          eq(channelSurfaces.channelType, input.channelType),
+          eq(channelSurfaces.conversationId, input.conversationId),
+          eq(channelSurfaces.branchId, input.branchId),
+        ),
+      )
+      .all();
+  }
 }

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -194,6 +194,127 @@ describe("find tool", () => {
         limitReached: false,
       },
     });
+  });
+
+  test("continues broad scans but reports unreadable directories as warnings", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-find-tool-"));
+
+    const readableDir = path.join(tempDir, "inside");
+    const unreadableDir = path.join(tempDir, "private");
+    await mkdir(readableDir);
+    await mkdir(unreadableDir);
+    await writeFile(path.join(readableDir, "visible.txt"), "ok", "utf8");
+    await writeFile(path.join(unreadableDir, "secret.txt"), "hidden", "utf8");
+
+    const security = new SecurityService(handle.storage.db);
+    security.grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "main_agent",
+      scopes: [{ kind: "fs.read", path: `${tempDir}/**` }],
+    });
+
+    const registry = new ToolRegistry();
+    registry.register(createFindTool());
+
+    await chmod(unreadableDir, 0o000);
+    try {
+      const result = await registry.execute(
+        "find",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          pattern: "*.txt",
+        },
+      );
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: expect.stringContaining("inside/visible.txt"),
+        },
+      ]);
+      expect((result.content[0] as { type: string; text: string }).text).toContain(
+        "Warning: skipped 1 unreadable directory:",
+      );
+      expect((result.content[0] as { type: string; text: string }).text).toContain("private");
+      expect(result.details).toMatchObject({
+        path: ".",
+        absolutePath: await resolveExpectedToolAbsolutePath(tempDir),
+        pattern: "*.txt",
+        type: "any",
+        matches: 1,
+        visitedEntries: 3,
+        limit: 200,
+        limitReached: false,
+        warnings: [
+          {
+            path: "private",
+            errorCode: expect.stringMatching(/^(EPERM|EACCES)$/),
+            errorMessage: expect.stringContaining("private"),
+          },
+        ],
+      });
+    } finally {
+      await chmod(unreadableDir, 0o755);
+    }
+  });
+
+  test("fails when the explicitly requested root directory is unreadable", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-find-tool-"));
+
+    const unreadableRoot = path.join(tempDir, "private");
+    await mkdir(unreadableRoot);
+
+    const security = new SecurityService(handle.storage.db);
+    security.grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "main_agent",
+      scopes: [{ kind: "fs.read", path: `${tempDir}/**` }],
+    });
+
+    const registry = new ToolRegistry();
+    registry.register(createFindTool());
+
+    await chmod(unreadableRoot, 0o000);
+    try {
+      await expect(
+        registry.execute(
+          "find",
+          {
+            sessionId: "sess_1",
+            conversationId: "conv_1",
+            ownerAgentId: "agent_1",
+            cwd: tempDir,
+            securityConfig: DEFAULT_CONFIG.security,
+            storage: handle.storage.db,
+          },
+          {
+            path: unreadableRoot,
+            pattern: "*.txt",
+          },
+        ),
+      ).rejects.toMatchObject({
+        name: "ToolFailure",
+        kind: "recoverable_error",
+        message: expect.stringContaining("Cannot read directory:"),
+        details: {
+          code: "path_not_readable",
+          path: expect.stringContaining("/private"),
+        },
+      } satisfies Partial<ToolFailure>);
+    } finally {
+      await chmod(unreadableRoot, 0o755);
+    }
   });
 
   test("denies searching the system directory", async () => {

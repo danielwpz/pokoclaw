@@ -14,6 +14,7 @@ import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 const logger = createSubsystemLogger("channels/lark-inbound");
 
 const LARK_CHANNEL_TYPE = "lark";
+const LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH = 144;
 
 export interface LarkInboundIngress {
   submitMessage(input: {
@@ -197,6 +198,7 @@ export function createLarkMessageReceiveHandler(input: {
       conversationId: surface.conversationId,
       branchId: surface.branchId,
       chatType: normalized.chatType,
+      contentPreview: truncateLogText(normalized.text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
     });
 
     await input.ingress.submitMessage({
@@ -572,6 +574,14 @@ function parseLarkMessageCreatedAt(value: unknown): Date | undefined {
   }
 
   return new Date(milliseconds);
+}
+
+function truncateLogText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
