@@ -2,6 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 
 import { AgentManager } from "@/src/orchestration/agent-manager.js";
 import { createMainAgentApprovalSessionId } from "@/src/orchestration/approval-session.js";
+import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
+import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
 import {
   createTestDatabase,
@@ -756,6 +758,114 @@ describe("AgentManager", () => {
           runType: "delegate",
         },
         event: { type: "turn_completed" },
+      });
+    });
+  });
+
+  test("publishes runtime and task lifecycle envelopes to the outbound event bus", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id,
+          schedule_kind, schedule_value, payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron', '0 * * * *', '{}', '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
+        );
+      `);
+
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const published: OrchestratedOutboundEventEnvelope[] = [];
+      bus.subscribe(async (event) => {
+        published.push(event);
+      });
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+        outboundEventBus: bus,
+      });
+
+      const created = manager.createTaskExecution({
+        runType: "cron",
+        ownerAgentId: "agent_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        cronJobId: "cron_1",
+      });
+      await flushMicrotasks();
+
+      expect(published[0]).toMatchObject({
+        kind: "task_run_event",
+        event: {
+          type: "task_run_started",
+          taskRunId: created.taskRun.id,
+        },
+        taskRun: {
+          taskRunId: created.taskRun.id,
+          runType: "cron",
+          status: "running",
+        },
+      });
+
+      manager.completeTaskExecution({
+        taskRunId: created.taskRun.id,
+        resultSummary: "done",
+      });
+      await flushMicrotasks();
+
+      expect(published[1]).toMatchObject({
+        kind: "task_run_event",
+        event: {
+          type: "task_run_completed",
+          taskRunId: created.taskRun.id,
+          resultSummary: "done",
+        },
+        taskRun: {
+          taskRunId: created.taskRun.id,
+          status: "completed",
+        },
+      });
+
+      manager.emitRuntimeEvent({
+        type: "assistant_message_delta",
+        eventId: "evt_1",
+        createdAt: "2026-03-25T00:00:06.000Z",
+        sessionId: created.executionSession.id,
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        runId: "run_loop_1",
+        turn: 1,
+        messageId: "msg_1",
+        delta: "hello",
+        accumulatedText: "hello",
+      });
+      await flushMicrotasks();
+
+      expect(published[2]).toMatchObject({
+        kind: "runtime_event",
+        session: {
+          sessionId: created.executionSession.id,
+          purpose: "task",
+        },
+        taskRun: {
+          taskRunId: created.taskRun.id,
+          runType: "cron",
+        },
+        run: {
+          runId: "run_loop_1",
+        },
+        object: {
+          messageId: "msg_1",
+        },
+        event: {
+          type: "assistant_message_delta",
+          delta: "hello",
+        },
       });
     });
   });

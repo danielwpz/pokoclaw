@@ -38,6 +38,20 @@ CREATE TABLE IF NOT EXISTS conversation_branches (
   UNIQUE(conversation_id, branch_key)
 );
 
+CREATE TABLE IF NOT EXISTS channel_surfaces (
+  id TEXT PRIMARY KEY,
+  channel_type TEXT NOT NULL,
+  channel_installation_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  branch_id TEXT NOT NULL REFERENCES conversation_branches(id) ON DELETE CASCADE,
+  surface_key TEXT NOT NULL,
+  surface_object_json TEXT NOT NULL,
+  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
+  updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
+  UNIQUE(channel_type, channel_installation_id, conversation_id, branch_id),
+  UNIQUE(channel_type, channel_installation_id, surface_key)
+);
+
 CREATE TABLE IF NOT EXISTS agents (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
@@ -220,10 +234,36 @@ CREATE TABLE IF NOT EXISTS auth_events (
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL)
 );
 
+CREATE TABLE IF NOT EXISTS lark_object_bindings (
+  id TEXT PRIMARY KEY,
+  channel_installation_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  branch_id TEXT NOT NULL REFERENCES conversation_branches(id) ON DELETE CASCADE,
+  internal_object_kind TEXT NOT NULL,
+  internal_object_id TEXT NOT NULL,
+  lark_message_id TEXT,
+  lark_open_message_id TEXT,
+  lark_card_id TEXT,
+  thread_root_message_id TEXT,
+  card_element_id TEXT,
+  last_sequence INTEGER,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'finalized', 'stale')),
+  metadata_json TEXT,
+  created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
+  updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
+  UNIQUE(channel_installation_id, internal_object_kind, internal_object_id),
+  UNIQUE(channel_installation_id, lark_message_id),
+  UNIQUE(channel_installation_id, lark_open_message_id),
+  UNIQUE(channel_installation_id, lark_card_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_conversations_channel_chat
   ON conversations(channel_instance_id, external_chat_id);
 CREATE INDEX IF NOT EXISTS idx_branches_root_key
   ON conversation_branches(conversation_id, branch_key);
+CREATE INDEX IF NOT EXISTS idx_channel_surfaces_conversation_branch
+  ON channel_surfaces(conversation_id, branch_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_branch_status_updated
   ON sessions(branch_id, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_conversation_status_updated
@@ -252,3 +292,7 @@ CREATE INDEX IF NOT EXISTS idx_subagent_creation_requests_source_session
   ON subagent_creation_requests(source_session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_auth_events_time
   ON auth_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_lark_object_bindings_conversation_branch
+  ON lark_object_bindings(conversation_id, branch_id);
+CREATE INDEX IF NOT EXISTS idx_lark_object_bindings_thread_root
+  ON lark_object_bindings(channel_installation_id, thread_root_message_id);

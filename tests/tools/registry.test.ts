@@ -1,7 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
+import { toolApprovalRequired } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/core/types.js";
 import {
@@ -22,8 +23,14 @@ const NO_ARGS_TOOL_SCHEMA = Type.Object({}, { additionalProperties: false });
 
 describe("tool registry", () => {
   let handle: TestDatabaseHandle | null = null;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
 
   afterEach(async () => {
+    consoleErrorSpy.mockRestore();
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
@@ -171,5 +178,86 @@ describe("tool registry", () => {
       content: [{ type: "json", json: { ok: true } }],
       details: { code: 200 },
     });
+  });
+
+  test("logs tool execution start and success with truncated args/result", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const registry = new ToolRegistry();
+    registry.register(
+      defineTool({
+        name: "bash",
+        description: "Run bash",
+        inputSchema: Type.Object({
+          command: Type.String(),
+        }),
+        execute() {
+          return textToolResult("x".repeat(400));
+        },
+      }),
+    );
+
+    await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        toolCallId: "tool_1",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      { command: "echo ".concat("a".repeat(300)) },
+    );
+
+    const output = consoleErrorSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+    expect(output).toContain("[tools] tool execution started");
+    expect(output).toContain("toolName='bash'");
+    expect(output).toContain("toolCallId='tool_1'");
+    expect(output).toContain("[tools] tool execution finished");
+    expect(output).toContain("success=true");
+    expect(output).toContain("durationMs=");
+    expect(output).toContain("args=");
+    expect(output).toContain("result=");
+    expect(output).toContain("...");
+  });
+
+  test("logs approval-required tools as waiting for approval", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const registry = new ToolRegistry();
+    registry.register(
+      defineTool({
+        name: "bash",
+        description: "Run bash",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          throw toolApprovalRequired({
+            request: {
+              scopes: [{ kind: "db.read", database: "system" }],
+            },
+            reasonText: "Need approval first",
+          });
+        },
+      }),
+    );
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          toolCallId: "tool_approval",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {},
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+    });
+
+    const output = consoleErrorSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+    expect(output).toContain("[tools] tool execution waiting for approval");
+    expect(output).toContain("toolCallId='tool_approval'");
+    expect(output).not.toContain("success=false");
   });
 });

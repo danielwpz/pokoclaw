@@ -6,8 +6,10 @@ import {
   deliverDelegatedApprovalRequest,
 } from "@/src/orchestration/delegated-approval.js";
 import {
+  type OrchestratedOutboundEventEnvelope,
   type OrchestratedRuntimeEventEnvelope,
   projectRuntimeEvent,
+  projectTaskRunEvent,
 } from "@/src/orchestration/outbound-events.js";
 import {
   type ApproveSubagentCreationRequestInput,
@@ -30,6 +32,7 @@ import {
   type SettledTaskExecution,
 } from "@/src/orchestration/task-run-lifecycle.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
+import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
 import {
   type ResolvedSessionLiveState,
@@ -54,6 +57,7 @@ export interface AgentManagerIngress {
 export interface AgentManagerDependencies {
   storage: StorageDb;
   ingress: AgentManagerIngress;
+  outboundEventBus?: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   subagentProvisioner?: SubagentConversationSurfaceProvisioner;
 }
 
@@ -116,6 +120,25 @@ export class AgentManager {
       conversationId: created.taskRun.conversationId,
       branchId: created.taskRun.branchId,
     });
+
+    this.publishOutboundEvent(
+      projectTaskRunEvent({
+        db: this.deps.storage,
+        event: {
+          type: "task_run_started",
+          taskRunId: created.taskRun.id,
+          runType: created.taskRun.runType,
+          status: created.taskRun.status,
+          startedAt: created.taskRun.startedAt,
+          initiatorSessionId: created.taskRun.initiatorSessionId,
+          parentRunId: created.taskRun.parentRunId,
+          cronJobId: created.taskRun.cronJobId,
+          executionSessionId: created.taskRun.executionSessionId,
+        },
+        taskRun: created.taskRun,
+        executionSession: created.executionSession,
+      }),
+    );
 
     return created;
   }
@@ -257,6 +280,7 @@ export class AgentManager {
       ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
     });
     logSettledTaskExecution("completed", settled);
+    this.publishTaskRunSettledEvent("task_run_completed", settled);
     return settled;
   }
 
@@ -274,6 +298,7 @@ export class AgentManager {
       ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
     });
     logSettledTaskExecution("failed", settled);
+    this.publishTaskRunSettledEvent("task_run_failed", settled);
     return settled;
   }
 
@@ -291,10 +316,12 @@ export class AgentManager {
       ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
     });
     logSettledTaskExecution("cancelled", settled);
+    this.publishTaskRunSettledEvent("task_run_cancelled", settled);
     return settled;
   }
 
   emitRuntimeEvent(event: AgentRuntimeEvent): void {
+    this.publishOutboundEvent(this.projectRuntimeEvent(event));
     void this.handleRuntimeEvent(event).catch((error: unknown) => {
       logger.error("runtime event orchestration failed", {
         eventType: event.type,
@@ -355,6 +382,64 @@ export class AgentManager {
         cancelTaskExecution: (input) => this.cancelTaskExecution(input),
       },
     });
+  }
+
+  private publishTaskRunSettledEvent(
+    eventType: "task_run_completed" | "task_run_failed" | "task_run_cancelled",
+    settled: SettledTaskExecution,
+  ): void {
+    const taskRun = settled.taskRun;
+    const event =
+      eventType === "task_run_completed"
+        ? {
+            type: eventType,
+            taskRunId: taskRun.id,
+            runType: taskRun.runType,
+            status: taskRun.status,
+            startedAt: taskRun.startedAt,
+            finishedAt: taskRun.finishedAt,
+            durationMs: taskRun.durationMs,
+            resultSummary: taskRun.resultSummary,
+            executionSessionId: taskRun.executionSessionId,
+          }
+        : eventType === "task_run_failed"
+          ? {
+              type: eventType,
+              taskRunId: taskRun.id,
+              runType: taskRun.runType,
+              status: taskRun.status,
+              startedAt: taskRun.startedAt,
+              finishedAt: taskRun.finishedAt,
+              durationMs: taskRun.durationMs,
+              resultSummary: taskRun.resultSummary,
+              errorText: taskRun.errorText,
+              executionSessionId: taskRun.executionSessionId,
+            }
+          : {
+              type: eventType,
+              taskRunId: taskRun.id,
+              runType: taskRun.runType,
+              status: taskRun.status,
+              startedAt: taskRun.startedAt,
+              finishedAt: taskRun.finishedAt,
+              durationMs: taskRun.durationMs,
+              resultSummary: taskRun.resultSummary,
+              cancelledBy: taskRun.cancelledBy,
+              executionSessionId: taskRun.executionSessionId,
+            };
+
+    this.publishOutboundEvent(
+      projectTaskRunEvent({
+        db: this.deps.storage,
+        event,
+        taskRun,
+        executionSession: settled.executionSession,
+      }),
+    );
+  }
+
+  private publishOutboundEvent(event: OrchestratedOutboundEventEnvelope): void {
+    this.deps.outboundEventBus?.publish(event);
   }
 }
 

@@ -52,6 +52,7 @@ describe("storage db bootstrap", () => {
       expect(tableNames).toContain("channel_instances");
       expect(tableNames).toContain("conversations");
       expect(tableNames).toContain("conversation_branches");
+      expect(tableNames).toContain("channel_surfaces");
       expect(tableNames).toContain("agents");
       expect(tableNames).toContain("sessions");
       expect(tableNames).toContain("messages");
@@ -60,6 +61,7 @@ describe("storage db bootstrap", () => {
       expect(tableNames).toContain("approval_ledger");
       expect(tableNames).toContain("agent_permission_grants");
       expect(tableNames).toContain("auth_events");
+      expect(tableNames).toContain("lark_object_bindings");
     } finally {
       await destroyTestDatabase(handle);
     }

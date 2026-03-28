@@ -6,9 +6,11 @@ import type {
   approvalLedger,
   authEvents,
   channelInstances,
+  channelSurfaces,
   conversationBranches,
   conversations,
   cronJobs,
+  larkObjectBindings,
   messages,
   sessions,
   subagentCreationRequests,
@@ -23,6 +25,9 @@ export type NewConversation = InferInsertModel<typeof conversations>;
 
 export type ConversationBranch = InferSelectModel<typeof conversationBranches>;
 export type NewConversationBranch = InferInsertModel<typeof conversationBranches>;
+
+export type ChannelSurface = InferSelectModel<typeof channelSurfaces>;
+export type NewChannelSurface = InferInsertModel<typeof channelSurfaces>;
 
 export type Agent = InferSelectModel<typeof agents>;
 export type NewAgent = InferInsertModel<typeof agents>;
@@ -50,3 +55,6 @@ export type NewSubagentCreationRequest = InferInsertModel<typeof subagentCreatio
 
 export type AuthEvent = InferSelectModel<typeof authEvents>;
 export type NewAuthEvent = InferInsertModel<typeof authEvents>;
+
+export type LarkObjectBinding = InferSelectModel<typeof larkObjectBindings>;
+export type NewLarkObjectBinding = InferInsertModel<typeof larkObjectBindings>;

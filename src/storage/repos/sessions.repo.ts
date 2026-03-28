@@ -35,6 +35,11 @@ export interface FindLatestSessionByOwnerOptions {
   statuses?: string[];
 }
 
+export interface FindLatestSessionByConversationBranchOptions {
+  purpose?: string;
+  statuses?: string[];
+}
+
 export interface FindLatestApprovalSessionOptions {
   statuses?: string[];
 }
@@ -123,6 +128,34 @@ export class SessionsRepo {
     options: FindLatestSessionByOwnerOptions = {},
   ): Session | null {
     const predicates = [eq(sessions.ownerAgentId, ownerAgentId)];
+
+    if (options.purpose != null) {
+      predicates.push(eq(sessions.purpose, options.purpose));
+    }
+
+    if ((options.statuses?.length ?? 0) > 0) {
+      predicates.push(inArray(sessions.status, options.statuses ?? []));
+    }
+
+    return (
+      this.db
+        .select()
+        .from(sessions)
+        .where(and(...predicates))
+        .orderBy(desc(sessions.updatedAt), desc(sessions.createdAt), desc(sessions.id))
+        .get() ?? null
+    );
+  }
+
+  findLatestByConversationBranch(
+    conversationId: string,
+    branchId: string,
+    options: FindLatestSessionByConversationBranchOptions = {},
+  ): Session | null {
+    const predicates = [
+      eq(sessions.conversationId, conversationId),
+      eq(sessions.branchId, branchId),
+    ];
 
     if (options.purpose != null) {
       predicates.push(eq(sessions.purpose, options.purpose));

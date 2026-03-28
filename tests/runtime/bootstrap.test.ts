@@ -41,6 +41,11 @@ function createConfig(): AppConfig {
         hardDenyHosts: [],
       },
     },
+    channels: {
+      lark: {
+        installations: {},
+      },
+    },
     secrets: {},
   };
 }
@@ -69,6 +74,11 @@ describe("runtime bootstrap", () => {
     expect(bootstrap.cron.status()).toMatchObject({
       started: true,
     });
+    expect(bootstrap.lark.status()).toMatchObject({
+      started: true,
+      enabledInstallations: 0,
+      configuredInstallations: 0,
+    });
 
     await expect(
       bootstrap.bridge.runtimeControl.runCronJobNow?.({
@@ -82,6 +92,9 @@ describe("runtime bootstrap", () => {
     expect(bootstrap.cron.status()).toMatchObject({
       started: false,
       inFlightRuns: 0,
+    });
+    expect(bootstrap.lark.status()).toMatchObject({
+      started: false,
     });
   });
 });

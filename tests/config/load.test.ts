@@ -151,6 +151,11 @@ describe("config loader", () => {
         hardDenyHosts: [],
       },
     });
+    expect(config.channels).toEqual({
+      lark: {
+        installations: {},
+      },
+    });
     expect(config.secrets).toEqual({});
   });
 
@@ -253,7 +258,10 @@ describe("config loader", () => {
     const secretsPath = path.join(tempDir, "secrets.toml");
     await writeFile(secretsPath, ["[api]", 'key = "secret-value"', ""].join("\n"), "utf8");
 
-    const config = await loadConfig({ secretsTomlPath: secretsPath });
+    const config = await loadConfig({
+      configTomlPath: path.join(tempDir, "missing-config.toml"),
+      secretsTomlPath: secretsPath,
+    });
 
     expect(config.secrets).toEqual({
       api: {
@@ -294,6 +302,52 @@ describe("config loader", () => {
         hardDenyHosts: ["internal.example.com"],
       },
     });
+  });
+
+  test("loads minimal lark installation config", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[channels.lark.installations.default]",
+        "enabled = true",
+        'appId = "cli_123"',
+        'appSecret = "secret_123"',
+        'connectionMode = "websocket"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const config = await loadConfig({ configTomlPath: configPath });
+
+    expect(config.channels.lark.installations).toEqual({
+      default: {
+        enabled: true,
+        appId: "cli_123",
+        appSecret: "secret_123",
+        connectionMode: "websocket",
+      },
+    });
+  });
+
+  test("rejects invalid lark installation connection mode", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[channels.lark.installations.default]",
+        'appId = "cli_123"',
+        'appSecret = "secret_123"',
+        'connectionMode = "polling"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml channels.lark.installations.default.connectionMode must be websocket or webhook",
+    );
   });
 
   test("resolves _ref values from config.toml using secrets.toml", async () => {
@@ -430,7 +484,10 @@ describe("config loader", () => {
       "utf8",
     );
 
-    const config = await loadConfig({ secretsTomlPath: secretsPath });
+    const config = await loadConfig({
+      configTomlPath: path.join(tempDir, "missing-config.toml"),
+      secretsTomlPath: secretsPath,
+    });
 
     expect(config.secrets).toEqual({
       llm: {

@@ -48,7 +48,10 @@ export {
 export { getProductionDatabasePath, getTestDatabasePath } from "@/src/storage/db/paths.js";
 export { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 export { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
+export { ChannelInstancesRepo } from "@/src/storage/repos/channel-instances.repo.js";
+export { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 export { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
+export { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
 export { type AppendMessageInput, MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 export { PermissionGrantsRepo } from "@/src/storage/repos/permission-grants.repo.js";
 export { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
