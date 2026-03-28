@@ -970,7 +970,7 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
-  test("deletes a placeholder-only run card when the segment closes without visible content", async () => {
+  test("keeps a placeholder-only run card when the segment is cancelled so the terminal state stays visible", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`
@@ -1000,7 +1000,6 @@ describe("lark outbound runtime", () => {
     const createMessage = vi.fn(async (_input: unknown) => ({
       data: { message_id: "om_card_1", open_message_id: "om_open_1" },
     }));
-    const deleteMessage = vi.fn(async (_input: unknown) => ({}));
     const updateCard = vi.fn(async (_input: unknown) => ({}));
     const streamContent = vi.fn(async (_input: unknown) => ({}));
     const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
@@ -1020,7 +1019,6 @@ describe("lark outbound runtime", () => {
               im: {
                 message: {
                   create: createMessage,
-                  delete: deleteMessage,
                 },
               },
             },
@@ -1067,17 +1065,132 @@ describe("lark outbound runtime", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(250);
 
-    expect(deleteMessage).toHaveBeenCalledOnce();
-    expect(deleteMessage.mock.calls.at(0)?.[0]).toMatchObject({
-      path: { message_id: "om_card_1" },
-    });
+    expect(updateCard).toHaveBeenCalledOnce();
+    const updatePayload = updateCard.mock.calls.at(0)?.[0] as
+      | { data?: { card?: { data?: string } } }
+      | undefined;
+    expect(updatePayload?.data?.card?.data ?? "").toContain("已停止");
+    expect(updatePayload?.data?.card?.data ?? "").toContain("stop requested");
     expect(
       new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
         channelInstallationId: "default",
         internalObjectKind: "run_card",
         internalObjectId: "run_1:seg:1",
       }),
-    ).toBeNull();
+    ).not.toBeNull();
+
+    await runtime.shutdown();
+  });
+
+  test("creates a failed terminal placeholder when a run errors before any visible transcript arrives", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: { card_id: "card_1" },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: { message_id: "om_card_1", open_message_id: "om_open_1" },
+    }));
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: streamContent },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_fail_keep_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(createCard).toHaveBeenCalledOnce();
+
+    bus.publish(
+      makeEnvelope({
+        type: "run_failed",
+        eventId: "evt_fail_keep_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        errorKind: "upstream",
+        errorMessage: "403 Key limit exceeded (daily limit).",
+        retryable: false,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(updateCard).toHaveBeenCalledOnce();
+    const updatePayload = updateCard.mock.calls.at(0)?.[0] as
+      | { data?: { card?: { data?: string } } }
+      | undefined;
+    expect(updatePayload?.data?.card?.data ?? "").toContain("执行失败");
+    expect(updatePayload?.data?.card?.data ?? "").toContain("403 Key limit exceeded");
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_1:seg:1",
+      }),
+    ).not.toBeNull();
 
     await runtime.shutdown();
   });

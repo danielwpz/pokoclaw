@@ -380,6 +380,26 @@ function renderEmptyRunStatePlaceholder(
     };
   }
 
+  if (state.terminal === "failed") {
+    const details = formatTerminalMessage(state.terminalMessage);
+    return {
+      tag: "markdown",
+      content:
+        details == null
+          ? "❌ **执行失败**"
+          : `❌ **执行失败**\n\n**错误**\n\`\`\`\n${details}\n\`\`\``,
+    };
+  }
+
+  if (state.terminal === "cancelled") {
+    const details = formatTerminalMessage(state.terminalMessage);
+    return {
+      tag: "markdown",
+      content:
+        details == null ? "⏹ **已停止**" : `⏹ **已停止**\n\n**原因**\n\`\`\`\n${details}\n\`\`\``,
+    };
+  }
+
   return null;
 }
 
@@ -703,6 +723,17 @@ function truncateText(text: string, maxLength: number): string {
   }
 
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function formatTerminalMessage(message: string | null): string | null {
+  if (message == null) {
+    return null;
+  }
+  const trimmed = message.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return truncateText(trimmed, 1600);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

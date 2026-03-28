@@ -11,7 +11,6 @@ import {
   buildLarkRenderedRunCard,
 } from "@/src/channels/lark/render.js";
 import {
-  hasVisibleLarkRunBlocks,
   type LarkRunState,
   markLarkRunApprovalResolved,
   markLarkRunAwaitingApproval,
@@ -201,35 +200,6 @@ export function createLarkOutboundRuntime(
         internalObjectId: runCardObjectId,
       });
       const snapshotKey = `${surface.channelInstallationId}:run:${runCardObjectId}`;
-      const shouldDiscard = shouldDiscardRunSegment(state);
-      if (shouldDiscard) {
-        if (existing?.larkMessageId != null) {
-          await client.sdk.im.message.delete({
-            path: {
-              message_id: existing.larkMessageId,
-            },
-          });
-        }
-        if (existing != null) {
-          bindingsRepo.deleteByInternalObject({
-            channelInstallationId: surface.channelInstallationId,
-            internalObjectKind: RUN_CARD_OBJECT_KIND,
-            internalObjectId: runCardObjectId,
-          });
-        }
-        cleanupDiscardedRunSegment({
-          runId: state.runId,
-          runCardObjectId,
-          snapshotKey,
-        });
-        logger.debug("discarded empty lark run card segment", {
-          runId: state.runId,
-          runCardObjectId,
-          channelInstallationId: surface.channelInstallationId,
-          discardedBecause: state.terminal,
-        });
-        continue;
-      }
 
       const rendered = buildLarkRenderedRunCard(state);
       const activeAssistantBlockId = rendered.activeAssistant?.elementId ?? null;
@@ -589,21 +559,6 @@ export function createLarkOutboundRuntime(
     return runCardObjectId;
   };
 
-  const cleanupDiscardedRunSegment = (input: {
-    runId: string;
-    runCardObjectId: string;
-    snapshotKey: string;
-  }): void => {
-    deliverySnapshots.delete(input.snapshotKey);
-    runStates.delete(input.runCardObjectId);
-    if (activeRunSegmentByRunId.get(input.runId) === input.runCardObjectId) {
-      activeRunSegmentByRunId.delete(input.runId);
-    }
-    if (latestRunSegmentByRunId.get(input.runId) === input.runCardObjectId) {
-      latestRunSegmentByRunId.delete(input.runId);
-    }
-  };
-
   const handleApprovalEvent = (envelope: OrchestratedRuntimeEventEnvelope) => {
     if (!shouldHandleLarkApprovalRuntimeEvent(envelope)) {
       return;
@@ -859,6 +814,8 @@ function shouldCreateRunSegmentForEvent(envelope: OrchestratedRuntimeEventEnvelo
     case "tool_call_started":
     case "tool_call_completed":
     case "tool_call_failed":
+    case "run_failed":
+    case "run_cancelled":
       return true;
     default:
       return false;
@@ -892,10 +849,6 @@ function shouldIgnorePostApprovalPermissionToolResolution(
 
   const latestRunState = state.runStates.get(latestRunCardObjectId);
   return latestRunState?.terminal === "continued" || latestRunState?.terminal === "denied";
-}
-
-function shouldDiscardRunSegment(state: LarkRunState): boolean {
-  return state.terminal !== "running" && !hasVisibleLarkRunBlocks(state);
 }
 
 function truncateLogText(text: string, maxLength: number): string {

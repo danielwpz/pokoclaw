@@ -49,7 +49,7 @@ describe("real llm pi bridge integration", () => {
     expect(collectAssistantText(result.content)).toContain("POKECLAW_STREAM_OK");
     expect(result.stopReason).toBe("stop");
     expect(result.usage.totalTokens).toBeGreaterThan(0);
-    expect(result.modelApi).toBe(model.provider.api);
+    expect(result.modelApi).toBe(resolveExpectedPiApi(model));
   }, 30_000);
 
   test("completes a real non-streaming reply", async () => {
@@ -187,4 +187,18 @@ function collectAssistantText(
 
 function normalizeComparableText(value: string): string {
   return value.replaceAll(/\p{Pd}/gu, "-");
+}
+
+function resolveExpectedPiApi(model: {
+  provider: { api: string };
+  id: string;
+  upstreamId: string;
+}): string {
+  if (model.provider.api !== "openai-responses") {
+    return model.provider.api;
+  }
+
+  const normalizedIds = [model.id, model.upstreamId].map((value) => value.toLowerCase());
+  const isGptFamily = normalizedIds.some((value) => value.includes("gpt"));
+  return isGptFamily ? "openai-responses" : "openai-completions";
 }

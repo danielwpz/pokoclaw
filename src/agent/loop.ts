@@ -65,6 +65,7 @@ import {
 
 const logger = createSubsystemLogger("agent-loop");
 const ASSISTANT_RESPONSE_LOG_PREVIEW_MAX_LENGTH = 144;
+const ASSISTANT_REASONING_LOG_PREVIEW_MAX_LENGTH = 144;
 
 // AgentLoop is the execution core for a single session run.
 // It owns model turns, tool execution, compaction hooks, and the runtime-side
@@ -92,6 +93,7 @@ export interface AgentModelTurnInput {
   messages: Message[];
   signal: AbortSignal;
   onTextDelta?: (delta: { delta: string; accumulatedText: string }) => void;
+  onThinkingDelta?: (delta: { delta: string }) => void;
 }
 
 export interface AgentModelRunner {
@@ -275,6 +277,9 @@ export class AgentLoop {
 
         const assistantMessageId = randomUUID();
         let sawStreamedText = false;
+        let sawStreamedReasoning = false;
+        let streamedReasoningDeltaCount = 0;
+        let streamedReasoningChars = 0;
         let overflowRecovered = false;
         let response: AgentModelTurnResult;
 
@@ -324,6 +329,37 @@ export class AgentLoop {
                   messageId: assistantMessageId,
                   delta: event.delta,
                   accumulatedText: event.accumulatedText,
+                  sessionId: input.sessionId,
+                  conversationId: context.session.conversationId,
+                  branchId: context.session.branchId,
+                  runId,
+                });
+              },
+              onThinkingDelta: (event) => {
+                sawStreamedReasoning = true;
+                streamedReasoningDeltaCount += 1;
+                streamedReasoningChars += event.delta.length;
+                if (streamedReasoningDeltaCount === 1 && event.delta.length > 0) {
+                  logger.debug("assistant reasoning started", {
+                    sessionId: input.sessionId,
+                    conversationId: context.session.conversationId,
+                    branchId: context.session.branchId,
+                    scenario: input.scenario,
+                    turn: turn + 1,
+                    runId,
+                    assistantMessageId,
+                    modelId: model.id,
+                    deltaPreview: truncateLogText(
+                      event.delta,
+                      ASSISTANT_REASONING_LOG_PREVIEW_MAX_LENGTH,
+                    ),
+                  });
+                }
+                this.recordEvent(events, {
+                  type: "assistant_reasoning_delta",
+                  turn: turn + 1,
+                  messageId: assistantMessageId,
+                  delta: event.delta,
                   sessionId: input.sessionId,
                   conversationId: context.session.conversationId,
                   branchId: context.session.branchId,
@@ -388,6 +424,7 @@ export class AgentLoop {
 
             overflowRecovered = true;
             sawStreamedText = false;
+            sawStreamedReasoning = false;
             context = this.deps.sessions.getContext(input.sessionId);
             messages = [...context.messages];
           }
@@ -449,12 +486,32 @@ export class AgentLoop {
           toolCalls: toolCalls.length,
           textPreview: truncateLogText(assistantText, ASSISTANT_RESPONSE_LOG_PREVIEW_MAX_LENGTH),
         });
+        if (sawStreamedReasoning || reasoningText.length > 0) {
+          logger.debug("assistant reasoning completed", {
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            scenario: input.scenario,
+            turn: turn + 1,
+            runId,
+            assistantMessageId,
+            modelId: model.id,
+            streamed: sawStreamedReasoning,
+            deltaCount: streamedReasoningDeltaCount,
+            streamedChars: streamedReasoningChars,
+            finalChars: reasoningText.length,
+            finalPreview:
+              reasoningText.length > 0
+                ? truncateLogText(reasoningText, ASSISTANT_REASONING_LOG_PREVIEW_MAX_LENGTH)
+                : "",
+          });
+        }
         this.recordEvent(events, {
           type: "assistant_message_completed",
           turn: turn + 1,
           messageId: assistantMessageId,
           text: assistantText,
-          reasoningText: reasoningText.length > 0 ? reasoningText : null,
+          reasoningText: !sawStreamedReasoning && reasoningText.length > 0 ? reasoningText : null,
           toolCalls,
           usage: response.usage,
           sessionId: input.sessionId,

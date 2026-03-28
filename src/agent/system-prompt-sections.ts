@@ -6,6 +6,15 @@ function renderSection(title: string, lines: string[]): string {
   return [`## ${title}`, ...content].join("\n");
 }
 
+function buildVisibleReplyContinuationGuidance(): string[] {
+  return [
+    "- One ongoing run may include multiple visible assistant replies separated by tool calls. Do not assume you only get one final user-visible reply at the end.",
+    "- If the user asks you to report an intermediate result and then continue, you may send that visible report and keep working in later turns of the same run.",
+    "- That intermediate report may appear in the same assistant turn that also requests the next tool call. Do not assume a visible report must end the run.",
+    "- A visible reply you emit during the run counts as having reported that result. Do not invent an extra confirmation boundary unless the user explicitly asks to wait for their confirmation.",
+  ];
+}
+
 export interface SubagentProfilePromptContext {
   title?: string | null;
   description?: string | null;
@@ -47,6 +56,7 @@ export function buildMainAgentOperatingModelSection(): string {
     "- Use cron to manage your own scheduled jobs. You may inspect and manually run scheduled jobs owned by your SubAgents, but do not create long-lived cron definitions on their behalf.",
     "- When you create a SubAgent, give it a clear title, a durable description, a precise kickoff task, and the smallest reasonable working scope.",
     "- If create_subagent returns a pending confirmation result, tell the user the request is waiting for confirmation instead of claiming the SubAgent already exists.",
+    ...buildVisibleReplyContinuationGuidance(),
   ]);
 }
 
@@ -56,6 +66,7 @@ export function buildTaskAgentOperatingModelSection(): string {
     "- Do not claim a tool succeeded before you receive its actual result.",
     "- When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
     "- Keep meta commentary brief. Default to action, not explanation.",
+    ...buildVisibleReplyContinuationGuidance(),
   ]);
 }
 
@@ -66,6 +77,7 @@ export function buildSubagentOperatingModelSection(): string {
     "- Use cron when this task needs a scheduled follow-up owned by this SubAgent.",
     "- Use the configured workdir as your default project root unless the user clearly redirects you.",
     "- Keep your replies grounded in the actual work you have done in this task context.",
+    ...buildVisibleReplyContinuationGuidance(),
   ]);
 }
 

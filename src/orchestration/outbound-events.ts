@@ -212,6 +212,7 @@ function extractRuntimeObjectAnchors(event: AgentRuntimeEvent): OutboundEventCon
   switch (event.type) {
     case "assistant_message_started":
     case "assistant_message_delta":
+    case "assistant_reasoning_delta":
     case "assistant_message_completed":
       return {
         messageId: event.messageId,
