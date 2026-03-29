@@ -1,3 +1,9 @@
+/**
+ * Normalized LLM error taxonomy.
+ *
+ * Maps heterogeneous upstream/provider failures into stable runtime error kinds
+ * used by AgentLoop, orchestration, and channel observability paths.
+ */
 export type AgentLlmErrorKind =
   | "aborted"
   | "context_overflow"

@@ -1,3 +1,10 @@
+/**
+ * Unified runtime ingress API.
+ *
+ * Channel adapters and orchestration submit user messages, steering inputs,
+ * and approval decisions through this boundary. Ingress delegates scheduling
+ * and ordering to dispatcher/session-lane primitives.
+ */
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import {
   InMemorySessionDispatcher,

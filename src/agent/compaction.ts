@@ -1,3 +1,10 @@
+/**
+ * Session compaction planner and executor.
+ *
+ * Compaction decides when to summarize older transcript segments, calls a
+ * dedicated model path to generate checkpoint summaries, and persists cursor
+ * and summary state back to the session for later runs.
+ */
 import { randomUUID } from "node:crypto";
 
 import { type AgentLlmErrorKind, isAgentLlmError } from "@/src/agent/llm/errors.js";

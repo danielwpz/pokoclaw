@@ -1,3 +1,9 @@
+/**
+ * Resolver for an agent's owning main-agent chat session.
+ *
+ * Used by orchestration flows that must operate against the main long-lived
+ * conversation (for example delegated approvals and control operations).
+ */
 import { resolveAgentOwnershipState } from "@/src/runtime/live-state.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";

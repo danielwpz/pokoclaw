@@ -1,3 +1,10 @@
+/**
+ * Delegated approval delivery and decision flow.
+ *
+ * Handles the "main agent approves for unattended runs" path: create approval
+ * review input, deliver into dedicated approval session, parse decisions, and
+ * feed results back into runtime approval-resume ingress.
+ */
 import { resolveOrCreateMainAgentApprovalSession } from "@/src/orchestration/approval-session.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";

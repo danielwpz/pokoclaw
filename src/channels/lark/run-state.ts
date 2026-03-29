@@ -1,3 +1,10 @@
+/**
+ * Reducer state model for one lark run card segment.
+ *
+ * Applies runtime fact events in order and maintains a channel-local rendering
+ * state (assistant text blocks, tool sequences, reasoning, footer status).
+ * Render output is produced later by `render.ts`.
+ */
 import type {
   AssistantMessageCompletedEvent,
   AssistantMessageDeltaEvent,

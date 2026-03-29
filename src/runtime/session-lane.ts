@@ -1,3 +1,10 @@
+/**
+ * In-memory per-session lane state machine.
+ *
+ * A lane serializes run execution and buffers steer inputs for one session.
+ * This implementation assumes a single-process event loop and can be replaced
+ * by external coordination if runtime becomes multi-process.
+ */
 import { randomUUID } from "node:crypto";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { AgentLoop, RunAgentLoopResult } from "@/src/agent/loop.js";

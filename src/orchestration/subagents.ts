@@ -1,3 +1,9 @@
+/**
+ * Subagent provisioning and request lifecycle.
+ *
+ * Implements create/approve/deny flows for subagent creation requests,
+ * including conversation/session provisioning and initial security boundaries.
+ */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 

@@ -1,3 +1,9 @@
+/**
+ * Provider/model registry built from app config.
+ *
+ * Resolves configured providers and model catalog entries into runtime-safe
+ * objects, and serves scenario-default model resolution for loop execution.
+ */
 import {
   type ModelScenario,
   type ResolvedModel,

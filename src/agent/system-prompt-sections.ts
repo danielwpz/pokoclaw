@@ -1,3 +1,9 @@
+/**
+ * Reusable prompt section builders.
+ *
+ * `system-prompt.ts` composes these building blocks into role-specific prompts.
+ * Keep behavioral wording here so policy changes are localized and testable.
+ */
 function renderSection(title: string, lines: string[]): string {
   const content = lines.map((line) => line.trimEnd()).filter((line) => line.length > 0);
   if (content.length === 0) {

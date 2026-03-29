@@ -1,3 +1,10 @@
+/**
+ * Approval bridge for tool-time permission escalation.
+ *
+ * AgentLoop calls this module when a tool requests additional permission.
+ * It creates approval records, emits approval events, waits for decisions, and
+ * returns deterministic resume outcomes back to the active run.
+ */
 import type { AgentRuntimeEventInput, AgentToolCall } from "@/src/agent/events.js";
 import type { RunAgentLoopInput } from "@/src/agent/loop.js";
 import { resolveApprovalRouteForSession } from "@/src/runtime/approval-routing.js";

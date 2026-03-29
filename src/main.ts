@@ -1,3 +1,10 @@
+/**
+ * Process entrypoint.
+ *
+ * Keeps only process-level responsibilities: load config, initialize storage,
+ * start runtime bootstrap, listen for shutdown signals, and perform graceful
+ * teardown. Business logic lives in runtime/orchestration/channel modules.
+ */
 import { loadConfig } from "@/src/config/load.js";
 import { createRuntimeBootstrap } from "@/src/runtime/bootstrap.js";
 import { createBootstrapLogger, createSubsystemLogger } from "@/src/shared/logger.js";

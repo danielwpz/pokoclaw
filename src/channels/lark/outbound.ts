@@ -1,3 +1,10 @@
+/**
+ * Lark outbound adapter.
+ *
+ * Consumes orchestrated runtime events, reduces them into lark-specific run and
+ * approval states, and flushes CardKit create/update/stream operations with
+ * throttling, sequencing, and durable lark object bindings.
+ */
 import { randomUUID } from "node:crypto";
 import {
   createLarkApprovalStateFromRequest,

@@ -1,3 +1,10 @@
+/**
+ * Top-level orchestration coordinator.
+ *
+ * AgentManager is the cross-session control plane above runtime loop execution.
+ * It routes runtime events, manages delegated approvals, drives task/cron runs,
+ * and publishes channel-facing outbound envelopes.
+ */
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
 import { extractCronTaskDefinition } from "@/src/cron/payload.js";
 import { CronService } from "@/src/cron/service.js";

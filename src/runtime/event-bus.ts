@@ -1,3 +1,9 @@
+/**
+ * Lightweight async pub/sub bus for outbound runtime facts.
+ *
+ * Runtime and orchestration publish channel-agnostic event envelopes here.
+ * Channel adapters subscribe and render according to platform capabilities.
+ */
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 
 const logger = createSubsystemLogger("runtime/event-bus");

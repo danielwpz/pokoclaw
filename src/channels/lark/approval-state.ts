@@ -1,3 +1,9 @@
+/**
+ * Reducer state model for lark approval cards.
+ *
+ * Tracks approval request lifecycle (requested/resolved) independently from
+ * run transcript cards so approval UX can be rendered and updated separately.
+ */
 import type { ApprovalRequestedEvent } from "@/src/agent/events.js";
 import type { OrchestratedRuntimeEventEnvelope } from "@/src/orchestration/outbound-events.js";
 

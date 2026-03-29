@@ -1,3 +1,10 @@
+/**
+ * Lark inbound adapter.
+ *
+ * Parses lark message/callback payloads, resolves channel surface bindings, and
+ * translates user actions into runtime ingress/control commands (`submitMessage`,
+ * `/status`, `/stop`, approval decisions).
+ */
 import { randomUUID } from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";

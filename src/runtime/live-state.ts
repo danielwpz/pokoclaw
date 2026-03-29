@@ -1,3 +1,10 @@
+/**
+ * Runtime live-state resolver.
+ *
+ * Resolves ownership and execution context for a session/run by joining
+ * sessions, agents, branches, and task runs. Orchestration and status/control
+ * services use this module to avoid duplicating relationship logic.
+ */
 import { type AgentRuntimeRole, normalizeAgentKindToRuntimeRole } from "@/src/security/policy.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";

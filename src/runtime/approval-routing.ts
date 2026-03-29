@@ -1,3 +1,9 @@
+/**
+ * Approval routing policy resolver.
+ *
+ * Determines whether a permission request should go to end-user approval or to
+ * delegated main-agent approval based on runtime role/session ownership.
+ */
 import { resolveSessionLiveStateFromSession } from "@/src/runtime/live-state.js";
 import type { AgentRuntimeRole } from "@/src/security/policy.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";

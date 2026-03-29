@@ -1,3 +1,10 @@
+/**
+ * OpenAI-compatible streaming adapter overrides.
+ *
+ * Extends pi-ai's default OpenAI path to preserve provider-specific fidelity
+ * (especially usage/reasoning stream handling) while keeping a uniform bridge
+ * interface for the rest of runtime.
+ */
 import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 import {
   type Api,

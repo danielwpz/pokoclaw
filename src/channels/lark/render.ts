@@ -1,3 +1,9 @@
+/**
+ * Lark card renderer.
+ *
+ * Pure rendering layer that converts `LarkRunState` / `LarkApprovalState`
+ * into CardKit JSON payloads. Transport and flush policy live in `outbound.ts`.
+ */
 import type { LarkApprovalState } from "@/src/channels/lark/approval-state.js";
 import {
   buildLarkAssistantElementId,

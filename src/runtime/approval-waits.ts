@@ -1,3 +1,10 @@
+/**
+ * In-memory hot-wait registry for pending approvals.
+ *
+ * When a tool call is blocked on approval, AgentLoop waits here for a bounded
+ * window. Approval decisions can resume immediately; user messages can be
+ * buffered as steer inputs and replayed after unblock.
+ */
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 
 const logger = createSubsystemLogger("approval-waits");

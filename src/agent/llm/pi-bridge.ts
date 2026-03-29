@@ -1,3 +1,10 @@
+/**
+ * pi-ai bridge used by AgentLoop and compaction runner.
+ *
+ * Adapts local runtime message/tool formats to pi-ai model APIs, handles
+ * streaming/completion execution, and normalizes usage + errors back into local
+ * runtime contracts.
+ */
 import {
   type Api,
   type AssistantMessage,
