@@ -5,6 +5,7 @@ import {
   SUBAGENT_CREATION_REQUEST_TTL_MS,
   SubagentManager,
 } from "@/src/orchestration/subagents.js";
+import { buildSubagentWorkspaceDir } from "@/src/shared/paths.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import { PermissionGrantsRepo } from "@/src/storage/repos/permission-grants.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
@@ -16,6 +17,12 @@ import {
 
 describe("subagent orchestration", () => {
   let handle: TestDatabaseHandle | null = null;
+
+  function createPrivateWorkspaceManager() {
+    return {
+      ensureDirectory: vi.fn(async () => {}),
+    };
+  }
 
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -74,6 +81,7 @@ describe("subagent orchestration", () => {
     const manager = new SubagentManager({
       storage: handle.storage.db,
       ingress: { submitMessage },
+      privateWorkspace: createPrivateWorkspaceManager(),
       provisioner,
     });
 
@@ -129,6 +137,7 @@ describe("subagent orchestration", () => {
     const manager = new SubagentManager({
       storage: handle.storage.db,
       ingress: { submitMessage },
+      privateWorkspace: createPrivateWorkspaceManager(),
       provisioner,
     });
 
@@ -155,6 +164,7 @@ describe("subagent orchestration", () => {
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
       workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      privateWorkspaceDir: buildSubagentWorkspaceDir(created.agent.id),
       preferredSurface: "independent_chat",
     });
     expect(created.conversation).toMatchObject({
@@ -163,6 +173,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
     });
     expect(created.shareLink).toBe("https://example.com/subagent-1");
+    expect(created.privateWorkspaceDir).toBe(buildSubagentWorkspaceDir(created.agent.id));
     expect(created.agent).toMatchObject({
       mainAgentId: "agent_main",
       kind: "sub",
@@ -232,6 +243,7 @@ describe("subagent orchestration", () => {
     const manager = new SubagentManager({
       storage: handle.storage.db,
       ingress: { submitMessage: vi.fn(async () => ({ status: "started" as const })) },
+      privateWorkspace: createPrivateWorkspaceManager(),
       provisioner,
     });
 
@@ -280,6 +292,7 @@ describe("subagent orchestration", () => {
     const manager = new SubagentManager({
       storage: handle.storage.db,
       ingress: { submitMessage: vi.fn(async () => ({ status: "started" as const })) },
+      privateWorkspace: createPrivateWorkspaceManager(),
       provisioner,
     });
     const surfaceUpsert = vi
@@ -321,12 +334,13 @@ describe("subagent orchestration", () => {
     expect(requestAfterFailure?.failureReason).toContain("cleanup succeeded");
   });
 
-  test("defaults the submitted subagent workdir to the pokeclaw workspace", async () => {
+  test("defaults the submitted subagent workdir to its dedicated private workspace", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedMainAgentFixture();
     const manager = new SubagentManager({
       storage: handle.storage.db,
       ingress: { submitMessage: vi.fn(async () => ({ status: "started" as const })) },
+      privateWorkspace: createPrivateWorkspaceManager(),
       provisioner: {
         provisionSubagentSurface: vi.fn(async () => ({
           status: "provisioned" as const,
@@ -350,8 +364,45 @@ describe("subagent orchestration", () => {
       initialTask: "Start by checking the workspace contents.",
     });
 
-    expect(submitted.workdir).toContain(".pokeclaw/workspace");
+    expect(submitted.workdir).toBe(buildSubagentWorkspaceDir(submitted.request.id));
+    expect(submitted.privateWorkspaceDir).toBe(buildSubagentWorkspaceDir(submitted.request.id));
     expect(submitted.request.status).toBe("pending");
+  });
+
+  test("keeps an explicit cwd while still assigning a dedicated private workspace", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedMainAgentFixture();
+    const manager = new SubagentManager({
+      storage: handle.storage.db,
+      ingress: { submitMessage: vi.fn(async () => ({ status: "started" as const })) },
+      privateWorkspace: createPrivateWorkspaceManager(),
+      provisioner: {
+        provisionSubagentSurface: vi.fn(async () => ({
+          status: "provisioned" as const,
+          externalChatId: "chat_sub_4",
+          shareLink: "https://example.com/subagent-4",
+          conversationKind: "group" as const,
+          channelSurface: {
+            channelType: "lark",
+            channelInstallationId: "default",
+            surfaceKey: "chat:chat_sub_4",
+            surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_4" }),
+          },
+        })),
+      },
+    });
+
+    const submitted = manager.submitCreateRequest({
+      sourceSessionId: "sess_main",
+      title: "Repo Helper",
+      description: "Operate inside the repo while keeping a private scratch directory.",
+      initialTask: "Start by checking the repo state.",
+      cwd: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+    });
+
+    expect(submitted.workdir).toBe("/Users/daniel/Programs/ai/openclaw/pokeclaw");
+    expect(submitted.privateWorkspaceDir).toBe(buildSubagentWorkspaceDir(submitted.request.id));
+    expect(submitted.request.workdir).toBe("/Users/daniel/Programs/ai/openclaw/pokeclaw");
   });
 
   test("rejects subagent creation request submission from a non-main session", async () => {
@@ -379,6 +430,7 @@ describe("subagent orchestration", () => {
     const manager = new SubagentManager({
       storage: handle.storage.db,
       ingress: { submitMessage: vi.fn(async () => ({ status: "started" as const })) },
+      privateWorkspace: createPrivateWorkspaceManager(),
       provisioner: {
         provisionSubagentSurface: vi.fn(async () => ({
           status: "provisioned" as const,

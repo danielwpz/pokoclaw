@@ -78,6 +78,7 @@ describe("lark subagent provisioner", () => {
       description: "Review pull requests and summarize findings.",
       initialTask: "Review the current PR and report concrete issues.",
       workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      privateWorkspaceDir: "/Users/daniel/.pokeclaw/workspace/subagents/abcd1234",
       preferredSurface: "independent_chat",
     });
 
@@ -123,6 +124,35 @@ describe("lark subagent provisioner", () => {
         content: expect.stringContaining("欢迎来到 PR Review"),
       }),
     });
+    const welcomeCall = messageCreate.mock.calls[0] as [{ data: { content: string } }] | undefined;
+    expect(welcomeCall).toBeDefined();
+    const welcomeContent = welcomeCall?.[0].data.content ?? "";
+    const welcomeCard = JSON.parse(welcomeContent) as {
+      body?: { elements?: Array<Record<string, unknown>> };
+    };
+    const initialTaskPanel = welcomeCard.body?.elements?.find(
+      (element) =>
+        element.tag === "collapsible_panel" &&
+        typeof element.header === "object" &&
+        element.header != null,
+    ) as
+      | {
+          tag: string;
+          expanded?: boolean;
+          header?: { title?: { content?: string } };
+        }
+      | undefined;
+
+    expect(welcomeContent).toContain(
+      "**私有工作区**：`/Users/daniel/.pokeclaw/workspace/subagents/abcd1234`",
+    );
+    expect(welcomeContent).not.toContain("**初始任务**：Review the current PR");
+    expect(welcomeContent).toContain(
+      "工作目录` 是默认执行目录；`私有工作区` 用于笔记、scratch 文件、导出物和其他临时产物。",
+    );
+    expect(initialTaskPanel).toBeDefined();
+    expect(initialTaskPanel?.expanded).toBe(false);
+    expect(initialTaskPanel?.header?.title?.content).toContain("初始任务");
     expect(putTopNotice).toHaveBeenCalledExactlyOnceWith({
       path: { chat_id: "chat_sub_1" },
       data: {
@@ -189,6 +219,7 @@ describe("lark subagent provisioner", () => {
       description: "Review pull requests and summarize findings.",
       initialTask: "Review the current PR and report concrete issues.",
       workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      privateWorkspaceDir: "/Users/daniel/.pokeclaw/workspace/subagents/abcd1234",
       preferredSurface: "independent_chat",
     });
 

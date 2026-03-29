@@ -5,13 +5,18 @@
  * including conversation/session provisioning and initial security boundaries.
  */
 import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import { type PermissionScope, serializePermissionScope } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { POKECLAW_SYSTEM_DIR, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import {
+  buildSubagentWorkspaceDir,
+  POKECLAW_SYSTEM_DIR,
+  POKECLAW_WORKSPACE_DIR,
+} from "@/src/shared/paths.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
@@ -45,6 +50,7 @@ export interface CreateSubagentInput {
 export interface SubmittedSubagentCreationRequest {
   request: SubagentCreationRequest;
   workdir: string;
+  privateWorkspaceDir: string;
   initialExtraScopes: PermissionScope[];
 }
 
@@ -67,6 +73,7 @@ export interface ProvisionSubagentSurfaceInput {
   description: string;
   initialTask: string;
   workdir: string;
+  privateWorkspaceDir: string;
   preferredSurface: "independent_chat";
 }
 
@@ -96,6 +103,10 @@ export type ProvisionSubagentSurfaceResult =
       retryable: boolean;
     };
 
+export interface SubagentPrivateWorkspaceManager {
+  ensureDirectory(path: string): Promise<void>;
+}
+
 export interface SubagentConversationSurfaceProvisioner {
   provisionSubagentSurface(
     input: ProvisionSubagentSurfaceInput,
@@ -122,12 +133,14 @@ export interface CreatedSubagent {
   externalChatId: string;
   shareLink: string | null;
   workdir: string;
+  privateWorkspaceDir: string;
 }
 
 export interface SubagentManagerDependencies {
   storage: StorageDb;
   ingress: SubagentManagerIngress;
   provisioner?: SubagentConversationSurfaceProvisioner;
+  privateWorkspace?: SubagentPrivateWorkspaceManager;
 }
 
 export class SubagentManager {
@@ -141,9 +154,10 @@ export class SubagentManager {
     const normalizedTitle = normalizeRequiredTrimmed("title", input.title);
     const normalizedDescription = normalizeRequiredTrimmed("description", input.description);
     const normalizedInitialTask = normalizeRequiredTrimmed("initialTask", input.initialTask);
-    const workdir = normalizeSubagentWorkdir(input.cwd);
     const initialExtraScopes = dedupeScopes(input.initialExtraScopes ?? []);
     const requestId = randomUUID();
+    const privateWorkspaceDir = buildSubagentWorkspaceDir(requestId);
+    const workdir = normalizeSubagentWorkdir(input.cwd, privateWorkspaceDir);
 
     const repo = new SubagentCreationRequestsRepo(this.deps.storage);
     repo.create({
@@ -180,6 +194,7 @@ export class SubagentManager {
     return {
       request,
       workdir,
+      privateWorkspaceDir,
       initialExtraScopes,
     };
   }
@@ -192,8 +207,21 @@ export class SubagentManager {
 
     const conversationId = randomUUID();
     const branchId = randomUUID();
-    const agentId = randomUUID();
+    const agentId = request.id;
     const sessionId = randomUUID();
+    const privateWorkspaceDir = buildSubagentWorkspaceDir(agentId);
+
+    try {
+      await this.ensurePrivateWorkspaceDir(privateWorkspaceDir);
+    } catch (error: unknown) {
+      const failureReason = error instanceof Error ? error.message : String(error);
+      this.markRequestFailed({
+        requestId: request.id,
+        failureReason: `Failed to initialize the SubAgent private workspace ${privateWorkspaceDir}: ${failureReason}`,
+        decidedAt,
+      });
+      throw new Error(`Failed to initialize the SubAgent private workspace: ${failureReason}`);
+    }
 
     requestsRepo.updateStatus({
       id: request.id,
@@ -212,6 +240,7 @@ export class SubagentManager {
         description: request.description,
         initialTask: request.initialTask,
         workdir: request.workdir,
+        privateWorkspaceDir,
         preferredSurface: "independent_chat",
       });
     } catch (error: unknown) {
@@ -388,6 +417,7 @@ export class SubagentManager {
       externalChatId: provisioned.externalChatId,
       shareLink: provisioned.shareLink,
       workdir: request.workdir,
+      privateWorkspaceDir,
     };
   }
 
@@ -556,6 +586,15 @@ export class SubagentManager {
       return message;
     }
   }
+
+  private async ensurePrivateWorkspaceDir(path: string): Promise<void> {
+    if (this.deps.privateWorkspace != null) {
+      await this.deps.privateWorkspace.ensureDirectory(path);
+      return;
+    }
+
+    await mkdir(path, { recursive: true });
+  }
 }
 
 export function buildSubagentKickoffMessage(initialTask: string): string {
@@ -591,8 +630,8 @@ function buildInitialSubagentScopes(input: {
   return scopes;
 }
 
-function normalizeSubagentWorkdir(cwd: string | undefined): string {
-  const candidate = cwd == null || cwd.trim().length === 0 ? POKECLAW_WORKSPACE_DIR : cwd.trim();
+function normalizeSubagentWorkdir(cwd: string | undefined, fallbackWorkdir: string): string {
+  const candidate = cwd == null || cwd.trim().length === 0 ? fallbackWorkdir : cwd.trim();
   const normalized = path.normalize(candidate);
 
   if (!path.isAbsolute(normalized)) {

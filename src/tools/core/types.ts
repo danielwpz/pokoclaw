@@ -58,6 +58,7 @@ export interface ToolRuntimeControl {
     requestId: string;
     title: string;
     workdir: string;
+    privateWorkspaceDir: string;
     status: "pending_confirmation";
     expiresAt: string | null;
   }>;

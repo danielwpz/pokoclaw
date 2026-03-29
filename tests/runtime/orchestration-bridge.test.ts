@@ -196,6 +196,9 @@ describe("RuntimeOrchestrationBridge", () => {
       storage: handle.storage.db,
       ingress,
       subagentProvisioner: provisioner,
+      subagentPrivateWorkspace: {
+        ensureDirectory: vi.fn(async () => {}),
+      },
     });
     bridge.attachManager(manager);
 

@@ -35,6 +35,7 @@ export class RuntimeOrchestrationBridge {
         requestId: submitted.request.id,
         title: submitted.request.title,
         workdir: submitted.workdir,
+        privateWorkspaceDir: submitted.privateWorkspaceDir,
         status: "pending_confirmation" as const,
         expiresAt: submitted.request.expiresAt,
       };

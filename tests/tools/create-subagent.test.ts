@@ -58,6 +58,7 @@ describe("create_subagent tool", () => {
       requestId: "req_new",
       title: "PR Review",
       workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      privateWorkspaceDir: "/Users/daniel/.pokeclaw/workspace/subagents/reqnew00",
       status: "pending_confirmation" as const,
       expiresAt: "2026-03-26T01:00:00.000Z",
     }));
@@ -97,6 +98,12 @@ describe("create_subagent tool", () => {
       type: "text",
       text: expect.stringContaining(
         'Submitted a pending SubAgent creation request for "PR Review"',
+      ),
+    });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining(
+        "Private workspace: /Users/daniel/.pokeclaw/workspace/subagents/reqnew00",
       ),
     });
   });

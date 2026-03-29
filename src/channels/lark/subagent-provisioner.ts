@@ -101,6 +101,7 @@ export function createLarkSubagentConversationSurfaceProvisioner(
           description: params.description,
           initialTask: params.initialTask,
           workdir: params.workdir,
+          privateWorkspaceDir: params.privateWorkspaceDir,
           shareLink,
         });
 
@@ -229,6 +230,7 @@ async function publishWelcomeNotice(input: {
   description: string;
   initialTask: string;
   workdir: string;
+  privateWorkspaceDir: string;
   shareLink: string | null;
 }): Promise<void> {
   try {
@@ -270,6 +272,7 @@ function buildSubagentWelcomeCard(input: {
   description: string;
   initialTask: string;
   workdir: string;
+  privateWorkspaceDir: string;
   shareLink: string | null;
 }): Record<string, unknown> {
   const elements: Array<Record<string, unknown>> = [
@@ -284,14 +287,43 @@ function buildSubagentWelcomeCard(input: {
         "",
         `**职责**：${input.description}`,
         "",
-        `**初始任务**：${input.initialTask}`,
-        "",
         `**工作目录**：\`${input.workdir}\``,
+        "",
+        `**私有工作区**：\`${input.privateWorkspaceDir}\``,
       ].join("\n"),
+    },
+    {
+      tag: "collapsible_panel",
+      expanded: false,
+      header: {
+        title: {
+          tag: "markdown",
+          content: "📝 **初始任务**",
+        },
+        vertical_align: "center",
+        icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
+        icon_position: "follow_text",
+        icon_expanded_angle: -180,
+      },
+      border: { color: "grey", corner_radius: "5px" },
+      vertical_spacing: "8px",
+      padding: "8px 8px 8px 8px",
+      elements: [
+        {
+          tag: "markdown",
+          content: input.initialTask,
+          text_size: "notation",
+        },
+      ],
     },
     {
       tag: "markdown",
       content: "后续你可以在这里直接和这个 SubAgent 协作。常用帮助和 FAQ 后面再继续补。",
+    },
+    {
+      tag: "markdown",
+      content:
+        "说明：`工作目录` 是默认执行目录；`私有工作区` 用于笔记、scratch 文件、导出物和其他临时产物。没有单独 cwd 时，两者会是同一个目录。",
     },
   ];
 
