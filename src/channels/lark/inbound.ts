@@ -28,6 +28,8 @@ const logger = createSubsystemLogger("channels/lark-inbound");
 const LARK_CHANNEL_TYPE = "lark";
 const LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH = 144;
 const LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH = 320;
+const LARK_INTERACTIVE_TEXT_NODE_LIMIT = 48;
+const LARK_INTERACTIVE_TEXT_CHAR_LIMIT = 4_000;
 
 export interface LarkInboundIngress {
   submitMessage(input: {
@@ -959,7 +961,7 @@ function parseLarkMessageContent(messageType: string, content: string): string {
       case "post":
         return "[富文本]";
       case "interactive": {
-        const interactiveText = parseLarkInteractiveContent(parsed);
+        const interactiveText = parseLarkInteractiveMessageContent(parsed);
         return interactiveText.length > 0 ? interactiveText : "[卡片消息]";
       }
       default:
@@ -970,17 +972,35 @@ function parseLarkMessageContent(messageType: string, content: string): string {
   }
 }
 
+function parseLarkInteractiveMessageContent(parsed: Record<string, unknown>): string {
+  if (typeof parsed.json_card === "string") {
+    try {
+      const rawCard = JSON.parse(parsed.json_card);
+      if (isRecord(rawCard)) {
+        const rawCardText = parseLarkInteractiveContent(rawCard);
+        if (rawCardText.length > 0) {
+          return rawCardText;
+        }
+      }
+    } catch {
+      // Fall back to direct interactive parsing.
+    }
+  }
+
+  return parseLarkInteractiveContent(parsed);
+}
+
 function parseLarkInteractiveContent(parsed: Record<string, unknown>): string {
   const fragments: string[] = [];
   const seen = new Set<string>();
-  const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
+  const title = extractLarkInteractiveTitle(parsed);
   if (title.length > 0) {
     fragments.push(title);
     seen.add(title);
   }
 
   const textNodes: string[] = [];
-  collectLarkTextNodes(parsed.elements, textNodes);
+  collectLarkTextNodes(resolveLarkInteractiveElements(parsed), textNodes);
   const dedupedNodes = textNodes.filter((text) => {
     if (seen.has(text)) {
       return false;
@@ -995,8 +1015,46 @@ function parseLarkInteractiveContent(parsed: Record<string, unknown>): string {
   return fragments.join("\n").trim();
 }
 
+function extractLarkInteractiveTitle(parsed: Record<string, unknown>): string {
+  if (typeof parsed.title === "string" && parsed.title.trim().length > 0) {
+    return parsed.title.trim();
+  }
+
+  const header = isRecord(parsed.header) ? parsed.header : null;
+  if (header == null) {
+    return "";
+  }
+
+  const title = header.title;
+  if (typeof title === "string" && title.trim().length > 0) {
+    return title.trim();
+  }
+  if (!isRecord(title)) {
+    return "";
+  }
+
+  return extractLarkInteractiveText(title);
+}
+
+function resolveLarkInteractiveElements(parsed: Record<string, unknown>): unknown {
+  if (parsed.elements != null) {
+    return parsed.elements;
+  }
+
+  const body = isRecord(parsed.body) ? parsed.body : null;
+  if (body == null) {
+    return undefined;
+  }
+  if (body.elements != null) {
+    return body.elements;
+  }
+
+  const property = isRecord(body.property) ? body.property : null;
+  return property?.elements;
+}
+
 function collectLarkTextNodes(value: unknown, sink: string[]): void {
-  if (sink.length >= 8) {
+  if (hasReachedLarkInteractiveTextLimit(sink)) {
     return;
   }
 
@@ -1011,7 +1069,7 @@ function collectLarkTextNodes(value: unknown, sink: string[]): void {
   if (Array.isArray(value)) {
     for (const item of value) {
       collectLarkTextNodes(item, sink);
-      if (sink.length >= 8) {
+      if (hasReachedLarkInteractiveTextLimit(sink)) {
         return;
       }
     }
@@ -1022,20 +1080,13 @@ function collectLarkTextNodes(value: unknown, sink: string[]): void {
     return;
   }
 
-  if (typeof value.text === "string") {
-    const text = value.text.trim();
-    if (text.length > 0) {
-      sink.push(text);
-    }
-  }
-  if (typeof value.content === "string" && typeof value.text !== "string") {
-    const content = value.content.trim();
-    if (content.length > 0) {
-      sink.push(content);
-    }
+  const text = extractLarkInteractiveText(value);
+  if (text.length > 0) {
+    sink.push(text);
   }
 
   const children = [
+    value.property,
     value.elements,
     value.children,
     value.fields,
@@ -1045,10 +1096,55 @@ function collectLarkTextNodes(value: unknown, sink: string[]): void {
   ];
   for (const nested of children) {
     collectLarkTextNodes(nested, sink);
-    if (sink.length >= 8) {
+    if (hasReachedLarkInteractiveTextLimit(sink)) {
       return;
     }
   }
+}
+
+function hasReachedLarkInteractiveTextLimit(sink: string[]): boolean {
+  if (sink.length >= LARK_INTERACTIVE_TEXT_NODE_LIMIT) {
+    return true;
+  }
+
+  let totalLength = 0;
+  for (const text of sink) {
+    totalLength += text.length;
+    if (totalLength >= LARK_INTERACTIVE_TEXT_CHAR_LIMIT) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function extractLarkInteractiveText(value: Record<string, unknown>): string {
+  if (typeof value.text === "string" && value.text.trim().length > 0) {
+    return value.text.trim();
+  }
+  if (typeof value.content === "string" && value.content.trim().length > 0) {
+    return value.content.trim();
+  }
+
+  const property = isRecord(value.property) ? value.property : null;
+  if (property != null) {
+    const propertyText = extractLarkInteractiveText(property);
+    if (propertyText.length > 0) {
+      return propertyText;
+    }
+  }
+
+  const i18nContent = isRecord(value.i18n_content) ? value.i18n_content : null;
+  if (i18nContent != null) {
+    for (const language of ["zh_cn", "en_us", "ja_jp"]) {
+      const localized = i18nContent[language];
+      if (typeof localized === "string" && localized.trim().length > 0) {
+        return localized.trim();
+      }
+    }
+  }
+
+  return "";
 }
 
 function parseLarkUnknownContent(
@@ -1143,8 +1239,9 @@ export function createLarkQuoteMessageFetcher(input: {
   return async ({ messageId }) => {
     try {
       const client = input.clients.getOrCreate(input.installationId);
-      const response = (await client.sdk.im.message.get({
-        path: { message_id: messageId },
+      const response = (await fetchQuotedLarkMessage({
+        client,
+        messageId,
       })) as {
         code?: number;
         msg?: string;
@@ -1212,6 +1309,37 @@ export function createLarkQuoteMessageFetcher(input: {
       return null;
     }
   };
+}
+
+async function fetchQuotedLarkMessage(input: {
+  client: LarkSdkClient;
+  messageId: string;
+}): Promise<unknown> {
+  const rawRequest = (
+    input.client.sdk as Lark.Client & {
+      request?: (payload: {
+        method: string;
+        url: string;
+        params: Record<string, string>;
+      }) => Promise<unknown>;
+    }
+  ).request;
+
+  if (typeof rawRequest === "function") {
+    return rawRequest.call(input.client.sdk, {
+      method: "GET",
+      url: `/open-apis/im/v1/messages/${input.messageId}`,
+      params: {
+        user_id_type: "open_id",
+        card_msg_content_type: "raw_card_content",
+      },
+    });
+  }
+
+  return input.client.sdk.im.message.get({
+    path: { message_id: input.messageId },
+    params: { user_id_type: "open_id" },
+  });
 }
 
 async function sendLarkStatusCard(input: {

@@ -239,7 +239,72 @@ describe("lark inbound message handling", () => {
     });
   });
 
-  test("parses interactive quoted messages through message.get", async () => {
+  test("parses interactive quoted messages through raw card content fetch", async () => {
+    const request = vi.fn(async () => ({
+      data: {
+        items: [
+          {
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                json_card: JSON.stringify({
+                  schema: "2.0",
+                  header: {
+                    title: {
+                      tag: "plain_text",
+                      content: "当前状态",
+                    },
+                  },
+                  body: {
+                    elements: [
+                      {
+                        tag: "markdown",
+                        content: "请升级至最新版本客户端，以查看内容",
+                      },
+                    ],
+                  },
+                }),
+              }),
+            },
+          },
+        ],
+      },
+    }));
+    const clients = {
+      getOrCreate: vi.fn(() => ({
+        sdk: {
+          request,
+        },
+      })),
+    } as unknown as {
+      getOrCreate(installationId: string): LarkSdkClient;
+    };
+
+    const fetcher = createLarkQuoteMessageFetcher({
+      installationId: "default",
+      clients,
+    });
+
+    const quoted = await fetcher({
+      installationId: "default",
+      messageId: "om_parent_interactive",
+    });
+
+    expect(request).toHaveBeenCalledExactlyOnceWith({
+      method: "GET",
+      url: "/open-apis/im/v1/messages/om_parent_interactive",
+      params: {
+        user_id_type: "open_id",
+        card_msg_content_type: "raw_card_content",
+      },
+    });
+    expect(quoted).toEqual({
+      messageType: "interactive",
+      text: "当前状态\n请升级至最新版本客户端，以查看内容",
+    });
+  });
+
+  test("falls back to sdk message.get when raw request is unavailable", async () => {
     const get = vi.fn(async () => ({
       data: {
         items: [
@@ -247,8 +312,8 @@ describe("lark inbound message handling", () => {
             msg_type: "interactive",
             body: {
               content: JSON.stringify({
-                title: "当前状态",
-                elements: [[{ tag: "text", text: "请升级至最新版本客户端，以查看内容" }]],
+                title: "旧卡片",
+                elements: [[{ tag: "text", text: "占位内容" }]],
               }),
             },
           },
@@ -276,15 +341,72 @@ describe("lark inbound message handling", () => {
 
     const quoted = await fetcher({
       installationId: "default",
-      messageId: "om_parent_interactive",
+      messageId: "om_parent_legacy",
     });
 
     expect(get).toHaveBeenCalledExactlyOnceWith({
-      path: { message_id: "om_parent_interactive" },
+      path: { message_id: "om_parent_legacy" },
+      params: { user_id_type: "open_id" },
     });
     expect(quoted).toEqual({
       messageType: "interactive",
-      text: "当前状态\n请升级至最新版本客户端，以查看内容",
+      text: "旧卡片\n占位内容",
+    });
+  });
+
+  test("keeps long raw card content instead of truncating after a few nodes", async () => {
+    const bodyLines = Array.from({ length: 12 }, (_, index) => `第${index + 1}段`);
+    const request = vi.fn(async () => ({
+      data: {
+        items: [
+          {
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                json_card: JSON.stringify({
+                  schema: "2.0",
+                  header: {
+                    title: {
+                      tag: "plain_text",
+                      content: "长卡片",
+                    },
+                  },
+                  body: {
+                    elements: bodyLines.map((line) => ({
+                      tag: "markdown",
+                      content: line,
+                    })),
+                  },
+                }),
+              }),
+            },
+          },
+        ],
+      },
+    }));
+    const clients = {
+      getOrCreate: vi.fn(() => ({
+        sdk: {
+          request,
+        },
+      })),
+    } as unknown as {
+      getOrCreate(installationId: string): LarkSdkClient;
+    };
+
+    const fetcher = createLarkQuoteMessageFetcher({
+      installationId: "default",
+      clients,
+    });
+
+    const quoted = await fetcher({
+      installationId: "default",
+      messageId: "om_parent_long_card",
+    });
+
+    expect(quoted).toEqual({
+      messageType: "interactive",
+      text: `长卡片\n${bodyLines.join(" ")}`,
     });
   });
 
