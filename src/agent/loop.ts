@@ -213,6 +213,9 @@ export class AgentLoop {
     content: string;
     messageType?: string;
     visibility?: string;
+    channelMessageId?: string | null;
+    channelParentMessageId?: string | null;
+    channelThreadId?: string | null;
     createdAt?: Date;
   }): boolean {
     if (!this.deps.cancel.isActive(input.sessionId)) {
@@ -1221,6 +1224,9 @@ export class AgentLoop {
         } satisfies AgentUserPayload,
         messageType: queued.messageType ?? "text",
         visibility: queued.visibility ?? "user_visible",
+        channelMessageId: queued.channelMessageId ?? null,
+        channelParentMessageId: queued.channelParentMessageId ?? null,
+        channelThreadId: queued.channelThreadId ?? null,
         createdAt: queued.createdAt ?? new Date(),
       });
       nextSeq += 1;
@@ -1251,6 +1257,9 @@ function appendMessageAndHydrate(input: {
   role: string;
   messageType: string;
   visibility: string;
+  channelMessageId?: string | null;
+  channelParentMessageId?: string | null;
+  channelThreadId?: string | null;
   provider?: string | null;
   model?: string | null;
   modelApi?: string | null;
@@ -1268,6 +1277,9 @@ function appendMessageAndHydrate(input: {
     role: input.role,
     messageType: input.messageType,
     visibility: input.visibility,
+    channelMessageId: input.channelMessageId ?? null,
+    channelParentMessageId: input.channelParentMessageId ?? null,
+    channelThreadId: input.channelThreadId ?? null,
     provider: input.provider ?? null,
     model: input.model ?? null,
     modelApi: input.modelApi ?? null,
@@ -1285,7 +1297,9 @@ function appendMessageAndHydrate(input: {
     role: input.role,
     messageType: input.messageType,
     visibility: input.visibility,
-    channelMessageId: null,
+    channelMessageId: input.channelMessageId ?? null,
+    channelParentMessageId: input.channelParentMessageId ?? null,
+    channelThreadId: input.channelThreadId ?? null,
     provider: input.provider ?? null,
     model: input.model ?? null,
     modelApi: input.modelApi ?? null,

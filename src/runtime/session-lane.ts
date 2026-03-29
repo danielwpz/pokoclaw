@@ -24,6 +24,9 @@ export interface SubmitSessionMessageInput {
   content: string;
   messageType?: string;
   visibility?: string;
+  channelMessageId?: string | null;
+  channelParentMessageId?: string | null;
+  channelThreadId?: string | null;
   createdAt?: Date;
   maxTurns?: number;
 }
@@ -62,6 +65,15 @@ export class InMemorySessionLane {
         content: input.content,
         ...(input.messageType == null ? {} : { messageType: input.messageType }),
         ...(input.visibility == null ? {} : { visibility: input.visibility }),
+        ...(input.channelMessageId === undefined
+          ? {}
+          : { channelMessageId: input.channelMessageId ?? null }),
+        ...(input.channelParentMessageId === undefined
+          ? {}
+          : { channelParentMessageId: input.channelParentMessageId ?? null }),
+        ...(input.channelThreadId === undefined
+          ? {}
+          : { channelThreadId: input.channelThreadId ?? null }),
         ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
       });
       if (steered) {
@@ -86,6 +98,9 @@ export class InMemorySessionLane {
       }),
       messageType: input.messageType ?? "text",
       visibility: input.visibility ?? "user_visible",
+      channelMessageId: input.channelMessageId ?? null,
+      channelParentMessageId: input.channelParentMessageId ?? null,
+      channelThreadId: input.channelThreadId ?? null,
       createdAt: input.createdAt ?? new Date(),
     });
 

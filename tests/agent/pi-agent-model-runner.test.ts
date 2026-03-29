@@ -81,6 +81,8 @@ function createStoredUserMessage(): Omit<Message, "sessionId"> {
     messageType: "text",
     visibility: "user_visible",
     channelMessageId: null,
+    channelParentMessageId: null,
+    channelThreadId: null,
     provider: null,
     model: null,
     modelApi: null,

@@ -8,6 +8,9 @@ export interface SteerInput {
   content: string;
   messageType?: string;
   visibility?: string;
+  channelMessageId?: string | null;
+  channelParentMessageId?: string | null;
+  channelThreadId?: string | null;
   createdAt?: Date;
 }
 
@@ -19,6 +22,9 @@ export class SessionSteerQueueRegistry {
     content: string;
     messageType?: string;
     visibility?: string;
+    channelMessageId?: string | null;
+    channelParentMessageId?: string | null;
+    channelThreadId?: string | null;
     createdAt?: Date;
   }): void {
     const queue = this.queues.get(input.sessionId) ?? [];
@@ -26,6 +32,15 @@ export class SessionSteerQueueRegistry {
       content: input.content,
       ...(input.messageType == null ? {} : { messageType: input.messageType }),
       ...(input.visibility == null ? {} : { visibility: input.visibility }),
+      ...(input.channelMessageId === undefined
+        ? {}
+        : { channelMessageId: input.channelMessageId ?? null }),
+      ...(input.channelParentMessageId === undefined
+        ? {}
+        : { channelParentMessageId: input.channelParentMessageId ?? null }),
+      ...(input.channelThreadId === undefined
+        ? {}
+        : { channelThreadId: input.channelThreadId ?? null }),
       ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
     });
     this.queues.set(input.sessionId, queue);

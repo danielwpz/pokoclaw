@@ -191,6 +191,8 @@ export const messages = sqliteTable(
     messageType: text("message_type").notNull().default("text"),
     visibility: text("visibility").notNull().default("user_visible"),
     channelMessageId: text("channel_message_id"),
+    channelParentMessageId: text("channel_parent_message_id"),
+    channelThreadId: text("channel_thread_id"),
     provider: text("provider"),
     model: text("model"),
     modelApi: text("model_api"),
@@ -209,6 +211,8 @@ export const messages = sqliteTable(
     uniqueIndex("uidx_messages_session_seq").on(table.sessionId, table.seq),
     index("idx_messages_session_seq").on(table.sessionId, table.seq),
     index("idx_messages_channel_msg").on(table.channelMessageId),
+    index("idx_messages_channel_parent_msg").on(table.channelParentMessageId),
+    index("idx_messages_channel_thread").on(table.channelThreadId),
   ],
 );
 
