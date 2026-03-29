@@ -404,4 +404,16 @@ describe("subagent orchestration", () => {
       }),
     ).toThrow("SubAgent creation is only allowed from a main-agent chat session");
   });
+
+  test("builds a kickoff note that treats unclear work as background to clarify, not as already-approved detail", () => {
+    const kickoff = buildSubagentKickoffMessage(
+      "The user wants help with code review, but the exact target may still need clarification.",
+    );
+
+    expect(kickoff).toContain("system-generated kickoff note");
+    expect(kickoff).toContain("It is not a literal user message in this chat");
+    expect(kickoff).toContain("If the request is still broad, ambiguous, or missing key decisions");
+    expect(kickoff).toContain("begin by greeting the user in this new conversation");
+    expect(kickoff).toContain("Do not invent missing requirements");
+  });
 });

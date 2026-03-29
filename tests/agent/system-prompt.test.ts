@@ -89,11 +89,36 @@ describe("agent system prompt", () => {
 
     expect(prompt).toContain("call request_permissions");
     expect(prompt).toContain("retryToolCallId");
+    expect(prompt).toContain("Bash runs in a sandbox by default.");
     expect(prompt).toContain("Do not use request_permissions for bash sandbox failures.");
     expect(prompt).toContain('rerun bash with sandboxMode="full_access"');
+    expect(prompt).toContain("short human-readable justification");
+    expect(prompt).toContain("prefer a reusable prefix");
+    expect(prompt).toContain("git is often the first prefix to consider");
+    expect(prompt).toContain("pnpm, npm, pytest, cargo");
     expect(prompt).toContain("Only provide a reusable prefix");
     expect(prompt).toContain("do not use unmanaged backgrounding like &, nohup, setsid, or disown");
     expect(prompt).toContain("Do not bypass approval or permission mechanisms.");
+  });
+
+  test("teaches the main agent to stay responsive, delegate proactively, and keep global diagnosis work local", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+    });
+
+    expect(prompt).toContain("the system's long-lived manager");
+    expect(prompt).toContain("single entrypoint for new requests");
+    expect(prompt).toContain("It is fine to proactively attempt create_subagent");
+    expect(prompt).toContain(
+      "if the user declines you should simply continue the conversation normally",
+    );
+    expect(prompt).toContain(
+      "System observation, runtime status checks, approval investigation, and cross-agent diagnosis stay with you.",
+    );
+    expect(prompt).toContain(
+      "Do not create a SubAgent just to inspect what the system or another agent is doing.",
+    );
   });
 
   test("teaches main-agent subagent creation argument shape and examples", () => {
@@ -102,13 +127,22 @@ describe("agent system prompt", () => {
       agentKind: "main",
     });
 
+    expect(prompt).toContain("repo-specific code changes");
+    expect(prompt).toContain("deep research");
+    expect(prompt).toContain("repeated bash/test/edit/debug loops");
+    expect(prompt).toContain("recurring user-facing tasks");
     expect(prompt).toContain("Prefer the minimal call shape first");
     expect(prompt).toContain("initialExtraScopes");
     expect(prompt).toContain('{"kind":"fs.read","path":"/abs/path"}');
     expect(prompt).toContain('{"kind":"db.read","database":"system"}');
     expect(prompt).toContain('{"kind":"bash.full_access","prefix":["git","status"]}');
     expect(prompt).toContain('"title":"Pokeclaw Code Review"');
-    expect(prompt).toContain('"initialTask":"Scan the current pokeclaw repo changes');
+    expect(prompt).toContain('"title":"Daily News Briefing"');
+    expect(prompt).toContain(
+      "greeting the user and clarifying the desired sources, schedule, and output format",
+    );
+    expect(prompt).toContain("Do not create a SubAgent for system observation");
+    expect(prompt).toContain("If the user's intent is still broad or underspecified");
   });
 
   test("builds a dedicated approval-session prompt without normal tool escalation guidance", () => {
@@ -144,6 +178,15 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("<description>");
     expect(prompt).toContain("<workdir>/Users/daniel/Programs/ai/openclaw/pokeclaw</workdir>");
     expect(prompt).not.toContain("<initial_task>");
+    expect(prompt).toContain("Treat the kickoff note as system-generated background");
+    expect(prompt).toContain("begin this new conversation by greeting the user");
+    expect(prompt).toContain(
+      "When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
+    );
+    expect(prompt).toContain("Bash runs in a sandbox by default.");
+    expect(prompt).toContain("Do not use request_permissions for bash sandbox failures.");
+    expect(prompt).toContain('rerun bash with sandboxMode="full_access"');
+    expect(prompt).toContain("git is often the first prefix to consider");
   });
 
   test("current filled section builders remain non-empty", () => {
@@ -181,6 +224,17 @@ describe("agent system prompt", () => {
       );
       expect(section).toContain(
         "Do not invent an extra confirmation boundary unless the user explicitly asks",
+      );
+    }
+  });
+
+  test("teaches main and sub agents how to react to tool failures", () => {
+    const main = buildMainAgentOperatingModelSection();
+    const sub = buildSubagentOperatingModelSection();
+
+    for (const section of [main, sub]) {
+      expect(section).toContain(
+        "When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
       );
     }
   });

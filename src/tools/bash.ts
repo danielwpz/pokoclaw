@@ -300,12 +300,33 @@ function findUnquotedBackgroundAmpersand(command: string): boolean {
       continue;
     }
 
-    const prev = index > 0 ? command[index - 1] : "";
-    const next = index + 1 < command.length ? command[index + 1] : "";
-    if (prev === "&" || next === "&") {
+    if (isNonBackgroundAmpersand(command, index)) {
       continue;
     }
 
+    return true;
+  }
+
+  return false;
+}
+
+function isNonBackgroundAmpersand(command: string, index: number): boolean {
+  const prev = index > 0 ? command[index - 1] : "";
+  const next = index + 1 < command.length ? command[index + 1] : "";
+
+  if (prev === "&" || next === "&") {
+    return true;
+  }
+
+  // Bash redirection forms like 2>&1, 1>&2, <&0, >&2, &>file, and &>>file
+  // use '&' as part of a redirection operator, not as backgrounding.
+  if (prev === ">" || prev === "<" || next === ">") {
+    return true;
+  }
+
+  // Bash pipe shorthand |& pipes stdout+stderr together and is not a
+  // background operator.
+  if (prev === "|") {
     return true;
   }
 

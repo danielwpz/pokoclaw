@@ -553,6 +553,17 @@ describe("bash tool", () => {
     'echo "nohup is just text"',
     "echo hi \\& echo there",
     "echo one && echo two || echo three",
+    "gh auth status 2>&1 || true",
+    "echo $GITHUB_TOKEN && gh auth status 2>&1 || true",
+    "npm test >out.log 2>&1",
+    "echo ok >/dev/null 2>&1 && echo done",
+    "printf 'warn\\n' 1>&2",
+    "cat missing.txt >&2 || true",
+    "run_job &>job.log || true",
+    "run_job &>>job.log || true",
+    "cat <&0",
+    "exec 3>&1 1>&2 2>&3",
+    "git status |& tee status.log",
   ])("does not false-positive on safe shell syntax: %s", async (command) => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
@@ -605,6 +616,42 @@ describe("bash tool", () => {
         command,
       }),
     );
+  });
+
+  test.each([
+    "sleep 60 >/tmp/sleep.log 2>&1 &",
+    "long_task &>task.log &",
+    "echo ok && worker >/tmp/worker.log 2>&1 &",
+    "git status |& tee status.log &",
+  ])("still rejects real background execution when redirection is also present: %s", async (command) => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        { command },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_background_not_supported",
+        reason: "unmanaged '&' background operator",
+      },
+    } satisfies Partial<ToolFailure>);
+
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
   });
 });
 

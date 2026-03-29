@@ -333,10 +333,17 @@ describe("pi bridge", () => {
     });
 
     const [effectiveModel] = upstreamStreamMock.mock.calls.at(-1) as [
-      { api: string; baseUrl: string },
+      {
+        api: string;
+        baseUrl: string;
+        compat?: {
+          supportsDeveloperRole?: boolean;
+        };
+      },
     ];
     expect(effectiveModel.api).toBe("openai-completions");
     expect(effectiveModel.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(effectiveModel.compat?.supportsDeveloperRole).toBe(false);
     expect(result.modelApi).toBe("openai-completions");
   });
 
@@ -391,10 +398,17 @@ describe("pi bridge", () => {
     });
 
     const [effectiveModel] = upstreamStreamMock.mock.calls.at(-1) as [
-      { api: string; baseUrl: string },
+      {
+        api: string;
+        baseUrl: string;
+        compat?: {
+          supportsDeveloperRole?: boolean;
+        };
+      },
     ];
     expect(effectiveModel.api).toBe("openai-responses");
     expect(effectiveModel.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(effectiveModel.compat?.supportsDeveloperRole).toBe(true);
     expect(result.modelApi).toBe("openai-responses");
   });
 

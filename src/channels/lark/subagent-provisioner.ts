@@ -182,7 +182,7 @@ async function listChatMemberIds(client: LarkSdkClient, chatId: string): Promise
 }
 
 function buildSubagentChatName(title: string): string {
-  return `SubAgent · ${title}`;
+  return title.trim();
 }
 
 async function getChatShareLink(client: LarkSdkClient, chatId: string): Promise<string | null> {

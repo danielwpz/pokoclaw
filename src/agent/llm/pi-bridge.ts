@@ -21,6 +21,7 @@ import type {
 import { normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
 import { type AgentAssistantContentBlock, buildPiMessages } from "@/src/agent/llm/messages.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
+import { resolveOpenAICompatForResolvedModel } from "@/src/agent/llm/openai-compat.js";
 import { streamWithNormalizedUpstreamUsage } from "@/src/agent/llm/upstream-openai.js";
 import type {
   AgentModelRunner,
@@ -331,10 +332,13 @@ function buildPiStreamOptions(
 }
 
 function toPiModel(model: ResolvedModel): Model<Api> {
+  const api = resolvePiApi(model);
+  const compat = resolveOpenAICompatForResolvedModel(model);
+
   return {
     id: model.upstreamId,
     name: model.id,
-    api: resolvePiApi(model),
+    api,
     provider: model.provider.id,
     baseUrl: resolvePiBaseUrl(model),
     reasoning: model.supportsReasoning,
@@ -347,6 +351,7 @@ function toPiModel(model: ResolvedModel): Model<Api> {
     },
     contextWindow: model.contextWindow,
     maxTokens: model.maxOutputTokens,
+    ...(compat == null ? {} : { compat }),
   };
 }
 
@@ -363,12 +368,7 @@ function shouldUseOpenAICompletions(model: ResolvedModel): boolean {
     return false;
   }
 
-  return !isGptFamilyModel(model);
-}
-
-function isGptFamilyModel(model: ResolvedModel): boolean {
-  const normalizedIds = [model.id, model.upstreamId].map((value) => value.toLowerCase());
-  return normalizedIds.some((value) => value.includes("gpt"));
+  return resolveOpenAICompatForResolvedModel(model)?.supportsDeveloperRole !== true;
 }
 
 function resolvePiBaseUrl(model: ResolvedModel): string {

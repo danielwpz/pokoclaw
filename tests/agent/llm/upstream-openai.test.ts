@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  buildOpenAICompletionsParams,
+  buildOpenAIResponsesParams,
   normalizeUsageFromOpenAICompatible,
   shouldUseCustomOpenAICompletionsStream,
   shouldUseCustomOpenAIResponsesStream,
@@ -26,6 +28,11 @@ const OPENROUTER_RESPONSES_MODEL = {
     cacheRead: 0.5,
     cacheWrite: 3,
   },
+};
+
+const SIMPLE_CONTEXT = {
+  systemPrompt: "You are a helpful assistant.",
+  messages: [],
 };
 
 describe("upstream openai usage normalization", () => {
@@ -182,5 +189,101 @@ describe("upstream openai usage normalization", () => {
         baseUrl: "https://api.openai.com/v1",
       }),
     ).toBe(false);
+  });
+
+  test("uses system role for non-GPT openai-compatible completions models", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        ...OPENROUTER_COMPLETIONS_MODEL,
+        id: "anthropic/claude-sonnet-4.5",
+        name: "claude-sonnet-4.5",
+        provider: "openrouter",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+      },
+      SIMPLE_CONTEXT,
+      undefined,
+    );
+
+    expect(params.messages[0]).toMatchObject({
+      role: "system",
+      content: "You are a helpful assistant.",
+    });
+  });
+
+  test("uses developer role for GPT-family openai-compatible completions models", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        ...OPENROUTER_COMPLETIONS_MODEL,
+        id: "openai/gpt-5",
+        name: "gpt-5",
+        provider: "openrouter",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+      },
+      SIMPLE_CONTEXT,
+      undefined,
+    );
+
+    expect(params.messages[0]).toMatchObject({
+      role: "developer",
+      content: "You are a helpful assistant.",
+    });
+  });
+
+  test("uses system role for non-GPT openai-compatible responses models", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        ...OPENROUTER_RESPONSES_MODEL,
+        id: "qwen/qwen3-32b",
+        name: "qwen3-32b",
+        provider: "openrouter",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+      },
+      SIMPLE_CONTEXT,
+      undefined,
+    );
+
+    expect(Array.isArray(params.input)).toBe(true);
+    if (!Array.isArray(params.input)) {
+      throw new Error("expected array input");
+    }
+    expect(params.input[0]).toMatchObject({
+      role: "system",
+      content: "You are a helpful assistant.",
+    });
+  });
+
+  test("uses developer role for GPT-family openai-compatible responses models", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        ...OPENROUTER_RESPONSES_MODEL,
+        id: "openai/gpt-5",
+        name: "gpt-5",
+        provider: "openrouter",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+      },
+      SIMPLE_CONTEXT,
+      undefined,
+    );
+
+    expect(Array.isArray(params.input)).toBe(true);
+    if (!Array.isArray(params.input)) {
+      throw new Error("expected array input");
+    }
+    expect(params.input[0]).toMatchObject({
+      role: "developer",
+      content: "You are a helpful assistant.",
+    });
   });
 });
