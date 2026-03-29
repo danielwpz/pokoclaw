@@ -1,3 +1,9 @@
+/**
+ * Session-local steer queue.
+ *
+ * Stores deferred user steering messages while a run is busy and lets runtime
+ * replay them in order once the current execution stage allows it.
+ */
 export interface SteerInput {
   content: string;
   messageType?: string;

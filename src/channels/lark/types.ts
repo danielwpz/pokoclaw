@@ -1,3 +1,9 @@
+/**
+ * Lark channel configuration normalization helpers.
+ *
+ * Converts config schema objects into validated installation descriptors used
+ * by channel bootstrap and client registry initialization.
+ */
 import type { LarkChannelConfig, LarkInstallationConfig } from "@/src/config/schema.js";
 
 export interface LarkInstallationDescriptor {

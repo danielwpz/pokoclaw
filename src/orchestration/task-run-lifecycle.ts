@@ -1,3 +1,9 @@
+/**
+ * Task-run settlement helpers.
+ *
+ * Applies terminal status transitions to `task_runs` and execution sessions,
+ * centralizing completion/failed/cancelled bookkeeping for unattended runs.
+ */
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";

@@ -1,3 +1,10 @@
+/**
+ * AgentLoop is the single-session execution engine.
+ *
+ * It runs one model "run" at a time for a session: model turn, tool calls,
+ * approval waits/retries, compaction hooks, and runtime event emission.
+ * Cross-session orchestration (task routing, channel rendering, etc.) is out of scope.
+ */
 import { randomUUID } from "node:crypto";
 import {
   AgentCompactionService,

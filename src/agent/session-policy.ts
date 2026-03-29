@@ -1,3 +1,10 @@
+/**
+ * Session-level tool policy gates.
+ *
+ * This module encodes which tools are allowed for special session purposes
+ * (notably approval sessions) so AgentLoop can enforce capability boundaries
+ * before tool execution.
+ */
 import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import type { ToolDefinition } from "@/src/tools/core/types.js";
 

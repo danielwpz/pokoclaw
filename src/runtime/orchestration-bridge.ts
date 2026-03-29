@@ -1,3 +1,10 @@
+/**
+ * Runtime-to-orchestration bridge.
+ *
+ * Exposes a narrow interface from runtime/tool layer into AgentManager without
+ * creating a direct dependency cycle. Used for runtime event handoff and
+ * runtime-control actions like subagent creation and manual cron triggers.
+ */
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
 import type { AgentManager } from "@/src/orchestration/agent-manager.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";

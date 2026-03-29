@@ -1,3 +1,10 @@
+/**
+ * Runtime status aggregation and presentation helpers.
+ *
+ * Builds conversation-level snapshots (model, usage, active runs, approvals)
+ * from storage + live runtime state. Channel adapters can render the snapshot
+ * as plain text or rich cards without duplicating status logic.
+ */
 import { readFileSync } from "node:fs";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";

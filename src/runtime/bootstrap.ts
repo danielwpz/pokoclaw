@@ -1,3 +1,10 @@
+/**
+ * Runtime bootstrap/composition root.
+ *
+ * This file wires concrete implementations for loop, runtime services,
+ * orchestration bridge, cron, and channel runtimes. `main.ts` calls into this
+ * module to keep process entry thin and business assembly centralized.
+ */
 import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop } from "@/src/agent/loop.js";

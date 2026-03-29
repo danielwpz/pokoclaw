@@ -1,3 +1,10 @@
+/**
+ * Canonical runtime event contracts emitted by AgentLoop.
+ *
+ * These events are the semantic boundary between execution (agent/loop) and
+ * downstream consumers (runtime event bus, orchestration, channels).
+ * Keep this model channel-agnostic and focused on execution facts.
+ */
 import type { CompactionReason } from "@/src/agent/compaction.js";
 import type { AgentLlmErrorKind } from "@/src/agent/llm/errors.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";

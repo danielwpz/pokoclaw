@@ -1,3 +1,10 @@
+/**
+ * Session dispatcher for runtime ingress commands.
+ *
+ * Dispatcher enforces one-active-run-per-session and routes new inputs into
+ * either fresh runs or in-run steering queues. It is the execution scheduler
+ * above AgentLoop and below channel/orchestration layers.
+ */
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import {
   InMemorySessionLane,

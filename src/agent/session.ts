@@ -1,3 +1,10 @@
+/**
+ * Session-facing storage service for AgentLoop.
+ *
+ * This module reconstructs run context from durable storage (session row +
+ * post-compaction messages) and persists session status/compaction updates.
+ * Higher-level runtime/orchestration should not read/write these tables directly.
+ */
 import type { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import type {
   SessionsRepo,

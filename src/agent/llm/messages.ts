@@ -1,3 +1,9 @@
+/**
+ * Message conversion layer between storage/runtime and pi-ai.
+ *
+ * Reconstructs model input messages from persisted transcript rows and maps
+ * pi-ai assistant outputs back into local assistant/tool payload structures.
+ */
 import type {
   AssistantMessage,
   Message as PiMessage,

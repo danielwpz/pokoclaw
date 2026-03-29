@@ -1,3 +1,9 @@
+/**
+ * Runtime control-plane service for active runs.
+ *
+ * Tracks active run records and provides cancel operations (`stopRun`,
+ * `stopConversation`) used by command handlers and channel callbacks.
+ */
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";

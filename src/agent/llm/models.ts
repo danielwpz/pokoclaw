@@ -1,3 +1,9 @@
+/**
+ * LLM model/provider domain types and helpers.
+ *
+ * Defines normalized provider/model metadata, scenario model selection types,
+ * and token usage/cost utility logic shared by runtime and status reporting.
+ */
 import type {
   ModelPricingConfig,
   ModelScenarioConfig,

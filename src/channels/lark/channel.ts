@@ -1,3 +1,10 @@
+/**
+ * Lark channel runtime entry.
+ *
+ * Wires lark client registry, inbound monitor, and outbound renderer around
+ * the shared runtime ingress/event-bus interfaces. This is the top-level
+ * channel module started by runtime bootstrap.
+ */
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { LarkClientRegistry } from "@/src/channels/lark/client.js";
 import {

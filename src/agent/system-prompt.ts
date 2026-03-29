@@ -1,3 +1,10 @@
+/**
+ * System-prompt assembler for different runtime roles.
+ *
+ * This module selects and composes prompt sections by session purpose and
+ * agent kind (main/sub/task/approval), keeping prompt policy centralized and
+ * consistent across loop runs.
+ */
 import {
   buildApprovalAgentIdentitySection,
   buildApprovalAgentOperatingModelSection,

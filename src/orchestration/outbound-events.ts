@@ -1,3 +1,10 @@
+/**
+ * Runtime-to-channel outbound event projection.
+ *
+ * Converts raw AgentLoop events and task lifecycle changes into channel-safe
+ * envelopes with ownership/session/task anchors. Channel adapters consume these
+ * envelopes and decide concrete rendering/transport behavior.
+ */
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
 import {
   resolveSessionLiveState,

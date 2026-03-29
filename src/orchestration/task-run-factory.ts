@@ -1,3 +1,10 @@
+/**
+ * Task-run creation helpers.
+ *
+ * Creates durable `task_runs` and their execution sessions with normalized
+ * metadata for delegate/cron/system workloads. AgentManager uses this factory
+ * to start unattended execution units consistently.
+ */
 import { randomUUID } from "node:crypto";
 
 import type { StorageDb } from "@/src/storage/db/client.js";

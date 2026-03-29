@@ -1,3 +1,10 @@
+/**
+ * Active-run abort registry.
+ *
+ * Maintains AbortControllers per session so control-plane actions can cancel
+ * in-flight runs. Dispatcher/lane own serialization; this module only tracks
+ * and aborts currently running session executions.
+ */
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 
 const logger = createSubsystemLogger("runtime-cancel");

@@ -1,3 +1,9 @@
+/**
+ * Main-agent approval-session lifecycle helpers.
+ *
+ * Resolves or creates the dedicated approval chat session used for delegated
+ * approvals. This keeps approval traffic out of the visible main chat session.
+ */
 import { APPROVAL_SESSION_TOOL_ALLOWLIST } from "@/src/agent/session-policy.js";
 import { resolveMainAgentChatSessionForAgent } from "@/src/orchestration/main-agent-session.js";
 import type { StorageDb } from "@/src/storage/db/client.js";

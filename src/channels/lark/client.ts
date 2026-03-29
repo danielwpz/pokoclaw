@@ -1,3 +1,9 @@
+/**
+ * Lark SDK client registry.
+ *
+ * Owns installation-scoped SDK client construction/caching so inbound/outbound
+ * code can reuse authenticated clients without duplicating config logic.
+ */
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
