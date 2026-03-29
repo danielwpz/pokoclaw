@@ -415,6 +415,68 @@ describe("lark inbound message handling", () => {
     });
   });
 
+  test("marks quoted card content when fallback truncation limits are hit", async () => {
+    const bodyLines = Array.from({ length: 60 }, (_, index) => `第${index + 1}段`);
+    const request = vi.fn(async () => ({
+      data: {
+        items: [
+          {
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                json_card: JSON.stringify({
+                  schema: "2.0",
+                  header: {
+                    title: {
+                      tag: "plain_text",
+                      content: "超长卡片",
+                    },
+                  },
+                  body: {
+                    elements: bodyLines.map((line) => ({
+                      tag: "markdown",
+                      content: line,
+                    })),
+                  },
+                }),
+              }),
+            },
+          },
+        ],
+      },
+    }));
+    const clients = {
+      getOrCreate: vi.fn(() => ({
+        sdk: {
+          request,
+        },
+      })),
+    } as unknown as {
+      getOrCreate(installationId: string): LarkSdkClient;
+    };
+
+    const fetcher = createLarkQuoteMessageFetcher({
+      installationId: "default",
+      clients,
+    });
+
+    const quoted = await fetcher({
+      installationId: "default",
+      messageId: "om_parent_truncated_card",
+    });
+
+    expect(quoted).toEqual({
+      messageType: "interactive",
+      text: expect.stringContaining("[卡片内容过长，引用文本已截断]"),
+    });
+    if (quoted == null) {
+      throw new Error("Expected quoted message");
+    }
+    expect(quoted.text).toContain("超长卡片");
+    expect(quoted.text).toContain("第48段");
+    expect(quoted.text).not.toContain("第49段");
+  });
+
   test("backfills a surface from legacy conversation mapping before routing", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
@@ -793,6 +855,182 @@ describe("lark card actions", () => {
       toast: {
         type: "error",
         content: "无法识别授权请求",
+      },
+    });
+  });
+
+  test("routes approve subagent creation callbacks to orchestration handler", async () => {
+    const approve = vi.fn(async () => ({
+      outcome: "created" as const,
+      request: {} as never,
+      externalChatId: "chat_sub_1",
+      shareLink: "https://example.com/subagent-1",
+    }));
+    const deny = vi.fn();
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
+      },
+      control: {} as RuntimeControlService,
+      subagentRequests: {
+        approve,
+        deny,
+      },
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "approve_subagent_creation",
+          requestId: "req_sub_1",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(approve).toHaveBeenCalledExactlyOnceWith("req_sub_1");
+    expect(deny).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "SubAgent 已创建",
+      },
+    });
+  });
+
+  test("routes deny subagent creation callbacks to orchestration handler", async () => {
+    const approve = vi.fn(async () => ({
+      outcome: "created" as const,
+      request: {} as never,
+      externalChatId: "chat_sub_1",
+      shareLink: "https://example.com/subagent-1",
+    }));
+    const deny = vi.fn(() => ({
+      outcome: "denied" as const,
+      request: {} as never,
+      externalChatId: null,
+      shareLink: null,
+    }));
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
+      },
+      control: {} as RuntimeControlService,
+      subagentRequests: {
+        approve,
+        deny,
+      },
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "deny_subagent_creation",
+          requestId: "req_sub_2",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(approve).not.toHaveBeenCalled();
+    expect(deny).toHaveBeenCalledExactlyOnceWith("req_sub_2");
+    expect(result).toEqual({
+      toast: {
+        type: "info",
+        content: "已取消创建",
+      },
+    });
+  });
+
+  test("treats duplicate approve subagent creation callbacks as info instead of failure", async () => {
+    const approve = vi.fn(async () => ({
+      outcome: "already_created" as const,
+      request: {} as never,
+      externalChatId: "chat_sub_1",
+      shareLink: null,
+    }));
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
+      },
+      control: {} as RuntimeControlService,
+      subagentRequests: {
+        approve,
+        deny: vi.fn(),
+      },
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "approve_subagent_creation",
+          requestId: "req_sub_dup",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "info",
+        content: "SubAgent 已创建",
+      },
+    });
+  });
+
+  test("treats duplicate deny subagent creation callbacks as info instead of failure", async () => {
+    const deny = vi.fn(() => ({
+      outcome: "already_denied" as const,
+      request: {} as never,
+      externalChatId: null,
+      shareLink: null,
+    }));
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
+      },
+      control: {} as RuntimeControlService,
+      subagentRequests: {
+        approve: vi.fn(async () => ({
+          outcome: "created" as const,
+          request: {} as never,
+          externalChatId: "chat_sub_1",
+          shareLink: null,
+        })),
+        deny,
+      },
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "deny_subagent_creation",
+          requestId: "req_sub_dup",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(result).toEqual({
+      toast: {
+        type: "info",
+        content: "该请求已取消",
       },
     });
   });

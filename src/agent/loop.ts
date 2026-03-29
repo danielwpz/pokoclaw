@@ -31,7 +31,7 @@ import type { AgentSessionService } from "@/src/agent/session.js";
 import { assertToolAllowedForSession } from "@/src/agent/session-policy.js";
 import { buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
 import { requestToolApproval } from "@/src/agent/tool-approval.js";
-import type { CompactionConfig, SecurityConfig } from "@/src/config/schema.js";
+import type { CompactionConfig, RuntimeConfig, SecurityConfig } from "@/src/config/schema.js";
 import {
   type ApprovalResponseInput,
   type ApprovalWaitOutcome,
@@ -134,6 +134,7 @@ export interface AgentLoopDependencies {
   storage: StorageDb;
   securityConfig: SecurityConfig;
   compaction: CompactionConfig;
+  runtime?: RuntimeConfig;
   approvalTimeoutMs?: number;
   approvalGrantTtlMs?: number;
   runtimeControl?: Omit<ToolRuntimeControl, "submitApprovalDecision">;
@@ -152,6 +153,7 @@ export class AgentLoop {
   private readonly security: SecurityService;
   private readonly approvalWaits = new SessionApprovalWaitRegistry();
   private readonly steerQueue = new SessionSteerQueueRegistry();
+  private readonly defaultMaxTurns: number;
   private readonly approvalTimeoutMs: number;
   private readonly approvalGrantTtlMs: number;
 
@@ -160,8 +162,11 @@ export class AgentLoop {
       deps.storage,
       buildSystemPolicy({ security: deps.securityConfig }),
     );
-    this.approvalTimeoutMs = deps.approvalTimeoutMs ?? 3 * 60 * 1000;
-    this.approvalGrantTtlMs = deps.approvalGrantTtlMs ?? 7 * 24 * 60 * 60 * 1000;
+    this.defaultMaxTurns = deps.runtime?.maxTurns ?? 8;
+    this.approvalTimeoutMs =
+      deps.approvalTimeoutMs ?? deps.runtime?.approvalTimeoutMs ?? 3 * 60 * 1000;
+    this.approvalGrantTtlMs =
+      deps.approvalGrantTtlMs ?? deps.runtime?.approvalGrantTtlMs ?? 7 * 24 * 60 * 60 * 1000;
     this.compactor = isCompactionModelRunner(deps.modelRunner)
       ? new AgentCompactionService({
           sessions: deps.sessions,
@@ -228,7 +233,7 @@ export class AgentLoop {
 
   async run(input: RunAgentLoopInput): Promise<RunAgentLoopResult> {
     const handle = this.deps.cancel.begin(input.sessionId);
-    const maxTurns = input.maxTurns ?? 8;
+    const maxTurns = input.maxTurns ?? this.defaultMaxTurns;
     let context = this.deps.sessions.getContext(input.sessionId);
     const model = this.deps.models.getRequiredScenarioModel(input.scenario);
     const ownerAgent =
@@ -266,6 +271,7 @@ export class AgentLoop {
         runId,
       });
 
+      let completed = false;
       for (let turn = 0; turn < maxTurns; turn += 1) {
         throwIfAborted(handle.signal);
         let turnToolExecutions = 0;
@@ -319,6 +325,7 @@ export class AgentLoop {
               sessionId: input.sessionId,
               conversationId: context.session.conversationId,
               scenario: input.scenario,
+              sessionPurpose: context.session.purpose,
               agentKind: ownerAgent?.kind ?? null,
               model,
               systemPrompt: buildAgentSystemPrompt({
@@ -563,6 +570,7 @@ export class AgentLoop {
           if (queuedSteer.length > 0) {
             continue;
           }
+          completed = true;
           break;
         }
 
@@ -734,6 +742,20 @@ export class AgentLoop {
 
         if (queuedSteer.length > 0) {
         }
+      }
+
+      if (!completed) {
+        const error = new AgentLoopTurnLimitError(maxTurns);
+        logger.warn("session run hit max turn limit", {
+          sessionId: input.sessionId,
+          conversationId: context.session.conversationId,
+          branchId: context.session.branchId,
+          scenario: input.scenario,
+          modelId: model.id,
+          runId,
+          maxTurns,
+        });
+        throw error;
       }
 
       const compactionEstimate = estimateSessionContextTokens({
@@ -1443,6 +1465,13 @@ function isCompactionModelRunner(
   return "runCompaction" in runner && typeof runner.runCompaction === "function";
 }
 
+class AgentLoopTurnLimitError extends Error {
+  constructor(readonly maxTurns: number) {
+    super(`Run hit the configured max turn limit (${maxTurns}) before producing a final response.`);
+    this.name = "AgentLoopTurnLimitError";
+  }
+}
+
 function toRunFailure(error: unknown): {
   kind:
     | import("@/src/agent/llm/errors.js").AgentLlmErrorKind
@@ -1464,6 +1493,14 @@ function toRunFailure(error: unknown): {
       kind: error.kind,
       message: error.message,
       retryable: error.retryable,
+    };
+  }
+
+  if (error instanceof AgentLoopTurnLimitError) {
+    return {
+      kind: "unknown",
+      message: error.message,
+      retryable: false,
     };
   }
 

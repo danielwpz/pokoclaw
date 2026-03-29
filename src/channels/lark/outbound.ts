@@ -16,6 +16,8 @@ import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
   buildLarkRenderedApprovalCard,
   buildLarkRenderedRunCard,
+  buildLarkRenderedSubagentCreationRequestCard,
+  type LarkSubagentCreationRequestCardState,
 } from "@/src/channels/lark/render.js";
 import {
   type LarkRunState,
@@ -39,6 +41,7 @@ const LARK_CHANNEL_TYPE = "lark";
 const DELIVERY_INTERVAL_MS = 200;
 const RUN_CARD_OBJECT_KIND = "run_card";
 const APPROVAL_CARD_OBJECT_KIND = "approval_card";
+const SUBAGENT_REQUEST_CARD_OBJECT_KIND = "subagent_creation_request_card";
 const LARK_CARD_LOG_PREVIEW_MAX_LENGTH = 600;
 
 interface LarkCardCreateResponse {
@@ -107,6 +110,14 @@ export function createLarkOutboundRuntime(
   const latestRunSegmentByRunId = new Map<string, string>();
   const nextRunSegmentIndexByRunId = new Map<string, number>();
   const latestApprovalByRunId = new Map<string, string>();
+  const subagentRequestStates = new Map<
+    string,
+    {
+      conversationId: string;
+      branchId: string;
+      state: LarkSubagentCreationRequestCardState;
+    }
+  >();
   const scheduled = new Map<string, NodeJS.Timeout>();
   const deliverySnapshots = new Map<string, LarkRunDeliverySnapshot>();
   const deliveryVersions = new Map<string, number>();
@@ -148,6 +159,8 @@ export function createLarkOutboundRuntime(
         await flushRunCard(deliveryId.slice(4));
       } else if (deliveryId.startsWith("approval:")) {
         await flushApprovalCard(deliveryId.slice("approval:".length));
+      } else if (deliveryId.startsWith("subagent:")) {
+        await flushSubagentRequestCard(deliveryId.slice("subagent:".length));
       }
     } finally {
       flushing.delete(deliveryId);
@@ -552,6 +565,110 @@ export function createLarkOutboundRuntime(
     }
   };
 
+  const flushSubagentRequestCard = async (requestId: string) => {
+    const entry = subagentRequestStates.get(requestId);
+    if (entry == null) {
+      return;
+    }
+
+    const surfaces = new ChannelSurfacesRepo(input.storage).listByConversationBranch({
+      channelType: LARK_CHANNEL_TYPE,
+      conversationId: entry.conversationId,
+      branchId: entry.branchId,
+    });
+
+    for (const surface of surfaces) {
+      const surfaceObject = parseSurfaceObject(surface.surfaceObjectJson);
+      const chatId = typeof surfaceObject.chat_id === "string" ? surfaceObject.chat_id : null;
+      if (chatId == null || chatId.length === 0) {
+        continue;
+      }
+
+      const client = input.clients.getOrCreate(surface.channelInstallationId);
+      const cardkit = getCardkitSdk(client);
+      const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
+      const existing = bindingsRepo.getByInternalObject({
+        channelInstallationId: surface.channelInstallationId,
+        internalObjectKind: SUBAGENT_REQUEST_CARD_OBJECT_KIND,
+        internalObjectId: requestId,
+      });
+      const rendered = buildLarkRenderedSubagentCreationRequestCard(entry.state);
+
+      if (existing?.larkCardId == null) {
+        const createResp = await cardkit.card.create({
+          data: {
+            type: "card_json",
+            data: JSON.stringify(rendered.card),
+          },
+        });
+        const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
+        if (larkCardId == null) {
+          continue;
+        }
+
+        const response = (await client.sdk.im.message.create({
+          params: { receive_id_type: "chat_id" },
+          data: {
+            receive_id: chatId,
+            msg_type: "interactive",
+            content: JSON.stringify({
+              type: "card",
+              data: {
+                card_id: larkCardId,
+              },
+            }),
+          },
+        })) as { data?: { message_id?: string; open_message_id?: string } };
+        const larkMessageId = response.data?.message_id ?? null;
+        if (larkMessageId == null) {
+          continue;
+        }
+
+        bindingsRepo.upsert({
+          id: randomUUID(),
+          channelInstallationId: surface.channelInstallationId,
+          conversationId: entry.conversationId,
+          branchId: entry.branchId,
+          internalObjectKind: SUBAGENT_REQUEST_CARD_OBJECT_KIND,
+          internalObjectId: requestId,
+          larkMessageId,
+          larkOpenMessageId: response.data?.open_message_id ?? null,
+          larkCardId,
+          lastSequence: 0,
+          status: entry.state.status === "pending" ? "active" : "finalized",
+          metadataJson: JSON.stringify({
+            requestId,
+            status: entry.state.status,
+          }),
+        });
+        continue;
+      }
+
+      const sequence = (existing.lastSequence ?? 0) + 1;
+      await cardkit.card.update({
+        path: { card_id: existing.larkCardId },
+        data: {
+          card: {
+            type: "card_json",
+            data: JSON.stringify(rendered.card),
+          },
+          sequence,
+        },
+      });
+      bindingsRepo.updateDeliveryState({
+        channelInstallationId: surface.channelInstallationId,
+        internalObjectKind: SUBAGENT_REQUEST_CARD_OBJECT_KIND,
+        internalObjectId: requestId,
+        lastSequence: sequence,
+        status: entry.state.status === "pending" ? "active" : "finalized",
+        metadataJson: JSON.stringify({
+          requestId,
+          status: entry.state.status,
+        }),
+      });
+    }
+  };
+
   const allocateRunSegmentObjectId = (runId: string): string => {
     const nextIndex = (nextRunSegmentIndexByRunId.get(runId) ?? 0) + 1;
     nextRunSegmentIndexByRunId.set(runId, nextIndex);
@@ -651,6 +768,55 @@ export function createLarkOutboundRuntime(
       }
 
       unsubscribe = input.outboundEventBus.subscribe((envelope) => {
+        if (envelope.kind === "subagent_creation_event") {
+          const event = envelope.event;
+          const nextState: LarkSubagentCreationRequestCardState =
+            event.type === "subagent_creation_requested"
+              ? {
+                  requestId: event.requestId,
+                  title: event.title,
+                  description: event.description,
+                  workdir: event.workdir,
+                  expiresAt: event.expiresAt,
+                  status: "pending",
+                  failureReason: null,
+                  externalChatId: null,
+                  shareLink: null,
+                }
+              : {
+                  requestId: event.requestId,
+                  title: event.title,
+                  description: "",
+                  workdir: "",
+                  expiresAt: null,
+                  status: event.status,
+                  failureReason: event.failureReason,
+                  externalChatId: event.externalChatId,
+                  shareLink: event.shareLink,
+                };
+          const previous = subagentRequestStates.get(event.requestId);
+          subagentRequestStates.set(event.requestId, {
+            conversationId: envelope.target.conversationId,
+            branchId: envelope.target.branchId,
+            state:
+              previous == null
+                ? nextState
+                : {
+                    ...previous.state,
+                    ...nextState,
+                    description:
+                      nextState.description.length > 0
+                        ? nextState.description
+                        : previous.state.description,
+                    workdir:
+                      nextState.workdir.length > 0 ? nextState.workdir : previous.state.workdir,
+                    expiresAt: nextState.expiresAt ?? previous.state.expiresAt,
+                  },
+          });
+          bumpVersionAndSchedule(`subagent:${event.requestId}`);
+          return;
+        }
+
         if (envelope.kind !== "runtime_event") {
           return;
         }

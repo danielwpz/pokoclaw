@@ -163,7 +163,14 @@ describe("RuntimeOrchestrationBridge", () => {
       provisionSubagentSurface: vi.fn(async () => ({
         status: "provisioned" as const,
         externalChatId: "chat_sub_1",
+        shareLink: "https://example.com/subagent-1",
         conversationKind: "group" as const,
+        channelSurface: {
+          channelType: "lark",
+          channelInstallationId: "default",
+          surfaceKey: "chat:chat_sub_1",
+          surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_1" }),
+        },
       })),
     };
 

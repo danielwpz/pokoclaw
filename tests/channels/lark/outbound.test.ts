@@ -5,6 +5,7 @@ import { buildLarkAssistantElementId } from "@/src/channels/lark/run-state.js";
 import type {
   OrchestratedOutboundEventEnvelope,
   OrchestratedRuntimeEventEnvelope,
+  OrchestratedSubagentCreationEventEnvelope,
 } from "@/src/orchestration/outbound-events.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
@@ -41,6 +42,43 @@ function makeEnvelope(
     },
     run: {
       runId: "run_1",
+    },
+    object: {
+      messageId: null,
+      toolCallId: null,
+      toolName: null,
+      approvalId: null,
+    },
+    event,
+  };
+}
+
+function makeSubagentEnvelope(
+  event: OrchestratedSubagentCreationEventEnvelope["event"],
+): OrchestratedSubagentCreationEventEnvelope {
+  return {
+    kind: "subagent_creation_event",
+    target: {
+      conversationId: "conv_1",
+      branchId: "branch_1",
+    },
+    session: {
+      sessionId: "sess_1",
+      purpose: "chat",
+    },
+    agent: {
+      ownerAgentId: "agent_1",
+      ownerRole: "main",
+      mainAgentId: "agent_1",
+    },
+    taskRun: {
+      taskRunId: null,
+      runType: null,
+      status: null,
+      executionSessionId: null,
+    },
+    run: {
+      runId: null,
     },
     object: {
       messageId: null,
@@ -789,6 +827,114 @@ describe("lark outbound runtime", () => {
       internalObjectId: "run_1:seg:2",
     });
     expect(secondRunBinding?.larkCardId).toBe("card_run_2");
+
+    await runtime.shutdown();
+  });
+
+  test("creates and updates a standalone subagent creation request card", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async () => ({ data: { card_id: "card_subagent_1" } }));
+    const createMessage = vi.fn(async () => ({
+      data: { message_id: "om_subagent_1", open_message_id: "oom_subagent_1" },
+    }));
+    const updateCard = vi.fn(async () => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: vi.fn(async () => ({})) },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeSubagentEnvelope({
+        type: "subagent_creation_requested",
+        requestId: "req_sub_1",
+        title: "PR Review",
+        description: "Review pull requests and summarize findings.",
+        workdir: "/workspace",
+        expiresAt: "2026-03-28T00:30:00.000Z",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    const createdSubagentCardInput = (createCard.mock.calls as unknown as Array<[unknown]>)[0]?.[0];
+    expect(JSON.stringify(createdSubagentCardInput)).toContain("SubAgent 创建请求");
+    expect(JSON.stringify(createdSubagentCardInput)).toContain("PR Review");
+
+    bus.publish(
+      makeSubagentEnvelope({
+        type: "subagent_creation_resolved",
+        requestId: "req_sub_1",
+        title: "PR Review",
+        status: "created",
+        decidedAt: "2026-03-28T00:05:00.000Z",
+        failureReason: null,
+        createdSubagentAgentId: "agent_sub_1",
+        externalChatId: "chat_sub_1",
+        shareLink: "https://example.com/subagent-1",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(updateCard).toHaveBeenCalledOnce();
+    const updatedSubagentCardInput = (updateCard.mock.calls as unknown as Array<[unknown]>)[0]?.[0];
+    expect(JSON.stringify(updatedSubagentCardInput)).toContain("SubAgent 已创建");
+    expect(JSON.stringify(updatedSubagentCardInput)).toContain("chat_sub_1");
+    expect(JSON.stringify(updatedSubagentCardInput)).toContain("打开 SubAgent 群聊");
+    expect(JSON.stringify(updatedSubagentCardInput)).toContain("https://example.com/subagent-1");
+
+    const binding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "subagent_creation_request_card",
+      internalObjectId: "req_sub_1",
+    });
+    expect(binding?.larkCardId).toBe("card_subagent_1");
 
     await runtime.shutdown();
   });

@@ -10,6 +10,9 @@ import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
 import { createLarkChannelRuntime, type LarkChannelRuntime } from "@/src/channels/lark/channel.js";
+import { LarkClientRegistry } from "@/src/channels/lark/client.js";
+import { createLarkSubagentConversationSurfaceProvisioner } from "@/src/channels/lark/subagent-provisioner.js";
+import { listConfiguredLarkInstallations } from "@/src/channels/lark/types.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { CronService } from "@/src/cron/service.js";
 import { AgentManager, type AgentManagerDependencies } from "@/src/orchestration/agent-manager.js";
@@ -74,6 +77,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     storage: input.storage,
     securityConfig: input.config.security,
     compaction: input.config.compaction,
+    runtime: input.config.runtime,
     runtimeControl: bridge.runtimeControl,
     control,
     emitEvent: bridge.emitRuntimeEvent,
@@ -83,13 +87,19 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     loop,
     messages,
   });
+  const larkClients = new LarkClientRegistry(
+    listConfiguredLarkInstallations(input.config.channels.lark),
+  );
   const manager = new AgentManager({
     storage: input.storage,
     ingress,
     outboundEventBus,
-    ...(input.subagentProvisioner == null
-      ? {}
-      : { subagentProvisioner: input.subagentProvisioner }),
+    subagentProvisioner:
+      input.subagentProvisioner ??
+      createLarkSubagentConversationSurfaceProvisioner({
+        storage: input.storage,
+        clients: larkClients,
+      }),
   });
   bridge.attachManager(manager);
 
@@ -104,6 +114,18 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     control,
     status,
     outboundEventBus,
+    clients: larkClients,
+    subagentRequests: {
+      approve: (requestId: string) =>
+        manager.resolveApproveSubagentCreationRequest({
+          requestId,
+        }),
+      deny: (requestId: string) =>
+        manager.resolveDenySubagentCreationRequest({
+          requestId,
+          reasonText: "Denied from lark subagent creation card",
+        }),
+    },
   });
 
   let started = false;

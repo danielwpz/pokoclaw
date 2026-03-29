@@ -13,6 +13,7 @@ import {
   buildFutureRuntimeSections,
   buildMainAgentIdentitySection,
   buildMainAgentOperatingModelSection,
+  buildMainAgentSubagentSection,
   buildMemorySection,
   buildPermissionsSection,
   buildProjectContextSection,
@@ -59,6 +60,7 @@ function buildMainAgentSystemPrompt(): string {
   return joinSections([
     buildMainAgentIdentitySection(),
     buildMainAgentOperatingModelSection(),
+    buildMainAgentSubagentSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
     buildBashFullAccessSection(),

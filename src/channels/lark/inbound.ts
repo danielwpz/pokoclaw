@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
+import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import {
   buildConversationStatusPresentation,
@@ -30,6 +31,7 @@ const LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH = 144;
 const LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH = 320;
 const LARK_INTERACTIVE_TEXT_NODE_LIMIT = 48;
 const LARK_INTERACTIVE_TEXT_CHAR_LIMIT = 4_000;
+const LARK_INTERACTIVE_TEXT_TRUNCATED_NOTICE = "[卡片内容过长，引用文本已截断]";
 
 export interface LarkInboundIngress {
   submitMessage(input: {
@@ -62,6 +64,12 @@ export interface CreateLarkInboundRuntimeInput {
     getOrCreate(installationId: string): LarkSdkClient;
   };
   wsClientFactory?: (installation: ConfiguredLarkInstallation) => Lark.WSClient;
+  subagentRequests?: {
+    approve(requestId: string): Promise<ResolveSubagentCreationRequestResult>;
+    deny(
+      requestId: string,
+    ): Promise<ResolveSubagentCreationRequestResult> | ResolveSubagentCreationRequestResult;
+  };
 }
 
 export interface LarkInboundRuntimeStatus {
@@ -111,10 +119,17 @@ interface LarkQuotedMessage {
   text: string;
 }
 
+interface LarkInteractiveTextCollection {
+  nodes: string[];
+  totalLength: number;
+  truncated: boolean;
+}
+
 export interface NormalizedLarkCardAction {
   action: string;
   runId: string | null;
   approvalId: number | null;
+  requestId: string | null;
   grantTtl: "one_day" | "permanent" | null;
   actorOpenId: string | null;
 }
@@ -350,6 +365,10 @@ export function normalizeLarkCardAction(
   }
 
   const runId = typeof value?.runId === "string" && value.runId.length > 0 ? value.runId : null;
+  const requestId =
+    typeof value?.requestId === "string" && value.requestId.trim().length > 0
+      ? value.requestId.trim()
+      : null;
   const approvalIdRaw = value?.approvalId;
   const approvalId =
     typeof approvalIdRaw === "number" && Number.isFinite(approvalIdRaw)
@@ -372,6 +391,7 @@ export function normalizeLarkCardAction(
       approvalId == null || Number.isNaN(approvalId) || !Number.isFinite(approvalId)
         ? null
         : approvalId,
+    requestId,
     grantTtl,
     actorOpenId,
   };
@@ -381,6 +401,12 @@ export function createLarkCardActionHandler(input: {
   installationId: string;
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
+  subagentRequests?: {
+    approve(requestId: string): Promise<ResolveSubagentCreationRequestResult>;
+    deny(
+      requestId: string,
+    ): Promise<ResolveSubagentCreationRequestResult> | ResolveSubagentCreationRequestResult;
+  };
 }): (data: unknown) => Promise<unknown> {
   return async (data: unknown) => {
     logger.debug("received raw lark card action callback", {
@@ -403,6 +429,7 @@ export function createLarkCardActionHandler(input: {
       action: normalized.action,
       runId: normalized.runId,
       approvalId: normalized.approvalId,
+      requestId: normalized.requestId,
       grantTtl: normalized.grantTtl,
       actor:
         normalized.actorOpenId == null
@@ -413,7 +440,9 @@ export function createLarkCardActionHandler(input: {
     if (
       normalized.action !== "stop_run" &&
       normalized.action !== "approve_permission" &&
-      normalized.action !== "deny_permission"
+      normalized.action !== "deny_permission" &&
+      normalized.action !== "approve_subagent_creation" &&
+      normalized.action !== "deny_subagent_creation"
     ) {
       logger.debug("ignoring unsupported lark card action", {
         installationId: input.installationId,
@@ -458,6 +487,61 @@ export function createLarkCardActionHandler(input: {
           content: result.accepted ? "正在停止..." : "该运行已结束或无法停止",
         },
       };
+    }
+
+    if (
+      normalized.action === "approve_subagent_creation" ||
+      normalized.action === "deny_subagent_creation"
+    ) {
+      if (normalized.requestId == null) {
+        return {
+          toast: {
+            type: "error",
+            content: "无法识别 SubAgent 创建请求",
+          },
+        };
+      }
+
+      if (input.subagentRequests == null) {
+        logger.warn("received subagent creation card action without orchestration handler", {
+          installationId: input.installationId,
+          action: normalized.action,
+          requestId: normalized.requestId,
+        });
+        return {
+          toast: {
+            type: "error",
+            content: "当前环境未启用 SubAgent 创建",
+          },
+        };
+      }
+
+      try {
+        if (normalized.action === "approve_subagent_creation") {
+          const result = await input.subagentRequests.approve(normalized.requestId);
+          return {
+            toast: buildSubagentCreationActionToast(result),
+          };
+        }
+
+        const result = await input.subagentRequests.deny(normalized.requestId);
+        return {
+          toast: buildSubagentCreationActionToast(result),
+        };
+      } catch (error: unknown) {
+        logger.error("failed to process lark subagent creation card action", {
+          installationId: input.installationId,
+          action: normalized.action,
+          requestId: normalized.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          toast: {
+            type: "error",
+            content: "SubAgent 创建失败",
+          },
+        };
+      }
     }
 
     if (normalized.approvalId == null) {
@@ -526,6 +610,49 @@ export function createLarkCardActionHandler(input: {
   };
 }
 
+function buildSubagentCreationActionToast(result: ResolveSubagentCreationRequestResult): {
+  type: "success" | "info";
+  content: string;
+} {
+  switch (result.outcome) {
+    case "created":
+      return {
+        type: "success",
+        content: "SubAgent 已创建",
+      };
+    case "denied":
+      return {
+        type: "info",
+        content: "已取消创建",
+      };
+    case "already_created":
+      return {
+        type: "info",
+        content: "SubAgent 已创建",
+      };
+    case "already_denied":
+      return {
+        type: "info",
+        content: "该请求已取消",
+      };
+    case "already_expired":
+      return {
+        type: "info",
+        content: "该请求已过期",
+      };
+    case "already_failed":
+      return {
+        type: "info",
+        content: "该请求已结束",
+      };
+    case "provisioning":
+      return {
+        type: "info",
+        content: "SubAgent 正在创建中",
+      };
+  }
+}
+
 export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): LarkInboundRuntime {
   const wsClientFactory =
     input.wsClientFactory ??
@@ -584,6 +711,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           installationId: installation.installationId,
           ingress: input.ingress,
           control: input.control,
+          ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
         });
 
         const dispatcher = new Lark.EventDispatcher({}).register({
@@ -1007,9 +1135,8 @@ function parseLarkInteractiveContent(parsed: Record<string, unknown>): string {
     seen.add(title);
   }
 
-  const textNodes: string[] = [];
-  collectLarkTextNodes(resolveLarkInteractiveElements(parsed), textNodes);
-  const dedupedNodes = textNodes.filter((text) => {
+  const collected = collectLarkTextNodes(resolveLarkInteractiveElements(parsed));
+  const dedupedNodes = collected.nodes.filter((text) => {
     if (seen.has(text)) {
       return false;
     }
@@ -1018,6 +1145,9 @@ function parseLarkInteractiveContent(parsed: Record<string, unknown>): string {
   });
   if (dedupedNodes.length > 0) {
     fragments.push(dedupedNodes.join(" "));
+  }
+  if (collected.truncated) {
+    fragments.push(LARK_INTERACTIVE_TEXT_TRUNCATED_NOTICE);
   }
 
   return fragments.join("\n").trim();
@@ -1061,23 +1191,30 @@ function resolveLarkInteractiveElements(parsed: Record<string, unknown>): unknow
   return property?.elements;
 }
 
-function collectLarkTextNodes(value: unknown, sink: string[]): void {
-  if (hasReachedLarkInteractiveTextLimit(sink)) {
+function collectLarkTextNodes(value: unknown): LarkInteractiveTextCollection {
+  const state: LarkInteractiveTextCollection = {
+    nodes: [],
+    totalLength: 0,
+    truncated: false,
+  };
+  collectLarkTextNodesInto(value, state);
+  return state;
+}
+
+function collectLarkTextNodesInto(value: unknown, state: LarkInteractiveTextCollection): void {
+  if (state.truncated) {
     return;
   }
 
   if (typeof value === "string") {
-    const text = value.trim();
-    if (text.length > 0) {
-      sink.push(text);
-    }
+    appendLarkTextNode(state, value);
     return;
   }
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      collectLarkTextNodes(item, sink);
-      if (hasReachedLarkInteractiveTextLimit(sink)) {
+      collectLarkTextNodesInto(item, state);
+      if (state.truncated) {
         return;
       }
     }
@@ -1089,8 +1226,9 @@ function collectLarkTextNodes(value: unknown, sink: string[]): void {
   }
 
   const text = extractLarkInteractiveText(value);
-  if (text.length > 0) {
-    sink.push(text);
+  appendLarkTextNode(state, text);
+  if (state.truncated) {
+    return;
   }
 
   const children = [
@@ -1103,27 +1241,39 @@ function collectLarkTextNodes(value: unknown, sink: string[]): void {
     value.extra,
   ];
   for (const nested of children) {
-    collectLarkTextNodes(nested, sink);
-    if (hasReachedLarkInteractiveTextLimit(sink)) {
+    collectLarkTextNodesInto(nested, state);
+    if (state.truncated) {
       return;
     }
   }
 }
 
-function hasReachedLarkInteractiveTextLimit(sink: string[]): boolean {
-  if (sink.length >= LARK_INTERACTIVE_TEXT_NODE_LIMIT) {
-    return true;
+function appendLarkTextNode(state: LarkInteractiveTextCollection, rawText: string): void {
+  const text = rawText.trim();
+  if (text.length === 0 || state.truncated) {
+    return;
   }
 
-  let totalLength = 0;
-  for (const text of sink) {
-    totalLength += text.length;
-    if (totalLength >= LARK_INTERACTIVE_TEXT_CHAR_LIMIT) {
-      return true;
-    }
+  if (state.nodes.length >= LARK_INTERACTIVE_TEXT_NODE_LIMIT) {
+    state.truncated = true;
+    return;
   }
 
-  return false;
+  const remainingChars = LARK_INTERACTIVE_TEXT_CHAR_LIMIT - state.totalLength;
+  if (remainingChars <= 0) {
+    state.truncated = true;
+    return;
+  }
+
+  if (text.length > remainingChars) {
+    state.nodes.push(text.slice(0, remainingChars).trimEnd());
+    state.totalLength = LARK_INTERACTIVE_TEXT_CHAR_LIMIT;
+    state.truncated = true;
+    return;
+  }
+
+  state.nodes.push(text);
+  state.totalLength += text.length;
 }
 
 function extractLarkInteractiveText(value: Record<string, unknown>): string {

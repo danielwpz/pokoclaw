@@ -29,6 +29,11 @@ function createConfig(): AppConfig {
       reserveTokensFloor: 60_000,
       recentTurnsPreserve: 3,
     },
+    runtime: {
+      maxTurns: 8,
+      approvalTimeoutMs: 180_000,
+      approvalGrantTtlMs: 604_800_000,
+    },
     security: {
       filesystem: {
         overrideHardDenyRead: false,

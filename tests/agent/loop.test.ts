@@ -214,6 +214,146 @@ describe("agent loop", () => {
     ]);
   });
 
+  test("passes session purpose into the model runner for session-scoped tool visibility", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    handle.storage.sqlite.exec(`
+      INSERT INTO agents (id, conversation_id, kind, created_at)
+      VALUES ('agent_main', 'conv_1', 'main', '2026-03-22T00:00:00.000Z');
+    `);
+    sessionsRepo.create({
+      id: "sess_main",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_main",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_main",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"create a subagent"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const calls: Array<{
+      sessionPurpose: string | undefined;
+      agentKind: string | null | undefined;
+    }> = [];
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        calls.push({
+          sessionPurpose: input.sessionPurpose,
+          agentKind: input.agentKind,
+        });
+        return makeAssistantResult({
+          content: [{ type: "text", text: "ok" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_main", scenario: "chat" });
+
+    expect(calls).toEqual([{ sessionPurpose: "chat", agentKind: "main" }]);
+  });
+
+  test("fails loudly when the configured max turn limit is exhausted", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"keep going"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turn = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        turn += 1;
+        return makeAssistantResult({
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: `tool_${turn}`, name: "probe", arguments: {} }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "probe",
+        description: "Returns a trivial result",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          return textToolResult("ok");
+        },
+      }),
+    );
+
+    const emittedEvents: Array<{ type: string; errorKind?: string; errorMessage?: string }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      runtime: {
+        ...DEFAULT_CONFIG.runtime,
+        maxTurns: 2,
+      },
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
+      "configured max turn limit (2)",
+    );
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(5);
+    expect(rows.map((row) => row.role)).toEqual(["user", "assistant", "tool", "assistant", "tool"]);
+    expect(emittedEvents.some((event) => event.type === "run_completed")).toBe(false);
+    expect(emittedEvents.at(-1)).toMatchObject({
+      type: "run_failed",
+      errorKind: "unknown",
+      errorMessage: expect.stringContaining("configured max turn limit (2)"),
+    });
+  });
+
   test("passes owner agent and workspace cwd into tool execution context", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);

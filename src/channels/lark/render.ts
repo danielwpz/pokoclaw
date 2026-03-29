@@ -29,12 +29,77 @@ export interface LarkRenderedApprovalCard {
   structureSignature: string;
 }
 
+export interface LarkSubagentCreationRequestCardState {
+  requestId: string;
+  title: string;
+  description: string;
+  workdir: string;
+  expiresAt: string | null;
+  status: "pending" | "created" | "denied" | "failed" | "expired";
+  failureReason: string | null;
+  externalChatId: string | null;
+  shareLink: string | null;
+}
+
+export interface LarkRenderedSubagentCreationRequestCard {
+  card: Record<string, unknown>;
+  structureSignature: string;
+}
+
 export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> {
   return buildLarkRenderedRunCard(state).card;
 }
 
 export function renderLarkApprovalCard(state: LarkApprovalState): Record<string, unknown> {
   return buildLarkRenderedApprovalCard(state).card;
+}
+
+export function buildLarkRenderedSubagentCreationRequestCard(
+  state: LarkSubagentCreationRequestCardState,
+): LarkRenderedSubagentCreationRequestCard {
+  const approved = state.status === "created";
+  const denied = state.status === "denied";
+  const failed = state.status === "failed" || state.status === "expired";
+  const card = {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      wide_screen_mode: false,
+      summary: {
+        content: summarizeSubagentRequestState(state),
+      },
+    },
+    header: {
+      title: {
+        tag: "plain_text",
+        content:
+          state.status === "pending"
+            ? "SubAgent 创建请求"
+            : approved
+              ? "SubAgent 已创建"
+              : denied
+                ? "SubAgent 创建已取消"
+                : "SubAgent 创建失败",
+      },
+      subtitle: {
+        tag: "plain_text",
+        content: state.title,
+      },
+      template: failed ? "red" : approved ? "green" : denied ? "grey" : "blue",
+      icon: {
+        tag: "standard_icon",
+        token: failed ? "warning_outlined" : approved ? "yes_filled" : "robot_outlined",
+      },
+    },
+    body: {
+      elements: buildSubagentCreationRequestCardElements(state),
+    },
+  };
+
+  return {
+    card,
+    structureSignature: JSON.stringify(card),
+  };
 }
 
 export function buildLarkRenderedRunCard(state: LarkRunState): LarkRenderedRunCard {
@@ -357,6 +422,93 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
   return elements;
 }
 
+function buildSubagentCreationRequestCardElements(
+  state: LarkSubagentCreationRequestCardState,
+): Array<Record<string, unknown>> {
+  const elements: Array<Record<string, unknown>> = [
+    {
+      tag: "markdown",
+      content: [
+        `### ${state.title}`,
+        "",
+        state.description,
+        "",
+        `**工作目录**：\`${state.workdir}\``,
+        ...(state.expiresAt == null ? [] : ["", `**确认截止**：\`${state.expiresAt}\``]),
+      ].join("\n"),
+      text_size: "normal",
+    },
+  ];
+
+  if (state.status === "pending") {
+    elements.push({ tag: "hr" });
+    elements.push({
+      tag: "column_set",
+      flex_mode: "none",
+      horizontal_align: "right",
+      columns: [
+        {
+          tag: "column",
+          width: "auto",
+          elements: [
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "创建 SubAgent" },
+              type: "primary",
+              size: "medium",
+              value: {
+                action: "approve_subagent_creation",
+                requestId: state.requestId,
+              },
+            },
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "取消" },
+              type: "default",
+              size: "medium",
+              value: {
+                action: "deny_subagent_creation",
+                requestId: state.requestId,
+              },
+            },
+          ],
+        },
+      ],
+    });
+    return elements;
+  }
+
+  elements.push({ tag: "hr" });
+  elements.push({
+    tag: "markdown",
+    content:
+      state.status === "created"
+        ? [
+            "**结果**：SubAgent 群聊已创建并已启动。",
+            ...(state.externalChatId == null ? [] : ["", `**群聊**：\`${state.externalChatId}\``]),
+          ].join("\n")
+        : state.status === "denied"
+          ? "**结果**：用户已取消本次创建请求。"
+          : [
+              "**结果**：创建未完成。",
+              ...(state.failureReason == null ? [] : ["", `**原因**：${state.failureReason}`]),
+            ].join("\n"),
+    text_size: "normal",
+  });
+
+  if (state.status === "created" && state.shareLink != null) {
+    elements.push({
+      tag: "button",
+      text: { tag: "plain_text", content: "打开 SubAgent 群聊" },
+      type: "primary",
+      size: "medium",
+      url: state.shareLink,
+    });
+  }
+
+  return elements;
+}
+
 function renderEmptyRunStatePlaceholder(
   state: LarkRunState,
   hasVisibleTranscript: boolean,
@@ -407,6 +559,19 @@ function renderEmptyRunStatePlaceholder(
   }
 
   return null;
+}
+
+function summarizeSubagentRequestState(state: LarkSubagentCreationRequestCardState): string {
+  if (state.status === "pending") {
+    return `等待确认创建 SubAgent：${state.title}`;
+  }
+  if (state.status === "created") {
+    return `已创建 SubAgent：${state.title}`;
+  }
+  if (state.status === "denied") {
+    return `已取消 SubAgent 创建：${state.title}`;
+  }
+  return `SubAgent 创建失败：${state.title}`;
 }
 
 function renderToolDetail(tool: LarkToolSequenceTool): Record<string, unknown> {

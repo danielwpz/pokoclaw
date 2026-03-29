@@ -5,6 +5,7 @@ import {
   SUBAGENT_CREATION_REQUEST_TTL_MS,
   SubagentManager,
 } from "@/src/orchestration/subagents.js";
+import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import { PermissionGrantsRepo } from "@/src/storage/repos/permission-grants.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import {
@@ -17,6 +18,7 @@ describe("subagent orchestration", () => {
   let handle: TestDatabaseHandle | null = null;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
@@ -59,7 +61,14 @@ describe("subagent orchestration", () => {
       provisionSubagentSurface: vi.fn(async () => ({
         status: "provisioned" as const,
         externalChatId: "chat_sub_1",
+        shareLink: "https://example.com/subagent-1",
         conversationKind: "group" as const,
+        channelSurface: {
+          channelType: "lark",
+          channelInstallationId: "default",
+          surfaceKey: "chat:chat_sub_1",
+          surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_1" }),
+        },
       })),
     };
     const manager = new SubagentManager({
@@ -107,7 +116,14 @@ describe("subagent orchestration", () => {
       provisionSubagentSurface: vi.fn(async () => ({
         status: "provisioned" as const,
         externalChatId: "chat_sub_1",
+        shareLink: "https://example.com/subagent-1",
         conversationKind: "group" as const,
+        channelSurface: {
+          channelType: "lark",
+          channelInstallationId: "default",
+          surfaceKey: "chat:chat_sub_1",
+          surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_1" }),
+        },
       })),
     };
     const manager = new SubagentManager({
@@ -136,6 +152,9 @@ describe("subagent orchestration", () => {
       sourceConversationId: "conv_main",
       channelInstanceId: "ci_1",
       title: "PR Review",
+      description: "Review pull requests and summarize concrete findings.",
+      initialTask: "Review the current PR and report concrete issues to the user.",
+      workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
       preferredSurface: "independent_chat",
     });
     expect(created.conversation).toMatchObject({
@@ -143,6 +162,7 @@ describe("subagent orchestration", () => {
       kind: "group",
       title: "PR Review",
     });
+    expect(created.shareLink).toBe("https://example.com/subagent-1");
     expect(created.agent).toMatchObject({
       mainAgentId: "agent_main",
       kind: "sub",
@@ -199,7 +219,14 @@ describe("subagent orchestration", () => {
       provisionSubagentSurface: vi.fn(async () => ({
         status: "provisioned" as const,
         externalChatId: "chat_sub_1",
+        shareLink: "https://example.com/subagent-1",
         conversationKind: "group" as const,
+        channelSurface: {
+          channelType: "lark",
+          channelInstallationId: "default",
+          surfaceKey: "chat:chat_sub_1",
+          surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_1" }),
+        },
       })),
     };
     const manager = new SubagentManager({
@@ -231,6 +258,69 @@ describe("subagent orchestration", () => {
     });
   });
 
+  test("marks the request failed and cleans up the external surface when local finalization fails", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedMainAgentFixture();
+    const cleanupProvisionedSubagentSurface = vi.fn(async () => undefined);
+    const provisioner = {
+      provisionSubagentSurface: vi.fn(async () => ({
+        status: "provisioned" as const,
+        externalChatId: "chat_sub_orphan",
+        shareLink: "https://example.com/subagent-orphan",
+        conversationKind: "group" as const,
+        channelSurface: {
+          channelType: "lark",
+          channelInstallationId: "default",
+          surfaceKey: "chat:chat_sub_orphan",
+          surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_orphan" }),
+        },
+      })),
+      cleanupProvisionedSubagentSurface,
+    };
+    const manager = new SubagentManager({
+      storage: handle.storage.db,
+      ingress: { submitMessage: vi.fn(async () => ({ status: "started" as const })) },
+      provisioner,
+    });
+    const surfaceUpsert = vi
+      .spyOn(ChannelSurfacesRepo.prototype, "upsert")
+      .mockImplementation(() => {
+        throw new Error("surface write failed");
+      });
+
+    const submitted = manager.submitCreateRequest({
+      sourceSessionId: "sess_main",
+      title: "PR Review",
+      description: "Review pull requests and summarize concrete findings.",
+      initialTask: "Review the current PR and report concrete issues to the user.",
+      createdAt: new Date("2026-03-26T00:05:00.000Z"),
+    });
+
+    await expect(
+      manager.approveCreateRequest({
+        requestId: submitted.request.id,
+        decidedAt: new Date("2026-03-26T00:06:00.000Z"),
+      }),
+    ).rejects.toThrow("surface write failed");
+
+    expect(surfaceUpsert).toHaveBeenCalledOnce();
+    expect(cleanupProvisionedSubagentSurface).toHaveBeenCalledExactlyOnceWith({
+      channelInstanceId: "ci_1",
+      externalChatId: "chat_sub_orphan",
+    });
+
+    const requestAfterFailure = new SubagentCreationRequestsRepo(handle.storage.db).getById(
+      submitted.request.id,
+    );
+    expect(requestAfterFailure).toMatchObject({
+      id: submitted.request.id,
+      status: "failed",
+      decidedAt: "2026-03-26T00:06:00.000Z",
+    });
+    expect(requestAfterFailure?.failureReason).toContain("chat_sub_orphan");
+    expect(requestAfterFailure?.failureReason).toContain("cleanup succeeded");
+  });
+
   test("defaults the submitted subagent workdir to the pokeclaw workspace", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedMainAgentFixture();
@@ -241,7 +331,14 @@ describe("subagent orchestration", () => {
         provisionSubagentSurface: vi.fn(async () => ({
           status: "provisioned" as const,
           externalChatId: "chat_sub_2",
+          shareLink: "https://example.com/subagent-2",
           conversationKind: "group" as const,
+          channelSurface: {
+            channelType: "lark",
+            channelInstallationId: "default",
+            surfaceKey: "chat:chat_sub_2",
+            surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_2" }),
+          },
         })),
       },
     });
@@ -286,7 +383,14 @@ describe("subagent orchestration", () => {
         provisionSubagentSurface: vi.fn(async () => ({
           status: "provisioned" as const,
           externalChatId: "chat_sub_3",
+          shareLink: "https://example.com/subagent-3",
           conversationKind: "group" as const,
+          channelSurface: {
+            channelType: "lark",
+            channelInstallationId: "default",
+            surfaceKey: "chat:chat_sub_3",
+            surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_3" }),
+          },
         })),
       },
     });

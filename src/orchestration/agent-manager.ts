@@ -16,6 +16,7 @@ import {
   type OrchestratedOutboundEventEnvelope,
   type OrchestratedRuntimeEventEnvelope,
   projectRuntimeEvent,
+  projectSubagentCreationEvent,
   projectTaskRunEvent,
 } from "@/src/orchestration/outbound-events.js";
 import {
@@ -50,8 +51,12 @@ import {
 } from "@/src/runtime/live-state.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
+import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
+import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
+import type { SubagentCreationRequest } from "@/src/storage/schema/types.js";
 import { TaskExecutionRunner, type TaskExecutionRunResult } from "@/src/tasks/runner.js";
 
 const logger = createSubsystemLogger("orchestration/agent-manager");
@@ -66,6 +71,20 @@ export interface AgentManagerDependencies {
   ingress: AgentManagerIngress;
   outboundEventBus?: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   subagentProvisioner?: SubagentConversationSurfaceProvisioner;
+}
+
+export interface ResolveSubagentCreationRequestResult {
+  outcome:
+    | "created"
+    | "denied"
+    | "already_created"
+    | "already_denied"
+    | "already_failed"
+    | "already_expired"
+    | "provisioning";
+  request: SubagentCreationRequest;
+  externalChatId: string | null;
+  shareLink: string | null;
 }
 
 // AgentManager is the orchestration-facing runtime entrypoint.
@@ -158,7 +177,22 @@ export class AgentManager {
         ? {}
         : { provisioner: this.deps.subagentProvisioner }),
     });
-    return manager.submitCreateRequest(params);
+    const submitted = manager.submitCreateRequest(params);
+    this.publishOutboundEvent(
+      projectSubagentCreationEvent({
+        db: this.deps.storage,
+        request: submitted.request,
+        event: {
+          type: "subagent_creation_requested",
+          requestId: submitted.request.id,
+          title: submitted.request.title,
+          description: submitted.request.description,
+          workdir: submitted.request.workdir,
+          expiresAt: submitted.request.expiresAt,
+        },
+      }),
+    );
+    return submitted;
   }
 
   approveSubagentCreationRequest(
@@ -173,7 +207,34 @@ export class AgentManager {
       ingress: this.deps.ingress,
       provisioner: this.deps.subagentProvisioner,
     });
-    return manager.approveCreateRequest(input);
+    return manager.approveCreateRequest(input).then(
+      (created) => {
+        const request = new SubagentCreationRequestsRepo(this.deps.storage).getById(
+          input.requestId,
+        );
+        if (request != null) {
+          this.publishResolvedSubagentRequestEvent({
+            request,
+            externalChatId: created.externalChatId,
+            shareLink: created.shareLink,
+          });
+        }
+        return created;
+      },
+      (error: unknown) => {
+        const request = new SubagentCreationRequestsRepo(this.deps.storage).getById(
+          input.requestId,
+        );
+        if (request != null) {
+          this.publishResolvedSubagentRequestEvent({
+            request,
+            externalChatId: null,
+            shareLink: null,
+          });
+        }
+        throw error;
+      },
+    );
   }
 
   denySubagentCreationRequest(input: DenySubagentCreationRequestInput) {
@@ -184,7 +245,97 @@ export class AgentManager {
         ? {}
         : { provisioner: this.deps.subagentProvisioner }),
     });
-    return manager.denyCreateRequest(input);
+    const denied = manager.denyCreateRequest(input);
+    this.publishResolvedSubagentRequestEvent({
+      request: denied,
+      externalChatId: null,
+      shareLink: null,
+    });
+    return denied;
+  }
+
+  async resolveApproveSubagentCreationRequest(
+    input: ApproveSubagentCreationRequestInput,
+  ): Promise<ResolveSubagentCreationRequestResult> {
+    const decidedAt = input.decidedAt ?? new Date();
+    const request = this.getCurrentSubagentRequestForDecision(input.requestId, decidedAt);
+    if (request.status === "pending") {
+      const created = await this.approveSubagentCreationRequest({
+        requestId: input.requestId,
+        decidedAt,
+      });
+      const updated = this.requireSubagentRequest(input.requestId);
+      return {
+        outcome: "created",
+        request: updated,
+        externalChatId: created.externalChatId,
+        shareLink: created.shareLink,
+      };
+    }
+
+    if (request.status === "provisioning") {
+      return {
+        outcome: "provisioning",
+        request,
+        externalChatId: null,
+        shareLink: null,
+      };
+    }
+
+    const createdSurface = this.resolveCreatedSubagentSurface(request);
+    this.publishResolvedSubagentRequestEvent({
+      request,
+      externalChatId: createdSurface.externalChatId,
+      shareLink: createdSurface.shareLink,
+    });
+    return {
+      outcome: toResolvedApproveOutcome(request.status),
+      request,
+      externalChatId: createdSurface.externalChatId,
+      shareLink: createdSurface.shareLink,
+    };
+  }
+
+  resolveDenySubagentCreationRequest(
+    input: DenySubagentCreationRequestInput,
+  ): ResolveSubagentCreationRequestResult {
+    const decidedAt = input.decidedAt ?? new Date();
+    const request = this.getCurrentSubagentRequestForDecision(input.requestId, decidedAt);
+    if (request.status === "pending") {
+      const denied = this.denySubagentCreationRequest({
+        requestId: input.requestId,
+        decidedAt,
+        ...(input.reasonText === undefined ? {} : { reasonText: input.reasonText }),
+      });
+      return {
+        outcome: "denied",
+        request: denied,
+        externalChatId: null,
+        shareLink: null,
+      };
+    }
+
+    if (request.status === "provisioning") {
+      return {
+        outcome: "provisioning",
+        request,
+        externalChatId: null,
+        shareLink: null,
+      };
+    }
+
+    const createdSurface = this.resolveCreatedSubagentSurface(request);
+    this.publishResolvedSubagentRequestEvent({
+      request,
+      externalChatId: createdSurface.externalChatId,
+      shareLink: createdSurface.shareLink,
+    });
+    return {
+      outcome: toResolvedDenyOutcome(request.status),
+      request,
+      externalChatId: createdSurface.externalChatId,
+      shareLink: createdSurface.shareLink,
+    };
   }
 
   createCronTaskExecutionFromJob(input: {
@@ -448,6 +599,92 @@ export class AgentManager {
   private publishOutboundEvent(event: OrchestratedOutboundEventEnvelope): void {
     this.deps.outboundEventBus?.publish(event);
   }
+
+  private getCurrentSubagentRequestForDecision(
+    requestId: string,
+    now: Date,
+  ): SubagentCreationRequest {
+    const repo = new SubagentCreationRequestsRepo(this.deps.storage);
+    const request = this.requireSubagentRequest(requestId);
+    if (request.status !== "pending") {
+      return request;
+    }
+
+    if (request.expiresAt == null || Date.parse(request.expiresAt) > now.getTime()) {
+      return request;
+    }
+
+    repo.updateStatus({
+      id: request.id,
+      status: "expired",
+      updatedAt: now,
+      decidedAt: now,
+    });
+    return this.requireSubagentRequest(requestId);
+  }
+
+  private requireSubagentRequest(requestId: string): SubagentCreationRequest {
+    const request = new SubagentCreationRequestsRepo(this.deps.storage).getById(requestId);
+    if (request == null) {
+      throw new Error(`Unknown SubAgent creation request ${requestId}`);
+    }
+
+    return request;
+  }
+
+  private resolveCreatedSubagentSurface(request: SubagentCreationRequest): {
+    externalChatId: string | null;
+    shareLink: string | null;
+  } {
+    if (request.status !== "created" || request.createdSubagentAgentId == null) {
+      return {
+        externalChatId: null,
+        shareLink: null,
+      };
+    }
+
+    const agent = new AgentsRepo(this.deps.storage).getById(request.createdSubagentAgentId);
+    if (agent == null) {
+      return {
+        externalChatId: null,
+        shareLink: null,
+      };
+    }
+
+    const conversation = new ConversationsRepo(this.deps.storage).getById(agent.conversationId);
+    return {
+      externalChatId: conversation?.externalChatId ?? null,
+      shareLink: null,
+    };
+  }
+
+  private publishResolvedSubagentRequestEvent(input: {
+    request: SubagentCreationRequest;
+    externalChatId: string | null;
+    shareLink: string | null;
+  }): void {
+    if (!isResolvedSubagentRequestStatus(input.request.status)) {
+      return;
+    }
+
+    this.publishOutboundEvent(
+      projectSubagentCreationEvent({
+        db: this.deps.storage,
+        request: input.request,
+        event: {
+          type: "subagent_creation_resolved",
+          requestId: input.request.id,
+          title: input.request.title,
+          status: input.request.status,
+          decidedAt: input.request.decidedAt,
+          failureReason: input.request.failureReason,
+          createdSubagentAgentId: input.request.createdSubagentAgentId,
+          externalChatId: input.externalChatId,
+          shareLink: input.shareLink,
+        },
+      }),
+    );
+  }
 }
 
 function logSettledTaskExecution(
@@ -475,4 +712,35 @@ function summarizeCronTaskRunForKickoff(run: {
     summary: run.resultSummary,
     error: run.errorText,
   };
+}
+
+function isResolvedSubagentRequestStatus(
+  status: string,
+): status is "created" | "denied" | "failed" | "expired" {
+  return status === "created" || status === "denied" || status === "failed" || status === "expired";
+}
+
+function toResolvedApproveOutcome(
+  status: string,
+): "already_created" | "already_denied" | "already_failed" | "already_expired" {
+  if (status === "created") {
+    return "already_created";
+  }
+  if (status === "denied") {
+    return "already_denied";
+  }
+  if (status === "failed") {
+    return "already_failed";
+  }
+  if (status === "expired") {
+    return "already_expired";
+  }
+
+  throw new Error(`Unsupported SubAgent request status for approve resolution: ${status}`);
+}
+
+function toResolvedDenyOutcome(
+  status: string,
+): "already_created" | "already_denied" | "already_failed" | "already_expired" {
+  return toResolvedApproveOutcome(status);
 }
