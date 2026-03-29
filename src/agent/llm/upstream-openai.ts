@@ -27,6 +27,7 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import { resolveOpenAICompatForPiModel } from "@/src/agent/llm/openai-compat.js";
 // This import intentionally targets pi-ai internals. We need the responses
 // stream parser to preserve event fidelity while overriding usage normalization.
 import {
@@ -82,6 +83,8 @@ interface ParsedActualCost {
   total?: number;
 }
 
+type ResponsesInput = Exclude<ResponseCreateParamsStreaming["input"], undefined>;
+
 interface UpstreamCostParser {
   supports(model: Pick<Model<Api>, "baseUrl">): boolean;
   parse(rawUsage: OpenAICompatibleUsageRaw): ParsedActualCost | null;
@@ -121,7 +124,7 @@ const COST_PARSERS: UpstreamCostParser[] = [OPENROUTER_COST_PARSER];
 
 const DEFAULT_COMPAT: Required<OpenAICompletionsCompat> = {
   supportsStore: true,
-  supportsDeveloperRole: true,
+  supportsDeveloperRole: false,
   supportsReasoningEffort: true,
   reasoningEffortMap: {},
   supportsUsageInStreaming: true,
@@ -535,7 +538,7 @@ function streamOpenAIResponsesWithUpstreamUsage(
   return stream;
 }
 
-function buildOpenAICompletionsParams(
+export function buildOpenAICompletionsParams(
   model: Model<"openai-completions">,
   context: Context,
   options?: SimpleStreamOptions,
@@ -572,12 +575,15 @@ function buildOpenAICompletionsParams(
   return params;
 }
 
-function buildOpenAIResponsesParams(
+export function buildOpenAIResponsesParams(
   model: Model<"openai-responses">,
   context: Context,
   options?: SimpleStreamOptions,
 ): ResponseCreateParamsStreaming {
-  const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
+  const messages: ResponsesInput = normalizeResponsesInputRoles(
+    convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS),
+    shouldUseDeveloperRole(model),
+  );
   const params: ResponseCreateParamsStreaming = {
     model: model.id,
     input: messages,
@@ -608,9 +614,44 @@ function buildOpenAIResponsesParams(
 function resolveCompat(model: Model<"openai-completions">): Required<OpenAICompletionsCompat> {
   return {
     ...DEFAULT_COMPAT,
+    supportsDeveloperRole: shouldUseDeveloperRole(model),
     ...(((model as Model<"openai-completions"> & { compat?: Partial<OpenAICompletionsCompat> })
       .compat ?? {}) as Partial<OpenAICompletionsCompat>),
   };
+}
+
+function shouldUseDeveloperRole(model: Pick<Model<Api>, "id"> & { name?: string }): boolean {
+  return (
+    resolveOpenAICompatForPiModel({
+      api: "openai-completions",
+      id: model.id,
+      ...(model.name == null ? {} : { name: model.name }),
+    })?.supportsDeveloperRole === true
+  );
+}
+
+function normalizeResponsesInputRoles(
+  input: ResponsesInput,
+  supportsDeveloperRole: boolean,
+): ResponsesInput {
+  if (supportsDeveloperRole || !Array.isArray(input)) {
+    return input;
+  }
+
+  let changed = false;
+  const normalized = input.map((item) => {
+    if (!isRecord(item) || item.role !== "developer") {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      role: "system" as const,
+    };
+  });
+
+  return changed ? normalized : input;
 }
 
 function convertCompletionTools(
@@ -626,6 +667,10 @@ function convertCompletionTools(
       parameters: tool.parameters as Record<string, unknown>,
     },
   }));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> & { role?: unknown } {
+  return typeof value === "object" && value !== null;
 }
 
 function parseRawUsage(rawUsage: unknown): OpenAICompatibleUsageRaw | null {

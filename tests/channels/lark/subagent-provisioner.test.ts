@@ -93,6 +93,11 @@ describe("lark subagent provisioner", () => {
       },
     });
     expect(chatCreate).toHaveBeenCalledOnce();
+    expect(chatCreate).toHaveBeenCalledWith({
+      data: {
+        name: "PR Review",
+      },
+    });
     expect(chatDelete).not.toHaveBeenCalled();
     expect(chatMembersGet).toHaveBeenCalledExactlyOnceWith({
       path: { chat_id: "chat_main" },
@@ -115,6 +120,7 @@ describe("lark subagent provisioner", () => {
       data: expect.objectContaining({
         receive_id: "chat_sub_1",
         msg_type: "interactive",
+        content: expect.stringContaining("欢迎来到 PR Review"),
       }),
     });
     expect(putTopNotice).toHaveBeenCalledExactlyOnceWith({

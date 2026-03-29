@@ -561,12 +561,15 @@ export class SubagentManager {
 export function buildSubagentKickoffMessage(initialTask: string): string {
   return [
     "<subagent_kickoff>",
-    "This is a system-generated kickoff instruction for the task you should begin now.",
-    "It is not a literal user message in this chat.",
+    "This is a system-generated kickoff note for a newly created SubAgent conversation.",
+    "It provides background about why this SubAgent was created.",
+    "It is not a literal user message in this chat, and it does not mean every detail is already confirmed.",
     "",
     initialTask.trim(),
     "",
-    "Reply to the user in this conversation to begin the task.",
+    "If the task is already specific enough to execute, start the work.",
+    "If the request is still broad, ambiguous, or missing key decisions, begin by greeting the user in this new conversation and asking the focused follow-up questions you need.",
+    "Do not invent missing requirements or pretend your guesses were already approved by the user.",
     "</subagent_kickoff>",
   ].join("\n");
 }
