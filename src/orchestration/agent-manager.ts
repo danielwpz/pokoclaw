@@ -26,6 +26,7 @@ import {
   type DenySubagentCreationRequestInput,
   type SubagentConversationSurfaceProvisioner,
   SubagentManager,
+  type SubagentPrivateWorkspaceManager,
   type SubmittedSubagentCreationRequest,
 } from "@/src/orchestration/subagents.js";
 import {
@@ -71,6 +72,7 @@ export interface AgentManagerDependencies {
   ingress: AgentManagerIngress;
   outboundEventBus?: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   subagentProvisioner?: SubagentConversationSurfaceProvisioner;
+  subagentPrivateWorkspace?: SubagentPrivateWorkspaceManager;
 }
 
 export interface ResolveSubagentCreationRequestResult {
@@ -173,6 +175,9 @@ export class AgentManager {
     const manager = new SubagentManager({
       storage: this.deps.storage,
       ingress: this.deps.ingress,
+      ...(this.deps.subagentPrivateWorkspace == null
+        ? {}
+        : { privateWorkspace: this.deps.subagentPrivateWorkspace }),
       ...(this.deps.subagentProvisioner == null
         ? {}
         : { provisioner: this.deps.subagentProvisioner }),
@@ -206,6 +211,9 @@ export class AgentManager {
       storage: this.deps.storage,
       ingress: this.deps.ingress,
       provisioner: this.deps.subagentProvisioner,
+      ...(this.deps.subagentPrivateWorkspace == null
+        ? {}
+        : { privateWorkspace: this.deps.subagentPrivateWorkspace }),
     });
     return manager.approveCreateRequest(input).then(
       (created) => {
@@ -241,6 +249,9 @@ export class AgentManager {
     const manager = new SubagentManager({
       storage: this.deps.storage,
       ingress: this.deps.ingress,
+      ...(this.deps.subagentPrivateWorkspace == null
+        ? {}
+        : { privateWorkspace: this.deps.subagentPrivateWorkspace }),
       ...(this.deps.subagentProvisioner == null
         ? {}
         : { provisioner: this.deps.subagentProvisioner }),

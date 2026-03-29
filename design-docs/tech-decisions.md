@@ -226,6 +226,14 @@
       - `~/.pokeclaw/workspace/**`：所有 agent 默认可读写
       - 主Agent：默认可读用户环境中的大多数内容，但写权限默认需要授权
       - SubAgent：默认仅拥有创建时指定工作目录 + `~/.pokeclaw/workspace/**`
+      - 每个 SubAgent 还应有一个专属私有工作区目录：
+        - 路径：`~/.pokeclaw/workspace/subagents/<agent-id-prefix>/`
+        - `<agent-id-prefix>` 当前先取 agent UUID 的前 8 个十六进制字符
+        - 该目录用于 scratch、笔记、导出物、缓存等 agent 自己的工作产物
+        - `workdir` 表示默认执行目录；相对路径解析、代码修改、测试等默认以它为根
+        - 如果用户创建 SubAgent 时没有显式提供 `cwd/workdir`，则这个私有目录就是默认 `workdir`
+        - 如果用户显式提供了 `cwd/workdir`（例如项目仓库路径），则该路径继续作为默认执行目录；私有工作区仍然会被创建，但不替代 repo `workdir`
+        - 因此 `workdir` 与 `privateWorkspaceDir` 可能相同，也可能不同；prompt 与欢迎卡片都需要把这层区别明确告诉 SubAgent
     - **bash（sandboxed）**
       - 默认仍受 sandbox 约束，并继承各自 agent 的默认权限与已批准增量权限
     - **bash（full access）**
@@ -501,6 +509,7 @@
     - 因此内部接口和状态命名必须保持平台无关，不出现 `create_lark_group` 这类平台耦合语义
   - **SubAgent prompt / kickoff 口径**：
     - `title` / `description` / `workdir(cwd)` 属于 SubAgent 的长期身份信息，进入该 SubAgent 的实例级 system prompt
+    - `privateWorkspaceDir` 也是 SubAgent 的长期身份信息；即使默认执行目录是外部 repo，也要让 SubAgent 知道自己的私有工作区路径
     - `initialTask` 不进入 system prompt，而是只在创建完成后写入一条 hidden kickoff message
     - 该 kickoff message 的 runtime 角色仍是 `user`，但产品语义上是系统生成的启动消息，不是用户真实发言
   - **通信**：主Agent与SubAgent之间双向通信（通过发送消息工具）

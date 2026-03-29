@@ -44,7 +44,7 @@ import { buildSystemPolicy } from "@/src/security/policy.js";
 import type { PermissionRequest } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { buildSubagentWorkspaceDir, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.repo.js";
@@ -334,6 +334,10 @@ export class AgentLoop {
                 displayName: ownerAgent?.displayName ?? null,
                 description: ownerAgent?.description ?? null,
                 workdir: ownerAgent?.workdir ?? null,
+                privateWorkspaceDir:
+                  ownerAgent?.kind === "sub" && ownerAgent.id.length > 0
+                    ? buildSubagentWorkspaceDir(ownerAgent.id)
+                    : null,
               }),
               compactSummary: context.compactSummary,
               messages,

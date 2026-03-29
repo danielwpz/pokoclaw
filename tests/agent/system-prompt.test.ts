@@ -108,7 +108,9 @@ describe("agent system prompt", () => {
     });
 
     expect(prompt).toContain("the system's long-lived manager");
-    expect(prompt).toContain("single entrypoint for new requests");
+    expect(prompt).toContain("single entrypoint for new requests, casual conversation");
+    expect(prompt).toContain("You can and should handle casual conversation");
+    expect(prompt).toContain("Your unique role is to preserve continuity across the whole system");
     expect(prompt).toContain("It is fine to proactively attempt create_subagent");
     expect(prompt).toContain(
       "if the user declines you should simply continue the conversation normally",
@@ -118,6 +120,9 @@ describe("agent system prompt", () => {
     );
     expect(prompt).toContain(
       "Do not create a SubAgent just to inspect what the system or another agent is doing.",
+    );
+    expect(prompt).toContain(
+      "Delegation is about protecting the main conversation and creating the right task boundary",
     );
   });
 
@@ -131,6 +136,12 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("deep research");
     expect(prompt).toContain("repeated bash/test/edit/debug loops");
     expect(prompt).toContain("recurring user-facing tasks");
+    expect(prompt).toContain("Helpful reference signals, not hard rules");
+    expect(prompt).toContain("more than about 10 bash calls");
+    expect(prompt).toContain("more than about 5 conversation turns");
+    expect(prompt).toContain("more than about 1 hour of end-to-end work");
+    expect(prompt).toContain("Those signals are only guidance");
+    expect(prompt).toContain("casual conversation in the main chat");
     expect(prompt).toContain("Prefer the minimal call shape first");
     expect(prompt).toContain("initialExtraScopes");
     expect(prompt).toContain('{"kind":"fs.read","path":"/abs/path"}');
@@ -170,6 +181,7 @@ describe("agent system prompt", () => {
       displayName: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      privateWorkspaceDir: "/Users/daniel/.pokeclaw/workspace/subagents/1234abcd",
     });
 
     expect(prompt).toContain("You are Pokeclaw SubAgent");
@@ -177,9 +189,18 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("<title>PR Review</title>");
     expect(prompt).toContain("<description>");
     expect(prompt).toContain("<workdir>/Users/daniel/Programs/ai/openclaw/pokeclaw</workdir>");
+    expect(prompt).toContain(
+      "<private_workspace_dir>/Users/daniel/.pokeclaw/workspace/subagents/1234abcd</private_workspace_dir>",
+    );
     expect(prompt).not.toContain("<initial_task>");
+    expect(prompt).toContain("You own this workstream");
+    expect(prompt).toContain("You are responsible for moving this workstream forward");
+    expect(prompt).toContain("You are not the system-wide coordinator");
     expect(prompt).toContain("Treat the kickoff note as system-generated background");
     expect(prompt).toContain("begin this new conversation by greeting the user");
+    expect(prompt).toContain("workdir is your default execution and project root");
+    expect(prompt).toContain("private_workspace_dir is your own scratch space");
+    expect(prompt).toContain("Those two directories may be the same");
     expect(prompt).toContain(
       "When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
     );

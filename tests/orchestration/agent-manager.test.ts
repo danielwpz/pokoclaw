@@ -233,6 +233,9 @@ describe("AgentManager", () => {
           submitApprovalDecision: vi.fn(() => false),
         },
         outboundEventBus: bus,
+        subagentPrivateWorkspace: {
+          ensureDirectory: vi.fn(async () => {}),
+        },
         subagentProvisioner: {
           provisionSubagentSurface: vi.fn(async () => ({
             status: "provisioned" as const,

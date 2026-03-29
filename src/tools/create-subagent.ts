@@ -69,7 +69,7 @@ export const CREATE_SUBAGENT_TOOL_SCHEMA = Type.Object(
       Type.String({
         minLength: 1,
         description:
-          "Optional absolute working directory for the SubAgent. If omitted, it defaults to the Pokeclaw workspace.",
+          "Optional absolute working directory for the SubAgent. If omitted, it defaults to the SubAgent's dedicated workspace inside the Pokeclaw workspace.",
       }),
     ),
     initialExtraScopes: Type.Optional(
@@ -148,6 +148,7 @@ export function createCreateSubagentTool() {
           `Submitted a pending SubAgent creation request for "${submitted.title}".`,
           `Request id: ${submitted.requestId}`,
           `Workdir: ${submitted.workdir}`,
+          `Private workspace: ${submitted.privateWorkspaceDir}`,
           "This request now needs user confirmation before the SubAgent will actually be created.",
         ].join("\n"),
         submitted,

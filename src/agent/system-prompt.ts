@@ -38,6 +38,7 @@ interface BuildAgentSystemPromptInput {
   displayName?: string | null;
   description?: string | null;
   workdir?: string | null;
+  privateWorkspaceDir?: string | null;
 }
 
 function buildTaskAgentSystemPrompt(): string {
@@ -80,6 +81,9 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
       ...(input.displayName === undefined ? {} : { title: input.displayName }),
       ...(input.description === undefined ? {} : { description: input.description }),
       ...(input.workdir === undefined ? {} : { workdir: input.workdir }),
+      ...(input.privateWorkspaceDir === undefined
+        ? {}
+        : { privateWorkspaceDir: input.privateWorkspaceDir }),
     }),
     buildSubagentOperatingModelSection(),
     buildToolUsageSection(),
