@@ -831,6 +831,284 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("renders reusable bash prefixes on standalone approval cards", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO approval_ledger (
+        id, owner_agent_id, requested_scope_json, approval_target, status, reason_text, created_at
+      ) VALUES (
+        1,
+        'agent_1',
+        '{"scopes":[{"kind":"bash.full_access","prefix":["git","status"]}]}',
+        'user',
+        'pending',
+        'Need git status.',
+        '2026-03-28T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async () => ({ data: { card_id: "card_approval_1" } }));
+    const createMessage = vi.fn(async () => ({
+      data: { message_id: "om_approval_1", open_message_id: "oom_approval_1" },
+    }));
+    const updateCard = vi.fn(async () => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: vi.fn(async () => ({})) },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "approval_requested",
+        eventId: "evt_appr_prefix_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "1",
+        approvalTarget: "user",
+        title: "Approval required: run bash with full access for prefix git status",
+        reasonText: "Need git status.",
+        expiresAt: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    const approvalCardInput = (createCard.mock.calls as unknown as Array<[unknown]>)[0]?.[0];
+    const approvalCardText = JSON.stringify(approvalCardInput);
+    expect(approvalCardText).toContain("Prefix");
+    expect(approvalCardText).toContain("git status");
+    expect(updateCard).not.toHaveBeenCalled();
+
+    await runtime.shutdown();
+  });
+
+  test("updates the original run card when an approved bash tool finishes", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { card_id: "card_run_1" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_approval_1" } });
+    const createMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { message_id: "om_run_1", open_message_id: "oom_run_1" } })
+      .mockResolvedValueOnce({
+        data: { message_id: "om_approval_1", open_message_id: "oom_approval_1" },
+      });
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: vi.fn(async () => ({})) },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_bash_appr_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_bash_1",
+        toolName: "bash",
+        args: {
+          command: "git status",
+          sandboxMode: "full_access",
+          justification: "Need to inspect the repo state.",
+          prefix: ["git", "status"],
+        },
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "approval_requested",
+        eventId: "evt_bash_appr_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "2",
+        approvalTarget: "user",
+        title: "Approval required: run bash with full access for prefix git status",
+        reasonText: "Need to inspect the repo state.",
+        expiresAt: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(updateCard).not.toHaveBeenCalled();
+
+    bus.publish(
+      makeEnvelope({
+        type: "approval_resolved",
+        eventId: "evt_bash_appr_3",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "2",
+        decision: "approve",
+        actor: "user:demo",
+        rawInput: "approve",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    bus.publish(
+      makeEnvelope({
+        type: "tool_call_completed",
+        eventId: "evt_bash_appr_4",
+        createdAt: "2026-03-28T00:00:03.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_bash_1",
+        toolName: "bash",
+        messageId: "tool_result_bash_1",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "<bash_result><stdout>On branch main</stdout><stderr></stderr></bash_result>",
+            },
+          ],
+          details: {
+            command: "git status",
+            cwd: "/tmp/repo",
+            timeoutMs: 10000,
+            exitCode: 0,
+            signal: null,
+            stdoutChars: 13,
+            stderrChars: 0,
+            outputTruncated: false,
+          },
+        },
+      } as never),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_1:seg:2",
+      }),
+    ).toBeNull();
+
+    const latestRunCardText = JSON.stringify(updateCard.mock.calls.at(-1)?.[0]);
+    expect(latestRunCardText).toContain("git status");
+    expect(latestRunCardText).toContain("exit_code");
+    expect(latestRunCardText).toContain("On branch main");
+    expect(latestRunCardText).not.toContain("等待授权");
+
+    await runtime.shutdown();
+  });
+
   test("creates and updates a standalone subagent creation request card", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);

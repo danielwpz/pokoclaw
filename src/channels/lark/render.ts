@@ -339,6 +339,7 @@ function renderToolSequenceBlock(block: LarkToolSequenceBlock): Array<Record<str
 
 function buildApprovalCardElements(state: LarkApprovalState): Array<Record<string, unknown>> {
   const approved = state.decision === "approve";
+  const requestedBashPrefixLines = formatRequestedBashPrefixLines(state.requestedBashPrefixes);
   const elements: Array<Record<string, unknown>> = [
     {
       tag: "markdown",
@@ -347,6 +348,7 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
             "### 需要你的授权",
             "",
             `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+            ...requestedBashPrefixLines,
             "",
             `**原因**：${state.reasonText}`,
             ...(state.expiresAt == null ? [] : ["", `**有效期至**：\`${state.expiresAt}\``]),
@@ -356,11 +358,13 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
         : approved
           ? [
               `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+              ...requestedBashPrefixLines,
               "",
               "**结果**：agent 将继续执行。",
             ].join("\n")
           : [
               `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+              ...requestedBashPrefixLines,
               "",
               "**结果**：当前操作已停止。",
             ].join("\n"),
@@ -829,6 +833,17 @@ function summarizeApprovalState(state: LarkApprovalState): string {
     return "等待授权";
   }
   return state.decision === "approve" ? "授权成功" : "已拒绝";
+}
+
+function formatRequestedBashPrefixLines(prefixes: string[][]): string[] {
+  if (prefixes.length === 0) {
+    return [];
+  }
+  if (prefixes.length === 1) {
+    return ["", `**Prefix**：\`${prefixes[0]?.join(" ") ?? ""}\``];
+  }
+
+  return ["", "**Prefixes**", ...prefixes.map((prefix) => `- \`${prefix.join(" ")}\``)];
 }
 
 function formatApprovalTitleMarkdown(title: string): string {

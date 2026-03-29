@@ -31,8 +31,10 @@ import type {
   OrchestratedRuntimeEventEnvelope,
 } from "@/src/orchestration/outbound-events.js";
 import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
+import { parsePermissionRequestJson } from "@/src/security/scope.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
 
@@ -721,6 +723,7 @@ export function createLarkOutboundRuntime(
         createLarkApprovalStateFromRequest({
           event,
           sourceRunCardObjectId,
+          requestedBashPrefixes: loadRequestedBashPrefixes(input.storage, approvalId),
         }),
       );
       latestApprovalByRunId.set(runId, approvalId);
@@ -884,6 +887,12 @@ export function createLarkOutboundRuntime(
 
         let runCardObjectId = activeRunSegmentByRunId.get(runId) ?? null;
         if (runCardObjectId == null) {
+          runCardObjectId = findResolvedApprovalToolRunCardObjectId(envelope, runId, {
+            latestRunSegmentByRunId,
+            runStates,
+          });
+        }
+        if (runCardObjectId == null) {
           const terminalEvent =
             envelope.event.type === "run_completed" ||
             envelope.event.type === "run_cancelled" ||
@@ -1022,6 +1031,65 @@ function shouldIgnorePostApprovalPermissionToolResolution(
 
   const latestRunState = state.runStates.get(latestRunCardObjectId);
   return latestRunState?.terminal === "continued" || latestRunState?.terminal === "denied";
+}
+
+function findResolvedApprovalToolRunCardObjectId(
+  envelope: OrchestratedRuntimeEventEnvelope,
+  runId: string,
+  state: {
+    latestRunSegmentByRunId: Map<string, string>;
+    runStates: Map<string, LarkRunState>;
+  },
+): string | null {
+  if (envelope.event.type !== "tool_call_completed" && envelope.event.type !== "tool_call_failed") {
+    return null;
+  }
+  const toolCallId = envelope.event.toolCallId;
+
+  const latestRunCardObjectId = state.latestRunSegmentByRunId.get(runId);
+  if (latestRunCardObjectId == null) {
+    return null;
+  }
+
+  const latestRunState = state.runStates.get(latestRunCardObjectId);
+  if (latestRunState == null) {
+    return null;
+  }
+  if (latestRunState.terminal !== "continued" && latestRunState.terminal !== "denied") {
+    return null;
+  }
+
+  return latestRunState.blocks.some(
+    (block) =>
+      block.kind === "tool_sequence" &&
+      block.tools.some((tool) => tool.toolCallId === toolCallId && tool.status === "running"),
+  )
+    ? latestRunCardObjectId
+    : null;
+}
+
+function loadRequestedBashPrefixes(storage: StorageDb, approvalId: string): string[][] {
+  const numericApprovalId = Number.parseInt(approvalId, 10);
+  if (!Number.isFinite(numericApprovalId)) {
+    return [];
+  }
+
+  const approval = new ApprovalsRepo(storage).getById(numericApprovalId);
+  if (approval == null) {
+    return [];
+  }
+
+  try {
+    return parsePermissionRequestJson(approval.requestedScopeJson).scopes.flatMap((scope) =>
+      scope.kind === "bash.full_access" ? [scope.prefix] : [],
+    );
+  } catch (error: unknown) {
+    logger.warn("failed to parse requested approval scopes for lark approval card", {
+      approvalId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
 }
 
 function truncateLogText(text: string, maxLength: number): string {
