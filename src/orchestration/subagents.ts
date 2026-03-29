@@ -14,6 +14,7 @@ import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { POKECLAW_SYSTEM_DIR, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
+import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import { ConversationBranchesRepo } from "@/src/storage/repos/conversation-branches.repo.js";
 import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
@@ -63,14 +64,31 @@ export interface ProvisionSubagentSurfaceInput {
   sourceConversationId: string;
   channelInstanceId: string;
   title: string;
+  description: string;
+  initialTask: string;
+  workdir: string;
   preferredSurface: "independent_chat";
+}
+
+export interface ProvisionedSubagentChannelSurface {
+  channelType: string;
+  channelInstallationId: string;
+  surfaceKey: string;
+  surfaceObjectJson: string;
+}
+
+export interface CleanupProvisionedSubagentSurfaceInput {
+  channelInstanceId: string;
+  externalChatId: string;
 }
 
 export type ProvisionSubagentSurfaceResult =
   | {
       status: "provisioned";
       externalChatId: string;
+      shareLink: string | null;
       conversationKind: "dm" | "group";
+      channelSurface: ProvisionedSubagentChannelSurface;
     }
   | {
       status: "failed";
@@ -82,6 +100,7 @@ export interface SubagentConversationSurfaceProvisioner {
   provisionSubagentSurface(
     input: ProvisionSubagentSurfaceInput,
   ): Promise<ProvisionSubagentSurfaceResult>;
+  cleanupProvisionedSubagentSurface?(input: CleanupProvisionedSubagentSurfaceInput): Promise<void>;
 }
 
 export interface SubagentManagerIngress {
@@ -101,6 +120,7 @@ export interface CreatedSubagent {
   agent: Agent;
   session: Session;
   externalChatId: string;
+  shareLink: string | null;
   workdir: string;
 }
 
@@ -168,26 +188,46 @@ export class SubagentManager {
     const decidedAt = input.decidedAt ?? new Date();
     const request = this.getPendingRequestOrThrow(input.requestId, decidedAt);
     const provisioner = this.requireProvisioner();
+    const requestsRepo = new SubagentCreationRequestsRepo(this.deps.storage);
 
     const conversationId = randomUUID();
     const branchId = randomUUID();
     const agentId = randomUUID();
     const sessionId = randomUUID();
 
-    const provisioned = await provisioner.provisionSubagentSurface({
-      conversationId,
-      sourceConversationId: request.sourceConversationId,
-      channelInstanceId: request.channelInstanceId,
-      title: request.title,
-      preferredSurface: "independent_chat",
+    requestsRepo.updateStatus({
+      id: request.id,
+      status: "provisioning",
+      failureReason: null,
+      updatedAt: decidedAt,
     });
 
+    let provisioned: ProvisionSubagentSurfaceResult;
+    try {
+      provisioned = await provisioner.provisionSubagentSurface({
+        conversationId,
+        sourceConversationId: request.sourceConversationId,
+        channelInstanceId: request.channelInstanceId,
+        title: request.title,
+        description: request.description,
+        initialTask: request.initialTask,
+        workdir: request.workdir,
+        preferredSurface: "independent_chat",
+      });
+    } catch (error: unknown) {
+      const failureReason = error instanceof Error ? error.message : String(error);
+      this.markRequestFailed({
+        requestId: request.id,
+        failureReason,
+        decidedAt,
+      });
+      throw new Error(`Failed to provision the SubAgent conversation surface: ${failureReason}`);
+    }
+
     if (provisioned.status !== "provisioned") {
-      new SubagentCreationRequestsRepo(this.deps.storage).updateStatus({
-        id: request.id,
-        status: "failed",
+      this.markRequestFailed({
+        requestId: request.id,
         failureReason: provisioned.reason,
-        updatedAt: decidedAt,
         decidedAt,
       });
       throw new Error(
@@ -196,90 +236,126 @@ export class SubagentManager {
     }
 
     const initialExtraScopes = parseSerializedPermissionScopes(request.initialExtraScopesJson);
-    const created = this.deps.storage.transaction((tx) => {
-      const conversationsRepo = new ConversationsRepo(tx);
-      const branchesRepo = new ConversationBranchesRepo(tx);
-      const agentsRepo = new AgentsRepo(tx);
-      const sessionsRepo = new SessionsRepo(tx);
-      const requestsRepo = new SubagentCreationRequestsRepo(tx);
-      const security = new SecurityService(tx, buildSystemPolicy());
+    let created: {
+      conversation: Conversation;
+      branch: ConversationBranch;
+      agent: Agent;
+      session: Session;
+    };
+    try {
+      created = this.deps.storage.transaction((tx) => {
+        const conversationsRepo = new ConversationsRepo(tx);
+        const branchesRepo = new ConversationBranchesRepo(tx);
+        const agentsRepo = new AgentsRepo(tx);
+        const sessionsRepo = new SessionsRepo(tx);
+        const txRequestsRepo = new SubagentCreationRequestsRepo(tx);
+        const security = new SecurityService(tx, buildSystemPolicy());
 
-      conversationsRepo.create({
-        id: conversationId,
-        channelInstanceId: request.channelInstanceId,
-        externalChatId: provisioned.externalChatId,
-        kind: provisioned.conversationKind,
-        title: request.title,
-        createdAt: decidedAt,
-        updatedAt: decidedAt,
-      });
+        conversationsRepo.create({
+          id: conversationId,
+          channelInstanceId: request.channelInstanceId,
+          externalChatId: provisioned.externalChatId,
+          kind: provisioned.conversationKind,
+          title: request.title,
+          createdAt: decidedAt,
+          updatedAt: decidedAt,
+        });
 
-      branchesRepo.create({
-        id: branchId,
-        conversationId,
-        kind: provisioned.conversationKind === "group" ? "group_main" : "dm_main",
-        branchKey: "main",
-        createdAt: decidedAt,
-        updatedAt: decidedAt,
-      });
+        branchesRepo.create({
+          id: branchId,
+          conversationId,
+          kind: provisioned.conversationKind === "group" ? "group_main" : "dm_main",
+          branchKey: "main",
+          createdAt: decidedAt,
+          updatedAt: decidedAt,
+        });
 
-      agentsRepo.create({
-        id: agentId,
-        conversationId,
-        mainAgentId: request.sourceAgentId,
-        kind: "sub",
-        displayName: request.title,
-        description: request.description,
-        workdir: request.workdir,
-        createdAt: decidedAt,
-      });
-
-      sessionsRepo.create({
-        id: sessionId,
-        conversationId,
-        branchId,
-        ownerAgentId: agentId,
-        purpose: "chat",
-        createdAt: decidedAt,
-        updatedAt: decidedAt,
-      });
-
-      const initialScopes = buildInitialSubagentScopes({
-        workdir: request.workdir,
-        initialExtraScopes,
-      });
-      if (initialScopes.length > 0) {
-        security.grantScopes({
-          ownerAgentId: agentId,
-          scopes: initialScopes,
-          grantedBy: "main_agent",
+        agentsRepo.create({
+          id: agentId,
+          conversationId,
+          mainAgentId: request.sourceAgentId,
+          kind: "sub",
+          displayName: request.title,
+          description: request.description,
+          workdir: request.workdir,
           createdAt: decidedAt,
         });
-      }
 
-      requestsRepo.updateStatus({
-        id: request.id,
-        status: "created",
-        createdSubagentAgentId: agentId,
-        updatedAt: decidedAt,
+        sessionsRepo.create({
+          id: sessionId,
+          conversationId,
+          branchId,
+          ownerAgentId: agentId,
+          purpose: "chat",
+          createdAt: decidedAt,
+          updatedAt: decidedAt,
+        });
+
+        const initialScopes = buildInitialSubagentScopes({
+          workdir: request.workdir,
+          initialExtraScopes,
+        });
+        if (initialScopes.length > 0) {
+          security.grantScopes({
+            ownerAgentId: agentId,
+            scopes: initialScopes,
+            grantedBy: "main_agent",
+            createdAt: decidedAt,
+          });
+        }
+
+        new ChannelSurfacesRepo(tx).upsert({
+          id: randomUUID(),
+          channelType: provisioned.channelSurface.channelType,
+          channelInstallationId: provisioned.channelSurface.channelInstallationId,
+          conversationId,
+          branchId,
+          surfaceKey: provisioned.channelSurface.surfaceKey,
+          surfaceObjectJson: provisioned.channelSurface.surfaceObjectJson,
+          createdAt: decidedAt,
+          updatedAt: decidedAt,
+        });
+
+        txRequestsRepo.updateStatus({
+          id: request.id,
+          status: "created",
+          createdSubagentAgentId: agentId,
+          updatedAt: decidedAt,
+          decidedAt,
+        });
+
+        const conversation = conversationsRepo.getById(conversationId);
+        const branch = branchesRepo.getById(branchId);
+        const agent = agentsRepo.getById(agentId);
+        const session = sessionsRepo.getById(sessionId);
+        if (conversation == null || branch == null || agent == null || session == null) {
+          throw new Error("Failed to persist the created SubAgent records");
+        }
+
+        return {
+          conversation,
+          branch,
+          agent,
+          session,
+        };
+      });
+    } catch (error: unknown) {
+      const cleanupError = await this.cleanupProvisionedSurface({
+        channelInstanceId: request.channelInstanceId,
+        externalChatId: provisioned.externalChatId,
+      });
+      const failureReason = buildSubagentFinalizeFailureReason({
+        externalChatId: provisioned.externalChatId,
+        error,
+        cleanupError,
+      });
+      this.markRequestFailed({
+        requestId: request.id,
+        failureReason,
         decidedAt,
       });
-
-      const conversation = conversationsRepo.getById(conversationId);
-      const branch = branchesRepo.getById(branchId);
-      const agent = agentsRepo.getById(agentId);
-      const session = sessionsRepo.getById(sessionId);
-      if (conversation == null || branch == null || agent == null || session == null) {
-        throw new Error("Failed to persist the created SubAgent records");
-      }
-
-      return {
-        conversation,
-        branch,
-        agent,
-        session,
-      };
-    });
+      throw new Error(failureReason);
+    }
 
     const kickoffMessage = buildSubagentKickoffMessage(request.initialTask);
     void this.deps.ingress
@@ -310,6 +386,7 @@ export class SubagentManager {
     return {
       ...created,
       externalChatId: provisioned.externalChatId,
+      shareLink: provisioned.shareLink,
       workdir: request.workdir,
     };
   }
@@ -428,6 +505,57 @@ export class SubagentManager {
 
     return this.deps.provisioner;
   }
+
+  private markRequestFailed(input: {
+    requestId: string;
+    failureReason: string;
+    decidedAt: Date;
+  }): SubagentCreationRequest {
+    const repo = new SubagentCreationRequestsRepo(this.deps.storage);
+    repo.updateStatus({
+      id: input.requestId,
+      status: "failed",
+      failureReason: input.failureReason,
+      updatedAt: input.decidedAt,
+      decidedAt: input.decidedAt,
+    });
+
+    const updated = repo.getById(input.requestId);
+    if (updated == null) {
+      throw new Error(`SubAgent creation request disappeared after failure: ${input.requestId}`);
+    }
+
+    return updated;
+  }
+
+  private async cleanupProvisionedSurface(input: {
+    channelInstanceId: string;
+    externalChatId: string;
+  }): Promise<string | null> {
+    if (this.deps.provisioner?.cleanupProvisionedSubagentSurface == null) {
+      logger.error("subagent surface cleanup unavailable after finalize failure", {
+        channelInstanceId: input.channelInstanceId,
+        externalChatId: input.externalChatId,
+      });
+      return "surface provisioner does not support cleanup";
+    }
+
+    try {
+      await this.deps.provisioner.cleanupProvisionedSubagentSurface({
+        channelInstanceId: input.channelInstanceId,
+        externalChatId: input.externalChatId,
+      });
+      return null;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error("failed to cleanup provisioned subagent surface after finalize error", {
+        channelInstanceId: input.channelInstanceId,
+        externalChatId: input.externalChatId,
+        error: message,
+      });
+      return message;
+    }
+  }
 }
 
 export function buildSubagentKickoffMessage(initialTask: string): string {
@@ -488,6 +616,19 @@ function normalizeRequiredTrimmed(field: string, value: string): string {
 
 function toSubtreePath(targetPath: string): string {
   return path.join(targetPath, "**");
+}
+
+function buildSubagentFinalizeFailureReason(input: {
+  externalChatId: string;
+  error: unknown;
+  cleanupError: string | null;
+}): string {
+  const base = input.error instanceof Error ? input.error.message : String(input.error);
+  if (input.cleanupError == null) {
+    return `Failed to finalize SubAgent creation after provisioning external chat ${input.externalChatId}; cleanup succeeded: ${base}`;
+  }
+
+  return `Failed to finalize SubAgent creation after provisioning external chat ${input.externalChatId}; cleanup also failed (${input.cleanupError}): ${base}`;
 }
 
 function isPathWithinOrEqual(targetPath: string, parentPath: string): boolean {

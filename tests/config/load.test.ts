@@ -139,6 +139,11 @@ describe("config loader", () => {
       reserveTokensFloor: 60_000,
       recentTurnsPreserve: 3,
     });
+    expect(config.runtime).toEqual({
+      maxTurns: 20,
+      approvalTimeoutMs: 180_000,
+      approvalGrantTtlMs: 604_800_000,
+    });
     expect(config.security).toEqual({
       filesystem: {
         overrideHardDenyRead: false,
@@ -301,6 +306,29 @@ describe("config loader", () => {
         overrideHardDenyHosts: true,
         hardDenyHosts: ["internal.example.com"],
       },
+    });
+  });
+
+  test("loads runtime execution limits", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[runtime]",
+        "maxTurns = 24",
+        "approvalTimeoutMs = 240000",
+        "approvalGrantTtlMs = 172800000",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const config = await loadConfig({ configTomlPath: configPath });
+
+    expect(config.runtime).toEqual({
+      maxTurns: 24,
+      approvalTimeoutMs: 240_000,
+      approvalGrantTtlMs: 172_800_000,
     });
   });
 

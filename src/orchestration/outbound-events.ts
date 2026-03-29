@@ -12,7 +12,7 @@ import {
 } from "@/src/runtime/live-state.js";
 import type { AgentRuntimeRole } from "@/src/security/policy.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
-import type { Session, TaskRun } from "@/src/storage/schema/types.js";
+import type { Session, SubagentCreationRequest, TaskRun } from "@/src/storage/schema/types.js";
 
 export interface OutboundEventContext {
   target: {
@@ -111,9 +111,40 @@ export interface OrchestratedTaskRunEventEnvelope extends OutboundEventContext {
   event: TaskRunOutboundEvent;
 }
 
+export interface SubagentCreationRequestedOutboundEvent {
+  type: "subagent_creation_requested";
+  requestId: string;
+  title: string;
+  description: string;
+  workdir: string;
+  expiresAt: string | null;
+}
+
+export interface SubagentCreationResolvedOutboundEvent {
+  type: "subagent_creation_resolved";
+  requestId: string;
+  title: string;
+  status: "created" | "denied" | "failed" | "expired";
+  decidedAt: string | null;
+  failureReason: string | null;
+  createdSubagentAgentId: string | null;
+  externalChatId: string | null;
+  shareLink: string | null;
+}
+
+export type SubagentCreationOutboundEvent =
+  | SubagentCreationRequestedOutboundEvent
+  | SubagentCreationResolvedOutboundEvent;
+
+export interface OrchestratedSubagentCreationEventEnvelope extends OutboundEventContext {
+  kind: "subagent_creation_event";
+  event: SubagentCreationOutboundEvent;
+}
+
 export type OrchestratedOutboundEventEnvelope =
   | OrchestratedRuntimeEventEnvelope
-  | OrchestratedTaskRunEventEnvelope;
+  | OrchestratedTaskRunEventEnvelope
+  | OrchestratedSubagentCreationEventEnvelope;
 
 export function projectRuntimeEvent(input: {
   db: StorageDb;
@@ -164,6 +195,39 @@ export function projectTaskRunEvent(input: {
       ownerRole: state.ownerRole,
       mainAgentId: state.mainAgentId,
       taskRun: input.taskRun,
+      runId: null,
+      object: {
+        messageId: null,
+        toolCallId: null,
+        toolName: null,
+        approvalId: null,
+      },
+    }),
+    event: input.event,
+  };
+}
+
+export function projectSubagentCreationEvent(input: {
+  db: StorageDb;
+  request: SubagentCreationRequest;
+  event: SubagentCreationOutboundEvent;
+}): OrchestratedSubagentCreationEventEnvelope {
+  const state = resolveSessionLiveState({
+    db: input.db,
+    sessionId: input.request.sourceSessionId,
+  });
+
+  return {
+    kind: "subagent_creation_event",
+    ...buildContext({
+      conversationId: input.request.sourceConversationId,
+      branchId: state?.session.branchId ?? "main",
+      sessionId: input.request.sourceSessionId,
+      sessionPurpose: state?.session.purpose ?? null,
+      ownerAgentId: state?.ownerAgentId ?? input.request.sourceAgentId,
+      ownerRole: state?.ownerRole ?? null,
+      mainAgentId: state?.mainAgentId ?? input.request.sourceAgentId,
+      taskRun: state?.taskRun ?? null,
       runId: null,
       object: {
         messageId: null,

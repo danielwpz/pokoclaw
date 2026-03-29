@@ -49,6 +49,12 @@ export interface CompactionConfig {
   recentTurnsPreserve: number;
 }
 
+export interface RuntimeConfig {
+  maxTurns: number;
+  approvalTimeoutMs: number;
+  approvalGrantTtlMs: number;
+}
+
 export interface SecurityFilesystemConfig {
   overrideHardDenyRead: boolean;
   overrideHardDenyWrite: boolean;
@@ -88,6 +94,7 @@ export interface RawConfig {
   providers: Record<string, ProviderConfig>;
   models: ModelsConfig;
   compaction: CompactionConfig;
+  runtime: RuntimeConfig;
   security: SecurityConfig;
   channels: ChannelsConfig;
 }
@@ -153,6 +160,12 @@ interface CompactionConfigInput {
   recentTurnsPreserve?: unknown;
 }
 
+interface RuntimeConfigInput {
+  maxTurns?: unknown;
+  approvalTimeoutMs?: unknown;
+  approvalGrantTtlMs?: unknown;
+}
+
 interface SecurityFilesystemConfigInput {
   overrideHardDenyRead?: unknown;
   overrideHardDenyWrite?: unknown;
@@ -190,6 +203,7 @@ interface FileConfigInput {
   providers?: unknown;
   models?: unknown;
   compaction?: unknown;
+  runtime?: unknown;
   security?: unknown;
   channels?: unknown;
 }
@@ -219,6 +233,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     "providers",
     "models",
     "compaction",
+    "runtime",
     "security",
     "channels",
   ]);
@@ -232,6 +247,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   const providers = validateProvidersConfig(config.providers, defaults.providers);
   const models = validateModelsConfig(config.models, defaults.models, providers);
   const compaction = validateCompactionConfig(config.compaction, defaults.compaction);
+  const runtime = validateRuntimeConfig(config.runtime, defaults.runtime);
   const security = validateSecurityConfig(config.security, defaults.security);
   const channels = validateChannelsConfig(config.channels, defaults.channels);
 
@@ -244,6 +260,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     providers,
     models,
     compaction,
+    runtime,
     security,
     channels,
   };
@@ -268,6 +285,7 @@ function cloneRawConfig(config: RawConfig): RawConfig {
       },
     },
     compaction: { ...config.compaction },
+    runtime: { ...config.runtime },
     security: {
       filesystem: {
         overrideHardDenyRead: config.security.filesystem.overrideHardDenyRead,
@@ -625,6 +643,38 @@ function validateCompactionConfig(input: unknown, defaults: CompactionConfig): C
     recentTurnsPreserve: validateNonNegativeInteger(
       config.recentTurnsPreserve ?? defaults.recentTurnsPreserve,
       "config.toml compaction.recentTurnsPreserve",
+    ),
+  };
+}
+
+function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): RuntimeConfig {
+  if (input == null) {
+    return { ...defaults };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml runtime must be a table/object");
+  }
+
+  const config = input as RuntimeConfigInput;
+  assertAllowedKeys(
+    config,
+    new Set(["maxTurns", "approvalTimeoutMs", "approvalGrantTtlMs"]),
+    "config.toml runtime",
+  );
+
+  return {
+    maxTurns: validatePositiveInteger(
+      config.maxTurns ?? defaults.maxTurns,
+      "config.toml runtime.maxTurns",
+    ),
+    approvalTimeoutMs: validatePositiveInteger(
+      config.approvalTimeoutMs ?? defaults.approvalTimeoutMs,
+      "config.toml runtime.approvalTimeoutMs",
+    ),
+    approvalGrantTtlMs: validatePositiveInteger(
+      config.approvalGrantTtlMs ?? defaults.approvalGrantTtlMs,
+      "config.toml runtime.approvalGrantTtlMs",
     ),
   };
 }

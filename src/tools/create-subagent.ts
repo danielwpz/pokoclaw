@@ -12,14 +12,22 @@ const INITIAL_EXTRA_SCOPE_SCHEMA = Type.Union(
         kind: Type.Union([Type.Literal("fs.read"), Type.Literal("fs.write")]),
         path: Type.String({ minLength: 1 }),
       },
-      { additionalProperties: false },
+      {
+        additionalProperties: false,
+        description:
+          'Filesystem scope. Exact shape: {"kind":"fs.read"|"fs.write","path":"/abs/path"}',
+      },
     ),
     Type.Object(
       {
         kind: Type.Union([Type.Literal("db.read"), Type.Literal("db.write")]),
         database: Type.Literal("system"),
       },
-      { additionalProperties: false },
+      {
+        additionalProperties: false,
+        description:
+          'System DB scope. Exact shape: {"kind":"db.read"|"db.write","database":"system"}',
+      },
     ),
     Type.Object(
       {
@@ -28,26 +36,34 @@ const INITIAL_EXTRA_SCOPE_SCHEMA = Type.Union(
           minItems: 1,
         }),
       },
-      { additionalProperties: false },
+      {
+        additionalProperties: false,
+        description:
+          'Reusable bash full-access prefix. Exact shape: {"kind":"bash.full_access","prefix":["git","status"]}',
+      },
     ),
   ],
-  { description: "Optional extra pre-authorized scopes for the created SubAgent." },
+  {
+    description:
+      "Optional extra pre-authorized scopes for the created SubAgent. Omit this field unless it is truly needed.",
+  },
 );
 
 export const CREATE_SUBAGENT_TOOL_SCHEMA = Type.Object(
   {
     title: Type.String({
       minLength: 1,
-      description: "The SubAgent display name and future conversation title.",
+      description:
+        'The SubAgent display name and future conversation title, for example "Pokeclaw Code Review".',
     }),
     description: Type.String({
       minLength: 1,
-      description: "The long-lived role and responsibility of the SubAgent.",
+      description: "The durable role and responsibility of the SubAgent, not just the first task.",
     }),
     initialTask: Type.String({
       minLength: 1,
       description:
-        "The kickoff task for the newly created SubAgent. This becomes the first hidden kickoff message, not part of the system prompt.",
+        "The concrete kickoff task for the newly created SubAgent. This becomes the first hidden kickoff message, not part of the system prompt.",
     }),
     cwd: Type.Optional(
       Type.String({
@@ -59,6 +75,8 @@ export const CREATE_SUBAGENT_TOOL_SCHEMA = Type.Object(
     initialExtraScopes: Type.Optional(
       Type.Array(INITIAL_EXTRA_SCOPE_SCHEMA, {
         maxItems: 16,
+        description:
+          "Optional array of exact scope objects. Prefer omitting this field entirely unless pre-authorized access is required.",
       }),
     ),
   },
@@ -71,7 +89,7 @@ export function createCreateSubagentTool() {
   return defineTool({
     name: "create_subagent",
     description:
-      "Submit a pending request to create a long-lived SubAgent in its own dedicated conversation when the task is complex enough to deserve a separate context. Only the Main Agent should use this tool.",
+      "Submit a pending request to create a long-lived SubAgent in its own dedicated conversation when the task is complex enough to deserve a separate context. Prefer the minimal call shape: title, description, initialTask, and optional cwd. Only include initialExtraScopes when the SubAgent truly needs pre-authorized access, and every scope entry must exactly match one allowed object shape.",
     inputSchema: CREATE_SUBAGENT_TOOL_SCHEMA,
     async execute(context, args) {
       const sessionsRepo = new SessionsRepo(context.storage);

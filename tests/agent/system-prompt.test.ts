@@ -7,6 +7,7 @@ import {
   buildBashFullAccessSection,
   buildMainAgentIdentitySection,
   buildMainAgentOperatingModelSection,
+  buildMainAgentSubagentSection,
   buildPermissionsSection,
   buildProjectContextSection,
   buildSafetySection,
@@ -29,6 +30,7 @@ describe("agent system prompt", () => {
 
     expect(prompt).toContain("You are Pokeclaw Main Agent");
     expect(prompt).toContain("## Operating Model");
+    expect(prompt).toContain("## SubAgent Creation");
     expect(prompt).toContain("## Tool Usage");
     expect(prompt).toContain("## Permissions");
     expect(prompt).toContain("## Bash Full Access");
@@ -47,13 +49,16 @@ describe("agent system prompt", () => {
     });
 
     const operatingIndex = prompt.indexOf("## Operating Model");
+    const subagentIndex = prompt.indexOf("## SubAgent Creation");
     const toolUsageIndex = prompt.indexOf("## Tool Usage");
     const permissionsIndex = prompt.indexOf("## Permissions");
     const bashIndex = prompt.indexOf("## Bash Full Access");
     const safetyIndex = prompt.indexOf("## Safety");
 
     expect(operatingIndex).toBeGreaterThanOrEqual(0);
+    expect(subagentIndex).toBeGreaterThan(operatingIndex);
     expect(toolUsageIndex).toBeGreaterThan(operatingIndex);
+    expect(toolUsageIndex).toBeGreaterThan(subagentIndex);
     expect(permissionsIndex).toBeGreaterThan(toolUsageIndex);
     expect(bashIndex).toBeGreaterThan(permissionsIndex);
     expect(safetyIndex).toBeGreaterThan(bashIndex);
@@ -89,6 +94,21 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("Only provide a reusable prefix");
     expect(prompt).toContain("do not use unmanaged backgrounding like &, nohup, setsid, or disown");
     expect(prompt).toContain("Do not bypass approval or permission mechanisms.");
+  });
+
+  test("teaches main-agent subagent creation argument shape and examples", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+    });
+
+    expect(prompt).toContain("Prefer the minimal call shape first");
+    expect(prompt).toContain("initialExtraScopes");
+    expect(prompt).toContain('{"kind":"fs.read","path":"/abs/path"}');
+    expect(prompt).toContain('{"kind":"db.read","database":"system"}');
+    expect(prompt).toContain('{"kind":"bash.full_access","prefix":["git","status"]}');
+    expect(prompt).toContain('"title":"Pokeclaw Code Review"');
+    expect(prompt).toContain('"initialTask":"Scan the current pokeclaw repo changes');
   });
 
   test("builds a dedicated approval-session prompt without normal tool escalation guidance", () => {
@@ -129,6 +149,7 @@ describe("agent system prompt", () => {
   test("current filled section builders remain non-empty", () => {
     expect(buildMainAgentIdentitySection()).not.toBe("");
     expect(buildMainAgentOperatingModelSection()).not.toBe("");
+    expect(buildMainAgentSubagentSection()).not.toBe("");
     expect(buildSubagentIdentitySection()).not.toBe("");
     expect(buildSubagentOperatingModelSection()).not.toBe("");
     expect(buildSubagentProfileSection({ title: "PR Review" })).not.toBe("");

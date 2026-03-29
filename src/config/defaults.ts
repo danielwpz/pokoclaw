@@ -21,6 +21,11 @@ export const DEFAULT_CONFIG: RawConfig = {
     reserveTokensFloor: 60_000,
     recentTurnsPreserve: 3,
   },
+  runtime: {
+    maxTurns: 20,
+    approvalTimeoutMs: 3 * 60 * 1000,
+    approvalGrantTtlMs: 7 * 24 * 60 * 60 * 1000,
+  },
   security: {
     filesystem: {
       overrideHardDenyRead: false,

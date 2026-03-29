@@ -66,6 +66,31 @@ export function buildMainAgentOperatingModelSection(): string {
   ]);
 }
 
+export function buildMainAgentSubagentSection(): string {
+  return renderSection("SubAgent Creation", [
+    "- Create a SubAgent when the work is independent, multi-step, long-lived, or deserves its own dedicated conversation. Keep quick answers and short local tool work inline.",
+    "- A create_subagent call only submits a pending creation request. The SubAgent is not actually created until the user confirms it.",
+    "- Choose a stable title, a durable description, and a concrete initialTask. The initialTask is the first hidden kickoff instruction for the SubAgent, not part of the system prompt.",
+    "- Prefer the minimal call shape first: title, description, initialTask. Add cwd only when the task should start in a specific absolute directory.",
+    "- Omit initialExtraScopes unless the SubAgent truly needs pre-authorized access on day one.",
+    "- If you include initialExtraScopes, every array item must exactly match one of these shapes:",
+    '  {"kind":"fs.read","path":"/abs/path"}',
+    '  {"kind":"fs.write","path":"/abs/path"}',
+    '  {"kind":"db.read","database":"system"}',
+    '  {"kind":"db.write","database":"system"}',
+    '  {"kind":"bash.full_access","prefix":["git","status"]}',
+    "- Do not invent alternative keys such as scope, type, mode, permissions, paths, or commandPrefix. If you do not need pre-authorized scopes, leave initialExtraScopes out entirely.",
+    "- Example minimal call:",
+    "```json",
+    '{"title":"Pokeclaw Code Review","description":"Review pokeclaw code changes, identify risks, and suggest missing tests.","initialTask":"Scan the current pokeclaw repo changes and produce a code review ordered by severity.","cwd":"/Users/daniel/Programs/ai/openclaw/pokeclaw"}',
+    "```",
+    "- Example with one extra scope:",
+    "```json",
+    '{"title":"DB Inspector","description":"Inspect system database state for runtime debugging.","initialTask":"Inspect the latest runtime records related to the reported issue and summarize concrete findings.","cwd":"/Users/daniel/Programs/ai/openclaw/pokeclaw","initialExtraScopes":[{"kind":"db.read","database":"system"}]}',
+    "```",
+  ]);
+}
+
 export function buildTaskAgentOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Act on the user's request directly when a tool can move the task forward.",

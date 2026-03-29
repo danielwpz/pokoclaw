@@ -62,6 +62,7 @@ export async function loadConfig(options?: LoadConfigOptions): Promise<AppConfig
     providers: resolvedConfig.providers,
     models: resolvedConfig.models,
     compaction: resolvedConfig.compaction,
+    runtime: resolvedConfig.runtime,
     security: resolvedConfig.security,
     channels: resolvedConfig.channels,
     secrets,

@@ -23,6 +23,7 @@ import {
   listEnabledLarkInstallations,
 } from "@/src/channels/lark/types.js";
 import type { LarkChannelConfig } from "@/src/config/schema.js";
+import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
@@ -57,12 +58,19 @@ export interface CreateLarkChannelRuntimeInput {
   status?: RuntimeStatusService;
   outboundEventBus: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   wsClientFactory?: (installation: ConfiguredLarkInstallation) => Lark.WSClient;
+  clients?: LarkClientRegistry;
+  subagentRequests?: {
+    approve(requestId: string): Promise<ResolveSubagentCreationRequestResult>;
+    deny(
+      requestId: string,
+    ): Promise<ResolveSubagentCreationRequestResult> | ResolveSubagentCreationRequestResult;
+  };
 }
 
 export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): LarkChannelRuntime {
   const enabledInstallations = listEnabledLarkInstallations(input.config);
   const configuredInstallations = listConfiguredLarkInstallations(input.config);
-  const clients = new LarkClientRegistry(configuredInstallations);
+  const clients = input.clients ?? new LarkClientRegistry(configuredInstallations);
   const inbound = createLarkInboundRuntime({
     installations: configuredInstallations,
     storage: input.storage,
@@ -71,6 +79,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     ...(input.status == null ? {} : { status: input.status }),
     clients,
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
+    ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
   });
   const outbound = createLarkOutboundRuntime({
     storage: input.storage,

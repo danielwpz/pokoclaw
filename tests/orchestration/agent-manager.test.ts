@@ -5,6 +5,7 @@ import { createMainAgentApprovalSessionId } from "@/src/orchestration/approval-s
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
+import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -214,6 +215,152 @@ describe("AgentManager", () => {
 
     expect(result).toBeNull();
     expect(submitMessage).not.toHaveBeenCalled();
+  });
+
+  test("treats duplicate approve subagent callbacks as idempotent and republishes the resolved event", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const events: OrchestratedOutboundEventEnvelope[] = [];
+      bus.subscribe((event) => {
+        events.push(event);
+      });
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+        outboundEventBus: bus,
+        subagentProvisioner: {
+          provisionSubagentSurface: vi.fn(async () => ({
+            status: "provisioned" as const,
+            externalChatId: "chat_sub_approved",
+            shareLink: "https://example.com/subagent-approved",
+            conversationKind: "group" as const,
+            channelSurface: {
+              channelType: "lark",
+              channelInstallationId: "default",
+              surfaceKey: "chat:chat_sub_approved",
+              surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_approved" }),
+            },
+          })),
+        },
+      });
+
+      manager.submitSubagentCreationRequest({
+        sourceSessionId: "sess_main",
+        title: "PR Review",
+        description: "Review pull requests and summarize findings.",
+        initialTask: "Review the current PR and report concrete issues.",
+      });
+      const request = new SubagentCreationRequestsRepo(handle.storage.db).listBySourceSession(
+        "sess_main",
+        1,
+      )[0];
+      if (request == null) {
+        throw new Error("Expected a pending subagent request");
+      }
+
+      await manager.approveSubagentCreationRequest({
+        requestId: request.id,
+        decidedAt: new Date("2026-03-25T00:10:00.000Z"),
+      });
+      await flushMicrotasks();
+
+      const publishedBeforeDuplicate = events.length;
+      const resolved = await manager.resolveApproveSubagentCreationRequest({
+        requestId: request.id,
+        decidedAt: new Date("2026-03-25T00:11:00.000Z"),
+      });
+      await flushMicrotasks();
+
+      expect(resolved).toMatchObject({
+        outcome: "already_created",
+        externalChatId: "chat_sub_approved",
+        shareLink: null,
+      });
+      expect(events).toHaveLength(publishedBeforeDuplicate + 1);
+      const duplicateEvent = events[events.length - 1];
+      expect(duplicateEvent).toMatchObject({
+        kind: "subagent_creation_event",
+        event: {
+          type: "subagent_creation_resolved",
+          requestId: request.id,
+          status: "created",
+          externalChatId: "chat_sub_approved",
+          shareLink: null,
+        },
+      });
+    });
+  });
+
+  test("treats duplicate deny subagent callbacks as idempotent and republishes the resolved event", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const events: OrchestratedOutboundEventEnvelope[] = [];
+      bus.subscribe((event) => {
+        events.push(event);
+      });
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+        outboundEventBus: bus,
+      });
+
+      manager.submitSubagentCreationRequest({
+        sourceSessionId: "sess_main",
+        title: "PR Review",
+        description: "Review pull requests and summarize findings.",
+        initialTask: "Review the current PR and report concrete issues.",
+      });
+      const request = new SubagentCreationRequestsRepo(handle.storage.db).listBySourceSession(
+        "sess_main",
+        1,
+      )[0];
+      if (request == null) {
+        throw new Error("Expected a pending subagent request");
+      }
+
+      manager.denySubagentCreationRequest({
+        requestId: request.id,
+        decidedAt: new Date("2026-03-25T00:10:00.000Z"),
+        reasonText: "User cancelled",
+      });
+      await flushMicrotasks();
+
+      const publishedBeforeDuplicate = events.length;
+      const resolved = manager.resolveDenySubagentCreationRequest({
+        requestId: request.id,
+        decidedAt: new Date("2026-03-25T00:11:00.000Z"),
+        reasonText: "User cancelled",
+      });
+      await flushMicrotasks();
+
+      expect(resolved).toMatchObject({
+        outcome: "already_denied",
+        externalChatId: null,
+        shareLink: null,
+      });
+      expect(events).toHaveLength(publishedBeforeDuplicate + 1);
+      const duplicateEvent = events[events.length - 1];
+      expect(duplicateEvent).toMatchObject({
+        kind: "subagent_creation_event",
+        event: {
+          type: "subagent_creation_resolved",
+          requestId: request.id,
+          status: "denied",
+          externalChatId: null,
+          shareLink: null,
+        },
+      });
+    });
   });
 
   test("exposes live session and task-run state for orchestration consumers", async () => {

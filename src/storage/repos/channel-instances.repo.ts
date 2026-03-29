@@ -47,4 +47,8 @@ export class ChannelInstancesRepo {
         .get() ?? null
     );
   }
+
+  getById(id: string): ChannelInstance | null {
+    return this.db.select().from(channelInstances).where(eq(channelInstances.id, id)).get() ?? null;
+  }
 }
