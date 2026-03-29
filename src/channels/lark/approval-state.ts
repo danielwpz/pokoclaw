@@ -20,11 +20,13 @@ export interface LarkApprovalState {
   decision: "approve" | "deny" | null;
   actor: string | null;
   sourceRunCardObjectId: string | null;
+  requestedBashPrefixes: string[][];
 }
 
 export function createLarkApprovalStateFromRequest(input: {
   event: ApprovalRequestedEvent;
   sourceRunCardObjectId: string | null;
+  requestedBashPrefixes?: string[][];
 }): LarkApprovalState {
   return {
     approvalId: input.event.approvalId,
@@ -39,6 +41,7 @@ export function createLarkApprovalStateFromRequest(input: {
     decision: null,
     actor: null,
     sourceRunCardObjectId: input.sourceRunCardObjectId,
+    requestedBashPrefixes: input.requestedBashPrefixes ?? [],
   };
 }
 
@@ -47,6 +50,7 @@ export function reduceLarkApprovalState(
   envelope: OrchestratedRuntimeEventEnvelope,
   input?: {
     sourceRunCardObjectId?: string | null;
+    requestedBashPrefixes?: string[][];
   },
 ): LarkApprovalState | null {
   switch (envelope.event.type) {
@@ -56,6 +60,7 @@ export function reduceLarkApprovalState(
         createLarkApprovalStateFromRequest({
           event: envelope.event,
           sourceRunCardObjectId: input?.sourceRunCardObjectId ?? null,
+          requestedBashPrefixes: input?.requestedBashPrefixes ?? [],
         })
       );
     case "approval_resolved":
