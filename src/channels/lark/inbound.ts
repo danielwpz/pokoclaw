@@ -36,6 +36,9 @@ export interface LarkInboundIngress {
     sessionId: string;
     scenario: "chat";
     content: string;
+    channelMessageId?: string | null;
+    channelParentMessageId?: string | null;
+    channelThreadId?: string | null;
     createdAt?: Date;
   }): Promise<unknown>;
   submitApprovalDecision(input: {
@@ -322,6 +325,11 @@ export function createLarkMessageReceiveHandler(input: {
       sessionId: session.id,
       scenario: "chat",
       content,
+      channelMessageId: normalized.messageId,
+      ...(normalized.parentMessageId == null
+        ? {}
+        : { channelParentMessageId: normalized.parentMessageId }),
+      ...(normalized.threadId == null ? {} : { channelThreadId: normalized.threadId }),
       ...(normalized.createdAt == null ? {} : { createdAt: normalized.createdAt }),
     });
   };

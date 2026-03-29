@@ -1,6 +1,9 @@
+import { mkdir, rm } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 
-import { getProductionDatabasePath } from "@/src/storage/db/paths.js";
+import { openStorageDatabase } from "@/src/storage/db/client.js";
+import { getProductionDatabasePath, getTestDatabasePath } from "@/src/storage/db/paths.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -80,6 +83,57 @@ describe("storage db bootstrap", () => {
       expect(columnNames).toContain("resume_payload_json");
     } finally {
       await destroyTestDatabase(handle);
+    }
+  });
+
+  test("upgrades legacy messages tables with inbound channel metadata columns", async () => {
+    const dbPath = getTestDatabasePath(import.meta.url);
+    await mkdir(path.dirname(dbPath), { recursive: true });
+
+    const legacy = openStorageDatabase({ databasePath: dbPath, initializeSchema: false });
+    try {
+      legacy.sqlite.exec(`
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          role TEXT NOT NULL,
+          message_type TEXT NOT NULL DEFAULT 'text',
+          visibility TEXT NOT NULL DEFAULT 'user_visible',
+          channel_message_id TEXT,
+          provider TEXT,
+          model TEXT,
+          model_api TEXT,
+          stop_reason TEXT,
+          error_message TEXT,
+          payload_json TEXT NOT NULL,
+          token_input INTEGER,
+          token_output INTEGER,
+          token_cache_read INTEGER,
+          token_cache_write INTEGER,
+          token_total INTEGER,
+          usage_json TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(session_id, seq)
+        );
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    const upgraded = openStorageDatabase({ databasePath: dbPath, initializeSchema: true });
+    try {
+      const rows = upgraded.sqlite.prepare("PRAGMA table_info(messages)").all() as Array<{
+        name: string;
+      }>;
+      const columnNames = rows.map((row) => row.name);
+
+      expect(columnNames).toContain("channel_message_id");
+      expect(columnNames).toContain("channel_parent_message_id");
+      expect(columnNames).toContain("channel_thread_id");
+    } finally {
+      upgraded.close();
+      await rm(dbPath, { force: true });
     }
   });
 

@@ -145,12 +145,18 @@ describe("session runtime ingress", () => {
       sessionId: "sess_1",
       scenario: "chat",
       content: "hello",
+      channelMessageId: "om_msg_runtime_1",
+      channelParentMessageId: "om_parent_runtime_1",
+      channelThreadId: "omt_runtime_1",
     });
 
     expect(result.status).toBe("started");
     const rows = messagesRepo.listBySession("sess_1");
     expect(rows).toHaveLength(2);
     expect(JSON.parse(rows[0]?.payloadJson ?? "{}")).toEqual({ content: "hello" });
+    expect(rows[0]?.channelMessageId).toBe("om_msg_runtime_1");
+    expect(rows[0]?.channelParentMessageId).toBe("om_parent_runtime_1");
+    expect(rows[0]?.channelThreadId).toBe("omt_runtime_1");
     expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({
       content: [{ type: "text", text: "hi there" }],
     });

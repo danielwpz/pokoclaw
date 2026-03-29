@@ -31,6 +31,8 @@ export interface AppendMessageInput {
   messageType?: string;
   visibility?: string;
   channelMessageId?: string | null;
+  channelParentMessageId?: string | null;
+  channelThreadId?: string | null;
   provider?: string | null;
   model?: string | null;
   modelApi?: string | null;
@@ -62,6 +64,8 @@ export class MessagesRepo {
       messageType: input.messageType ?? "text",
       visibility: input.visibility ?? "user_visible",
       channelMessageId: input.channelMessageId ?? null,
+      channelParentMessageId: input.channelParentMessageId ?? null,
+      channelThreadId: input.channelThreadId ?? null,
       provider: input.provider ?? null,
       model: input.model ?? null,
       modelApi: input.modelApi ?? null,

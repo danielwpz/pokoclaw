@@ -209,6 +209,40 @@ describe("messages repo", () => {
     );
   });
 
+  test("append persists inbound channel identifiers for direct db inspection", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const repo = new MessagesRepo(handle.storage.db);
+
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_1', 'lark', 'acct_a', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_1', 'chat_1', 'dm', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+      INSERT INTO sessions (id, conversation_id, branch_id, purpose, created_at, updated_at)
+      VALUES ('sess_1', 'conv_1', 'branch_1', 'chat', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+    `);
+
+    repo.append({
+      id: "msg_lark_meta",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      channelMessageId: "om_parent_reply",
+      channelParentMessageId: "om_parent_original",
+      channelThreadId: "omt_thread_1",
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const rows = repo.listBySession("sess_1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.channelMessageId).toBe("om_parent_reply");
+    expect(rows[0]?.channelParentMessageId).toBe("om_parent_original");
+    expect(rows[0]?.channelThreadId).toBe("omt_thread_1");
+  });
+
   test("listBySession does not silently drop newest messages once a session exceeds 500 rows", async () => {
     handle = await createTestDatabase(import.meta.url);
     const repo = new MessagesRepo(handle.storage.db);

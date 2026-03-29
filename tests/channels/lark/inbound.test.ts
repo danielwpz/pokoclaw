@@ -129,6 +129,7 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_chat_1",
         scenario: "chat",
         content: "hello from lark",
+        channelMessageId: "om_msg_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
     });
@@ -185,6 +186,8 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_chat_1",
         scenario: "chat",
         content: "用户引用了一条消息：\n被引用的原消息内容\n\n用户的新消息：请看这条引用消息",
+        channelMessageId: "om_msg_quote_1",
+        channelParentMessageId: "om_parent_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
     });
@@ -234,6 +237,8 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_chat_1",
         scenario: "chat",
         content: "用户引用了一条消息，但系统未能读取原文。\n\n用户的新消息：请继续",
+        channelMessageId: "om_msg_quote_2",
+        channelParentMessageId: "om_parent_2",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
     });
@@ -428,6 +433,7 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_chat_1",
         scenario: "chat",
         content: "hello again",
+        channelMessageId: "om_msg_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
 

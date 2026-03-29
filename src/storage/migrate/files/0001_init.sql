@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS messages (
   message_type TEXT NOT NULL DEFAULT 'text',
   visibility TEXT NOT NULL DEFAULT 'user_visible',
   channel_message_id TEXT,
+  channel_parent_message_id TEXT,
+  channel_thread_id TEXT,
   provider TEXT,
   model TEXT,
   model_api TEXT,
