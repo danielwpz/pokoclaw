@@ -35,6 +35,7 @@ import {
   createTaskExecution,
 } from "@/src/orchestration/task-run-factory.js";
 import {
+  blockTaskExecution,
   cancelTaskExecution,
   completeTaskExecution,
   failTaskExecution,
@@ -94,6 +95,8 @@ export interface ResolveSubagentCreationRequestResult {
 // coordination such as delegated approvals without pulling that logic into
 // AgentLoop or session lanes.
 export class AgentManager {
+  private readonly inflightRuntimeEventTasks = new Set<Promise<void>>();
+
   constructor(private readonly deps: AgentManagerDependencies) {}
 
   submitUserMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
@@ -453,6 +456,22 @@ export class AgentManager {
     return settled;
   }
 
+  blockTaskExecution(input: {
+    taskRunId: string;
+    resultSummary?: string | null;
+    finishedAt?: Date;
+  }): SettledTaskExecution {
+    const settled = blockTaskExecution({
+      db: this.deps.storage,
+      taskRunId: input.taskRunId,
+      ...(input.resultSummary === undefined ? {} : { resultSummary: input.resultSummary }),
+      ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
+    });
+    logSettledTaskExecution("blocked", settled);
+    this.publishTaskRunSettledEvent("task_run_blocked", settled);
+    return settled;
+  }
+
   failTaskExecution(input: {
     taskRunId: string;
     errorText?: string | null;
@@ -491,14 +510,25 @@ export class AgentManager {
 
   emitRuntimeEvent(event: AgentRuntimeEvent): void {
     this.publishOutboundEvent(this.projectRuntimeEvent(event));
-    void this.handleRuntimeEvent(event).catch((error: unknown) => {
-      logger.error("runtime event orchestration failed", {
-        eventType: event.type,
-        sessionId: event.sessionId,
-        runId: event.runId,
-        error: error instanceof Error ? error.message : String(error),
+    const task = this.handleRuntimeEvent(event)
+      .catch((error: unknown) => {
+        logger.error("runtime event orchestration failed", {
+          eventType: event.type,
+          sessionId: event.sessionId,
+          runId: event.runId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.inflightRuntimeEventTasks.delete(task);
       });
-    });
+    this.inflightRuntimeEventTasks.add(task);
+  }
+
+  async waitForRuntimeEventOrchestrationIdle(): Promise<void> {
+    while (this.inflightRuntimeEventTasks.size > 0) {
+      await Promise.allSettled([...this.inflightRuntimeEventTasks]);
+    }
   }
 
   async handleRuntimeEvent(
@@ -546,6 +576,7 @@ export class AgentManager {
     return new TaskExecutionRunner({
       ingress: this.deps.ingress,
       lifecycle: {
+        blockTaskExecution: (input) => this.blockTaskExecution(input),
         completeTaskExecution: (input) => this.completeTaskExecution(input),
         failTaskExecution: (input) => this.failTaskExecution(input),
         cancelTaskExecution: (input) => this.cancelTaskExecution(input),
@@ -554,7 +585,7 @@ export class AgentManager {
   }
 
   private publishTaskRunSettledEvent(
-    eventType: "task_run_completed" | "task_run_failed" | "task_run_cancelled",
+    eventType: "task_run_completed" | "task_run_blocked" | "task_run_failed" | "task_run_cancelled",
     settled: SettledTaskExecution,
   ): void {
     const taskRun = settled.taskRun;
@@ -571,7 +602,7 @@ export class AgentManager {
             resultSummary: taskRun.resultSummary,
             executionSessionId: taskRun.executionSessionId,
           }
-        : eventType === "task_run_failed"
+        : eventType === "task_run_blocked"
           ? {
               type: eventType,
               taskRunId: taskRun.id,
@@ -581,21 +612,33 @@ export class AgentManager {
               finishedAt: taskRun.finishedAt,
               durationMs: taskRun.durationMs,
               resultSummary: taskRun.resultSummary,
-              errorText: taskRun.errorText,
               executionSessionId: taskRun.executionSessionId,
             }
-          : {
-              type: eventType,
-              taskRunId: taskRun.id,
-              runType: taskRun.runType,
-              status: taskRun.status,
-              startedAt: taskRun.startedAt,
-              finishedAt: taskRun.finishedAt,
-              durationMs: taskRun.durationMs,
-              resultSummary: taskRun.resultSummary,
-              cancelledBy: taskRun.cancelledBy,
-              executionSessionId: taskRun.executionSessionId,
-            };
+          : eventType === "task_run_failed"
+            ? {
+                type: eventType,
+                taskRunId: taskRun.id,
+                runType: taskRun.runType,
+                status: taskRun.status,
+                startedAt: taskRun.startedAt,
+                finishedAt: taskRun.finishedAt,
+                durationMs: taskRun.durationMs,
+                resultSummary: taskRun.resultSummary,
+                errorText: taskRun.errorText,
+                executionSessionId: taskRun.executionSessionId,
+              }
+            : {
+                type: eventType,
+                taskRunId: taskRun.id,
+                runType: taskRun.runType,
+                status: taskRun.status,
+                startedAt: taskRun.startedAt,
+                finishedAt: taskRun.finishedAt,
+                durationMs: taskRun.durationMs,
+                resultSummary: taskRun.resultSummary,
+                cancelledBy: taskRun.cancelledBy,
+                executionSessionId: taskRun.executionSessionId,
+              };
 
     this.publishOutboundEvent(
       projectTaskRunEvent({
@@ -699,7 +742,7 @@ export class AgentManager {
 }
 
 function logSettledTaskExecution(
-  status: "completed" | "failed" | "cancelled",
+  status: "completed" | "blocked" | "failed" | "cancelled",
   settled: SettledTaskExecution,
 ): void {
   logger.info("settled task execution", {

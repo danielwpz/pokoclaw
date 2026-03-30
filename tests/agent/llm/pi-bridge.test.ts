@@ -15,6 +15,12 @@ const { completeSimpleMock, streamSimpleMock } = vi.hoisted(() => ({
 const { upstreamStreamMock } = vi.hoisted(() => ({
   upstreamStreamMock: vi.fn(),
 }));
+const { loggerDebugMock, loggerInfoMock, loggerWarnMock, loggerErrorMock } = vi.hoisted(() => ({
+  loggerDebugMock: vi.fn(),
+  loggerInfoMock: vi.fn(),
+  loggerWarnMock: vi.fn(),
+  loggerErrorMock: vi.fn(),
+}));
 
 const NO_ARGS_TOOL_SCHEMA = Type.Object({}, { additionalProperties: false });
 
@@ -35,6 +41,14 @@ vi.mock("@/src/agent/llm/upstream-openai.js", async () => {
     streamWithNormalizedUpstreamUsage: upstreamStreamMock,
   };
 });
+vi.mock("@/src/shared/logger.js", () => ({
+  createSubsystemLogger: () => ({
+    debug: loggerDebugMock,
+    info: loggerInfoMock,
+    warn: loggerWarnMock,
+    error: loggerErrorMock,
+  }),
+}));
 
 function createResolvedModel(overrides?: Partial<ResolvedModel>): ResolvedModel {
   return {
@@ -106,6 +120,10 @@ describe("pi bridge", () => {
     completeSimpleMock.mockReset();
     streamSimpleMock.mockReset();
     upstreamStreamMock.mockReset();
+    loggerDebugMock.mockReset();
+    loggerInfoMock.mockReset();
+    loggerWarnMock.mockReset();
+    loggerErrorMock.mockReset();
   });
 
   test("streams text deltas and returns a normalized assistant result", async () => {
@@ -280,6 +298,76 @@ describe("pi bridge", () => {
 
     const [model] = streamSimpleMock.mock.calls[0] as [{ baseUrl: string }];
     expect(model.baseUrl).toBe("https://api.anthropic.com");
+  });
+
+  test("warns when a streamed assistant completion has no visible text blocks", async () => {
+    const finalMessage = {
+      role: "assistant" as const,
+      api: "anthropic-messages" as const,
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5-20250929",
+      stopReason: "stop" as const,
+      content: [{ type: "thinking" as const, thinking: "Internal reasoning only." }],
+      usage: {
+        input: 10,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 13,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream(
+        [
+          {
+            type: "thinking_delta",
+            contentIndex: 0,
+            delta: "Internal reasoning only.",
+            partial: finalMessage,
+          },
+          {
+            type: "done",
+            reason: "stop",
+            message: finalMessage,
+          },
+        ],
+        finalMessage,
+      ),
+    );
+
+    const bridge = new PiBridge();
+    await bridge.streamTurn({
+      model: createResolvedModel(),
+      compactSummary: null,
+      messages: [createStoredUserMessage()],
+      tools: new ToolRegistry(),
+      signal: new AbortController().signal,
+    });
+
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "assistant completion finished without visible text",
+      expect.objectContaining({
+        mode: "stream",
+        modelId: "anthropic_main/claude-sonnet-4-5",
+        provider: "anthropic_main",
+        stopReason: "stop",
+        blockTypes: "thinking",
+        textBlocks: 0,
+        textChars: 0,
+        thinkingBlocks: 1,
+        thinkingChars: "Internal reasoning only.".length,
+        thinkingPreview: "Internal reasoning only.",
+        toolCallBlocks: 0,
+      }),
+    );
   });
 
   test("routes non-gpt responses models through openai completions", async () => {

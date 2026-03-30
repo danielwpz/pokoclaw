@@ -13,6 +13,7 @@ import {
   buildFutureRuntimeSections,
   buildMainAgentIdentitySection,
   buildMainAgentOperatingModelSection,
+  buildMainAgentScheduledTasksSection,
   buildMainAgentSubagentSection,
   buildMemorySection,
   buildPermissionsSection,
@@ -22,6 +23,7 @@ import {
   buildSubagentIdentitySection,
   buildSubagentOperatingModelSection,
   buildSubagentProfileSection,
+  buildSubagentScheduledTasksSection,
   buildTaskAgentIdentitySection,
   buildTaskAgentOperatingModelSection,
   buildToolUsageSection,
@@ -39,9 +41,11 @@ interface BuildAgentSystemPromptInput {
   description?: string | null;
   workdir?: string | null;
   privateWorkspaceDir?: string | null;
+  currentDate?: string | null;
+  timezone?: string | null;
 }
 
-function buildTaskAgentSystemPrompt(): string {
+function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string {
   return joinSections([
     buildTaskAgentIdentitySection(),
     buildTaskAgentOperatingModelSection(),
@@ -49,7 +53,10 @@ function buildTaskAgentSystemPrompt(): string {
     buildPermissionsSection(),
     buildBashFullAccessSection(),
     buildSafetySection(),
-    buildWorkspaceRuntimeSection(),
+    buildWorkspaceRuntimeSection({
+      ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
+      ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+    }),
     buildProjectContextSection(),
     buildMemorySection(),
     buildSkillsSection(),
@@ -57,16 +64,20 @@ function buildTaskAgentSystemPrompt(): string {
   ]);
 }
 
-function buildMainAgentSystemPrompt(): string {
+function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string {
   return joinSections([
     buildMainAgentIdentitySection(),
     buildMainAgentOperatingModelSection(),
+    buildMainAgentScheduledTasksSection(),
     buildMainAgentSubagentSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
     buildBashFullAccessSection(),
     buildSafetySection(),
-    buildWorkspaceRuntimeSection(),
+    buildWorkspaceRuntimeSection({
+      ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
+      ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+    }),
     buildProjectContextSection(),
     buildMemorySection(),
     buildSkillsSection(),
@@ -86,11 +97,15 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
         : { privateWorkspaceDir: input.privateWorkspaceDir }),
     }),
     buildSubagentOperatingModelSection(),
+    buildSubagentScheduledTasksSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
     buildBashFullAccessSection(),
     buildSafetySection(),
-    buildWorkspaceRuntimeSection(),
+    buildWorkspaceRuntimeSection({
+      ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
+      ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+    }),
     buildProjectContextSection(),
     buildMemorySection(),
     buildSkillsSection(),
@@ -98,14 +113,17 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
   ]);
 }
 
-function buildApprovalAgentSystemPrompt(): string {
+function buildApprovalAgentSystemPrompt(input: BuildAgentSystemPromptInput): string {
   return joinSections([
     buildApprovalAgentIdentitySection(),
     buildApprovalAgentOperatingModelSection(),
     buildToolUsageSection(),
     buildApprovalReviewSection(),
     buildSafetySection(),
-    buildWorkspaceRuntimeSection(),
+    buildWorkspaceRuntimeSection({
+      ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
+      ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+    }),
     buildProjectContextSection(),
     buildMemorySection(),
     buildSkillsSection(),
@@ -118,22 +136,22 @@ function buildApprovalAgentSystemPrompt(): string {
 // logic inside one shared prompt body.
 export function buildAgentSystemPrompt(input: BuildAgentSystemPromptInput = {}): string {
   if (input.sessionPurpose === "approval") {
-    return buildApprovalAgentSystemPrompt();
+    return buildApprovalAgentSystemPrompt(input);
   }
 
   if (input.sessionPurpose === "task") {
-    return buildTaskAgentSystemPrompt();
+    return buildTaskAgentSystemPrompt(input);
   }
 
   if (input.agentKind === "main") {
-    return buildMainAgentSystemPrompt();
+    return buildMainAgentSystemPrompt(input);
   }
 
   if (input.agentKind === "sub") {
     return buildSubagentSystemPrompt(input);
   }
 
-  return buildTaskAgentSystemPrompt();
+  return buildTaskAgentSystemPrompt(input);
 }
 
 export const AGENT_SYSTEM_PROMPT = buildAgentSystemPrompt({

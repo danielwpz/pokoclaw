@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   delete_after_run INTEGER NOT NULL DEFAULT 0
     CHECK (delete_after_run IN (0, 1)),
+  deleted_at TEXT CHECK (deleted_at IS NULL OR (deleted_at GLOB '????-??-??T??:??:??*Z' AND datetime(deleted_at) IS NOT NULL)),
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL)
 );

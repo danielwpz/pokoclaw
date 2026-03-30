@@ -14,7 +14,10 @@ import type {
   ToolCallFailedEvent,
   ToolCallStartedEvent,
 } from "@/src/agent/events.js";
-import type { OrchestratedRuntimeEventEnvelope } from "@/src/orchestration/outbound-events.js";
+import type {
+  OrchestratedRuntimeEventEnvelope,
+  OrchestratedTaskRunEventEnvelope,
+} from "@/src/orchestration/outbound-events.js";
 
 export type LarkFooterStatus = "thinking" | "tool_running" | null;
 
@@ -52,6 +55,7 @@ export interface LarkReasoningState {
 export type LarkRunTerminal =
   | "running"
   | "completed"
+  | "blocked"
   | "failed"
   | "cancelled"
   | "awaiting_approval"
@@ -59,10 +63,12 @@ export type LarkRunTerminal =
   | "denied";
 
 export interface LarkRunState {
-  runId: string;
+  runId: string | null;
   conversationId: string;
   branchId: string;
   sessionId: string | null;
+  taskRunId: string | null;
+  taskRunType: string | null;
   blocks: Array<LarkAssistantTextBlock | LarkToolSequenceBlock>;
   activeAssistantMessageId: string | null;
   activeToolSequenceBlockId: string | null;
@@ -77,54 +83,97 @@ export const LARK_ASSISTANT_PLACEHOLDER_TEXT = "_正在思考..._";
 
 export function reduceLarkRunState(
   previous: LarkRunState | null,
-  envelope: OrchestratedRuntimeEventEnvelope,
+  envelope: OrchestratedRuntimeEventEnvelope | OrchestratedTaskRunEventEnvelope,
 ): LarkRunState {
   const state =
     previous ??
     createInitialRunState({
-      runId: envelope.run.runId ?? `run:${envelope.event.eventId}`,
+      runId:
+        envelope.kind === "runtime_event"
+          ? (envelope.run.runId ?? `run:${envelope.event.eventId}`)
+          : null,
       conversationId: envelope.target.conversationId,
       branchId: envelope.target.branchId,
       sessionId: envelope.session.sessionId,
+      taskRunId: envelope.taskRun.taskRunId,
+      taskRunType: envelope.taskRun.runType,
     });
+  const hydratedState =
+    envelope.kind === "runtime_event"
+      ? {
+          ...state,
+          runId: envelope.run.runId ?? state.runId,
+          sessionId: envelope.session.sessionId ?? state.sessionId,
+          taskRunId: envelope.taskRun.taskRunId ?? state.taskRunId,
+          taskRunType: envelope.taskRun.runType ?? state.taskRunType,
+        }
+      : {
+          ...state,
+          sessionId: envelope.session.sessionId ?? state.sessionId,
+          taskRunId: envelope.taskRun.taskRunId ?? state.taskRunId,
+          taskRunType: envelope.taskRun.runType ?? state.taskRunType,
+        };
 
   switch (envelope.event.type) {
+    case "task_run_started":
+      return onTaskRunStarted(hydratedState, envelope);
+    case "task_run_completed":
+      return finalizeTaskRun(hydratedState, "completed", envelope.event.resultSummary);
+    case "task_run_blocked":
+      return finalizeTaskRun(hydratedState, "blocked", envelope.event.resultSummary);
+    case "task_run_failed":
+      return finalizeTaskRun(
+        hydratedState,
+        "failed",
+        envelope.event.resultSummary ?? envelope.event.errorText,
+        envelope.event.errorText,
+      );
+    case "task_run_cancelled":
+      return finalizeTaskRun(
+        hydratedState,
+        "cancelled",
+        envelope.event.resultSummary ?? envelope.event.cancelledBy,
+      );
     case "assistant_message_started":
-      return onAssistantMessageStarted(state, envelope.event);
+      return onAssistantMessageStarted(hydratedState, envelope.event);
     case "assistant_message_delta":
-      return onAssistantMessageDelta(state, envelope.event);
+      return onAssistantMessageDelta(hydratedState, envelope.event);
     case "assistant_reasoning_delta":
-      return onAssistantReasoningDelta(state, envelope.event);
+      return onAssistantReasoningDelta(hydratedState, envelope.event);
     case "assistant_message_completed":
-      return onAssistantMessageCompleted(state, envelope.event);
+      return onAssistantMessageCompleted(hydratedState, envelope.event);
     case "tool_call_started":
-      return onToolCallStarted(state, envelope.event);
+      return onToolCallStarted(hydratedState, envelope.event);
     case "tool_call_completed":
-      return onToolCallCompleted(state, envelope.event);
+      return onToolCallCompleted(hydratedState, envelope.event);
     case "tool_call_failed":
-      return onToolCallFailed(state, envelope.event);
+      return onToolCallFailed(hydratedState, envelope.event);
     case "run_completed":
-      return finalizeRun(state, envelope.event);
+      return finalizeRun(hydratedState, envelope.event);
     case "run_cancelled":
-      return finalizeRun(state, envelope.event);
+      return finalizeRun(hydratedState, envelope.event);
     case "run_failed":
-      return finalizeRun(state, envelope.event);
+      return finalizeRun(hydratedState, envelope.event);
     default:
-      return state;
+      return hydratedState;
   }
 }
 
 function createInitialRunState(input: {
-  runId: string;
+  runId: string | null;
   conversationId: string;
   branchId: string;
   sessionId: string | null;
+  taskRunId: string | null;
+  taskRunType: string | null;
 }): LarkRunState {
   return {
     runId: input.runId,
     conversationId: input.conversationId,
     branchId: input.branchId,
     sessionId: input.sessionId,
+    taskRunId: input.taskRunId,
+    taskRunType: input.taskRunType,
     blocks: [],
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
@@ -134,6 +183,21 @@ function createInitialRunState(input: {
       expanded: false,
       active: false,
     },
+    terminal: "running",
+    terminalErrorKind: null,
+    terminalMessage: null,
+  };
+}
+
+function onTaskRunStarted(
+  state: LarkRunState,
+  envelope: OrchestratedTaskRunEventEnvelope & { event: { type: "task_run_started" } },
+): LarkRunState {
+  return {
+    ...state,
+    sessionId: envelope.event.executionSessionId ?? state.sessionId,
+    taskRunId: envelope.event.taskRunId,
+    taskRunType: envelope.event.runType,
     terminal: "running",
     terminalErrorKind: null,
     terminalMessage: null,
@@ -399,6 +463,29 @@ function finalizeRun(
   };
 }
 
+function finalizeTaskRun(
+  state: LarkRunState,
+  terminal: Extract<LarkRunTerminal, "completed" | "blocked" | "failed" | "cancelled">,
+  terminalMessage: string | null,
+  terminalErrorKind: string | null = null,
+): LarkRunState {
+  return {
+    ...state,
+    blocks: finalizeActiveToolSequenceIfNeeded(state.blocks, state.activeToolSequenceBlockId),
+    activeAssistantMessageId: null,
+    activeToolSequenceBlockId: null,
+    footerStatus: null,
+    reasoning: {
+      ...state.reasoning,
+      active: false,
+      expanded: false,
+    },
+    terminal,
+    terminalErrorKind,
+    terminalMessage,
+  };
+}
+
 export function markLarkRunAwaitingApproval(state: LarkRunState): LarkRunState {
   return {
     ...state,
@@ -453,6 +540,7 @@ export function hasVisibleLarkRunTerminalState(state: LarkRunState): boolean {
     state.terminal === "awaiting_approval" ||
     state.terminal === "continued" ||
     state.terminal === "denied" ||
+    state.terminal === "blocked" ||
     state.terminal === "failed" ||
     state.terminal === "cancelled"
   );
@@ -554,5 +642,15 @@ export function shouldHandleLarkRuntimeEvent(envelope: OrchestratedRuntimeEventE
     envelope.event.type === "run_completed" ||
     envelope.event.type === "run_cancelled" ||
     envelope.event.type === "run_failed"
+  );
+}
+
+export function shouldHandleLarkTaskRunEvent(envelope: OrchestratedTaskRunEventEnvelope): boolean {
+  return (
+    envelope.event.type === "task_run_started" ||
+    envelope.event.type === "task_run_completed" ||
+    envelope.event.type === "task_run_blocked" ||
+    envelope.event.type === "task_run_failed" ||
+    envelope.event.type === "task_run_cancelled"
   );
 }

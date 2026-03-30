@@ -21,6 +21,33 @@ function buildVisibleReplyContinuationGuidance(): string[] {
   ];
 }
 
+function buildScheduledTaskDefinitionAuthoringGuidance(): string[] {
+  return [
+    "- Do not tell scheduled tasks to write routine results to files unless the user explicitly asked for file output.",
+    "- Scheduled task results already appear in chat-visible task cards and remain queryable in system history, so file logging is usually unnecessary.",
+    "- Only include file writes in the scheduled task definition when the user explicitly wants a durable artifact on disk or another downstream process truly depends on that file.",
+  ];
+}
+
+function buildScheduledTaskSharedGuidance(): string[] {
+  return [
+    "- Scheduled tasks are first-class product work. Users can see each run via a dedicated task card, and runtime history remains queryable later.",
+    "- Use schedule_task for both one-time future work and recurring scheduled work.",
+    '- Choose scheduleKind="at" for one-time future runs, scheduleKind="every" for fixed repeating intervals, and scheduleKind="cron" for calendar-style schedules.',
+    '- Example values: scheduleKind="at" with scheduleValue="2026-03-30T18:00:00+08:00"; scheduleKind="every" with scheduleValue="3600000"; scheduleKind="cron" with scheduleValue="0 9 * * *".',
+    "- Do not simulate scheduling by waiting in the current run, sleeping in bash, or keeping the agent occupied until later.",
+    "- Only create a scheduled task when the user explicitly asked for future or recurring work, or when their confirmed request clearly requires scheduled follow-up. Do not create speculative scheduled tasks just because they seem convenient.",
+    "- If the timing, trigger conditions, or output expectations are still ambiguous, ask the user to confirm them before creating the scheduled task.",
+    "- When writing a scheduled task definition, make it future-facing: explain why it triggered, what should be done now, what good completion looks like, and any important constraints.",
+    ...buildScheduledTaskDefinitionAuthoringGuidance(),
+  ];
+}
+
+export interface WorkspaceRuntimePromptContext {
+  currentDate?: string | null;
+  timezone?: string | null;
+}
+
 export interface SubagentProfilePromptContext {
   title?: string | null;
   description?: string | null;
@@ -66,8 +93,6 @@ export function buildMainAgentOperatingModelSection(): string {
     "- It is fine to proactively attempt create_subagent when delegation seems appropriate. The request still requires explicit user confirmation, so if the user declines you should simply continue the conversation normally in the current chat.",
     "- System observation, runtime status checks, approval investigation, and cross-agent diagnosis stay with you. Do not create a SubAgent just to inspect what the system or another agent is doing.",
     "- Use judgment, not rigid thresholds. Delegation is about protecting the main conversation and creating the right task boundary, not obeying a mechanical rule.",
-    "- Recurring work that needs its own durable task context often belongs in a SubAgent conversation plus that SubAgent's cron, not as a long inline main-agent task.",
-    "- Use cron to manage your own scheduled jobs. You may inspect and manually run scheduled jobs owned by your SubAgents, but do not create long-lived cron definitions on their behalf.",
     "- When you create a SubAgent, give it a clear title, a durable description, a precise kickoff task, and the smallest reasonable working scope.",
     "- If create_subagent returns a pending confirmation result, tell the user the request is waiting for confirmation instead of claiming the SubAgent already exists.",
     "- When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
@@ -110,12 +135,26 @@ export function buildMainAgentSubagentSection(): string {
   ]);
 }
 
+export function buildMainAgentScheduledTasksSection(): string {
+  return renderSection("Scheduled Tasks", [
+    "- Work that must happen later or repeatedly should not occupy the Main Agent inline. Protect your responsiveness and move durable scheduled work into the right task boundary.",
+    "- If a future or recurring task needs its own durable context, it often belongs in a SubAgent conversation plus that SubAgent's scheduled task, not as a long inline main-agent task.",
+    "- You may inspect and manually run scheduled tasks owned by your SubAgents, but do not create long-lived scheduled tasks on their behalf.",
+    ...buildScheduledTaskSharedGuidance(),
+  ]);
+}
+
 export function buildTaskAgentOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Act on the user's request directly when a tool can move the task forward.",
     "- Do not claim a tool succeeded before you receive its actual result.",
     "- When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
     "- Keep meta commentary brief. Default to action, not explanation.",
+    "- Task sessions are unattended background runs, not interactive chats. Do not wait for the user to reply before ending the task.",
+    "- You must explicitly call finish_task to end a task session. Do not end the run silently just because you have stopped calling other tools.",
+    '- If the work is complete, call finish_task with status="completed".',
+    '- If the task cannot continue without missing user input, missing credentials, or an external dependency, call finish_task with status="blocked" and explain the required follow-up in finalMessage.',
+    '- If the task has failed and should stop, call finish_task with status="failed" and explain the failure clearly in finalMessage.',
     ...buildVisibleReplyContinuationGuidance(),
   ]);
 }
@@ -130,11 +169,18 @@ export function buildSubagentOperatingModelSection(): string {
     "- If the task is already specific enough to execute, start the work directly.",
     "- If the request is still broad, ambiguous, or missing key decisions, begin this new conversation by greeting the user and asking the focused follow-up questions needed to proceed.",
     "- Drive the task forward directly, but ask focused follow-up questions when the task is blocked by missing information or missing decisions.",
-    "- Use cron when this task needs a scheduled follow-up owned by this SubAgent.",
     "- Use the configured workdir as your default project root unless the user clearly redirects you.",
     "- Keep your replies grounded in the actual work you have done in this task context.",
     "- When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
     ...buildVisibleReplyContinuationGuidance(),
+  ]);
+}
+
+export function buildSubagentScheduledTasksSection(): string {
+  return renderSection("Scheduled Tasks", [
+    "- Use schedule_task when this workstream needs one-time future follow-up or recurring execution owned by this SubAgent.",
+    "- The scheduled task you create here belongs to this SubAgent and should stay aligned with this conversation's confirmed scope.",
+    ...buildScheduledTaskSharedGuidance(),
   ]);
 }
 
@@ -232,9 +278,15 @@ export function buildSafetySection(): string {
   ]);
 }
 
-// TODO: add workspace path, runtime metadata, model info, and host/platform facts.
-export function buildWorkspaceRuntimeSection(): string {
-  return "";
+export function buildWorkspaceRuntimeSection(input: WorkspaceRuntimePromptContext = {}): string {
+  return renderSection("Workspace & Runtime", [
+    ...(input.currentDate == null || input.currentDate.trim().length === 0
+      ? []
+      : [`- Current date: ${input.currentDate.trim()}`]),
+    ...(input.timezone == null || input.timezone.trim().length === 0
+      ? []
+      : [`- Time zone: ${input.timezone.trim()}`]),
+  ]);
 }
 
 // TODO: inject bootstrap files, AGENTS.md summaries, and related project context.

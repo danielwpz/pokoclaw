@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   type CronScheduleDefinition,
   computeNextRunAt,
+  normalizeScheduleDefinition,
   resolveInitialNextRunAt,
 } from "@/src/cron/schedule.js";
 import type { AgentManager } from "@/src/orchestration/agent-manager.js";
@@ -145,11 +146,13 @@ export class CronService {
 
   add(input: AddCronJobInput): CronJob {
     const now = this.now();
+    const normalized = normalizeScheduleDefinition(input, now);
     const nextRunAt = input.enabled === false ? null : resolveInitialNextRunAt(input, now);
 
     const created = this.repo().create({
       id: randomUUID(),
       ...input,
+      scheduleValue: normalized.scheduleValue,
       nextRunAt,
       createdAt: now,
       updatedAt: now,
@@ -175,27 +178,30 @@ export class CronService {
     }
 
     const updatedAt = this.now();
-    const merged = {
+    const merged: CronScheduleDefinition & { enabled: boolean } = {
       scheduleKind: (patch.scheduleKind ??
         current.scheduleKind) as CronScheduleDefinition["scheduleKind"],
       scheduleValue: patch.scheduleValue ?? current.scheduleValue,
       timezone: patch.timezone === undefined ? current.timezone : patch.timezone,
       enabled: patch.enabled ?? current.enabled,
     };
-
-    const nextRunAt =
+    const hasSchedulePatch =
       patch.scheduleKind !== undefined ||
       patch.scheduleValue !== undefined ||
-      patch.timezone !== undefined ||
-      patch.enabled !== undefined
-        ? merged.enabled
-          ? resolveInitialNextRunAt(merged, updatedAt)
-          : null
-        : undefined;
+      patch.timezone !== undefined;
+    const shouldRecomputeNextRun = hasSchedulePatch || patch.enabled !== undefined;
+    const normalized = hasSchedulePatch ? normalizeScheduleDefinition(merged, updatedAt) : null;
+
+    const nextRunAt = shouldRecomputeNextRun
+      ? merged.enabled
+        ? (normalized?.nextRunAt ?? resolveInitialNextRunAt(merged, updatedAt))
+        : null
+      : undefined;
 
     const updated = this.repo().update({
       id,
       ...patch,
+      ...(normalized == null ? {} : { scheduleValue: normalized.scheduleValue }),
       ...(nextRunAt === undefined ? {} : { nextRunAt }),
       updatedAt,
     });
@@ -215,7 +221,10 @@ export class CronService {
   }
 
   remove(id: string): boolean {
-    const removed = this.repo().remove(id);
+    const removed = this.repo().softDelete({
+      id,
+      deletedAt: this.now(),
+    });
     if (removed) {
       logger.info("removed cron job", {
         cronJobId: id,
@@ -404,7 +413,7 @@ export class CronService {
       .then((result) => {
         const finishedAt = this.now();
         const output =
-          result.status === "completed"
+          result.status === "completed" || result.status === "blocked"
             ? result.settled.taskRun.resultSummary
             : (result.settled.taskRun.errorText ?? result.errorMessage);
 

@@ -12,6 +12,45 @@ import {
   type TestDatabaseHandle,
 } from "@/tests/storage/helpers/test-db.js";
 
+function createStartedTaskRunResult(input: {
+  sessionId: string;
+  scenario: "subagent" | "cron";
+  completionStatus?: "completed" | "blocked" | "failed";
+  summary?: string;
+  finalMessage?: string;
+}): SubmitMessageResult {
+  const completionStatus = input.completionStatus ?? "completed";
+  return {
+    status: "started",
+    messageId: "msg_task_1",
+    run: {
+      runId: input.scenario === "cron" ? "run_loop_cron_1" : "run_loop_1",
+      sessionId: input.sessionId,
+      scenario: input.scenario,
+      modelId: "test-model",
+      appendedMessageIds: [],
+      toolExecutions: 1,
+      compaction: {
+        shouldCompact: false,
+        reason: null,
+        thresholdTokens: 1000,
+        effectiveWindow: 2000,
+      },
+      events: [],
+      stopSignal: {
+        reason: "task_completion",
+        payload: {
+          taskCompletion: {
+            status: completionStatus,
+            summary: input.summary ?? "Task finished.",
+            finalMessage: input.finalMessage ?? "Task finished.",
+          },
+        },
+      },
+    },
+  };
+}
+
 async function withHandle(fn: (handle: TestDatabaseHandle) => Promise<void>): Promise<void> {
   const handle = await createTestDatabase(import.meta.url);
   try {
@@ -24,6 +63,16 @@ async function withHandle(fn: (handle: TestDatabaseHandle) => Promise<void>): Pr
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function createDeferredPromise<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function seedFixture(handle: TestDatabaseHandle): void {
@@ -215,6 +264,65 @@ describe("AgentManager", () => {
 
     expect(result).toBeNull();
     expect(submitMessage).not.toHaveBeenCalled();
+  });
+
+  test("can wait for inflight runtime event orchestration to finish", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+
+      const submitMessageGate = createDeferredPromise<SubmitMessageResult>();
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async (input: SubmitMessageInput): Promise<SubmitMessageResult> => {
+            if (input.messageType === "approval_request") {
+              return submitMessageGate.promise;
+            }
+            return { status: "steered" };
+          }),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      manager.emitRuntimeEvent({
+        type: "approval_requested",
+        eventId: "evt_1",
+        createdAt: "2026-03-25T00:00:03.000Z",
+        sessionId: "sess_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        runId: "run_1",
+        approvalId: "1",
+        approvalTarget: "main_agent",
+        title: "Need approval",
+        reasonText: "Need to update the requested task output.",
+        expiresAt: null,
+      });
+
+      await flushMicrotasks();
+
+      let idleResolved = false;
+      const idlePromise = manager.waitForRuntimeEventOrchestrationIdle().then(() => {
+        idleResolved = true;
+      });
+
+      await flushMicrotasks();
+      expect(idleResolved).toBe(false);
+
+      handle.storage.sqlite
+        .prepare(
+          `
+            UPDATE approval_ledger
+            SET status = 'approved', decided_at = ?, reason_text = ?
+            WHERE id = 1
+          `,
+        )
+        .run("2026-03-25T00:00:04.000Z", "Approved during test drain.");
+      submitMessageGate.resolve({ status: "steered" });
+
+      await idlePromise;
+      expect(idleResolved).toBe(true);
+    });
   });
 
   test("treats duplicate approve subagent callbacks as idempotent and republishes the resolved event", async () => {
@@ -472,25 +580,13 @@ describe("AgentManager", () => {
           });
           expect(input.content).toContain("<task_execution>");
 
-          return {
-            status: "started",
-            messageId: "msg_task_1",
-            run: {
-              runId: "run_loop_1",
-              sessionId: input.sessionId,
-              scenario: "subagent",
-              modelId: "test-model",
-              appendedMessageIds: [],
-              toolExecutions: 0,
-              compaction: {
-                shouldCompact: false,
-                reason: null,
-                thresholdTokens: 1000,
-                effectiveWindow: 2000,
-              },
-              events: [],
-            },
-          };
+          expect(input.afterToolResultHook).toBeDefined();
+          return createStartedTaskRunResult({
+            sessionId: input.sessionId,
+            scenario: "subagent",
+            summary: "Reviewed the repository changes.",
+            finalMessage: "Reviewed the repository changes.",
+          });
         },
       );
 
@@ -661,25 +757,13 @@ describe("AgentManager", () => {
           });
           expect(input.content).toContain("<run_type>cron</run_type>");
 
-          return {
-            status: "started",
-            messageId: "msg_cron_1",
-            run: {
-              runId: "run_loop_cron_1",
-              sessionId: input.sessionId,
-              scenario: "cron",
-              modelId: "test-model",
-              appendedMessageIds: [],
-              toolExecutions: 0,
-              compaction: {
-                shouldCompact: false,
-                reason: null,
-                thresholdTokens: 1000,
-                effectiveWindow: 2000,
-              },
-              events: [],
-            },
-          };
+          expect(input.afterToolResultHook).toBeDefined();
+          return createStartedTaskRunResult({
+            sessionId: input.sessionId,
+            scenario: "cron",
+            summary: "Cron reconciliation finished.",
+            finalMessage: "Cron reconciliation finished.",
+          });
         },
       );
 
@@ -809,25 +893,15 @@ describe("AgentManager", () => {
       `);
 
       const submitMessage = vi.fn(
-        async (input: SubmitMessageInput): Promise<SubmitMessageResult> => ({
-          status: "started",
-          messageId: "msg_cron_1",
-          run: {
-            runId: "run_loop_cron_1",
+        async (input: SubmitMessageInput): Promise<SubmitMessageResult> => {
+          expect(input.afterToolResultHook).toBeDefined();
+          return createStartedTaskRunResult({
             sessionId: input.sessionId,
             scenario: "cron",
-            modelId: "test-model",
-            appendedMessageIds: [],
-            toolExecutions: 0,
-            compaction: {
-              shouldCompact: false,
-              reason: null,
-              thresholdTokens: 1000,
-              effectiveWindow: 2000,
-            },
-            events: [],
-          },
-        }),
+            summary: "Manual cron run finished.",
+            finalMessage: "Manual cron run finished.",
+          });
+        },
       );
 
       const manager = new AgentManager({

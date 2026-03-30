@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
+  blockTaskExecution,
   cancelTaskExecution,
   completeTaskExecution,
   failTaskExecution,
@@ -92,6 +93,25 @@ describe("task run lifecycle", () => {
       durationMs: 6000,
     });
     expect(settled.executionSession?.status).toBe("failed");
+  });
+
+  test("blocks task execution and keeps the task outcome on the task run", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const settled = blockTaskExecution({
+      db: handle.storage.db,
+      taskRunId: "run_1",
+      resultSummary: "Need the user's API token before retrying.",
+      finishedAt: new Date("2026-03-26T00:00:08.500Z"),
+    });
+
+    expect(settled.taskRun).toMatchObject({
+      status: "blocked",
+      resultSummary: "Need the user's API token before retrying.",
+      durationMs: 6500,
+    });
+    expect(settled.executionSession?.status).toBe("blocked");
   });
 
   test("cancels task execution and records the cancelling actor", async () => {

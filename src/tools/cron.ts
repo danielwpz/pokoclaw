@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { type Static, Type } from "@sinclair/typebox";
 
 import { extractCronTaskDefinition, serializeCronTaskDefinition } from "@/src/cron/payload.js";
-import { resolveInitialNextRunAt } from "@/src/cron/schedule.js";
+import {
+  type CronScheduleDefinition,
+  normalizeScheduleDefinition,
+  resolveInitialNextRunAt,
+  ScheduleDefinitionError,
+} from "@/src/cron/schedule.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ConversationBranchesRepo } from "@/src/storage/repos/conversation-branches.repo.js";
@@ -22,26 +27,31 @@ const CRON_ACTION_SCHEMA = Type.Union([
   Type.Literal("resume"),
 ]);
 
-const CRON_SCHEDULE_KIND_SCHEMA = Type.Union([
-  Type.Literal("at"),
-  Type.Literal("every"),
-  Type.Literal("cron"),
-]);
-
 export const CRON_TOOL_SCHEMA = Type.Object(
   {
     action: CRON_ACTION_SCHEMA,
     jobId: Type.Optional(Type.String({ minLength: 1 })),
     includeDisabled: Type.Optional(Type.Boolean()),
     name: Type.Optional(Type.String({ minLength: 1 })),
-    scheduleKind: Type.Optional(CRON_SCHEDULE_KIND_SCHEMA),
-    scheduleValue: Type.Optional(Type.String({ minLength: 1 })),
+    scheduleKind: Type.Optional(
+      Type.Union([Type.Literal("at"), Type.Literal("every"), Type.Literal("cron")], {
+        description:
+          'Scheduling mode: use "at" for one-time future runs, "every" for fixed repeating intervals, and "cron" for calendar-style cron expressions.',
+      }),
+    ),
+    scheduleValue: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          'Value for the chosen scheduleKind. For "at", use an absolute timestamp like "2026-03-30T18:00:00+08:00" or a relative value like "in 2 hours". For "every", use a positive millisecond string like "3600000". For "cron", use a 5-field cron expression like "0 9 * * *".',
+      }),
+    ),
     timezone: Type.Optional(Type.String({ minLength: 1 })),
     prompt: Type.Optional(
       Type.String({
         minLength: 1,
         description:
-          "Free-form task definition for the future cron run. Write it so that when this exact message is seen again later, the agent can independently understand why it was triggered, what it should do now, and how to complete it without ambiguity. Prefer clear background, goal, completion standard, important constraints, and any useful reference steps, but do not force a rigid format.",
+          "Free-form task definition for the future scheduled task run. Write it so that when this exact message is seen again later, the agent can independently understand why it was triggered, what it should do now, and how to complete it without ambiguity. Prefer clear background, goal, completion standard, important constraints, and any useful reference steps, but do not force a rigid format.",
       }),
     ),
     enabled: Type.Optional(Type.Boolean()),
@@ -51,11 +61,11 @@ export const CRON_TOOL_SCHEMA = Type.Object(
 
 export type CronToolArgs = Static<typeof CRON_TOOL_SCHEMA>;
 
-export function createCronTool() {
+export function createScheduleTaskTool() {
   return defineTool({
-    name: "cron",
+    name: "schedule_task",
     description:
-      "Create, inspect, update, pause, resume, remove, and manually run scheduled cron jobs that belong to the current agent context. When creating or updating a cron job, write the task definition as a future-facing instruction for yourself: when this text is seen again at runtime, it should clearly explain the background, what should be done now, what good completion looks like, and any important constraints or reference steps.",
+      "Create, inspect, update, pause, resume, remove, and manually run one-time future or recurring scheduled tasks that belong to the current agent context. When creating or updating a scheduled task, write the task definition as a future-facing instruction for yourself: when this text is seen again at runtime, it should clearly explain the background, what should be done now, what good completion looks like, and any important constraints or reference steps.",
     inputSchema: CRON_TOOL_SCHEMA,
     async execute(context, args) {
       const resolved = resolveCronCaller(context);
@@ -78,7 +88,7 @@ export function createCronTool() {
           const scheduleKind = requireScheduleKind(args.scheduleKind);
           const scheduleValue = requireField(args.scheduleValue, "scheduleValue");
           const now = new Date();
-          const nextRunAt = resolveInitialNextRunAt(
+          const normalizedSchedule = normalizeScheduleDefinitionOrThrowRecoverable(
             {
               scheduleKind,
               scheduleValue,
@@ -94,18 +104,18 @@ export function createCronTool() {
             targetBranchId: resolved.homeBranchId,
             name: args.name ?? null,
             scheduleKind,
-            scheduleValue,
+            scheduleValue: normalizedSchedule.scheduleValue,
             timezone: args.timezone ?? null,
             enabled: args.enabled ?? true,
             contextMode: resolved.callerAgent.kind === "sub" ? "group" : "isolated",
             payloadJson: serializeCronTaskDefinition(prompt),
-            nextRunAt: (args.enabled ?? true) ? nextRunAt : null,
+            nextRunAt: (args.enabled ?? true) ? normalizedSchedule.nextRunAt : null,
             createdAt: now,
             updatedAt: now,
           });
 
           return textToolResult(
-            `Created cron job "${created.name ?? created.id}" for this ${resolved.callerAgent.kind === "main" ? "main agent" : "subagent"}.`,
+            `Created scheduled task "${created.name ?? created.id}" for this ${resolved.callerAgent.kind === "main" ? "main agent" : "subagent"}.`,
             formatCronJobForOutput(created),
           );
         }
@@ -119,10 +129,10 @@ export function createCronTool() {
             updatedAt: new Date(),
           });
           if (updated == null) {
-            throw toolInternalError(`Cron job ${job.id} disappeared during update.`);
+            throw toolInternalError(`Scheduled task ${job.id} disappeared during update.`);
           }
           return textToolResult(
-            `Updated cron job "${updated.name ?? updated.id}".`,
+            `Updated scheduled task "${updated.name ?? updated.id}".`,
             formatCronJobForOutput(updated),
           );
         }
@@ -130,7 +140,7 @@ export function createCronTool() {
         case "remove": {
           const job = requireOwnedJob(repo, args.jobId, resolved.callerAgent.id);
           repo.remove(job.id);
-          return textToolResult(`Removed cron job "${job.name ?? job.id}".`, {
+          return textToolResult(`Removed scheduled task "${job.name ?? job.id}".`, {
             id: job.id,
           });
         }
@@ -144,7 +154,7 @@ export function createCronTool() {
             updatedAt: new Date(),
             ...(args.action === "resume"
               ? {
-                  nextRunAt: resolveInitialNextRunAt(
+                  nextRunAt: resolveInitialNextRunAtOrThrowRecoverable(
                     {
                       scheduleKind: job.scheduleKind as "at" | "every" | "cron",
                       scheduleValue: job.scheduleValue,
@@ -156,10 +166,10 @@ export function createCronTool() {
               : { nextRunAt: null }),
           });
           if (updated == null) {
-            throw toolInternalError(`Cron job ${job.id} disappeared during ${args.action}.`);
+            throw toolInternalError(`Scheduled task ${job.id} disappeared during ${args.action}.`);
           }
           return textToolResult(
-            `${args.action === "pause" ? "Paused" : "Resumed"} cron job "${updated.name ?? updated.id}".`,
+            `${args.action === "pause" ? "Paused" : "Resumed"} scheduled task "${updated.name ?? updated.id}".`,
             formatCronJobForOutput(updated),
           );
         }
@@ -167,10 +177,13 @@ export function createCronTool() {
         case "run": {
           const job = requireManageableJob(repo, args.jobId, resolved.manageableOwnerIds);
           if (context.runtimeControl?.runCronJobNow == null) {
-            throw toolInternalError("cron.run is missing host runtime control.");
+            throw toolInternalError("schedule_task.run is missing host runtime control.");
           }
           const result = await context.runtimeControl.runCronJobNow({ jobId: job.id });
-          return textToolResult(`Triggered cron job "${job.name ?? job.id}" to run now.`, result);
+          return textToolResult(`Triggered scheduled task "${job.name ?? job.id}" to run now.`, {
+            accepted: result.accepted,
+            scheduledTaskId: result.cronJobId,
+          });
         }
       }
     },
@@ -187,22 +200,22 @@ function resolveCronCaller(context: { sessionId: string; storage: StorageDb }) {
     throw toolInternalError(`Source session not found: ${context.sessionId}`);
   }
   if (session.purpose !== "chat") {
-    throw toolRecoverableError("cron is only available in agent chat sessions.", {
-      code: "cron_wrong_session_purpose",
+    throw toolRecoverableError("schedule_task is only available in agent chat sessions.", {
+      code: "schedule_task_wrong_session_purpose",
       sessionPurpose: session.purpose,
     });
   }
   if (session.ownerAgentId == null) {
-    throw toolRecoverableError("cron is missing its owner agent context.", {
-      code: "cron_missing_owner_agent",
+    throw toolRecoverableError("schedule_task is missing its owner agent context.", {
+      code: "schedule_task_missing_owner_agent",
       sessionId: context.sessionId,
     });
   }
 
   const callerAgent = agentsRepo.getById(session.ownerAgentId);
   if (callerAgent == null || (callerAgent.kind !== "main" && callerAgent.kind !== "sub")) {
-    throw toolRecoverableError("cron is only available to the main agent or a subagent.", {
-      code: "cron_wrong_agent_kind",
+    throw toolRecoverableError("schedule_task is only available to the main agent or a subagent.", {
+      code: "schedule_task_wrong_agent_kind",
       agentKind: callerAgent?.kind ?? null,
     });
   }
@@ -236,8 +249,8 @@ function requireOwnedJob(
 ): CronJob {
   const job = requireJob(repo, jobId);
   if (job.ownerAgentId !== ownerAgentId) {
-    throw toolRecoverableError("You can only change cron jobs owned by this agent.", {
-      code: "cron_not_owned_by_caller",
+    throw toolRecoverableError("You can only change scheduled tasks owned by this agent.", {
+      code: "schedule_task_not_owned_by_caller",
       jobId: job.id,
       ownerAgentId: job.ownerAgentId,
     });
@@ -252,11 +265,14 @@ function requireManageableJob(
 ): CronJob {
   const job = requireJob(repo, jobId);
   if (!manageableOwnerIds.includes(job.ownerAgentId)) {
-    throw toolRecoverableError("This cron job is outside the current agent's management scope.", {
-      code: "cron_outside_management_scope",
-      jobId: job.id,
-      ownerAgentId: job.ownerAgentId,
-    });
+    throw toolRecoverableError(
+      "This scheduled task is outside the current agent's management scope.",
+      {
+        code: "schedule_task_outside_management_scope",
+        jobId: job.id,
+        ownerAgentId: job.ownerAgentId,
+      },
+    );
   }
   return job;
 }
@@ -265,8 +281,8 @@ function requireJob(repo: CronJobsRepo, jobId: string | undefined): CronJob {
   const id = requireField(jobId, "jobId");
   const job = repo.getById(id);
   if (job == null) {
-    throw toolRecoverableError(`Unknown cron job ${id}.`, {
-      code: "cron_job_not_found",
+    throw toolRecoverableError(`Unknown scheduled task ${id}.`, {
+      code: "schedule_task_not_found",
       jobId: id,
     });
   }
@@ -276,8 +292,8 @@ function requireJob(repo: CronJobsRepo, jobId: string | undefined): CronJob {
 function requireField(value: string | undefined, field: string): string {
   const normalized = value?.trim();
   if (!normalized) {
-    throw toolRecoverableError(`cron.${field} is required for this action.`, {
-      code: "cron_missing_field",
+    throw toolRecoverableError(`schedule_task.${field} is required for this action.`, {
+      code: "schedule_task_missing_field",
       field,
     });
   }
@@ -286,8 +302,8 @@ function requireField(value: string | undefined, field: string): string {
 
 function requireScheduleKind(value: CronToolArgs["scheduleKind"]): "at" | "every" | "cron" {
   if (value == null) {
-    throw toolRecoverableError("cron.scheduleKind is required for this action.", {
-      code: "cron_missing_field",
+    throw toolRecoverableError("schedule_task.scheduleKind is required for this action.", {
+      code: "schedule_task_missing_field",
       field: "scheduleKind",
     });
   }
@@ -303,8 +319,8 @@ function buildUpdatePatch(job: CronJob, args: CronToolArgs) {
   const hasMeta = args.name !== undefined || args.enabled !== undefined;
 
   if (!hasScheduleFields && !hasPrompt && !hasMeta) {
-    throw toolRecoverableError("cron.update requires at least one field to change.", {
-      code: "cron_empty_update",
+    throw toolRecoverableError("schedule_task.update requires at least one field to change.", {
+      code: "schedule_task_empty_update",
     });
   }
 
@@ -338,29 +354,32 @@ function buildUpdatePatch(job: CronJob, args: CronToolArgs) {
   }
 
   if (hasScheduleFields) {
+    const now = new Date();
     const scheduleKind = patch.scheduleKind ?? (job.scheduleKind as "at" | "every" | "cron");
     const scheduleValue = patch.scheduleValue ?? job.scheduleValue;
     if ((patch.scheduleKind == null) !== (patch.scheduleValue == null)) {
       throw toolRecoverableError(
-        "cron.update must provide both scheduleKind and scheduleValue when changing the schedule.",
+        "schedule_task.update must provide both scheduleKind and scheduleValue when changing the schedule.",
         {
-          code: "cron_incomplete_schedule_patch",
+          code: "schedule_task_incomplete_schedule_patch",
         },
       );
     }
 
-    patch.nextRunAt = resolveInitialNextRunAt(
+    const normalized = normalizeScheduleDefinitionOrThrowRecoverable(
       {
         scheduleKind,
         scheduleValue,
         timezone: patch.timezone ?? job.timezone,
       },
-      new Date(),
+      now,
     );
+    patch.scheduleValue = normalized.scheduleValue;
+    patch.nextRunAt = normalized.nextRunAt;
   } else if (args.enabled === false) {
     patch.nextRunAt = null;
   } else if (args.enabled === true && job.nextRunAt == null) {
-    patch.nextRunAt = resolveInitialNextRunAt(
+    patch.nextRunAt = resolveInitialNextRunAtOrThrowRecoverable(
       {
         scheduleKind: job.scheduleKind as "at" | "every" | "cron",
         scheduleValue: job.scheduleValue,
@@ -371,6 +390,85 @@ function buildUpdatePatch(job: CronJob, args: CronToolArgs) {
   }
 
   return patch;
+}
+
+function normalizeScheduleDefinitionOrThrowRecoverable(input: CronScheduleDefinition, now: Date) {
+  try {
+    const normalized = normalizeScheduleDefinition(input, now);
+    if (input.scheduleKind === "at" && normalized.nextRunAt == null) {
+      throw new ScheduleDefinitionError(
+        input.scheduleKind,
+        input.scheduleValue,
+        "past_at_timestamp",
+        "One-shot scheduled tasks must target a future time.",
+      );
+    }
+    return normalized;
+  } catch (error) {
+    if (error instanceof ScheduleDefinitionError) {
+      throw mapScheduleDefinitionError(error);
+    }
+    throw error;
+  }
+}
+
+function resolveInitialNextRunAtOrThrowRecoverable(
+  input: CronScheduleDefinition,
+  now: Date,
+): Date | null {
+  try {
+    return resolveInitialNextRunAt(input, now);
+  } catch (error) {
+    if (error instanceof ScheduleDefinitionError) {
+      throw mapScheduleDefinitionError(error);
+    }
+    throw error;
+  }
+}
+
+function mapScheduleDefinitionError(error: ScheduleDefinitionError) {
+  switch (error.code) {
+    case "invalid_at_timestamp":
+      return toolRecoverableError(
+        'Invalid schedule_task value for scheduleKind="at". Use an absolute timestamp like "2026-03-30T18:00:00+08:00" or a relative value like "in 2 hours".',
+        {
+          code: "schedule_task_invalid_schedule_value",
+          scheduleKind: error.scheduleKind,
+          scheduleValue: error.scheduleValue,
+          examples: ["2026-03-30T18:00:00+08:00", "in 2 hours"],
+        },
+      );
+    case "past_at_timestamp":
+      return toolRecoverableError(
+        'One-time scheduled tasks must target a future time. Use a future timestamp like "2026-03-30T18:00:00+08:00" or a relative value like "in 2 hours".',
+        {
+          code: "schedule_task_invalid_schedule_value",
+          scheduleKind: error.scheduleKind,
+          scheduleValue: error.scheduleValue,
+          examples: ["2026-03-30T18:00:00+08:00", "in 2 hours"],
+        },
+      );
+    case "invalid_every_interval":
+      return toolRecoverableError(
+        'Invalid schedule_task value for scheduleKind="every". Use a positive millisecond string such as "60000" or "3600000".',
+        {
+          code: "schedule_task_invalid_schedule_value",
+          scheduleKind: error.scheduleKind,
+          scheduleValue: error.scheduleValue,
+          examples: ["60000", "3600000"],
+        },
+      );
+    case "invalid_cron_expression":
+      return toolRecoverableError(
+        'Invalid schedule_task value for scheduleKind="cron". Use a standard 5-field cron expression like "0 9 * * *".',
+        {
+          code: "schedule_task_invalid_schedule_value",
+          scheduleKind: error.scheduleKind,
+          scheduleValue: error.scheduleValue,
+          examples: ["0 9 * * *"],
+        },
+      );
+  }
 }
 
 function formatCronJobForOutput(job: CronJob) {

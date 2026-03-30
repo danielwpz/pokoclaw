@@ -25,6 +25,7 @@ import {
   markLarkRunAwaitingApproval,
   reduceLarkRunState,
   shouldHandleLarkRuntimeEvent,
+  shouldHandleLarkTaskRunEvent,
 } from "@/src/channels/lark/run-state.js";
 import type {
   OrchestratedOutboundEventEnvelope,
@@ -820,7 +821,34 @@ export function createLarkOutboundRuntime(
           return;
         }
 
+        if (envelope.kind === "task_run_event") {
+          if (!shouldHandleLarkTaskRunEvent(envelope)) {
+            return;
+          }
+          const runCardObjectId = buildTaskRunCardObjectId(envelope.event.taskRunId);
+          const next = reduceLarkRunState(runStates.get(runCardObjectId) ?? null, envelope);
+          runStates.set(runCardObjectId, next);
+          logger.debug("accepted lark task run lifecycle event", {
+            taskRunId: envelope.event.taskRunId,
+            runCardObjectId,
+            eventType: envelope.event.type,
+            terminal: next.terminal,
+          });
+          bumpVersionAndSchedule(`run:${runCardObjectId}`);
+          return;
+        }
+
         if (envelope.kind !== "runtime_event") {
+          return;
+        }
+
+        if (!shouldDeliverLarkRuntimeTranscript(envelope)) {
+          logger.debug("ignoring non-deliverable runtime transcript for lark", {
+            runId: envelope.run.runId,
+            sessionId: envelope.session.sessionId,
+            sessionPurpose: envelope.session.purpose,
+            eventType: envelope.event.type,
+          });
           return;
         }
 
@@ -863,6 +891,43 @@ export function createLarkOutboundRuntime(
               toolCallId,
             },
           );
+          return;
+        }
+
+        if (isTaskRunCardRuntimeEnvelope(envelope)) {
+          if (isTaskRuntimeTerminalEvent(envelope)) {
+            logger.debug(
+              "ignoring task runtime terminal event because task lifecycle owns final state",
+              {
+                runId,
+                taskRunId: envelope.taskRun.taskRunId,
+                eventType: envelope.event.type,
+              },
+            );
+            return;
+          }
+
+          const taskRunId = envelope.taskRun.taskRunId;
+          if (taskRunId == null) {
+            return;
+          }
+          const runCardObjectId = buildTaskRunCardObjectId(taskRunId);
+          const next = reduceLarkRunState(runStates.get(runCardObjectId) ?? null, envelope);
+          runStates.set(runCardObjectId, next);
+
+          logger.debug("accepted lark task transcript runtime event", {
+            runId,
+            taskRunId,
+            runCardObjectId,
+            eventType: envelope.event.type,
+            turn: "turn" in envelope.event ? envelope.event.turn : null,
+            activeAssistantMessageId: next.activeAssistantMessageId,
+            activeToolSequenceBlockId: next.activeToolSequenceBlockId,
+            blockCount: next.blocks.length,
+            footerStatus: next.footerStatus,
+            terminal: next.terminal,
+          });
+          bumpVersionAndSchedule(`run:${runCardObjectId}`);
           return;
         }
 
@@ -978,6 +1043,30 @@ function parseSurfaceObject(raw: string): Record<string, unknown> {
   } catch {}
 
   return {};
+}
+
+function buildTaskRunCardObjectId(taskRunId: string): string {
+  return `task:${taskRunId}`;
+}
+
+function isTaskRunCardRuntimeEnvelope(envelope: OrchestratedRuntimeEventEnvelope): boolean {
+  return (
+    envelope.session.sessionId != null &&
+    envelope.session.purpose === "task" &&
+    envelope.taskRun.taskRunId != null
+  );
+}
+
+function isTaskRuntimeTerminalEvent(envelope: OrchestratedRuntimeEventEnvelope): boolean {
+  return (
+    envelope.event.type === "run_completed" ||
+    envelope.event.type === "run_failed" ||
+    envelope.event.type === "run_cancelled"
+  );
+}
+
+function shouldDeliverLarkRuntimeTranscript(envelope: OrchestratedRuntimeEventEnvelope): boolean {
+  return envelope.session.purpose === "chat" || envelope.session.purpose === "task";
 }
 
 function safeJson(value: unknown): string {

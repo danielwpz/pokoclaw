@@ -229,12 +229,17 @@ async function createHarness(input: {
 describe("real llm delegated approval integration", () => {
   let fixture: IntegrationLlmFixture;
   let handle: TestDatabaseHandle | null = null;
+  let manager: AgentManager | null = null;
 
   beforeAll(async () => {
     fixture = await createIntegrationLlmFixture();
   });
 
   afterEach(async () => {
+    if (manager != null) {
+      await manager.waitForRuntimeEventOrchestrationIdle();
+      manager = null;
+    }
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
@@ -271,6 +276,7 @@ describe("real llm delegated approval integration", () => {
         targetPath,
       }),
     });
+    manager = harness.manager;
 
     const result = await harness.ingress.submitMessage({
       sessionId: harness.created.executionSession.id,
@@ -380,6 +386,7 @@ describe("real llm delegated approval integration", () => {
         targetPath,
       }),
     });
+    manager = harness.manager;
 
     const result = await harness.ingress.submitMessage({
       sessionId: harness.created.executionSession.id,

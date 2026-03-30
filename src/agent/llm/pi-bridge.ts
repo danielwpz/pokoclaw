@@ -38,6 +38,7 @@ const COMPACTION_SUMMARY_PREFIX = "[Context Summary]";
 const PERMISSIVE_TOOL_PARAMETERS = Type.Object({}, { additionalProperties: true });
 const DEFAULT_REASONING_LEVEL = "medium";
 const logger = createSubsystemLogger("llm-bridge");
+const LOG_PREVIEW_LIMIT = 160;
 
 export interface PiBridgeTextDelta {
   delta: string;
@@ -124,11 +125,19 @@ export class PiBridge {
       }
 
       const finalMessage = await stream.result();
+      const contentSummary = summarizeAssistantContent(finalMessage.content);
       logger.debug("streaming llm turn finished", {
         modelId: input.model.id,
         provider: input.model.provider.id,
         stopReason: finalMessage.stopReason,
+        ...contentSummary,
       });
+      logSuspiciousAssistantCompletion(
+        "stream",
+        input.model,
+        finalMessage.stopReason,
+        contentSummary,
+      );
       return normalizeAssistantResult(finalMessage, "stream");
     } catch (error) {
       throw normalizeAgentLlmError({
@@ -169,11 +178,19 @@ export class PiBridge {
         context,
         buildPiStreamOptions(input.model, input.signal, { enableReasoning: true }),
       );
+      const contentSummary = summarizeAssistantContent(finalMessage.content);
       logger.debug("non-stream llm turn finished", {
         modelId: input.model.id,
         provider: input.model.provider.id,
         stopReason: finalMessage.stopReason,
+        ...contentSummary,
       });
+      logSuspiciousAssistantCompletion(
+        "complete",
+        input.model,
+        finalMessage.stopReason,
+        contentSummary,
+      );
       return normalizeAssistantResult(finalMessage, "complete");
     } catch (error) {
       throw normalizeAgentLlmError({
@@ -430,6 +447,93 @@ function normalizeAssistantResult(
     usage: normalizeUsage(message),
     ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
   };
+}
+
+interface AssistantContentSummary {
+  blockTypes: string;
+  textBlocks: number;
+  textChars: number;
+  textPreview?: string;
+  thinkingBlocks: number;
+  thinkingChars: number;
+  thinkingPreview?: string;
+  toolCallBlocks: number;
+  toolCallNames?: string;
+}
+
+function summarizeAssistantContent(content: AssistantMessage["content"]): AssistantContentSummary {
+  const blockTypes: string[] = [];
+  const toolCallNames: string[] = [];
+  let textBlocks = 0;
+  let textChars = 0;
+  let textPreview: string | undefined;
+  let thinkingBlocks = 0;
+  let thinkingChars = 0;
+  let thinkingPreview: string | undefined;
+  let toolCallBlocks = 0;
+
+  for (const block of content) {
+    blockTypes.push(block.type);
+    switch (block.type) {
+      case "text":
+        textBlocks += 1;
+        textChars += block.text.length;
+        textPreview ??= truncateForLog(block.text);
+        break;
+      case "thinking":
+        thinkingBlocks += 1;
+        thinkingChars += block.thinking.length;
+        thinkingPreview ??= truncateForLog(block.thinking);
+        break;
+      case "toolCall":
+        toolCallBlocks += 1;
+        if (block.name.length > 0) {
+          toolCallNames.push(block.name);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  return {
+    blockTypes: blockTypes.join(","),
+    textBlocks,
+    textChars,
+    ...(textPreview == null ? {} : { textPreview }),
+    thinkingBlocks,
+    thinkingChars,
+    ...(thinkingPreview == null ? {} : { thinkingPreview }),
+    toolCallBlocks,
+    ...(toolCallNames.length === 0 ? {} : { toolCallNames: toolCallNames.join(",") }),
+  };
+}
+
+function logSuspiciousAssistantCompletion(
+  mode: "stream" | "complete",
+  model: ResolvedModel,
+  stopReason: PiBridgeRunTurnResult["stopReason"],
+  summary: AssistantContentSummary,
+): void {
+  if (summary.textChars > 0) {
+    return;
+  }
+
+  logger.warn("assistant completion finished without visible text", {
+    mode,
+    modelId: model.id,
+    provider: model.provider.id,
+    stopReason,
+    ...summary,
+  });
+}
+
+function truncateForLog(value: string): string {
+  const normalized = value.replaceAll(/\s+/gu, " ").trim();
+  if (normalized.length <= LOG_PREVIEW_LIMIT) {
+    return normalized;
+  }
+  return `${normalized.slice(0, LOG_PREVIEW_LIMIT)}...`;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -40,6 +40,36 @@ export function buildTaskExecutionKickoffEnvelope(
   };
 }
 
+export function buildTaskExecutionSupervisorReminderEnvelope(input: {
+  runType: string;
+  nextPass: number;
+  maxPasses: number;
+}): TaskExecutionKickoffEnvelope {
+  const lines = [
+    "<task_supervisor_followup>",
+    `  <run_type>${input.runType}</run_type>`,
+    `  <next_pass>${input.nextPass}</next_pass>`,
+    `  <max_passes>${input.maxPasses}</max_passes>`,
+    "  <guidance>",
+    "    This unattended task run ended without calling finish_task.",
+    "    Do not wait for a user reply.",
+    "    Continue the work if there is still concrete work left to do.",
+    '    If the task is already complete, explicitly call finish_task with status="completed".',
+    '    If the task is blocked on missing information, credentials, or a user decision, explicitly call finish_task with status="blocked".',
+    '    If the task has failed and should stop, explicitly call finish_task with status="failed".',
+    "    You must call finish_task before this task can be considered settled.",
+    "  </guidance>",
+    "</task_supervisor_followup>",
+  ];
+
+  return {
+    scenario: resolveTaskExecutionScenario(input.runType),
+    messageType: "task_supervisor_followup",
+    visibility: "hidden_system",
+    content: lines.join("\n"),
+  };
+}
+
 function renderTaskKickoffMessage(
   taskRun: Pick<TaskRun, "runType" | "description" | "inputJson">,
   options: {
@@ -75,9 +105,15 @@ function renderTaskKickoffMessage(
   lines.push("    Execute this background task in this session.");
   lines.push("    Use tools directly when they help move the task forward.");
   lines.push("    Keep the work in this task session; do not assume a user is watching live.");
+  lines.push(
+    "    This session is unattended. Do not wait for live user feedback before ending the task.",
+  );
+  lines.push(
+    "    You must explicitly call finish_task to end this task with completed, blocked, or failed status.",
+  );
   if (taskRun.runType === "cron") {
     lines.push(
-      "    Seeing this message means the cron job has been triggered and should be executed now.",
+      "    Seeing this message means the scheduled task has been triggered and should be executed now.",
     );
     lines.push("    You are running in background mode rather than an interactive chat turn.");
     lines.push(
