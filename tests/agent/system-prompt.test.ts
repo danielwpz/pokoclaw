@@ -45,6 +45,19 @@ describe("agent system prompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  test("defaults chat sessions without agentKind to the main-agent prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+    });
+
+    expect(prompt).toContain("You are Pokeclaw Main Agent");
+    expect(prompt).toContain("## Scheduled Tasks");
+    expect(prompt).not.toContain(
+      "You are Pokeclaw, an agent that completes the user's request by using tools.",
+    );
+    expect(prompt).not.toContain("You must explicitly call finish_task");
+  });
+
   test("keeps the current section order stable", () => {
     const prompt = buildAgentSystemPrompt({
       sessionPurpose: "chat",

@@ -252,8 +252,9 @@ export class CronJobsRepo {
           ? current.consecutiveFailures
           : 0;
 
-    const enabled =
-      current.scheduleKind === "at" && current.nextRunAt == null ? false : current.enabled;
+    const shouldDisableOneShot = current.scheduleKind === "at";
+    const nextRunAt = shouldDisableOneShot ? null : input.nextRunAt;
+    const enabled = shouldDisableOneShot ? false : current.enabled;
 
     const result = this.db
       .update(cronJobs)
@@ -262,7 +263,7 @@ export class CronJobsRepo {
         lastRunAt: toCanonicalUtcIsoTimestamp(finishedAt),
         lastStatus: input.status,
         ...(input.lastOutput === undefined ? {} : { lastOutput: input.lastOutput ?? null }),
-        ...(input.nextRunAt === undefined ? {} : { nextRunAt: toNullableIso(input.nextRunAt) }),
+        ...(nextRunAt === undefined ? {} : { nextRunAt: toNullableIso(nextRunAt) }),
         consecutiveFailures: nextFailures,
         enabled,
         updatedAt: toCanonicalUtcIsoTimestamp(finishedAt),

@@ -27,7 +27,6 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import { resolveOpenAICompatForPiModel } from "@/src/agent/llm/openai-compat.js";
 // This import intentionally targets pi-ai internals. We need the responses
 // stream parser to preserve event fidelity while overriding usage normalization.
 import {
@@ -246,9 +245,13 @@ function streamOpenAICompletionsWithUpstreamUsage(
       });
 
       const params = buildOpenAICompletionsParams(model, context, options);
-      const openaiStream = await client.chat.completions.create(params, {
-        signal: options?.signal,
-      });
+      const response = await client.chat.completions
+        .create(params, {
+          signal: options?.signal,
+        })
+        .asResponse();
+
+      ensureSuccessfulStreamResponse(response);
 
       stream.push({ type: "start", partial: output });
 
@@ -258,6 +261,7 @@ function streamOpenAICompletionsWithUpstreamUsage(
         | null = null;
       const toolCallContentIndexByStreamIndex = new Map<number, number>();
       const toolCallPartialArgsByContentIndex = new Map<number, string>();
+      const pendingThoughtSignatureByToolCallId = new Map<string, string>();
 
       const finishCurrentBlock = () => {
         if (currentBlock == null) return;
@@ -282,7 +286,7 @@ function streamOpenAICompletionsWithUpstreamUsage(
         currentBlock = null;
       };
 
-      for await (const chunk of openaiStream) {
+      for await (const chunk of parseOpenAICompatibleSseResponse(response)) {
         const normalizedUsage = normalizeUsageFromOpenAICompatible(model, chunk.usage);
         if (normalizedUsage) {
           output.usage = normalizedUsage.usage;
@@ -319,18 +323,18 @@ function streamOpenAICompletionsWithUpstreamUsage(
           });
         }
 
-        const reasoningDelta =
-          readString(delta, "reasoning_content") ??
-          readString(delta, "reasoning") ??
-          readString(delta, "reasoning_text");
-
-        if (reasoningDelta) {
+        const reasoningField = resolveReasoningDeltaField(delta);
+        if (reasoningField != null) {
+          const reasoningDelta = readString(delta, reasoningField);
+          if (reasoningDelta == null) {
+            continue;
+          }
           if (!currentBlock || currentBlock.type !== "thinking") {
             finishCurrentBlock();
             currentBlock = {
               type: "thinking",
               thinking: "",
-              thinkingSignature: "reasoning",
+              thinkingSignature: reasoningField,
             };
             output.content.push(currentBlock);
             stream.push({
@@ -359,56 +363,81 @@ function streamOpenAICompletionsWithUpstreamUsage(
               };
             }>
           | undefined;
-        if (!toolCalls || toolCalls.length === 0) {
-          continue;
-        }
+        if (toolCalls && toolCalls.length > 0) {
+          finishCurrentBlock();
 
-        finishCurrentBlock();
+          for (const toolCallDelta of toolCalls) {
+            const streamIndex = toolCallDelta.index ?? 0;
+            let contentIndex = toolCallContentIndexByStreamIndex.get(streamIndex);
 
-        for (const toolCallDelta of toolCalls) {
-          const streamIndex = toolCallDelta.index ?? 0;
-          let contentIndex = toolCallContentIndexByStreamIndex.get(streamIndex);
+            if (contentIndex === undefined) {
+              const block = {
+                type: "toolCall" as const,
+                id: toolCallDelta.id ?? "",
+                name: toolCallDelta.function?.name ?? "",
+                arguments: {},
+              };
+              output.content.push(block);
+              contentIndex = output.content.length - 1;
+              toolCallContentIndexByStreamIndex.set(streamIndex, contentIndex);
+              toolCallPartialArgsByContentIndex.set(contentIndex, "");
+              stream.push({
+                type: "toolcall_start",
+                contentIndex,
+                partial: output,
+              });
+            }
 
-          if (contentIndex === undefined) {
-            const block = {
-              type: "toolCall" as const,
-              id: toolCallDelta.id ?? "",
-              name: toolCallDelta.function?.name ?? "",
-              arguments: {},
-            };
-            output.content.push(block);
-            contentIndex = output.content.length - 1;
-            toolCallContentIndexByStreamIndex.set(streamIndex, contentIndex);
-            toolCallPartialArgsByContentIndex.set(contentIndex, "");
+            const block = output.content[contentIndex];
+            if (!block || block.type !== "toolCall") {
+              continue;
+            }
+
+            if (toolCallDelta.id) {
+              block.id = toolCallDelta.id;
+              const pendingThoughtSignature = pendingThoughtSignatureByToolCallId.get(
+                toolCallDelta.id,
+              );
+              if (pendingThoughtSignature) {
+                block.thoughtSignature = pendingThoughtSignature;
+                pendingThoughtSignatureByToolCallId.delete(toolCallDelta.id);
+              }
+            }
+            if (toolCallDelta.function?.name) block.name = toolCallDelta.function.name;
+
+            const argsDelta = toolCallDelta.function?.arguments ?? "";
+            if (argsDelta.length > 0) {
+              const partialArgs =
+                (toolCallPartialArgsByContentIndex.get(contentIndex) ?? "") + argsDelta;
+              toolCallPartialArgsByContentIndex.set(contentIndex, partialArgs);
+              block.arguments = parseStreamingJson(partialArgs);
+            }
+
             stream.push({
-              type: "toolcall_start",
+              type: "toolcall_delta",
               contentIndex,
+              delta: argsDelta,
               partial: output,
             });
           }
+        }
 
-          const block = output.content[contentIndex];
-          if (!block || block.type !== "toolCall") {
-            continue;
+        const reasoningDetails = readReasoningDetails(delta);
+        if (reasoningDetails) {
+          for (const detail of reasoningDetails) {
+            if (detail.type !== "reasoning.encrypted" || !detail.id || !detail.data) {
+              continue;
+            }
+
+            const matchingToolCall = output.content.find(
+              (block) => block.type === "toolCall" && block.id === detail.id,
+            );
+            if (matchingToolCall) {
+              matchingToolCall.thoughtSignature = JSON.stringify(detail);
+            } else {
+              pendingThoughtSignatureByToolCallId.set(detail.id, JSON.stringify(detail));
+            }
           }
-
-          if (toolCallDelta.id) block.id = toolCallDelta.id;
-          if (toolCallDelta.function?.name) block.name = toolCallDelta.function.name;
-
-          const argsDelta = toolCallDelta.function?.arguments ?? "";
-          if (argsDelta.length > 0) {
-            const partialArgs =
-              (toolCallPartialArgsByContentIndex.get(contentIndex) ?? "") + argsDelta;
-            toolCallPartialArgsByContentIndex.set(contentIndex, partialArgs);
-            block.arguments = parseStreamingJson(partialArgs);
-          }
-
-          stream.push({
-            type: "toolcall_delta",
-            contentIndex,
-            delta: argsDelta,
-            partial: output,
-          });
         }
       }
 
@@ -545,14 +574,13 @@ export function buildOpenAICompletionsParams(
 ): OpenAI.Chat.ChatCompletionCreateParamsStreaming {
   const compat = resolveCompat(model);
   const messages = convertMessages(model, context, compat) as ChatCompletionMessageParam[];
-  const maxTokens = (model.maxTokens / 3) | 0;
 
   const params: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
     model: model.id,
     messages,
     stream: true,
     stream_options: { include_usage: true },
-    max_tokens: maxTokens,
+    max_tokens: model.maxTokens,
   };
 
   const tools = convertCompletionTools(context.tools);
@@ -582,14 +610,13 @@ export function buildOpenAIResponsesParams(
 ): ResponseCreateParamsStreaming {
   const messages: ResponsesInput = normalizeResponsesInputRoles(
     convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS),
-    shouldUseDeveloperRole(model),
   );
   const params: ResponseCreateParamsStreaming = {
     model: model.id,
     input: messages,
     stream: true,
     store: false,
-    max_output_tokens: (model.maxTokens / 3) | 0,
+    max_output_tokens: model.maxTokens,
   };
 
   if (options?.sessionId) {
@@ -614,27 +641,14 @@ export function buildOpenAIResponsesParams(
 function resolveCompat(model: Model<"openai-completions">): Required<OpenAICompletionsCompat> {
   return {
     ...DEFAULT_COMPAT,
-    supportsDeveloperRole: shouldUseDeveloperRole(model),
     ...(((model as Model<"openai-completions"> & { compat?: Partial<OpenAICompletionsCompat> })
       .compat ?? {}) as Partial<OpenAICompletionsCompat>),
+    supportsDeveloperRole: false,
   };
 }
 
-function shouldUseDeveloperRole(model: Pick<Model<Api>, "id"> & { name?: string }): boolean {
-  return (
-    resolveOpenAICompatForPiModel({
-      api: "openai-completions",
-      id: model.id,
-      ...(model.name == null ? {} : { name: model.name }),
-    })?.supportsDeveloperRole === true
-  );
-}
-
-function normalizeResponsesInputRoles(
-  input: ResponsesInput,
-  supportsDeveloperRole: boolean,
-): ResponsesInput {
-  if (supportsDeveloperRole || !Array.isArray(input)) {
+function normalizeResponsesInputRoles(input: ResponsesInput): ResponsesInput {
+  if (!Array.isArray(input)) {
     return input;
   }
 
@@ -786,6 +800,136 @@ function readString(value: unknown, key: string): string | null {
   if (typeof value !== "object" || value == null) return null;
   const candidate = (value as Record<string, unknown>)[key];
   return typeof candidate === "string" && candidate.length > 0 ? candidate : null;
+}
+
+function resolveReasoningDeltaField(
+  value: unknown,
+): "reasoning_content" | "reasoning" | "reasoning_text" | null {
+  if (readString(value, "reasoning_content") != null) {
+    return "reasoning_content";
+  }
+  if (readString(value, "reasoning") != null) {
+    return "reasoning";
+  }
+  if (readString(value, "reasoning_text") != null) {
+    return "reasoning_text";
+  }
+  return null;
+}
+
+function readReasoningDetails(
+  value: unknown,
+): Array<{ type?: string; id?: string; data?: string }> | null {
+  if (typeof value !== "object" || value == null) {
+    return null;
+  }
+
+  const details = (value as Record<string, unknown>).reasoning_details;
+  return Array.isArray(details)
+    ? (details as Array<{ type?: string; id?: string; data?: string }>)
+    : null;
+}
+
+function ensureSuccessfulStreamResponse(response: Response): void {
+  if (response.ok) {
+    return;
+  }
+
+  throw new Error(`OpenAI-compatible streaming request failed with status ${response.status}`);
+}
+
+async function* parseOpenAICompatibleSseResponse(response: Response): AsyncIterable<{
+  choices: Array<{
+    finish_reason?: string | null;
+    delta?: Record<string, unknown> | null;
+  }>;
+  usage?: unknown;
+}> {
+  const body = response.body;
+  if (body == null) {
+    throw new Error("OpenAI-compatible streaming response body is missing");
+  }
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+
+    while (true) {
+      const boundary = findSseEventBoundary(buffer);
+      if (boundary == null) {
+        break;
+      }
+
+      const event = buffer.slice(0, boundary.index);
+      buffer = buffer.slice(boundary.nextIndex);
+
+      const data = collectSseData(event);
+      if (data == null) {
+        continue;
+      }
+      if (data === "[DONE]") {
+        return;
+      }
+
+      yield JSON.parse(data) as {
+        choices: Array<{
+          finish_reason?: string | null;
+          delta?: Record<string, unknown> | null;
+        }>;
+        usage?: unknown;
+      };
+    }
+
+    if (done) {
+      const trailingData = collectSseData(buffer);
+      if (trailingData === "[DONE]") {
+        return;
+      }
+      if (trailingData != null) {
+        yield JSON.parse(trailingData) as {
+          choices: Array<{
+            finish_reason?: string | null;
+            delta?: Record<string, unknown> | null;
+          }>;
+          usage?: unknown;
+        };
+      }
+      break;
+    }
+  }
+}
+
+function findSseEventBoundary(buffer: string): { index: number; nextIndex: number } | null {
+  const lfBoundary = buffer.indexOf("\n\n");
+  const crlfBoundary = buffer.indexOf("\r\n\r\n");
+
+  if (lfBoundary === -1 && crlfBoundary === -1) {
+    return null;
+  }
+  if (lfBoundary === -1) {
+    return { index: crlfBoundary, nextIndex: crlfBoundary + 4 };
+  }
+  if (crlfBoundary === -1 || lfBoundary < crlfBoundary) {
+    return { index: lfBoundary, nextIndex: lfBoundary + 2 };
+  }
+  return { index: crlfBoundary, nextIndex: crlfBoundary + 4 };
+}
+
+function collectSseData(event: string): string | null {
+  const dataLines = event
+    .split(/\r?\n/gu)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart());
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  return dataLines.join("\n");
 }
 
 function mapCompletionStopReason(reason: string | null | undefined): StopReason {

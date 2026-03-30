@@ -20,8 +20,8 @@ import type {
 } from "@/src/agent/compaction.js";
 import { normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
 import { type AgentAssistantContentBlock, buildPiMessages } from "@/src/agent/llm/messages.js";
+import { isGptFamilyResolvedModel } from "@/src/agent/llm/model-family.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
-import { resolveOpenAICompatForResolvedModel } from "@/src/agent/llm/openai-compat.js";
 import { streamWithNormalizedUpstreamUsage } from "@/src/agent/llm/upstream-openai.js";
 import type {
   AgentModelRunner,
@@ -39,6 +39,9 @@ const PERMISSIVE_TOOL_PARAMETERS = Type.Object({}, { additionalProperties: true 
 const DEFAULT_REASONING_LEVEL = "medium";
 const logger = createSubsystemLogger("llm-bridge");
 const LOG_PREVIEW_LIMIT = 160;
+const OPENAI_COMPAT_ROLE_OVERRIDE = {
+  supportsDeveloperRole: false,
+} as const;
 
 export interface PiBridgeTextDelta {
   delta: string;
@@ -96,7 +99,6 @@ export class PiBridge {
       tools: tools?.length ?? 0,
       hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
     });
-    // logLlmRequestContext("stream", input, context.messages, tools);
 
     try {
       const stream = streamWithNormalizedUpstreamUsage(
@@ -132,14 +134,9 @@ export class PiBridge {
         stopReason: finalMessage.stopReason,
         ...contentSummary,
       });
-      logSuspiciousAssistantCompletion(
-        "stream",
-        input.model,
-        finalMessage.stopReason,
-        contentSummary,
-      );
       return normalizeAssistantResult(finalMessage, "stream");
     } catch (error) {
+      logRawLlmFailure("stream", input.model, error);
       throw normalizeAgentLlmError({
         error,
         provider: input.model.provider.id,
@@ -170,7 +167,6 @@ export class PiBridge {
       tools: tools?.length ?? 0,
       hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
     });
-    // logLlmRequestContext("complete", input, context.messages, tools);
 
     try {
       const finalMessage = await completeSimple(
@@ -185,14 +181,9 @@ export class PiBridge {
         stopReason: finalMessage.stopReason,
         ...contentSummary,
       });
-      logSuspiciousAssistantCompletion(
-        "complete",
-        input.model,
-        finalMessage.stopReason,
-        contentSummary,
-      );
       return normalizeAssistantResult(finalMessage, "complete");
     } catch (error) {
+      logRawLlmFailure("complete", input.model, error);
       throw normalizeAgentLlmError({
         error,
         provider: input.model.provider.id,
@@ -244,6 +235,7 @@ export class PiBridge {
         usage: normalized.usage,
       };
     } catch (error) {
+      logRawLlmFailure("compaction", input.model, error);
       throw normalizeAgentLlmError({
         error,
         provider: input.model.provider.id,
@@ -350,7 +342,7 @@ function buildPiStreamOptions(
 
 function toPiModel(model: ResolvedModel): Model<Api> {
   const api = resolvePiApi(model);
-  const compat = resolveOpenAICompatForResolvedModel(model);
+  const compat = isOpenAICompatibleApi(api) ? OPENAI_COMPAT_ROLE_OVERRIDE : null;
 
   return {
     id: model.upstreamId,
@@ -385,7 +377,11 @@ function shouldUseOpenAICompletions(model: ResolvedModel): boolean {
     return false;
   }
 
-  return resolveOpenAICompatForResolvedModel(model)?.supportsDeveloperRole !== true;
+  return !isGptFamilyResolvedModel(model);
+}
+
+function isOpenAICompatibleApi(api: Api): api is "openai-completions" | "openai-responses" {
+  return api === "openai-completions" || api === "openai-responses";
 }
 
 function resolvePiBaseUrl(model: ResolvedModel): string {
@@ -509,23 +505,83 @@ function summarizeAssistantContent(content: AssistantMessage["content"]): Assist
   };
 }
 
-function logSuspiciousAssistantCompletion(
-  mode: "stream" | "complete",
+function logRawLlmFailure(
+  phase: "stream" | "complete" | "compaction",
   model: ResolvedModel,
-  stopReason: PiBridgeRunTurnResult["stopReason"],
-  summary: AssistantContentSummary,
+  error: unknown,
 ): void {
-  if (summary.textChars > 0) {
-    return;
+  logger.error("raw llm failure before normalization", {
+    phase,
+    provider: model.provider.id,
+    providerApi: model.provider.api,
+    modelId: model.id,
+    upstreamModelId: model.upstreamId,
+    ...summarizeRawLlmError(error),
+  });
+}
+
+function summarizeRawLlmError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    const cause = error.cause;
+    return {
+      errorName: error.name,
+      errorMessage: error.message,
+      ...(typeof error.stack === "string"
+        ? { stackTop: error.stack.split("\n").slice(0, 3).join(" | ") }
+        : {}),
+      ...(readErrorNumberField(error, ["status"]) === undefined
+        ? {}
+        : { status: readErrorNumberField(error, ["status"]) }),
+      ...(readErrorNumberField(error, ["statusCode"]) === undefined
+        ? {}
+        : { statusCode: readErrorNumberField(error, ["statusCode"]) }),
+      ...(readErrorNumberField(error, ["response", "status"]) === undefined
+        ? {}
+        : { responseStatus: readErrorNumberField(error, ["response", "status"]) }),
+      ...(readErrorStringField(error, ["code"]) == null
+        ? {}
+        : { code: readErrorStringField(error, ["code"]) }),
+      ...(cause instanceof Error
+        ? {
+            causeName: cause.name,
+            causeMessage: cause.message,
+            ...(typeof cause.stack === "string"
+              ? { causeStackTop: cause.stack.split("\n").slice(0, 3).join(" | ") }
+              : {}),
+          }
+        : typeof cause === "object" && cause != null
+          ? {
+              cause: cause,
+            }
+          : cause == null
+            ? {}
+            : { cause }),
+    };
   }
 
-  logger.warn("assistant completion finished without visible text", {
-    mode,
-    modelId: model.id,
-    provider: model.provider.id,
-    stopReason,
-    ...summary,
-  });
+  return { errorValue: error };
+}
+
+function readErrorNumberField(value: unknown, path: string[]): number | undefined {
+  const candidate = readErrorField(value, path);
+  return typeof candidate === "number" ? candidate : undefined;
+}
+
+function readErrorStringField(value: unknown, path: string[]): string | undefined {
+  const candidate = readErrorField(value, path);
+  return typeof candidate === "string" ? candidate : undefined;
+}
+
+function readErrorField(value: unknown, path: string[]): unknown {
+  let current: unknown = value;
+  for (const key of path) {
+    if (current == null || typeof current !== "object" || !(key in current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+
+  return current;
 }
 
 function truncateForLog(value: string): string {

@@ -15,10 +15,9 @@ const { completeSimpleMock, streamSimpleMock } = vi.hoisted(() => ({
 const { upstreamStreamMock } = vi.hoisted(() => ({
   upstreamStreamMock: vi.fn(),
 }));
-const { loggerDebugMock, loggerInfoMock, loggerWarnMock, loggerErrorMock } = vi.hoisted(() => ({
+const { loggerDebugMock, loggerInfoMock, loggerErrorMock } = vi.hoisted(() => ({
   loggerDebugMock: vi.fn(),
   loggerInfoMock: vi.fn(),
-  loggerWarnMock: vi.fn(),
   loggerErrorMock: vi.fn(),
 }));
 
@@ -45,7 +44,7 @@ vi.mock("@/src/shared/logger.js", () => ({
   createSubsystemLogger: () => ({
     debug: loggerDebugMock,
     info: loggerInfoMock,
-    warn: loggerWarnMock,
+    warn: vi.fn(),
     error: loggerErrorMock,
   }),
 }));
@@ -122,7 +121,6 @@ describe("pi bridge", () => {
     upstreamStreamMock.mockReset();
     loggerDebugMock.mockReset();
     loggerInfoMock.mockReset();
-    loggerWarnMock.mockReset();
     loggerErrorMock.mockReset();
   });
 
@@ -300,76 +298,6 @@ describe("pi bridge", () => {
     expect(model.baseUrl).toBe("https://api.anthropic.com");
   });
 
-  test("warns when a streamed assistant completion has no visible text blocks", async () => {
-    const finalMessage = {
-      role: "assistant" as const,
-      api: "anthropic-messages" as const,
-      provider: "anthropic_main",
-      model: "claude-sonnet-4-5-20250929",
-      stopReason: "stop" as const,
-      content: [{ type: "thinking" as const, thinking: "Internal reasoning only." }],
-      usage: {
-        input: 10,
-        output: 3,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 13,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
-      timestamp: Date.now(),
-    };
-    streamSimpleMock.mockReturnValue(
-      createAssistantEventStream(
-        [
-          {
-            type: "thinking_delta",
-            contentIndex: 0,
-            delta: "Internal reasoning only.",
-            partial: finalMessage,
-          },
-          {
-            type: "done",
-            reason: "stop",
-            message: finalMessage,
-          },
-        ],
-        finalMessage,
-      ),
-    );
-
-    const bridge = new PiBridge();
-    await bridge.streamTurn({
-      model: createResolvedModel(),
-      compactSummary: null,
-      messages: [createStoredUserMessage()],
-      tools: new ToolRegistry(),
-      signal: new AbortController().signal,
-    });
-
-    expect(loggerWarnMock).toHaveBeenCalledWith(
-      "assistant completion finished without visible text",
-      expect.objectContaining({
-        mode: "stream",
-        modelId: "anthropic_main/claude-sonnet-4-5",
-        provider: "anthropic_main",
-        stopReason: "stop",
-        blockTypes: "thinking",
-        textBlocks: 0,
-        textChars: 0,
-        thinkingBlocks: 1,
-        thinkingChars: "Internal reasoning only.".length,
-        thinkingPreview: "Internal reasoning only.",
-        toolCallBlocks: 0,
-      }),
-    );
-  });
-
   test("routes non-gpt responses models through openai completions", async () => {
     const finalMessage = {
       role: "assistant" as const,
@@ -496,7 +424,7 @@ describe("pi bridge", () => {
     ];
     expect(effectiveModel.api).toBe("openai-responses");
     expect(effectiveModel.baseUrl).toBe("https://openrouter.ai/api/v1");
-    expect(effectiveModel.compat?.supportsDeveloperRole).toBe(true);
+    expect(effectiveModel.compat?.supportsDeveloperRole).toBe(false);
     expect(result.modelApi).toBe("openai-responses");
   });
 
@@ -731,6 +659,59 @@ describe("pi bridge", () => {
       kind: "context_overflow",
       retryable: false,
     });
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      "raw llm failure before normalization",
+      expect.objectContaining({
+        phase: "stream",
+        provider: "anthropic_main",
+        providerApi: "anthropic-messages",
+        modelId: "anthropic_main/claude-sonnet-4-5",
+        upstreamModelId: "claude-sonnet-4-5-20250929",
+        errorName: "Error",
+        errorMessage: "prompt is too long: 213462 tokens > 200000 maximum",
+      }),
+    );
+  });
+
+  test("logs raw structured upstream failure details before normalization", async () => {
+    streamSimpleMock.mockImplementation(() => {
+      const cause = Object.assign(new Error("upstream socket closed"), {
+        code: "UND_ERR_SOCKET",
+        status: 529,
+      });
+      const error = Object.assign(new Error("terminated"), {
+        cause,
+        response: { status: 529 },
+      });
+      throw error;
+    });
+
+    const bridge = new PiBridge();
+    await bridge
+      .streamTurn({
+        model: createResolvedModel(),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+      })
+      .catch(() => undefined);
+
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      "raw llm failure before normalization",
+      expect.objectContaining({
+        phase: "stream",
+        provider: "anthropic_main",
+        providerApi: "anthropic-messages",
+        modelId: "anthropic_main/claude-sonnet-4-5",
+        upstreamModelId: "claude-sonnet-4-5-20250929",
+        errorName: "Error",
+        errorMessage: "terminated",
+        responseStatus: 529,
+        causeName: "Error",
+        causeMessage: "upstream socket closed",
+      }),
+    );
   });
 
   test("marks regional availability upstream failures as non-retryable", async () => {

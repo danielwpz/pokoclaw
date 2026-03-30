@@ -213,7 +213,7 @@ describe("upstream openai usage normalization", () => {
     });
   });
 
-  test("uses developer role for GPT-family openai-compatible completions models", () => {
+  test("uses system role for GPT-family openai-compatible completions models", () => {
     const params = buildOpenAICompletionsParams(
       {
         ...OPENROUTER_COMPLETIONS_MODEL,
@@ -230,9 +230,53 @@ describe("upstream openai usage normalization", () => {
     );
 
     expect(params.messages[0]).toMatchObject({
-      role: "developer",
+      role: "system",
       content: "You are a helpful assistant.",
     });
+  });
+
+  test("ignores compat attempts to re-enable developer role for completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        ...OPENROUTER_COMPLETIONS_MODEL,
+        id: "openai/gpt-5",
+        name: "gpt-5",
+        provider: "openrouter",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+        compat: {
+          supportsDeveloperRole: true,
+        },
+      },
+      SIMPLE_CONTEXT,
+      undefined,
+    );
+
+    expect(params.messages[0]).toMatchObject({
+      role: "system",
+      content: "You are a helpful assistant.",
+    });
+  });
+
+  test("forwards the configured completions max token budget without shrinking it", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        ...OPENROUTER_COMPLETIONS_MODEL,
+        id: "openai/gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openrouter",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+      },
+      SIMPLE_CONTEXT,
+      undefined,
+    );
+
+    expect(params.max_tokens).toBe(16_384);
   });
 
   test("uses system role for non-GPT openai-compatible responses models", () => {
@@ -261,7 +305,7 @@ describe("upstream openai usage normalization", () => {
     });
   });
 
-  test("uses developer role for GPT-family openai-compatible responses models", () => {
+  test("uses system role for GPT-family openai-compatible responses models", () => {
     const params = buildOpenAIResponsesParams(
       {
         ...OPENROUTER_RESPONSES_MODEL,
@@ -282,8 +326,56 @@ describe("upstream openai usage normalization", () => {
       throw new Error("expected array input");
     }
     expect(params.input[0]).toMatchObject({
-      role: "developer",
+      role: "system",
       content: "You are a helpful assistant.",
     });
+  });
+
+  test("ignores compat attempts to re-enable developer role for responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        ...OPENROUTER_RESPONSES_MODEL,
+        id: "openai/gpt-5",
+        name: "gpt-5",
+        provider: "openrouter",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+        compat: {
+          supportsDeveloperRole: true,
+        },
+      },
+      SIMPLE_CONTEXT,
+      undefined,
+    );
+
+    expect(Array.isArray(params.input)).toBe(true);
+    if (!Array.isArray(params.input)) {
+      throw new Error("expected array input");
+    }
+    expect(params.input[0]).toMatchObject({
+      role: "system",
+      content: "You are a helpful assistant.",
+    });
+  });
+
+  test("forwards the configured responses max token budget without shrinking it", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        ...OPENROUTER_RESPONSES_MODEL,
+        id: "openai/gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openrouter",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+      },
+      SIMPLE_CONTEXT,
+      undefined,
+    );
+
+    expect(params.max_output_tokens).toBe(16_384);
   });
 });

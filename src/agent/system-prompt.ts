@@ -151,7 +151,7 @@ export function buildAgentSystemPrompt(input: BuildAgentSystemPromptInput = {}):
     return buildSubagentSystemPrompt(input);
   }
 
-  return buildTaskAgentSystemPrompt(input);
+  return buildMainAgentSystemPrompt(input);
 }
 
 export const AGENT_SYSTEM_PROMPT = buildAgentSystemPrompt({
