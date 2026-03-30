@@ -116,7 +116,7 @@ export function reduceLarkRunState(
 
   switch (envelope.event.type) {
     case "task_run_started":
-      return onTaskRunStarted(hydratedState, envelope);
+      return onTaskRunStarted(hydratedState, envelope.event);
     case "task_run_completed":
       return finalizeTaskRun(hydratedState, "completed", envelope.event.resultSummary);
     case "task_run_blocked":
@@ -191,13 +191,13 @@ function createInitialRunState(input: {
 
 function onTaskRunStarted(
   state: LarkRunState,
-  envelope: OrchestratedTaskRunEventEnvelope & { event: { type: "task_run_started" } },
+  event: Extract<OrchestratedTaskRunEventEnvelope["event"], { type: "task_run_started" }>,
 ): LarkRunState {
   return {
     ...state,
-    sessionId: envelope.event.executionSessionId ?? state.sessionId,
-    taskRunId: envelope.event.taskRunId,
-    taskRunType: envelope.event.runType,
+    sessionId: event.executionSessionId ?? state.sessionId,
+    taskRunId: event.taskRunId,
+    taskRunType: event.runType,
     terminal: "running",
     terminalErrorKind: null,
     terminalMessage: null,

@@ -83,6 +83,8 @@ interface ParsedActualCost {
 }
 
 type ResponsesInput = Exclude<ResponseCreateParamsStreaming["input"], undefined>;
+type AssistantContentItem = AssistantMessage["content"][number];
+type AssistantToolCallContent = Extract<AssistantContentItem, { type: "toolCall" }>;
 
 interface UpstreamCostParser {
   supports(model: Pick<Model<Api>, "baseUrl">): boolean;
@@ -302,7 +304,8 @@ function streamOpenAICompletionsWithUpstreamUsage(
         const delta = choice.delta;
         if (!delta) continue;
 
-        if (delta.content) {
+        const contentDelta = typeof delta.content === "string" ? delta.content : null;
+        if (contentDelta != null && contentDelta.length > 0) {
           if (!currentBlock || currentBlock.type !== "text") {
             finishCurrentBlock();
             currentBlock = { type: "text", text: "" };
@@ -314,11 +317,11 @@ function streamOpenAICompletionsWithUpstreamUsage(
             });
           }
 
-          currentBlock.text += delta.content;
+          currentBlock.text += contentDelta;
           stream.push({
             type: "text_delta",
             contentIndex: output.content.length - 1,
-            delta: delta.content,
+            delta: contentDelta,
             partial: output,
           });
         }
@@ -430,7 +433,8 @@ function streamOpenAICompletionsWithUpstreamUsage(
             }
 
             const matchingToolCall = output.content.find(
-              (block) => block.type === "toolCall" && block.id === detail.id,
+              (block): block is AssistantToolCallContent =>
+                block.type === "toolCall" && block.id === detail.id,
             );
             if (matchingToolCall) {
               matchingToolCall.thoughtSignature = JSON.stringify(detail);

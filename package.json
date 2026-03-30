@@ -13,7 +13,7 @@
     "format": "biome check --write --error-on-warnings .",
     "test": "vitest run --passWithNoTests",
     "test:integration:llm": "vitest run --passWithNoTests --config vitest.integration.config.ts",
-    "preflight": "pnpm format && pnpm lint && pnpm test",
+    "preflight": "pnpm build && pnpm format && pnpm lint && pnpm test",
     "prepare": "husky"
   },
   "lint-staged": {
