@@ -436,6 +436,14 @@ export function createLarkOutboundRuntime(
     if (state == null) {
       return;
     }
+    if (!shouldCreateStandaloneLarkApprovalCard(state)) {
+      logger.debug("skipping standalone lark approval card delivery for delegated approval", {
+        approvalId,
+        runId: state.runId,
+        approvalTarget: state.approvalTarget,
+      });
+      return;
+    }
 
     logger.debug("starting lark approval card flush", {
       approvalId,
@@ -701,8 +709,15 @@ export function createLarkOutboundRuntime(
     }
 
     if (event.type === "approval_requested") {
+      const taskRunCardObjectId =
+        isTaskRunCardRuntimeEnvelope(envelope) && envelope.taskRun.taskRunId != null
+          ? buildTaskRunCardObjectId(envelope.taskRun.taskRunId)
+          : null;
       const sourceRunCardObjectId =
-        activeRunSegmentByRunId.get(runId) ?? latestRunSegmentByRunId.get(runId) ?? null;
+        taskRunCardObjectId ??
+        activeRunSegmentByRunId.get(runId) ??
+        latestRunSegmentByRunId.get(runId) ??
+        null;
 
       if (sourceRunCardObjectId != null) {
         const existingRunState = runStates.get(sourceRunCardObjectId);
@@ -728,12 +743,22 @@ export function createLarkOutboundRuntime(
         }),
       );
       latestApprovalByRunId.set(runId, approvalId);
-      logger.debug("queued standalone lark approval card", {
-        runId,
-        approvalId,
-        sourceRunCardObjectId,
-      });
-      bumpVersionAndSchedule(`approval:${approvalId}`);
+      if (shouldCreateStandaloneLarkApprovalCard(event)) {
+        logger.debug("queued standalone lark approval card", {
+          runId,
+          approvalId,
+          sourceRunCardObjectId,
+          approvalTarget: event.approvalTarget,
+        });
+        bumpVersionAndSchedule(`approval:${approvalId}`);
+      } else {
+        logger.debug("suppressed standalone lark approval card for delegated approval", {
+          runId,
+          approvalId,
+          sourceRunCardObjectId,
+          approvalTarget: event.approvalTarget,
+        });
+      }
       return;
     }
 
@@ -744,7 +769,9 @@ export function createLarkOutboundRuntime(
     }
     approvalStates.set(approvalId, nextApprovalState);
     latestApprovalByRunId.delete(runId);
-    bumpVersionAndSchedule(`approval:${approvalId}`);
+    if (shouldCreateStandaloneLarkApprovalCard(nextApprovalState)) {
+      bumpVersionAndSchedule(`approval:${approvalId}`);
+    }
 
     if (previousApprovalState?.sourceRunCardObjectId != null) {
       const sourceRunState = runStates.get(previousApprovalState.sourceRunCardObjectId);
@@ -1067,6 +1094,12 @@ function isTaskRuntimeTerminalEvent(envelope: OrchestratedRuntimeEventEnvelope):
 
 function shouldDeliverLarkRuntimeTranscript(envelope: OrchestratedRuntimeEventEnvelope): boolean {
   return envelope.session.purpose === "chat" || envelope.session.purpose === "task";
+}
+
+function shouldCreateStandaloneLarkApprovalCard(value: {
+  approvalTarget: "user" | "main_agent";
+}): boolean {
+  return value.approvalTarget === "user";
 }
 
 function safeJson(value: unknown): string {

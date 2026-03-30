@@ -163,7 +163,7 @@ function renderPermissionRequestToolDetailContent(tool: LarkToolSequenceTool): s
   } else if (tool.status === "failed") {
     lines.push("", "**结果**", tool.errorMessage ?? "授权被拒绝或未完成。");
   } else {
-    lines.push("", "**状态**", "等待你的授权。详见下方授权卡。");
+    lines.push("", "**状态**", "等待授权处理。");
   }
 
   return lines.join("\n");
