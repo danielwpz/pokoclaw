@@ -487,6 +487,50 @@ describe("cron service", () => {
     expect(runCronTaskExecutionFromJob).toHaveBeenCalledTimes(1);
   });
 
+  test("one-shot jobs with legacy relative schedule values still disable themselves after completion", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    handle.storage.sqlite.exec(`
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id,
+        schedule_kind, schedule_value, payload_json, next_run_at, created_at, updated_at
+      ) VALUES (
+        'cron_legacy', 'agent_1', 'conv_1', 'branch_1',
+        'at', 'in 123 minutes', '{}', '2026-03-27T11:59:00.000Z',
+        '2026-03-27T00:00:00.000Z', '2026-03-27T00:00:00.000Z'
+      );
+    `);
+
+    const deferred = createDeferred<TaskExecutionRunResult>();
+    const runCronTaskExecutionFromJob = vi.fn(() => deferred.promise);
+
+    const service = new CronService({
+      storage: handle.storage.db,
+      agentManager: { runCronTaskExecutionFromJob },
+      now: () => new Date("2026-03-27T12:00:00.000Z"),
+    });
+
+    await service.scanOnce();
+
+    const repo = new CronJobsRepo(handle.storage.db);
+    expect(repo.getById("cron_legacy")).toMatchObject({
+      runningAt: "2026-03-27T12:00:00.000Z",
+      nextRunAt: "2026-03-27T14:03:00.000Z",
+      enabled: true,
+    });
+
+    deferred.resolve(createCompletedRunResult("run_legacy"));
+    await deferred.promise;
+    await flushMicrotasks();
+
+    expect(repo.getById("cron_legacy")).toMatchObject({
+      enabled: false,
+      runningAt: null,
+      lastStatus: "completed",
+      nextRunAt: null,
+    });
+  });
+
   test("records cron job, task_run, and task session state through a successful run", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);

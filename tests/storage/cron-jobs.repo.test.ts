@@ -163,4 +163,43 @@ describe("cron jobs repo", () => {
       }),
     ).toBeNull();
   });
+
+  test("one-shot jobs disable themselves for every terminal settle status", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const repo = new CronJobsRepo(handle.storage.db);
+    repo.update({
+      id: "cron_1",
+      scheduleKind: "at",
+      scheduleValue: "2026-03-26T01:00:00.000Z",
+      enabled: true,
+      nextRunAt: new Date("2026-03-26T02:00:00.000Z"),
+    });
+
+    for (const status of ["failed", "blocked", "cancelled", "missed"] as const) {
+      const finishedAt = new Date("2026-03-26T03:00:00.000Z");
+      const settled = repo.completeRun({
+        id: "cron_1",
+        finishedAt,
+        status,
+        lastOutput: `${status} output`,
+        nextRunAt: new Date("2026-03-26T04:00:00.000Z"),
+      });
+
+      expect(settled).toMatchObject({
+        id: "cron_1",
+        enabled: false,
+        nextRunAt: null,
+        lastStatus: status,
+        lastOutput: `${status} output`,
+      });
+
+      repo.update({
+        id: "cron_1",
+        enabled: true,
+        nextRunAt: new Date("2026-03-26T02:00:00.000Z"),
+      });
+    }
+  });
 });
