@@ -412,10 +412,7 @@ export class CronService {
       })
       .then((result) => {
         const finishedAt = this.now();
-        const output =
-          result.status === "completed" || result.status === "blocked"
-            ? result.settled.taskRun.resultSummary
-            : (result.settled.taskRun.errorText ?? result.errorMessage);
+        const output = summarizeTaskExecutionResult(result);
 
         const updated = this.repo().completeRun({
           id: job.id,
@@ -470,6 +467,19 @@ export class CronService {
 
   private repo(): CronJobsRepo {
     return new CronJobsRepo(this.deps.storage);
+  }
+}
+
+function summarizeTaskExecutionResult(
+  result: Awaited<ReturnType<AgentManager["runCronTaskExecutionFromJob"]>>,
+): string | null {
+  switch (result.status) {
+    case "completed":
+    case "blocked":
+      return result.settled.taskRun.resultSummary;
+    case "failed":
+    case "cancelled":
+      return result.settled.taskRun.errorText ?? result.errorMessage;
   }
 }
 

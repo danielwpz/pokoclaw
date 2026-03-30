@@ -1098,7 +1098,7 @@ describe("lark outbound runtime", () => {
     expect(JSON.stringify(createCard.mock.calls.at(1)?.[0])).toContain("授权请求");
     expect(updateCard).toHaveBeenCalledOnce();
     const oldRunCardTextAfterApproval = JSON.stringify(updateCard.mock.calls.at(0)?.[0]);
-    expect(oldRunCardTextAfterApproval).toContain("请求授权");
+    expect(oldRunCardTextAfterApproval).toContain("request_permissions");
     expect(oldRunCardTextAfterApproval).toContain("等待授权");
     expect(oldRunCardTextAfterApproval).toContain("Need to write the output file.");
 

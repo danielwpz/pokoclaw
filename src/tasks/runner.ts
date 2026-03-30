@@ -61,7 +61,12 @@ export type TaskExecutionRunResult =
       run: RunAgentLoopResult;
     }
   | {
-      status: "failed" | "cancelled";
+      status: "failed";
+      settled: SettledTaskExecution;
+      errorMessage: string;
+    }
+  | {
+      status: "cancelled";
       settled: SettledTaskExecution;
       errorMessage: string;
     };
@@ -97,10 +102,10 @@ export class TaskExecutionRunner {
         const started = await this.submitTaskPass({
           created: input.created,
           pass,
-          createdAt: pass === 1 ? input.createdAt : undefined,
+          ...(pass === 1 && input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
         });
 
-        if ("errorMessage" in started) {
+        if (started.status === "failed") {
           return started;
         }
 

@@ -127,6 +127,24 @@ function makeTaskEnvelope(
   };
 }
 
+function findFirstToolHeaderContent(card: Record<string, unknown>): string | null {
+  const body = isRecord(card.body) ? card.body : null;
+  const elements = Array.isArray(body?.elements) ? body.elements : [];
+  for (const element of elements) {
+    if (!isRecord(element) || element.tag !== "collapsible_panel") {
+      continue;
+    }
+    const header = isRecord(element.header) ? element.header : null;
+    const title = isRecord(header?.title) ? header.title : null;
+    return typeof title?.content === "string" ? title.content : null;
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value != null && !Array.isArray(value);
+}
+
 describe("lark run state", () => {
   test("creates a task card from task lifecycle events before any transcript exists", () => {
     const state = reduceLarkRunState(
@@ -882,9 +900,109 @@ describe("lark run state", () => {
     state = markLarkRunAwaitingApproval(state);
 
     const cardText = JSON.stringify(renderLarkRunCard(state));
-    expect(cardText).toContain("请求授权");
+    expect(cardText).toContain("request_permissions");
     expect(cardText).toContain("等待你的授权");
     expect(cardText).toContain("等待授权");
+  });
+
+  test("renders schedule_task header with concise list summary", () => {
+    const state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_sched_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_sched_1",
+        toolName: "schedule_task",
+        args: {
+          action: "list",
+          includeDisabled: true,
+        },
+      }),
+    );
+
+    const header = findFirstToolHeaderContent(renderLarkRunCard(state));
+    expect(header).toBe("⏳ **schedule_task** — 任务列表");
+    expect(header).not.toContain("includeDisabled");
+    expect(header).not.toContain("{");
+  });
+
+  test("renders concise headers for read/find tools without repeated verbs", () => {
+    const readState = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_read_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_read_1",
+        toolName: "read",
+        args: {
+          path: "/tmp/report.txt",
+        },
+      }),
+    );
+    const readHeader = findFirstToolHeaderContent(renderLarkRunCard(readState));
+    expect(readHeader).toBe("⏳ **read** — /tmp/report.txt");
+    expect(readHeader).not.toContain("读取");
+
+    const findState = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_find_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_find_1",
+        toolName: "find",
+        args: {
+          pattern: "TODO",
+          path: "/workspace/src",
+        },
+      }),
+    );
+    const findHeader = findFirstToolHeaderContent(renderLarkRunCard(findState));
+    expect(findHeader).toBe("⏳ **find** — TODO · /workspace/src");
+    expect(findHeader).not.toContain("查找");
+  });
+
+  test("renders review_permission_request header when approvalId is a string", () => {
+    const state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_perm_review_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_perm_review_1",
+        toolName: "review_permission_request",
+        args: {
+          decision: "approve",
+          approvalId: "42",
+          reason: "ok",
+        },
+      }),
+    );
+
+    const header = findFirstToolHeaderContent(renderLarkRunCard(state));
+    expect(header).toBe("⏳ **review_permission_request** — 已批准 · #42");
   });
 
   test("renders standalone approval cards with rich header styling and actions", () => {

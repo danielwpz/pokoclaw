@@ -510,7 +510,8 @@ export class AgentManager {
 
   emitRuntimeEvent(event: AgentRuntimeEvent): void {
     this.publishOutboundEvent(this.projectRuntimeEvent(event));
-    const task = this.handleRuntimeEvent(event)
+    const task: Promise<void> = this.handleRuntimeEvent(event)
+      .then(() => undefined)
       .catch((error: unknown) => {
         logger.error("runtime event orchestration failed", {
           eventType: event.type,
