@@ -1,9 +1,10 @@
 import { createBashTool } from "@/src/tools/bash.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createCreateSubagentTool } from "@/src/tools/create-subagent.js";
-import { createCronTool } from "@/src/tools/cron.js";
+import { createScheduleTaskTool } from "@/src/tools/cron.js";
 import { createEditTool } from "@/src/tools/edit.js";
 import { createFindTool } from "@/src/tools/find.js";
+import { createFinishTaskTool } from "@/src/tools/finish-task.js";
 import { createGrepTool } from "@/src/tools/grep.js";
 import { createLsTool } from "@/src/tools/ls.js";
 import { createReadTool } from "@/src/tools/read.js";
@@ -20,9 +21,10 @@ export function createBuiltinToolRegistry(): ToolRegistry {
   registry.register(createLsTool());
   registry.register(createFindTool());
   registry.register(createGrepTool());
+  registry.register(createFinishTaskTool());
   registry.register(createRequestPermissionsTool());
   registry.register(createReviewPermissionRequestTool());
   registry.register(createCreateSubagentTool());
-  registry.register(createCronTool());
+  registry.register(createScheduleTaskTool());
   return registry;
 }

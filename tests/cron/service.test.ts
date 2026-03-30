@@ -61,6 +61,16 @@ function createCompletedRunResult(taskRunId: string): TaskExecutionRunResult {
           effectiveWindow: 2000,
         },
         events: [],
+        stopSignal: {
+          reason: "task_completion",
+          payload: {
+            taskCompletion: {
+              status: "completed",
+              summary: "cron finished",
+              finalMessage: "cron finished",
+            },
+          },
+        },
       },
     },
     settled: {
@@ -102,6 +112,16 @@ function createCompletedRunResult(taskRunId: string): TaskExecutionRunResult {
         effectiveWindow: 2000,
       },
       events: [],
+      stopSignal: {
+        reason: "task_completion",
+        payload: {
+          taskCompletion: {
+            status: "completed",
+            summary: "cron finished",
+            finalMessage: "cron finished",
+          },
+        },
+      },
     },
   };
 }
@@ -129,6 +149,16 @@ function createStartedIngressResult(sessionId: string): SubmitMessageResult {
         effectiveWindow: 2000,
       },
       events: [],
+      stopSignal: {
+        reason: "task_completion",
+        payload: {
+          taskCompletion: {
+            status: "completed",
+            summary: "cron finished",
+            finalMessage: "cron finished",
+          },
+        },
+      },
     },
   };
 }
@@ -233,6 +263,44 @@ describe("cron service", () => {
       lastStatus: "completed",
       nextRunAt: "2026-03-28T00:00:00.000Z",
     });
+  });
+
+  test("remove soft-deletes cron jobs and prevents future runs while preserving the row", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    handle.storage.sqlite.exec(`
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id,
+        schedule_kind, schedule_value, payload_json, next_run_at, created_at, updated_at
+      ) VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1',
+        'cron', '0 8 * * *', '{}', '2026-03-28T00:00:00.000Z',
+        '2026-03-27T00:00:00.000Z', '2026-03-27T00:00:00.000Z'
+      );
+    `);
+
+    const service = new CronService({
+      storage: handle.storage.db,
+      agentManager: {
+        runCronTaskExecutionFromJob: vi.fn(async () => createCompletedRunResult("unused")),
+      },
+      now: () => new Date("2026-03-27T12:00:00.000Z"),
+    });
+
+    expect(service.remove("cron_1")).toBe(true);
+
+    const repo = new CronJobsRepo(handle.storage.db);
+    expect(repo.getById("cron_1")).toBeNull();
+    expect(repo.getByIdIncludingDeleted("cron_1")).toMatchObject({
+      id: "cron_1",
+      enabled: false,
+      nextRunAt: null,
+      deletedAt: "2026-03-27T12:00:00.000Z",
+    });
+
+    await expect(service.runJobNow("cron_1")).rejects.toThrow(
+      "Cron job cron_1 is already running or does not exist",
+    );
   });
 
   test("scanOnce does not double-start a job that is already running", async () => {
@@ -364,6 +432,59 @@ describe("cron service", () => {
         payloadJson: "{}",
       }),
     ).toThrow(/future time/i);
+  });
+
+  test("one-shot relative at schedules are normalized to an absolute timestamp and only claim once", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    let now = new Date("2026-03-27T12:00:00.000Z");
+    const runCronTaskExecutionFromJob = vi.fn(async () => createCompletedRunResult("run_6"));
+
+    const service = new CronService({
+      storage: handle.storage.db,
+      agentManager: { runCronTaskExecutionFromJob },
+      now: () => now,
+    });
+
+    const created = service.add({
+      ownerAgentId: "agent_1",
+      targetConversationId: "conv_1",
+      targetBranchId: "branch_1",
+      scheduleKind: "at",
+      scheduleValue: "in 60 seconds",
+      payloadJson: "{}",
+    });
+
+    expect(created.scheduleValue).not.toBe("in 60 seconds");
+    expect(Date.parse(created.scheduleValue)).not.toBeNaN();
+    expect(created.nextRunAt).toBe("2026-03-27T12:01:00.000Z");
+
+    now = new Date("2026-03-27T12:01:00.000Z");
+    const firstScan = await service.scanOnce();
+    await flushMicrotasks();
+
+    expect(firstScan).toMatchObject({
+      status: "ran",
+      dueJobs: 1,
+      claimedJobs: 1,
+    });
+    expect(runCronTaskExecutionFromJob).toHaveBeenCalledTimes(1);
+    expect(new CronJobsRepo(handle.storage.db).getById(created.id)).toMatchObject({
+      enabled: false,
+      nextRunAt: null,
+      lastStatus: "completed",
+    });
+
+    now = new Date("2026-03-27T12:02:00.000Z");
+    const secondScan = await service.scanOnce();
+
+    expect(secondScan).toMatchObject({
+      status: "ran",
+      dueJobs: 0,
+      claimedJobs: 0,
+    });
+    expect(runCronTaskExecutionFromJob).toHaveBeenCalledTimes(1);
   });
 
   test("records cron job, task_run, and task session state through a successful run", async () => {

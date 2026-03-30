@@ -6,6 +6,7 @@ import type {
   OrchestratedOutboundEventEnvelope,
   OrchestratedRuntimeEventEnvelope,
   OrchestratedSubagentCreationEventEnvelope,
+  OrchestratedTaskRunEventEnvelope,
 } from "@/src/orchestration/outbound-events.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
@@ -79,6 +80,117 @@ function makeSubagentEnvelope(
     },
     run: {
       runId: null,
+    },
+    object: {
+      messageId: null,
+      toolCallId: null,
+      toolName: null,
+      approvalId: null,
+    },
+    event,
+  };
+}
+
+function makeTaskRuntimeEnvelope(
+  event: OrchestratedRuntimeEventEnvelope["event"],
+): OrchestratedRuntimeEventEnvelope {
+  return {
+    kind: "runtime_event",
+    target: {
+      conversationId: "conv_1",
+      branchId: "branch_1",
+    },
+    session: {
+      sessionId: "sess_task",
+      purpose: "task",
+    },
+    agent: {
+      ownerAgentId: "agent_1",
+      ownerRole: "main",
+      mainAgentId: "agent_1",
+    },
+    taskRun: {
+      taskRunId: "task_1",
+      runType: "cron",
+      status: "running",
+      executionSessionId: "sess_task",
+    },
+    run: {
+      runId: "run_task_1",
+    },
+    object: {
+      messageId: null,
+      toolCallId: null,
+      toolName: null,
+      approvalId: null,
+    },
+    event,
+  };
+}
+
+function makeTaskEnvelope(
+  event: OrchestratedTaskRunEventEnvelope["event"],
+): OrchestratedTaskRunEventEnvelope {
+  return {
+    kind: "task_run_event",
+    target: {
+      conversationId: "conv_1",
+      branchId: "branch_1",
+    },
+    session: {
+      sessionId: "sess_task",
+      purpose: "task",
+    },
+    agent: {
+      ownerAgentId: "agent_1",
+      ownerRole: "main",
+      mainAgentId: "agent_1",
+    },
+    taskRun: {
+      taskRunId: "task_1",
+      runType: "cron",
+      status: event.status,
+      executionSessionId: "sess_task",
+    },
+    run: {
+      runId: null,
+    },
+    object: {
+      messageId: null,
+      toolCallId: null,
+      toolName: null,
+      approvalId: null,
+    },
+    event,
+  };
+}
+
+function makeApprovalRuntimeEnvelope(
+  event: OrchestratedRuntimeEventEnvelope["event"],
+): OrchestratedRuntimeEventEnvelope {
+  return {
+    kind: "runtime_event",
+    target: {
+      conversationId: "conv_1",
+      branchId: "branch_1",
+    },
+    session: {
+      sessionId: "sess_approval",
+      purpose: "approval",
+    },
+    agent: {
+      ownerAgentId: "agent_1",
+      ownerRole: "main",
+      mainAgentId: "agent_1",
+    },
+    taskRun: {
+      taskRunId: null,
+      runType: null,
+      status: null,
+      executionSessionId: null,
+    },
+    run: {
+      runId: "run_approval_1",
     },
     object: {
       messageId: null,
@@ -282,6 +394,168 @@ describe("lark outbound runtime", () => {
     });
 
     await runtime.shutdown();
+  });
+
+  test("creates a task card on task_run_started and keeps updating the same card through transcript and settle", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: {
+        card_id: "card_task_1",
+      },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_task_card_1",
+        open_message_id: "om_task_open_1",
+      },
+    }));
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: updateCard,
+                  },
+                  cardElement: {
+                    content: streamContent,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(createMessage).toHaveBeenCalledOnce();
+    const createdTaskCard = JSON.parse(
+      (createCard.mock.calls.at(0)?.[0] as { data?: { data?: string } } | undefined)?.data?.data ??
+        "{}",
+    ) as { header?: { title?: { content?: string }; template?: string } };
+    expect(createdTaskCard.header?.title?.content).toBe("定时任务运行中");
+    expect(createdTaskCard.header?.template).toBe("blue");
+
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_task_1",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_task_1",
+      }),
+    );
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_task_2",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_task_1",
+        delta: "Daily report ready",
+        accumulatedText: "Daily report ready",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(createMessage).toHaveBeenCalledOnce();
+
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_completed",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "completed",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        finishedAt: "2026-03-28T00:01:00.000Z",
+        durationMs: 60_000,
+        resultSummary: "Published the daily report successfully.",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    const binding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "task:task_1",
+    });
+    expect(binding?.larkMessageId).toBe("om_task_card_1");
+    expect(binding?.larkCardId).toBe("card_task_1");
+    expect(updateCard).toHaveBeenCalled();
+    const updatedTaskCard = JSON.parse(
+      (updateCard.mock.calls.at(-1)?.[0] as { data?: { card?: { data?: string } } } | undefined)
+        ?.data?.card?.data ?? "{}",
+    ) as { header?: { title?: { content?: string }; template?: string } };
+    expect(updatedTaskCard.header?.title?.content).toBe("定时任务已完成");
+    expect(updatedTaskCard.header?.template).toBe("green");
   });
 
   test("creates a placeholder card before first delta, then streams text and finalizes", async () => {
@@ -571,6 +845,109 @@ describe("lark outbound runtime", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     expect(streamContent).toHaveBeenCalledOnce();
+
+    await runtime.shutdown();
+  });
+
+  test("does not render approval-session runtime transcript into the visible lark chat", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: {
+        card_id: "card_approval_runtime_1",
+      },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_card_approval_runtime_1",
+        open_message_id: "om_open_approval_runtime_1",
+      },
+    }));
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: streamContent },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeApprovalRuntimeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_approval_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_approval",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_approval_1",
+        turn: 1,
+        messageId: "msg_approval_1",
+      }),
+    );
+    bus.publish(
+      makeApprovalRuntimeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_approval_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_approval",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_approval_1",
+        turn: 1,
+        messageId: "msg_approval_1",
+        delta: "approval review",
+        accumulatedText: "approval review",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).not.toHaveBeenCalled();
+    expect(createMessage).not.toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
+    expect(streamContent).not.toHaveBeenCalled();
 
     await runtime.shutdown();
   });
@@ -1615,6 +1992,132 @@ describe("lark outbound runtime", () => {
         internalObjectId: "run_1:seg:1",
       }),
     ).not.toBeNull();
+
+    await runtime.shutdown();
+  });
+
+  test("adds an explicit terminal failure summary when a run fails after visible transcript exists", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: { card_id: "card_1" },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: { message_id: "om_card_1", open_message_id: "om_open_1" },
+    }));
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: streamContent },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_fail_visible_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_fail_visible_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+        text: "Trying the requested operation now.",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(createCard).toHaveBeenCalledOnce();
+
+    bus.publish(
+      makeEnvelope({
+        type: "run_failed",
+        eventId: "evt_fail_visible_3",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        errorKind: "internal_error",
+        errorMessage: "Tool execution failed due to an internal runtime error.",
+        retryable: false,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(updateCard).toHaveBeenCalledOnce();
+    const updatePayload = updateCard.mock.calls.at(0)?.[0] as
+      | { data?: { card?: { data?: string } } }
+      | undefined;
+    expect(updatePayload?.data?.card?.data ?? "").toContain("Trying the requested operation now.");
+    expect(updatePayload?.data?.card?.data ?? "").toContain("执行失败");
+    expect(updatePayload?.data?.card?.data ?? "").toContain(
+      "Tool execution failed due to an internal runtime error.",
+    );
 
     await runtime.shutdown();
   });

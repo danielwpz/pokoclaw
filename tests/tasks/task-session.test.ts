@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 
-import { buildTaskExecutionKickoffEnvelope } from "@/src/tasks/task-session.js";
+import {
+  buildTaskExecutionKickoffEnvelope,
+  buildTaskExecutionSupervisorReminderEnvelope,
+} from "@/src/tasks/task-session.js";
 
 describe("buildTaskExecutionKickoffEnvelope", () => {
   test("renders cron task definitions without recent runs when there is no prior execution", () => {
@@ -15,8 +18,10 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     expect(envelope.content).toContain("<task_definition>");
     expect(envelope.content).toContain("看到这条消息意味着现在要执行日报任务");
     expect(envelope.content).not.toContain("<recent_runs>");
+    expect(envelope.content).toContain("scheduled task has been triggered");
     expect(envelope.content).toContain("You are running in background mode");
     expect(envelope.content).toContain("The final response is the primary user-facing output");
+    expect(envelope.content).toContain("You must explicitly call finish_task");
   });
 
   test("renders only the latest successful run when no failure history is relevant", () => {
@@ -75,5 +80,20 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     expect(envelope.content).toContain("Slack &lt;API&gt; timeout &amp; retry exhausted");
     expect(envelope.content).toContain("<last_successful_run>");
     expect(envelope.content).toContain("Posted report with 5 &lt;items&gt; &amp; links.");
+  });
+
+  test("renders a supervisor reminder for task runs that ended without finish_task", () => {
+    const envelope = buildTaskExecutionSupervisorReminderEnvelope({
+      runType: "cron",
+      nextPass: 2,
+      maxPasses: 3,
+    });
+
+    expect(envelope.scenario).toBe("cron");
+    expect(envelope.messageType).toBe("task_supervisor_followup");
+    expect(envelope.visibility).toBe("hidden_system");
+    expect(envelope.content).toContain("<task_supervisor_followup>");
+    expect(envelope.content).toContain("ended without calling finish_task");
+    expect(envelope.content).toContain('status="blocked"');
   });
 });

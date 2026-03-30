@@ -7,6 +7,7 @@ import {
   buildBashFullAccessSection,
   buildMainAgentIdentitySection,
   buildMainAgentOperatingModelSection,
+  buildMainAgentScheduledTasksSection,
   buildMainAgentSubagentSection,
   buildPermissionsSection,
   buildProjectContextSection,
@@ -15,6 +16,7 @@ import {
   buildSubagentIdentitySection,
   buildSubagentOperatingModelSection,
   buildSubagentProfileSection,
+  buildSubagentScheduledTasksSection,
   buildTaskAgentIdentitySection,
   buildTaskAgentOperatingModelSection,
   buildToolUsageSection,
@@ -30,6 +32,7 @@ describe("agent system prompt", () => {
 
     expect(prompt).toContain("You are Pokeclaw Main Agent");
     expect(prompt).toContain("## Operating Model");
+    expect(prompt).toContain("## Scheduled Tasks");
     expect(prompt).toContain("## SubAgent Creation");
     expect(prompt).toContain("## Tool Usage");
     expect(prompt).toContain("## Permissions");
@@ -49,19 +52,61 @@ describe("agent system prompt", () => {
     });
 
     const operatingIndex = prompt.indexOf("## Operating Model");
+    const scheduledTasksIndex = prompt.indexOf("## Scheduled Tasks");
     const subagentIndex = prompt.indexOf("## SubAgent Creation");
     const toolUsageIndex = prompt.indexOf("## Tool Usage");
     const permissionsIndex = prompt.indexOf("## Permissions");
     const bashIndex = prompt.indexOf("## Bash Full Access");
     const safetyIndex = prompt.indexOf("## Safety");
+    const runtimeIndex = prompt.indexOf("## Workspace & Runtime");
 
     expect(operatingIndex).toBeGreaterThanOrEqual(0);
+    expect(scheduledTasksIndex).toBeGreaterThan(operatingIndex);
+    expect(subagentIndex).toBeGreaterThan(scheduledTasksIndex);
     expect(subagentIndex).toBeGreaterThan(operatingIndex);
     expect(toolUsageIndex).toBeGreaterThan(operatingIndex);
     expect(toolUsageIndex).toBeGreaterThan(subagentIndex);
     expect(permissionsIndex).toBeGreaterThan(toolUsageIndex);
     expect(bashIndex).toBeGreaterThan(permissionsIndex);
     expect(safetyIndex).toBeGreaterThan(bashIndex);
+    expect(runtimeIndex).toBe(-1);
+  });
+
+  test("appends runtime context at the end when current date and timezone are provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      currentDate: "2026-03-30",
+      timezone: "Asia/Shanghai",
+    });
+
+    expect(prompt).toContain("## Workspace & Runtime");
+    expect(prompt).toContain("Current date: 2026-03-30");
+    expect(prompt).toContain("Time zone: Asia/Shanghai");
+    expect(prompt.indexOf("## Workspace & Runtime")).toBeGreaterThan(prompt.indexOf("## Safety"));
+    expect(prompt.endsWith("- Time zone: Asia/Shanghai")).toBe(true);
+  });
+
+  test("keeps the prompt prefix stable when only the injected runtime date changes", () => {
+    const promptA = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      currentDate: "2026-03-30",
+      timezone: "Asia/Shanghai",
+    });
+    const promptB = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      currentDate: "2026-03-31",
+      timezone: "Asia/Shanghai",
+    });
+
+    const runtimeMarker = "\n\n## Workspace & Runtime";
+    const prefixA = promptA.slice(0, promptA.indexOf(runtimeMarker));
+    const prefixB = promptB.slice(0, promptB.indexOf(runtimeMarker));
+
+    expect(prefixA).toBe(prefixB);
+    expect(promptA).not.toBe(promptB);
   });
 
   test("builds a distinct approval-agent identity and operating model", () => {
@@ -69,6 +114,8 @@ describe("agent system prompt", () => {
     const approvalPrompt = buildAgentSystemPrompt({ sessionPurpose: "approval" });
 
     expect(taskPrompt).toContain("You are Pokeclaw, an agent that completes the user's request");
+    expect(taskPrompt).toContain("You must explicitly call finish_task");
+    expect(taskPrompt).toContain('status="blocked"');
     expect(approvalPrompt).toContain(
       "You are Pokeclaw Approval Reviewer, a dedicated approval agent.",
     );
@@ -124,6 +171,19 @@ describe("agent system prompt", () => {
     expect(prompt).toContain(
       "Delegation is about protecting the main conversation and creating the right task boundary",
     );
+    expect(prompt).toContain(
+      "Use schedule_task for both one-time future work and recurring scheduled work.",
+    );
+    expect(prompt).toContain(
+      "Users can see each run via a dedicated task card, and runtime history remains queryable later.",
+    );
+    expect(prompt).toContain(
+      "Do not simulate scheduling by waiting in the current run, sleeping in bash, or keeping the agent occupied until later.",
+    );
+    expect(prompt).toContain('scheduleKind="at"');
+    expect(prompt).toContain('scheduleValue="2026-03-30T18:00:00+08:00"');
+    expect(prompt).toContain('scheduleValue="3600000"');
+    expect(prompt).toContain('scheduleValue="0 9 * * *"');
   });
 
   test("teaches main-agent subagent creation argument shape and examples", () => {
@@ -170,6 +230,12 @@ describe("agent system prompt", () => {
 
   test("future section builders stay empty until their features are implemented", () => {
     expect(buildWorkspaceRuntimeSection()).toBe("");
+    expect(
+      buildWorkspaceRuntimeSection({
+        currentDate: "2026-03-30",
+        timezone: "Asia/Shanghai",
+      }),
+    ).toContain("## Workspace & Runtime");
     expect(buildProjectContextSection()).toBe("");
     expect(buildSkillsSection()).toBe("");
   });
@@ -198,6 +264,17 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("You are not the system-wide coordinator");
     expect(prompt).toContain("Treat the kickoff note as system-generated background");
     expect(prompt).toContain("begin this new conversation by greeting the user");
+    expect(prompt).toContain(
+      "Use schedule_task for both one-time future work and recurring scheduled work.",
+    );
+    expect(prompt).toContain(
+      "Users can see each run via a dedicated task card, and runtime history remains queryable later.",
+    );
+    expect(prompt).toContain(
+      "Do not simulate scheduling by waiting in the current run, sleeping in bash, or keeping the agent occupied until later.",
+    );
+    expect(prompt).toContain('scheduleKind="at"');
+    expect(prompt).toContain('scheduleValue="2026-03-30T18:00:00+08:00"');
     expect(prompt).toContain("workdir is your default execution and project root");
     expect(prompt).toContain("private_workspace_dir is your own scratch space");
     expect(prompt).toContain("Those two directories may be the same");
@@ -213,9 +290,11 @@ describe("agent system prompt", () => {
   test("current filled section builders remain non-empty", () => {
     expect(buildMainAgentIdentitySection()).not.toBe("");
     expect(buildMainAgentOperatingModelSection()).not.toBe("");
+    expect(buildMainAgentScheduledTasksSection()).not.toBe("");
     expect(buildMainAgentSubagentSection()).not.toBe("");
     expect(buildSubagentIdentitySection()).not.toBe("");
     expect(buildSubagentOperatingModelSection()).not.toBe("");
+    expect(buildSubagentScheduledTasksSection()).not.toBe("");
     expect(buildSubagentProfileSection({ title: "PR Review" })).not.toBe("");
     expect(buildTaskAgentIdentitySection()).not.toBe("");
     expect(buildApprovalAgentIdentitySection()).not.toBe("");

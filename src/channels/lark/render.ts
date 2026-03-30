@@ -219,6 +219,11 @@ function buildCard(
     elements.push(emptyTerminalPlaceholder);
   }
 
+  const terminalSummary = renderVisibleTerminalSummary(state, hasVisibleTranscript);
+  if (terminalSummary != null) {
+    elements.push(terminalSummary);
+  }
+
   const footerElements = renderFooter(state.footerStatus, state.terminal, state.runId);
   if (footerElements.length > 0) {
     elements.push({ tag: "hr" }, ...footerElements);
@@ -233,6 +238,7 @@ function buildCard(
           content: summarizeRunState(state),
         },
       },
+      ...(buildTaskRunHeader(state) == null ? {} : { header: buildTaskRunHeader(state) }),
       body: {
         elements,
       },
@@ -528,6 +534,13 @@ function renderEmptyRunStatePlaceholder(
     };
   }
 
+  if (state.terminal === "running" && state.taskRunId != null) {
+    return {
+      tag: "markdown",
+      content: "⏳ **任务已启动**\n\n等待输出或工具执行结果。",
+    };
+  }
+
   if (state.terminal === "continued") {
     return {
       tag: "markdown",
@@ -553,12 +566,81 @@ function renderEmptyRunStatePlaceholder(
     };
   }
 
+  if (state.terminal === "blocked") {
+    const details = formatTerminalMessage(state.terminalMessage);
+    return {
+      tag: "markdown",
+      content:
+        details == null
+          ? "⏸ **任务已阻塞**"
+          : `⏸ **任务已阻塞**\n\n**需要处理**\n\`\`\`\n${details}\n\`\`\``,
+    };
+  }
+
   if (state.terminal === "cancelled") {
     const details = formatTerminalMessage(state.terminalMessage);
     return {
       tag: "markdown",
       content:
         details == null ? "⏹ **已停止**" : `⏹ **已停止**\n\n**原因**\n\`\`\`\n${details}\n\`\`\``,
+    };
+  }
+
+  return null;
+}
+
+function renderVisibleTerminalSummary(
+  state: LarkRunState,
+  hasVisibleTranscript: boolean,
+): Record<string, unknown> | null {
+  if (!hasVisibleTranscript) {
+    return null;
+  }
+
+  const details = formatTerminalMessage(state.terminalMessage);
+  if (state.taskRunId != null && state.terminal === "completed" && details != null) {
+    return {
+      tag: "markdown",
+      content: `✅ **任务已完成**\n\n${details}`,
+    };
+  }
+  if (state.taskRunId != null && state.terminal === "blocked" && details != null) {
+    return {
+      tag: "markdown",
+      content: `⏸ **任务已阻塞**\n\n${details}`,
+    };
+  }
+  if (state.taskRunId != null && state.terminal === "failed" && details != null) {
+    return {
+      tag: "markdown",
+      content: `❌ **任务失败**\n\n${details}`,
+    };
+  }
+  if (state.taskRunId != null && state.terminal === "cancelled" && details != null) {
+    return {
+      tag: "markdown",
+      content: `⏹ **任务已停止**\n\n${details}`,
+    };
+  }
+
+  if (state.terminal === "failed") {
+    return {
+      tag: "markdown",
+      content: details == null ? "❌ **执行失败**" : `❌ **执行失败**\n\n${details}`,
+    };
+  }
+
+  if (state.terminal === "cancelled") {
+    return {
+      tag: "markdown",
+      content: details == null ? "⏹ **已停止**" : `⏹ **已停止**\n\n${details}`,
+    };
+  }
+
+  if (state.terminal === "denied") {
+    return {
+      tag: "markdown",
+      content: "❌ **授权已拒绝**\n\n本次执行已停止。",
     };
   }
 
@@ -720,7 +802,7 @@ function renderPermissionRequestToolDetailContent(tool: LarkToolSequenceTool): s
 function renderFooter(
   status: LarkFooterStatus,
   terminal: LarkRunState["terminal"],
-  runId: string,
+  runId: string | null,
 ): Array<Record<string, unknown>> {
   const elements: Array<Record<string, unknown>> = [];
   if (status === "thinking") {
@@ -737,7 +819,7 @@ function renderFooter(
       text_size: "notation",
     });
   }
-  if (terminal === "running") {
+  if (terminal === "running" && runId != null && runId.trim().length > 0) {
     elements.push({
       tag: "button",
       text: { tag: "plain_text", content: "⏹ 停止" },
@@ -794,8 +876,47 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
 }
 
 function summarizeRunState(state: LarkRunState): string {
+  const taskKind = state.taskRunId == null ? null : describeTaskRunKind(state.taskRunType);
+
+  if (taskKind != null) {
+    if (state.terminal === "completed") {
+      return `${taskKind}已完成`;
+    }
+    if (state.terminal === "blocked") {
+      return `${taskKind}已阻塞`;
+    }
+    if (state.terminal === "failed") {
+      return `${taskKind}失败`;
+    }
+    if (state.terminal === "cancelled") {
+      return `${taskKind}已停止`;
+    }
+    if (state.terminal === "awaiting_approval") {
+      return `${taskKind}等待授权`;
+    }
+    if (state.terminal === "continued") {
+      return `${taskKind}已获授权`;
+    }
+    if (state.terminal === "denied") {
+      return `${taskKind}已拒绝`;
+    }
+    if (state.footerStatus === "thinking") {
+      return `${taskKind}正在思考`;
+    }
+    if (state.footerStatus === "tool_running") {
+      return `${taskKind}正在调用工具`;
+    }
+    if (state.activeAssistantMessageId != null) {
+      return `${taskKind}正在输出`;
+    }
+    return `${taskKind}运行中`;
+  }
+
   if (state.terminal === "completed") {
     return "已完成";
+  }
+  if (state.terminal === "blocked") {
+    return "已阻塞";
   }
   if (state.terminal === "failed") {
     return "已失败";
@@ -825,7 +946,93 @@ function summarizeRunState(state: LarkRunState): string {
   if (state.activeAssistantMessageId != null) {
     return "正在输出内容";
   }
+  if (state.taskRunId != null) {
+    return "任务运行中";
+  }
   return "运行中";
+}
+
+function buildTaskRunHeader(state: LarkRunState): Record<string, unknown> | null {
+  if (state.taskRunId == null) {
+    return null;
+  }
+
+  const kindLabel = describeTaskRunKind(state.taskRunType);
+  return {
+    title: {
+      tag: "plain_text",
+      content: `${kindLabel}${describeTaskRunTerminal(state.terminal)}`,
+    },
+    template: describeTaskRunTemplate(state.terminal),
+    icon: {
+      tag: "standard_icon",
+      token: describeTaskRunIcon(state.terminal),
+    },
+  };
+}
+
+function describeTaskRunKind(runType: string | null): string {
+  if (runType === "cron") {
+    return "定时任务";
+  }
+  if (runType === "system") {
+    return "系统任务";
+  }
+  return "后台任务";
+}
+
+function describeTaskRunTerminal(terminal: LarkRunState["terminal"]): string {
+  if (terminal === "completed") {
+    return "已完成";
+  }
+  if (terminal === "blocked") {
+    return "已阻塞";
+  }
+  if (terminal === "failed") {
+    return "失败";
+  }
+  if (terminal === "cancelled") {
+    return "已停止";
+  }
+  if (terminal === "awaiting_approval") {
+    return "等待授权";
+  }
+  if (terminal === "continued") {
+    return "已获授权";
+  }
+  if (terminal === "denied") {
+    return "已拒绝";
+  }
+  return "运行中";
+}
+
+function describeTaskRunTemplate(terminal: LarkRunState["terminal"]): string {
+  if (terminal === "completed" || terminal === "continued") {
+    return "green";
+  }
+  if (terminal === "failed" || terminal === "cancelled" || terminal === "denied") {
+    return "red";
+  }
+  if (terminal === "blocked") {
+    return "grey";
+  }
+  return "blue";
+}
+
+function describeTaskRunIcon(terminal: LarkRunState["terminal"]): string {
+  if (terminal === "completed" || terminal === "continued") {
+    return "yes_filled";
+  }
+  if (terminal === "cancelled" || terminal === "denied") {
+    return "close_filled";
+  }
+  if (terminal === "failed" || terminal === "blocked") {
+    return "warning_outlined";
+  }
+  if (terminal === "awaiting_approval") {
+    return "lock_chat_filled";
+  }
+  return "robot_outlined";
 }
 
 function summarizeApprovalState(state: LarkApprovalState): string {

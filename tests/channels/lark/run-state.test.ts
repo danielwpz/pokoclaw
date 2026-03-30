@@ -11,7 +11,10 @@ import {
   markLarkRunAwaitingApproval,
   reduceLarkRunState,
 } from "@/src/channels/lark/run-state.js";
-import type { OrchestratedRuntimeEventEnvelope } from "@/src/orchestration/outbound-events.js";
+import type {
+  OrchestratedRuntimeEventEnvelope,
+  OrchestratedTaskRunEventEnvelope,
+} from "@/src/orchestration/outbound-events.js";
 
 function makeEnvelope(
   event: OrchestratedRuntimeEventEnvelope["event"],
@@ -50,7 +53,211 @@ function makeEnvelope(
   };
 }
 
+function makeTaskRuntimeEnvelope(
+  event: OrchestratedRuntimeEventEnvelope["event"],
+): OrchestratedRuntimeEventEnvelope {
+  return {
+    kind: "runtime_event",
+    target: {
+      conversationId: "conv_1",
+      branchId: "branch_1",
+    },
+    session: {
+      sessionId: "sess_task",
+      purpose: "task",
+    },
+    agent: {
+      ownerAgentId: "agent_1",
+      ownerRole: "main",
+      mainAgentId: "agent_1",
+    },
+    taskRun: {
+      taskRunId: "task_1",
+      runType: "cron",
+      status: "running",
+      executionSessionId: "sess_task",
+    },
+    run: {
+      runId: "run_task_1",
+    },
+    object: {
+      messageId: null,
+      toolCallId: null,
+      toolName: null,
+      approvalId: null,
+    },
+    event,
+  };
+}
+
+function makeTaskEnvelope(
+  event: OrchestratedTaskRunEventEnvelope["event"],
+): OrchestratedTaskRunEventEnvelope {
+  return {
+    kind: "task_run_event",
+    target: {
+      conversationId: "conv_1",
+      branchId: "branch_1",
+    },
+    session: {
+      sessionId: "sess_task",
+      purpose: "task",
+    },
+    agent: {
+      ownerAgentId: "agent_1",
+      ownerRole: "main",
+      mainAgentId: "agent_1",
+    },
+    taskRun: {
+      taskRunId: "task_1",
+      runType: "cron",
+      status: event.status,
+      executionSessionId: "sess_task",
+    },
+    run: {
+      runId: null,
+    },
+    object: {
+      messageId: null,
+      toolCallId: null,
+      toolName: null,
+      approvalId: null,
+    },
+    event,
+  };
+}
+
 describe("lark run state", () => {
+  test("creates a task card from task lifecycle events before any transcript exists", () => {
+    const state = reduceLarkRunState(
+      null,
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    const rendered = buildLarkRenderedRunCard(state);
+    expect(state.taskRunId).toBe("task_1");
+    expect(state.terminal).toBe("running");
+    expect(rendered.card).toMatchObject({
+      header: {
+        title: {
+          content: "定时任务运行中",
+        },
+        template: "blue",
+      },
+      config: {
+        summary: {
+          content: "定时任务运行中",
+        },
+      },
+      body: {
+        elements: expect.arrayContaining([
+          expect.objectContaining({
+            tag: "markdown",
+            content: expect.stringContaining("任务已启动"),
+          }),
+        ]),
+      },
+    });
+  });
+
+  test("finalizes task cards from task lifecycle events instead of runtime terminal events", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_task_1",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_task_2",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_1",
+        text: "Working...",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeTaskEnvelope({
+        type: "task_run_completed",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "completed",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        finishedAt: "2026-03-28T00:01:00.000Z",
+        durationMs: 60_000,
+        resultSummary: "Published the daily report successfully.",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    const rendered = buildLarkRenderedRunCard(state);
+    expect(state.runId).toBe("run_task_1");
+    expect(state.terminal).toBe("completed");
+    expect(rendered.card).toMatchObject({
+      header: {
+        title: {
+          content: "定时任务已完成",
+        },
+        template: "green",
+      },
+      config: {
+        summary: {
+          content: "定时任务已完成",
+        },
+      },
+      body: {
+        elements: expect.arrayContaining([
+          expect.objectContaining({
+            tag: "markdown",
+            content: expect.stringContaining("任务已完成"),
+          }),
+        ]),
+      },
+    });
+  });
+
   test("keeps assistant/tool blocks in actual transcript order once visible text resumes", () => {
     let state = reduceLarkRunState(
       null,
@@ -972,6 +1179,69 @@ describe("lark run state", () => {
     const cardText = JSON.stringify(rendered.card);
     expect(cardText).toContain("执行失败");
     expect(cardText).toContain("403 Key limit exceeded (daily limit).");
+    expect(rendered.card.config).toMatchObject({
+      summary: { content: "已失败" },
+    });
+  });
+
+  test("renders terminal failure summary even when transcript blocks already exist", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_fail_summary_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_fail_summary_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+        text: "Trying the requested operation now.",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "run_failed",
+        eventId: "evt_fail_summary_3",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        errorKind: "internal_error",
+        errorMessage: "Tool execution failed due to an internal runtime error.",
+        retryable: false,
+      }),
+    );
+
+    const rendered = buildLarkRenderedRunCard(state);
+    const cardText = JSON.stringify(rendered.card);
+    expect(cardText).toContain("Trying the requested operation now.");
+    expect(cardText).toContain("执行失败");
+    expect(cardText).toContain("Tool execution failed due to an internal runtime error.");
     expect(rendered.card.config).toMatchObject({
       summary: { content: "已失败" },
     });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
-import { createCronTool } from "@/src/tools/cron.js";
+import { createScheduleTaskTool } from "@/src/tools/cron.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -51,7 +51,7 @@ function seedFixture(handle: TestDatabaseHandle): void {
   `);
 }
 
-describe("cron tool", () => {
+describe("schedule_task tool", () => {
   let handle: TestDatabaseHandle | null = null;
 
   afterEach(async () => {
@@ -61,13 +61,108 @@ describe("cron tool", () => {
     }
   });
 
-  test("subagent creates cron jobs owned by itself and bound to its main branch", async () => {
+  test("describes one-time and recurring scheduled task management", async () => {
+    const tool = createScheduleTaskTool();
+
+    expect(tool.name).toBe("schedule_task");
+    expect(tool.description).toContain("one-time future or recurring scheduled tasks");
+    expect(JSON.stringify(tool.inputSchema)).toContain("2026-03-30T18:00:00+08:00");
+    expect(JSON.stringify(tool.inputSchema)).toContain("in 2 hours");
+    expect(JSON.stringify(tool.inputSchema)).toContain("3600000");
+    expect(JSON.stringify(tool.inputSchema)).toContain("0 9 * * *");
+    expect(tool.description).not.toContain("write routine results to files");
+    expect(JSON.stringify(tool.inputSchema)).not.toContain("write routine results to files");
+  });
+
+  test("accepts relative one-time schedule values like in 1 minute", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
 
-    const registry = new ToolRegistry([createCronTool()]);
+    const registry = new ToolRegistry([createScheduleTaskTool()]);
+    const before = Date.now();
+    await registry.execute(
+      "schedule_task",
+      {
+        sessionId: "sess_sub",
+        conversationId: "conv_sub",
+        ownerAgentId: "agent_sub",
+        agentKind: "sub",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        runtimeControl: {
+          submitApprovalDecision: vi.fn(),
+          runCronJobNow: vi.fn(),
+        },
+      },
+      {
+        action: "add",
+        name: "Relative reminder",
+        scheduleKind: "at",
+        scheduleValue: "in 1 minute",
+        prompt: "Remind the user to check email.",
+      },
+    );
+
+    const row = handle.storage.sqlite
+      .prepare("SELECT schedule_value, next_run_at FROM cron_jobs WHERE name = ?")
+      .get("Relative reminder") as
+      | { schedule_value: string; next_run_at: string | null }
+      | undefined;
+
+    expect(row?.next_run_at).toBeTruthy();
+    const nextRunAt = Date.parse(row?.next_run_at ?? "");
+    expect(nextRunAt).toBeGreaterThanOrEqual(before + 50_000);
+    expect(nextRunAt).toBeLessThanOrEqual(before + 70_000);
+    expect(row?.schedule_value).not.toBe("in 1 minute");
+    expect(Date.parse(row?.schedule_value ?? "")).not.toBeNaN();
+  });
+
+  test("returns a recoverable error with examples when schedule_task gets an invalid at timestamp", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const registry = new ToolRegistry([createScheduleTaskTool()]);
+
+    await expect(
+      registry.execute(
+        "schedule_task",
+        {
+          sessionId: "sess_sub",
+          conversationId: "conv_sub",
+          ownerAgentId: "agent_sub",
+          agentKind: "sub",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          runtimeControl: {
+            submitApprovalDecision: vi.fn(),
+            runCronJobNow: vi.fn(),
+          },
+        },
+        {
+          action: "add",
+          name: "Broken reminder",
+          scheduleKind: "at",
+          scheduleValue: "next lunchtime maybe",
+          prompt: "Remind the user to check email.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      kind: "recoverable_error",
+      message: expect.stringContaining('scheduleKind="at"'),
+      details: expect.objectContaining({
+        code: "schedule_task_invalid_schedule_value",
+        scheduleKind: "at",
+      }),
+    });
+  });
+
+  test("subagent creates scheduled tasks owned by itself and bound to its main branch", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const registry = new ToolRegistry([createScheduleTaskTool()]);
     const result = await registry.execute(
-      "cron",
+      "schedule_task",
       {
         sessionId: "sess_sub",
         conversationId: "conv_sub",
@@ -91,7 +186,7 @@ describe("cron tool", () => {
 
     expect(result.content[0]).toEqual({
       type: "text",
-      text: expect.stringContaining("Created cron job"),
+      text: expect.stringContaining("Created scheduled task"),
     });
 
     const rows = handle.storage.sqlite
@@ -114,13 +209,13 @@ describe("cron tool", () => {
     });
   });
 
-  test("main agent listing includes subagent-owned cron jobs in its management scope", async () => {
+  test("main agent listing includes subagent-owned scheduled tasks in its management scope", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
 
-    const registry = new ToolRegistry([createCronTool()]);
+    const registry = new ToolRegistry([createScheduleTaskTool()]);
     const result = await registry.execute(
-      "cron",
+      "schedule_task",
       {
         sessionId: "sess_main",
         conversationId: "conv_main",
@@ -150,7 +245,7 @@ describe("cron tool", () => {
     });
   });
 
-  test("main agent can manually run a subagent-owned cron job", async () => {
+  test("main agent can manually run a subagent-owned scheduled task", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
 
@@ -158,10 +253,10 @@ describe("cron tool", () => {
       accepted: true,
       cronJobId: "cron_sub",
     }));
-    const registry = new ToolRegistry([createCronTool()]);
+    const registry = new ToolRegistry([createScheduleTaskTool()]);
 
     const result = await registry.execute(
-      "cron",
+      "schedule_task",
       {
         sessionId: "sess_main",
         conversationId: "conv_main",
@@ -185,19 +280,19 @@ describe("cron tool", () => {
     });
     expect(result.content[0]).toEqual({
       type: "text",
-      text: expect.stringContaining('Triggered cron job "PR review"'),
+      text: expect.stringContaining('Triggered scheduled task "PR review"'),
     });
   });
 
-  test("main agent cannot update a subagent-owned cron definition", async () => {
+  test("main agent cannot update a subagent-owned scheduled task definition", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
 
-    const registry = new ToolRegistry([createCronTool()]);
+    const registry = new ToolRegistry([createScheduleTaskTool()]);
 
     await expect(
       registry.execute(
-        "cron",
+        "schedule_task",
         {
           sessionId: "sess_main",
           conversationId: "conv_main",
@@ -216,14 +311,14 @@ describe("cron tool", () => {
           prompt: "Changed by main agent.",
         },
       ),
-    ).rejects.toThrow("You can only change cron jobs owned by this agent.");
+    ).rejects.toThrow("You can only change scheduled tasks owned by this agent.");
   });
 
-  test("main agent can pause and resume a subagent-owned cron job", async () => {
+  test("main agent can pause and resume a subagent-owned scheduled task", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
 
-    const registry = new ToolRegistry([createCronTool()]);
+    const registry = new ToolRegistry([createScheduleTaskTool()]);
     const context = {
       sessionId: "sess_main",
       conversationId: "conv_main",
@@ -237,7 +332,7 @@ describe("cron tool", () => {
       },
     };
 
-    await registry.execute("cron", context, {
+    await registry.execute("schedule_task", context, {
       action: "pause",
       jobId: "cron_sub",
     });
@@ -250,7 +345,7 @@ describe("cron tool", () => {
       next_run_at: null,
     });
 
-    await registry.execute("cron", context, {
+    await registry.execute("schedule_task", context, {
       action: "resume",
       jobId: "cron_sub",
     });
@@ -260,5 +355,69 @@ describe("cron tool", () => {
       .get("cron_sub") as { enabled: number; next_run_at: string | null };
     expect(resumed.enabled).toBe(1);
     expect(resumed.next_run_at).not.toBeNull();
+  });
+
+  test("remove soft-deletes a scheduled task while preserving its historical task runs", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    handle.storage.sqlite.exec(`
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id,
+        status, started_at, finished_at, result_summary
+      ) VALUES (
+        'task_run_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_main',
+        'completed', '2026-03-27T00:10:00.000Z', '2026-03-27T00:11:00.000Z', 'done'
+      );
+    `);
+
+    const registry = new ToolRegistry([createScheduleTaskTool()]);
+    const context = {
+      sessionId: "sess_main",
+      conversationId: "conv_main",
+      ownerAgentId: "agent_main",
+      agentKind: "main" as const,
+      securityConfig: DEFAULT_CONFIG.security,
+      storage: handle.storage.db,
+      runtimeControl: {
+        submitApprovalDecision: vi.fn(),
+        runCronJobNow: vi.fn(),
+      },
+    };
+
+    const result = await registry.execute("schedule_task", context, {
+      action: "remove",
+      jobId: "cron_main",
+    });
+
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining('Removed scheduled task "Main digest"'),
+    });
+
+    const deleted = handle.storage.sqlite
+      .prepare("SELECT id, enabled, next_run_at, deleted_at FROM cron_jobs WHERE id = ?")
+      .get("cron_main") as
+      | { id: string; enabled: number; next_run_at: string | null; deleted_at: string | null }
+      | undefined;
+    expect(deleted).toMatchObject({
+      id: "cron_main",
+      enabled: 0,
+      next_run_at: null,
+      deleted_at: expect.stringMatching(/^2026-/),
+    });
+
+    const historicalRun = handle.storage.sqlite
+      .prepare("SELECT id, cron_job_id FROM task_runs WHERE id = ?")
+      .get("task_run_1") as { id: string; cron_job_id: string | null } | undefined;
+    expect(historicalRun).toEqual({
+      id: "task_run_1",
+      cron_job_id: "cron_main",
+    });
+
+    const listed = await registry.execute("schedule_task", context, {
+      action: "list",
+      includeDisabled: true,
+    });
+    expect(JSON.stringify(listed.content[0])).not.toContain("cron_main");
   });
 });

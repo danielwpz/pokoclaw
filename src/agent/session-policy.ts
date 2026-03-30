@@ -31,8 +31,12 @@ export function isToolAllowedForSession(input: {
     return input.purpose === "chat" && input.agentKind === "main";
   }
 
-  if (input.toolName === "cron") {
+  if (input.toolName === "schedule_task") {
     return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
+  }
+
+  if (input.toolName === "finish_task") {
+    return input.purpose === "task";
   }
 
   return true;

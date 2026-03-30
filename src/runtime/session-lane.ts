@@ -7,7 +7,11 @@
  */
 import { randomUUID } from "node:crypto";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
-import type { AgentLoop, RunAgentLoopResult } from "@/src/agent/loop.js";
+import type {
+  AgentLoop,
+  AgentLoopAfterToolResultHook,
+  RunAgentLoopResult,
+} from "@/src/agent/loop.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
@@ -29,6 +33,7 @@ export interface SubmitSessionMessageInput {
   channelThreadId?: string | null;
   createdAt?: Date;
   maxTurns?: number;
+  afterToolResultHook?: AgentLoopAfterToolResultHook;
 }
 
 export type SubmitSessionMessageResult =
@@ -109,6 +114,9 @@ export class InMemorySessionLane {
         sessionId: input.sessionId,
         scenario: input.scenario,
         ...(input.maxTurns == null ? {} : { maxTurns: input.maxTurns }),
+        ...(input.afterToolResultHook == null
+          ? {}
+          : { afterToolResultHook: input.afterToolResultHook }),
       })
       .finally(() => {
         if (this.activeRun === runPromise) {

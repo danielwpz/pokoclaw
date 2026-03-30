@@ -51,10 +51,15 @@ export interface UpdateCronJobInput {
   updatedAt?: Date;
 }
 
+export interface SoftDeleteCronJobInput {
+  id: string;
+  deletedAt?: Date;
+}
+
 export interface CompleteCronJobRunInput {
   id: string;
   finishedAt?: Date;
-  status: "completed" | "failed" | "cancelled" | "missed";
+  status: "completed" | "blocked" | "failed" | "cancelled" | "missed";
   lastOutput?: string | null;
   nextRunAt?: Date | null;
 }
@@ -99,11 +104,21 @@ export class CronJobsRepo {
   }
 
   getById(id: string): CronJob | null {
+    return (
+      this.db
+        .select()
+        .from(cronJobs)
+        .where(and(eq(cronJobs.id, id), isNull(cronJobs.deletedAt)))
+        .get() ?? null
+    );
+  }
+
+  getByIdIncludingDeleted(id: string): CronJob | null {
     return this.db.select().from(cronJobs).where(eq(cronJobs.id, id)).get() ?? null;
   }
 
   list(options: ListCronJobsOptions = {}): CronJob[] {
-    const predicates = [];
+    const predicates = [isNull(cronJobs.deletedAt)];
 
     if (options.ownerAgentId != null) {
       predicates.push(eq(cronJobs.ownerAgentId, options.ownerAgentId));
@@ -133,6 +148,7 @@ export class CronJobsRepo {
       .from(cronJobs)
       .where(
         and(
+          isNull(cronJobs.deletedAt),
           eq(cronJobs.enabled, true),
           lte(cronJobs.nextRunAt, toCanonicalUtcIsoTimestamp(now)),
           isNull(cronJobs.runningAt),
@@ -160,7 +176,7 @@ export class CronJobsRepo {
         ...(input.deleteAfterRun === undefined ? {} : { deleteAfterRun: input.deleteAfterRun }),
         updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
       })
-      .where(eq(cronJobs.id, input.id))
+      .where(and(eq(cronJobs.id, input.id), isNull(cronJobs.deletedAt)))
       .run();
 
     if ((result.changes ?? 0) < 1) {
@@ -171,7 +187,22 @@ export class CronJobsRepo {
   }
 
   remove(id: string): boolean {
-    const result = this.db.delete(cronJobs).where(eq(cronJobs.id, id)).run();
+    return this.softDelete({ id });
+  }
+
+  softDelete(input: SoftDeleteCronJobInput): boolean {
+    const deletedAt = input.deletedAt ?? new Date();
+    const result = this.db
+      .update(cronJobs)
+      .set({
+        enabled: false,
+        nextRunAt: null,
+        deletedAt: toCanonicalUtcIsoTimestamp(deletedAt),
+        updatedAt: toCanonicalUtcIsoTimestamp(deletedAt),
+      })
+      .where(and(eq(cronJobs.id, input.id), isNull(cronJobs.deletedAt)))
+      .run();
+
     return (result.changes ?? 0) > 0;
   }
 
@@ -204,14 +235,14 @@ export class CronJobsRepo {
 
   completeRun(input: CompleteCronJobRunInput): CronJob | null {
     const finishedAt = input.finishedAt ?? new Date();
-    const current = this.getById(input.id);
+    const current = this.getByIdIncludingDeleted(input.id);
     if (current == null) {
       return null;
     }
 
     if (current.deleteAfterRun && input.status === "completed") {
       this.remove(input.id);
-      return null;
+      return this.getByIdIncludingDeleted(input.id);
     }
 
     const nextFailures =
@@ -243,7 +274,7 @@ export class CronJobsRepo {
       return null;
     }
 
-    return this.getById(input.id);
+    return this.getByIdIncludingDeleted(input.id);
   }
 
   clearStaleRunning(input: { now: Date; staleBefore: Date }): number {
@@ -278,6 +309,7 @@ export class CronJobsRepo {
       input.staleBefore == null ? null : toCanonicalUtcIsoTimestamp(input.staleBefore);
 
     const predicates = [eq(cronJobs.id, input.id)];
+    predicates.push(isNull(cronJobs.deletedAt));
 
     if (!input.allowDisabled) {
       predicates.push(eq(cronJobs.enabled, true));

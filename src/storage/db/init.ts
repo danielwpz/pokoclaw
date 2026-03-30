@@ -18,7 +18,22 @@ export function initSchemaIfNeeded(
   const initSqlPath = options.initSqlPath ?? getDefaultInitSqlPath();
   const initSql = readFileSync(initSqlPath, "utf8");
   sqlite.exec(initSql);
+  upgradeCronJobsSchema(sqlite);
   upgradeMessagesSchema(sqlite);
+}
+
+function upgradeCronJobsSchema(sqlite: Database.Database): void {
+  const cronJobColumns = new Set(
+    (
+      sqlite.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{
+        name: string;
+      }>
+    ).map((column) => column.name),
+  );
+
+  if (!cronJobColumns.has("deleted_at")) {
+    sqlite.exec("ALTER TABLE cron_jobs ADD COLUMN deleted_at TEXT");
+  }
 }
 
 function upgradeMessagesSchema(sqlite: Database.Database): void {

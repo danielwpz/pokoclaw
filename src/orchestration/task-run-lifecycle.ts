@@ -17,7 +17,7 @@ export interface SettledTaskExecution {
 interface SettleTaskExecutionInput {
   db: StorageDb;
   taskRunId: string;
-  status: "completed" | "failed" | "cancelled";
+  status: "completed" | "blocked" | "failed" | "cancelled";
   resultSummary?: string | null;
   errorText?: string | null;
   cancelledBy?: string | null;
@@ -51,6 +51,21 @@ export function failTaskExecution(input: {
     taskRunId: input.taskRunId,
     status: "failed",
     ...(input.errorText === undefined ? {} : { errorText: input.errorText }),
+    ...(input.resultSummary === undefined ? {} : { resultSummary: input.resultSummary }),
+    ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
+  });
+}
+
+export function blockTaskExecution(input: {
+  db: StorageDb;
+  taskRunId: string;
+  resultSummary?: string | null;
+  finishedAt?: Date;
+}): SettledTaskExecution {
+  return settleTaskExecution({
+    db: input.db,
+    taskRunId: input.taskRunId,
+    status: "blocked",
     ...(input.resultSummary === undefined ? {} : { resultSummary: input.resultSummary }),
     ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
   });

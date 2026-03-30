@@ -45,6 +45,7 @@ import type { PermissionRequest } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { buildSubagentWorkspaceDir, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { resolveLocalCalendarContext } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.repo.js";
@@ -111,6 +112,12 @@ export interface RunAgentLoopInput {
   sessionId: string;
   scenario: ModelScenario;
   maxTurns?: number;
+  afterToolResultHook?: AgentLoopAfterToolResultHook;
+}
+
+export interface AgentLoopStopSignal {
+  reason: string;
+  payload?: unknown;
 }
 
 export interface RunAgentLoopResult {
@@ -122,6 +129,30 @@ export interface RunAgentLoopResult {
   toolExecutions: number;
   compaction: CompactionDecision;
   events: AgentRuntimeEvent[];
+  stopSignal: AgentLoopStopSignal | null;
+}
+
+export type AgentLoopAfterToolResultDecision =
+  | {
+      kind: "continue";
+    }
+  | {
+      kind: "stop_run";
+      reason: string;
+      payload?: unknown;
+    };
+
+export interface AgentLoopAfterToolResultHook {
+  afterToolResult(input: {
+    run: RunAgentLoopInput;
+    sessionPurpose: string;
+    ownerAgentId?: string | null;
+    agentKind?: string | null;
+    runId: string;
+    turn: number;
+    toolCall: AgentToolCall;
+    result: ToolResult;
+  }): AgentLoopAfterToolResultDecision | null | Promise<AgentLoopAfterToolResultDecision | null>;
 }
 
 export interface AgentLoopDependencies {
@@ -162,7 +193,7 @@ export class AgentLoop {
       deps.storage,
       buildSystemPolicy({ security: deps.securityConfig }),
     );
-    this.defaultMaxTurns = deps.runtime?.maxTurns ?? 8;
+    this.defaultMaxTurns = deps.runtime?.maxTurns ?? 20;
     this.approvalTimeoutMs =
       deps.approvalTimeoutMs ?? deps.runtime?.approvalTimeoutMs ?? 3 * 60 * 1000;
     this.approvalGrantTtlMs =
@@ -236,6 +267,11 @@ export class AgentLoop {
     const maxTurns = input.maxTurns ?? this.defaultMaxTurns;
     let context = this.deps.sessions.getContext(input.sessionId);
     const model = this.deps.models.getRequiredScenarioModel(input.scenario);
+    assertSessionModelSupportsTools({
+      sessionPurpose: context.session.purpose,
+      scenario: input.scenario,
+      model,
+    });
     const ownerAgent =
       context.session.ownerAgentId == null
         ? null
@@ -244,8 +280,10 @@ export class AgentLoop {
     const events: AgentRuntimeEvent[] = [];
     const appendedMessageIds: string[] = [];
     let toolExecutions = 0;
+    let stopSignal: AgentLoopStopSignal | null = null;
     let nextSeq = this.deps.messages.getNextSeq(input.sessionId);
     const runId = randomUUID();
+    const promptRuntimeContext = resolveLocalCalendarContext();
     this.deps.control?.beginRun({
       runId,
       sessionId: input.sessionId,
@@ -333,6 +371,8 @@ export class AgentLoop {
                 agentKind: ownerAgent?.kind ?? null,
                 displayName: ownerAgent?.displayName ?? null,
                 description: ownerAgent?.description ?? null,
+                currentDate: promptRuntimeContext.currentDate,
+                timezone: promptRuntimeContext.timezone,
                 workdir: ownerAgent?.workdir ?? null,
                 privateWorkspaceDir:
                   ownerAgent?.kind === "sub" && ownerAgent.id.length > 0
@@ -650,6 +690,25 @@ export class AgentLoop {
             if (executedTool.queuedSteer.length > 0) {
               queuedSteerAfterTurn.push(...executedTool.queuedSteer);
             }
+
+            const stopDecision = await input.afterToolResultHook?.afterToolResult({
+              run: input,
+              sessionPurpose: context.session.purpose,
+              ownerAgentId: context.session.ownerAgentId,
+              agentKind: ownerAgent?.kind ?? null,
+              runId,
+              turn: turn + 1,
+              toolCall,
+              result: executedTool.result,
+            });
+            if (stopDecision?.kind === "stop_run") {
+              stopSignal = {
+                reason: stopDecision.reason,
+                ...(stopDecision.payload === undefined ? {} : { payload: stopDecision.payload }),
+              };
+              completed = true;
+              break;
+            }
           } catch (error) {
             throwIfAborted(handle.signal);
             const failure = normalizeToolFailure(error);
@@ -712,6 +771,10 @@ export class AgentLoop {
             toolExecutions += 1;
             turnToolExecutions += 1;
           }
+        }
+
+        if (stopSignal != null) {
+          break;
         }
 
         const queuedSteer = [...queuedSteerAfterTurn, ...this.steerQueue.drain(input.sessionId)];
@@ -849,6 +912,7 @@ export class AgentLoop {
         toolExecutions,
         compaction: latestCompaction,
         events,
+        stopSignal,
       };
     } catch (error) {
       if (handle.signal.aborted) {
@@ -1351,6 +1415,24 @@ function collectAssistantThinking(content: AgentAssistantContentBlock[]): string
     .flatMap((block) => (block.type === "thinking" ? [block.thinking] : []))
     .join("\n")
     .trim();
+}
+
+function assertSessionModelSupportsTools(input: {
+  sessionPurpose: string;
+  scenario: ModelScenario;
+  model: ResolvedModel;
+}): void {
+  if (input.model.supportsTools) {
+    return;
+  }
+
+  if (input.sessionPurpose !== "task" && input.sessionPurpose !== "approval") {
+    return;
+  }
+
+  throw new Error(
+    `Session purpose "${input.sessionPurpose}" requires a tool-capable model, but scenario "${input.scenario}" resolved to "${input.model.id}" with supportsTools=false.`,
+  );
 }
 
 function collectAgentToolCalls(content: AgentAssistantContentBlock[]): AgentToolCall[] {

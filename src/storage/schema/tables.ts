@@ -244,6 +244,7 @@ export const cronJobs = sqliteTable(
     lastOutput: text("last_output"),
     consecutiveFailures: integer("consecutive_failures").notNull().default(0),
     deleteAfterRun: integer("delete_after_run", { mode: "boolean" }).notNull().default(false),
+    deletedAt: text("deleted_at"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },

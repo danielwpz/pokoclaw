@@ -87,6 +87,18 @@ export interface TaskRunFailedOutboundEvent {
   executionSessionId: string | null;
 }
 
+export interface TaskRunBlockedOutboundEvent {
+  type: "task_run_blocked";
+  taskRunId: string;
+  runType: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  resultSummary: string | null;
+  executionSessionId: string | null;
+}
+
 export interface TaskRunCancelledOutboundEvent {
   type: "task_run_cancelled";
   taskRunId: string;
@@ -103,6 +115,7 @@ export interface TaskRunCancelledOutboundEvent {
 export type TaskRunOutboundEvent =
   | TaskRunStartedOutboundEvent
   | TaskRunCompletedOutboundEvent
+  | TaskRunBlockedOutboundEvent
   | TaskRunFailedOutboundEvent
   | TaskRunCancelledOutboundEvent;
 

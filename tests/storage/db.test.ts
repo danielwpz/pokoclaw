@@ -137,6 +137,55 @@ describe("storage db bootstrap", () => {
     }
   });
 
+  test("upgrades legacy cron_jobs tables with soft-delete support", async () => {
+    const dbPath = getTestDatabasePath(import.meta.url);
+    await mkdir(path.dirname(dbPath), { recursive: true });
+
+    const legacy = openStorageDatabase({ databasePath: dbPath, initializeSchema: false });
+    try {
+      legacy.sqlite.exec(`
+        CREATE TABLE cron_jobs (
+          id TEXT PRIMARY KEY,
+          owner_agent_id TEXT NOT NULL,
+          target_conversation_id TEXT NOT NULL,
+          target_branch_id TEXT NOT NULL,
+          name TEXT,
+          schedule_kind TEXT NOT NULL,
+          schedule_value TEXT NOT NULL,
+          timezone TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          session_target TEXT NOT NULL DEFAULT 'isolated',
+          context_mode TEXT NOT NULL DEFAULT 'isolated',
+          payload_json TEXT NOT NULL,
+          next_run_at TEXT,
+          running_at TEXT,
+          last_run_at TEXT,
+          last_status TEXT,
+          last_output TEXT,
+          consecutive_failures INTEGER NOT NULL DEFAULT 0,
+          delete_after_run INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    const upgraded = openStorageDatabase({ databasePath: dbPath, initializeSchema: true });
+    try {
+      const rows = upgraded.sqlite.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{
+        name: string;
+      }>;
+      const columnNames = rows.map((row) => row.name);
+
+      expect(columnNames).toContain("deleted_at");
+    } finally {
+      upgraded.close();
+      await rm(dbPath, { force: true });
+    }
+  });
+
   test("db-level timestamp CHECK rejects invalid timestamp text", async () => {
     const handle = await createTestDatabase(import.meta.url);
 

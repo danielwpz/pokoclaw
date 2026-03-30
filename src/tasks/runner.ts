@@ -3,15 +3,31 @@ import type { CreatedTaskExecution } from "@/src/orchestration/task-run-factory.
 import type { SettledTaskExecution } from "@/src/orchestration/task-run-lifecycle.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { buildTaskExecutionKickoffEnvelope } from "@/src/tasks/task-session.js";
+import {
+  extractTaskCompletionSignal,
+  resolveTaskCompletionResultSummary,
+  TASK_COMPLETION_TOOL_NAME,
+  type TaskCompletionDetails,
+  type TaskCompletionSignal,
+} from "@/src/tasks/task-completion.js";
+import {
+  buildTaskExecutionKickoffEnvelope,
+  buildTaskExecutionSupervisorReminderEnvelope,
+} from "@/src/tasks/task-session.js";
 
 const logger = createSubsystemLogger("tasks/runner");
+const DEFAULT_MAX_SUPERVISOR_PASSES = 3;
 
 export interface TaskExecutionRunnerIngress {
   submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult>;
 }
 
 export interface TaskExecutionRunnerLifecycle {
+  blockTaskExecution(input: {
+    taskRunId: string;
+    resultSummary?: string | null;
+    finishedAt?: Date;
+  }): SettledTaskExecution;
   completeTaskExecution(input: {
     taskRunId: string;
     resultSummary?: string | null;
@@ -34,11 +50,12 @@ export interface TaskExecutionRunnerLifecycle {
 export interface TaskExecutionRunnerDependencies {
   ingress: TaskExecutionRunnerIngress;
   lifecycle: TaskExecutionRunnerLifecycle;
+  maxSupervisorPasses?: number;
 }
 
 export type TaskExecutionRunResult =
   | {
-      status: "completed";
+      status: "completed" | "blocked";
       started: Extract<SubmitMessageResult, { status: "started" }>;
       settled: SettledTaskExecution;
       run: RunAgentLoopResult;
@@ -50,22 +67,19 @@ export type TaskExecutionRunResult =
     };
 
 export class TaskExecutionRunner {
-  constructor(private readonly deps: TaskExecutionRunnerDependencies) {}
+  private readonly maxSupervisorPasses: number;
+
+  constructor(private readonly deps: TaskExecutionRunnerDependencies) {
+    this.maxSupervisorPasses = Math.max(
+      1,
+      deps.maxSupervisorPasses ?? DEFAULT_MAX_SUPERVISOR_PASSES,
+    );
+  }
 
   async runCreatedTaskExecution(input: {
     created: CreatedTaskExecution;
     createdAt?: Date;
   }): Promise<TaskExecutionRunResult> {
-    const kickoff = buildTaskExecutionKickoffEnvelope(input.created.taskRun);
-    const messageInput: SubmitMessageInput = {
-      sessionId: input.created.executionSession.id,
-      scenario: kickoff.scenario,
-      content: kickoff.content,
-      messageType: kickoff.messageType,
-      visibility: kickoff.visibility,
-      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
-    };
-
     logger.info("starting task execution", {
       taskRunId: input.created.taskRun.id,
       executionSessionId: input.created.executionSession.id,
@@ -75,63 +89,66 @@ export class TaskExecutionRunner {
       branchId: input.created.taskRun.branchId,
       cronJobId: input.created.taskRun.cronJobId,
       parentRunId: input.created.taskRun.parentRunId,
-    });
-
-    logger.debug("submitting task execution kickoff message", {
-      taskRunId: input.created.taskRun.id,
-      executionSessionId: input.created.executionSession.id,
-      scenario: messageInput.scenario,
-      messageType: messageInput.messageType,
-      visibility: messageInput.visibility,
-      createdAt: input.createdAt?.toISOString(),
+      maxSupervisorPasses: this.maxSupervisorPasses,
     });
 
     try {
-      const started = await this.deps.ingress.submitMessage(messageInput);
-      if (started.status !== "started") {
-        const errorMessage =
-          "Task execution session was already active before its kickoff message could start.";
-        const settled = this.deps.lifecycle.failTaskExecution({
-          taskRunId: input.created.taskRun.id,
-          errorText: errorMessage,
-          resultSummary: errorMessage,
+      for (let pass = 1; pass <= this.maxSupervisorPasses; pass += 1) {
+        const started = await this.submitTaskPass({
+          created: input.created,
+          pass,
+          createdAt: pass === 1 ? input.createdAt : undefined,
         });
 
-        logger.warn("task execution failed to start", {
+        if ("errorMessage" in started) {
+          return started;
+        }
+
+        logger.info("task execution pass finished", {
           taskRunId: input.created.taskRun.id,
           executionSessionId: input.created.executionSession.id,
-          reason: "session_already_active",
+          pass,
+          runId: started.run.runId,
+          stopSignalReason: started.run.stopSignal?.reason ?? null,
         });
 
-        return {
-          status: "failed",
-          settled,
-          errorMessage,
-        };
+        const completion = extractTaskCompletionFromRun(started.run);
+        if (completion != null) {
+          return this.settleTaskCompletion({
+            taskRunId: input.created.taskRun.id,
+            started,
+            completion,
+          });
+        }
+
+        if (pass < this.maxSupervisorPasses) {
+          logger.warn("task execution pass ended without finish_task; continuing supervisor loop", {
+            taskRunId: input.created.taskRun.id,
+            executionSessionId: input.created.executionSession.id,
+            pass,
+            maxSupervisorPasses: this.maxSupervisorPasses,
+          });
+        }
       }
 
-      logger.info("task execution kickoff accepted", {
+      const errorMessage = `Task execution ended without calling ${TASK_COMPLETION_TOOL_NAME} after ${this.maxSupervisorPasses} passes.`;
+      const settled = this.deps.lifecycle.failTaskExecution({
         taskRunId: input.created.taskRun.id,
-        executionSessionId: input.created.executionSession.id,
-        runId: started.run.runId,
-        scenario: started.run.scenario,
+        errorText: errorMessage,
+        resultSummary: errorMessage,
+        finishedAt: new Date(),
       });
 
-      const settled = this.deps.lifecycle.completeTaskExecution({
-        taskRunId: input.created.taskRun.id,
-      });
-
-      logger.info("task execution completed", {
+      logger.warn("task execution exhausted supervisor passes without explicit completion", {
         taskRunId: input.created.taskRun.id,
         executionSessionId: input.created.executionSession.id,
-        runId: started.run.runId,
+        maxSupervisorPasses: this.maxSupervisorPasses,
       });
 
       return {
-        status: "completed",
-        started,
+        status: "failed",
         settled,
-        run: started.run,
+        errorMessage,
       };
     } catch (error) {
       const normalized = normalizeTaskExecutionError(error);
@@ -177,6 +194,153 @@ export class TaskExecutionRunner {
       };
     }
   }
+
+  private async submitTaskPass(input: {
+    created: CreatedTaskExecution;
+    pass: number;
+    createdAt?: Date;
+  }): Promise<
+    | Extract<SubmitMessageResult, { status: "started" }>
+    | Extract<TaskExecutionRunResult, { status: "failed" }>
+  > {
+    const envelope =
+      input.pass === 1
+        ? buildTaskExecutionKickoffEnvelope(input.created.taskRun)
+        : buildTaskExecutionSupervisorReminderEnvelope({
+            runType: input.created.taskRun.runType,
+            nextPass: input.pass,
+            maxPasses: this.maxSupervisorPasses,
+          });
+
+    const messageInput: SubmitMessageInput = {
+      sessionId: input.created.executionSession.id,
+      scenario: envelope.scenario,
+      content: envelope.content,
+      messageType: envelope.messageType,
+      visibility: envelope.visibility,
+      afterToolResultHook: {
+        afterToolResult: ({ toolCall, result }) => {
+          const completion = extractTaskCompletionSignal({
+            toolName: toolCall.name,
+            result,
+          });
+          if (completion == null) {
+            return { kind: "continue" };
+          }
+
+          return {
+            kind: "stop_run",
+            reason: "task_completion",
+            payload: {
+              taskCompletion: completion,
+            } satisfies TaskCompletionDetails,
+          };
+        },
+      },
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    };
+
+    logger.debug("submitting task execution message", {
+      taskRunId: input.created.taskRun.id,
+      executionSessionId: input.created.executionSession.id,
+      pass: input.pass,
+      scenario: messageInput.scenario,
+      messageType: messageInput.messageType,
+      visibility: messageInput.visibility,
+      createdAt: input.createdAt?.toISOString(),
+    });
+
+    const started = await this.deps.ingress.submitMessage(messageInput);
+    if (started.status === "started") {
+      logger.info("task execution message accepted", {
+        taskRunId: input.created.taskRun.id,
+        executionSessionId: input.created.executionSession.id,
+        pass: input.pass,
+        runId: started.run.runId,
+        scenario: started.run.scenario,
+      });
+      return started;
+    }
+
+    const errorMessage =
+      "Task execution session was already active before its kickoff message could start.";
+    const settled = this.deps.lifecycle.failTaskExecution({
+      taskRunId: input.created.taskRun.id,
+      errorText: errorMessage,
+      resultSummary: errorMessage,
+      finishedAt: new Date(),
+    });
+
+    logger.warn("task execution failed to start", {
+      taskRunId: input.created.taskRun.id,
+      executionSessionId: input.created.executionSession.id,
+      pass: input.pass,
+      reason: "session_already_active",
+    });
+
+    return {
+      status: "failed",
+      settled,
+      errorMessage,
+    };
+  }
+
+  private settleTaskCompletion(input: {
+    taskRunId: string;
+    started: Extract<SubmitMessageResult, { status: "started" }>;
+    completion: TaskCompletionSignal;
+  }):
+    | Extract<TaskExecutionRunResult, { status: "completed" | "blocked" }>
+    | Extract<TaskExecutionRunResult, { status: "failed" }> {
+    const finishedAt = new Date();
+    const resultSummary = resolveTaskCompletionResultSummary(input.completion);
+
+    if (input.completion.status === "completed") {
+      const settled = this.deps.lifecycle.completeTaskExecution({
+        taskRunId: input.taskRunId,
+        resultSummary,
+        finishedAt,
+      });
+      return {
+        status: "completed",
+        started: input.started,
+        settled,
+        run: input.started.run,
+      };
+    }
+
+    if (input.completion.status === "blocked") {
+      const settled = this.deps.lifecycle.blockTaskExecution({
+        taskRunId: input.taskRunId,
+        resultSummary,
+        finishedAt,
+      });
+      return {
+        status: "blocked",
+        started: input.started,
+        settled,
+        run: input.started.run,
+      };
+    }
+
+    const settled = this.deps.lifecycle.failTaskExecution({
+      taskRunId: input.taskRunId,
+      errorText: input.completion.finalMessage,
+      resultSummary,
+      finishedAt,
+    });
+    return {
+      status: "failed",
+      settled,
+      errorMessage: input.completion.finalMessage,
+    };
+  }
+}
+
+function extractTaskCompletionFromRun(run: RunAgentLoopResult): TaskCompletionSignal | null {
+  return extractTaskCompletionSignal({
+    details: run.stopSignal?.payload,
+  });
 }
 
 function normalizeTaskExecutionError(

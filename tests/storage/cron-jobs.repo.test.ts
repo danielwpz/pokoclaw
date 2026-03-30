@@ -136,4 +136,31 @@ describe("cron jobs repo", () => {
       lastStatus: "missed",
     });
   });
+
+  test("soft-deleted cron jobs stay in storage but disappear from active lookups and claims", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const repo = new CronJobsRepo(handle.storage.db);
+    repo.softDelete({
+      id: "cron_1",
+      deletedAt: new Date("2026-03-26T02:00:00.000Z"),
+    });
+
+    expect(repo.getById("cron_1")).toBeNull();
+    expect(repo.getByIdIncludingDeleted("cron_1")).toMatchObject({
+      id: "cron_1",
+      enabled: false,
+      nextRunAt: null,
+      deletedAt: "2026-03-26T02:00:00.000Z",
+    });
+    expect(repo.list({ includeDisabled: true })).toEqual([]);
+    expect(repo.listDue(new Date("2026-03-26T03:00:00.000Z"))).toEqual([]);
+    expect(
+      repo.claimManualRun({
+        id: "cron_1",
+        now: new Date("2026-03-26T03:00:00.000Z"),
+      }),
+    ).toBeNull();
+  });
 });

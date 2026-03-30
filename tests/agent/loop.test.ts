@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { Type } from "@sinclair/typebox";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { AgentLlmError } from "@/src/agent/llm/errors.js";
 import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
@@ -11,12 +11,14 @@ import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { resolveLocalCalendarContext } from "@/src/shared/time.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { defineTool, textToolResult } from "@/src/tools/core/types.js";
+import { createScheduleTaskTool } from "@/src/tools/cron.js";
 import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
 import {
   createTestDatabase,
@@ -35,7 +37,9 @@ const TEST_BASH_TOOL_SCHEMA = Type.Object(
 
 const NO_ARGS_TOOL_SCHEMA = Type.Object({}, { additionalProperties: false });
 
-function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
+function createModelConfig(
+  options: { supportsTools?: boolean } = {},
+): Pick<AppConfig, "providers" | "models"> {
   return {
     providers: {
       anthropic_main: {
@@ -50,7 +54,7 @@ function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
           upstreamId: "claude-sonnet-4-5-20250929",
           contextWindow: 200_000,
           maxOutputTokens: 16_384,
-          supportsTools: true,
+          supportsTools: options.supportsTools ?? true,
           supportsVision: true,
           supportsReasoning: true,
         },
@@ -143,6 +147,8 @@ describe("agent loop", () => {
   let handle: TestDatabaseHandle | null = null;
 
   afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
@@ -212,6 +218,93 @@ describe("agent loop", () => {
       "turn_completed",
       "run_completed",
     ]);
+  });
+
+  test("captures runtime date context once per run so multi-turn prompts keep a stable prefix", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-30T05:47:00.000Z"));
+
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    handle.storage.sqlite.exec(`
+      INSERT INTO agents (id, conversation_id, kind, created_at)
+      VALUES ('agent_main', 'conv_1', 'main', '2026-03-22T00:00:00.000Z');
+    `);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_main",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"提醒我今天下午三点开会"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const seenSystemPrompts: string[] = [];
+    let turns = 0;
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        seenSystemPrompts.push(input.systemPrompt ?? "");
+        turns += 1;
+        if (turns === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "ping",
+                arguments: {},
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry([
+        defineTool({
+          name: "ping",
+          description: "no-op",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("pong");
+          },
+        }),
+      ]),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    const runtimeContext = resolveLocalCalendarContext(new Date("2026-03-30T05:47:00.000Z"));
+    expect(seenSystemPrompts).toHaveLength(2);
+    expect(seenSystemPrompts[0]).toBe(seenSystemPrompts[1]);
+    expect(seenSystemPrompts[0]).toContain("## Workspace & Runtime");
+    expect(seenSystemPrompts[0]).toContain(`Current date: ${runtimeContext.currentDate}`);
+    expect(seenSystemPrompts[0]).toContain(`Time zone: ${runtimeContext.timezone}`);
   });
 
   test("passes session purpose into the model runner for session-scoped tool visibility", async () => {
@@ -354,6 +447,71 @@ describe("agent loop", () => {
     });
   });
 
+  test("uses the default max turn limit of 20 when runtime config is omitted", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+      updatedAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    messagesRepo.append({
+      id: "msg_1",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: JSON.stringify({ content: "keep going" }),
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turn = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        turn += 1;
+        return makeAssistantResult({
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: `tool_${turn}`, name: "probe", arguments: {} }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "probe",
+        description: "Returns a trivial result",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          return textToolResult("ok");
+        },
+      }),
+    );
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
+      "configured max turn limit (20)",
+    );
+    expect(turn).toBe(20);
+  });
+
   test("passes owner agent and workspace cwd into tool execution context", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
@@ -494,6 +652,98 @@ describe("agent loop", () => {
       toolName: "bash",
       sessionPurpose: "approval",
     });
+  });
+
+  test("fails early when a task session resolves to a model without tool support", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_task",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "task",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_task",
+      sessionId: "sess_task",
+      seq: 1,
+      role: "user",
+      messageType: "task_kickoff",
+      visibility: "hidden_system",
+      payloadJson: '{"content":"do the work"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig({ supportsTools: false })),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: {
+        async runTurn() {
+          throw new Error("model runner should not be called");
+        },
+      },
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await expect(loop.run({ sessionId: "sess_task", scenario: "cron" })).rejects.toThrow(
+      'Session purpose "task" requires a tool-capable model',
+    );
+  });
+
+  test("fails early when an approval session resolves to a model without tool support", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_approval",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "approval",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_approval",
+      sessionId: "sess_approval",
+      seq: 1,
+      role: "user",
+      messageType: "approval_request",
+      visibility: "hidden_system",
+      payloadJson: '{"content":"review approval"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig({ supportsTools: false })),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: {
+        async runTurn() {
+          throw new Error("model runner should not be called");
+        },
+      },
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await expect(loop.run({ sessionId: "sess_approval", scenario: "chat" })).rejects.toThrow(
+      'Session purpose "approval" requires a tool-capable model',
+    );
   });
 
   test("continues after bash tool calls and persists tool results", async () => {
@@ -1553,6 +1803,98 @@ describe("agent loop", () => {
       toolName: "bash",
       content: [{ type: "text", text: "bash exited with code 1: cat: missing.txt: No such file" }],
       isError: true,
+    });
+    expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(true);
+    expect(result.events.at(-1)?.type).toBe("run_completed");
+  });
+
+  test("returns invalid schedule_task time values to the model as recoverable error tool results", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"schedule a one-time reminder"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let callCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        callCount += 1;
+        if (callCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "schedule_task",
+                arguments: {
+                  action: "add",
+                  name: "Broken reminder",
+                  scheduleKind: "at",
+                  scheduleValue: "sometime later",
+                  prompt: "Remind the user to check email.",
+                },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [
+            { type: "text", text: "The schedule format was invalid, so I need to correct it." },
+          ],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry([createScheduleTaskTool()]);
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(4);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_1",
+      toolName: "schedule_task",
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining('scheduleKind="at"'),
+        },
+      ],
+      details: expect.objectContaining({
+        code: "schedule_task_invalid_schedule_value",
+        scheduleKind: "at",
+      }),
     });
     expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(true);
     expect(result.events.at(-1)?.type).toBe("run_completed");
