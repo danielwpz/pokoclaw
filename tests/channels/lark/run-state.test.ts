@@ -901,7 +901,7 @@ describe("lark run state", () => {
 
     const cardText = JSON.stringify(renderLarkRunCard(state));
     expect(cardText).toContain("request_permissions");
-    expect(cardText).toContain("等待你的授权");
+    expect(cardText).toContain("等待授权处理");
     expect(cardText).toContain("等待授权");
   });
 
@@ -1027,6 +1027,7 @@ describe("lark run state", () => {
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
     expect(cardText).toContain('"template":"blue"');
     expect(cardText).toContain("lock_chat_filled");
+    expect(cardText).not.toContain('"subtitle"');
     expect(cardText).toContain("### 需要你的授权");
     expect(cardText).toContain("**操作**");
     expect(cardText).toContain("**原因**");

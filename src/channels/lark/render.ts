@@ -129,10 +129,6 @@ export function buildLarkRenderedApprovalCard(state: LarkApprovalState): LarkRen
         tag: "plain_text",
         content: state.resolved ? `授权请求 — ${approved ? "授权成功" : "已拒绝"}` : "授权请求",
       },
-      subtitle: {
-        tag: "plain_text",
-        content: !state.resolved ? "请选择操作" : approved ? "(已允许)" : "(已拒绝)",
-      },
       template: denied ? "red" : approved ? "green" : "blue",
       icon: {
         tag: "standard_icon",
