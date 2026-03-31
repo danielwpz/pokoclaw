@@ -96,8 +96,15 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("## Workspace & Runtime");
     expect(prompt).toContain("Current date: 2026-03-30");
     expect(prompt).toContain("Time zone: Asia/Shanghai");
+    expect(prompt).toContain(
+      "If you are unsure about the current time, or need an exact time, use bash to get it.",
+    );
     expect(prompt.indexOf("## Workspace & Runtime")).toBeGreaterThan(prompt.indexOf("## Safety"));
-    expect(prompt.endsWith("- Time zone: Asia/Shanghai")).toBe(true);
+    expect(
+      prompt.endsWith(
+        "- If you are unsure about the current time, or need an exact time, use bash to get it.",
+      ),
+    ).toBe(true);
   });
 
   test("keeps the prompt prefix stable when only the injected runtime date changes", () => {

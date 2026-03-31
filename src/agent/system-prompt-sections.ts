@@ -279,14 +279,23 @@ export function buildSafetySection(): string {
 }
 
 export function buildWorkspaceRuntimeSection(input: WorkspaceRuntimePromptContext = {}): string {
-  return renderSection("Workspace & Runtime", [
+  const lines = [
     ...(input.currentDate == null || input.currentDate.trim().length === 0
       ? []
       : [`- Current date: ${input.currentDate.trim()}`]),
     ...(input.timezone == null || input.timezone.trim().length === 0
       ? []
       : [`- Time zone: ${input.timezone.trim()}`]),
-  ]);
+  ];
+
+  if (lines.length === 0) {
+    return "";
+  }
+
+  lines.push(
+    "- If you are unsure about the current time, or need an exact time, use bash to get it.",
+  );
+  return renderSection("Workspace & Runtime", lines);
 }
 
 // TODO: inject bootstrap files, AGENTS.md summaries, and related project context.
