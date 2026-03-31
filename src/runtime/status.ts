@@ -13,8 +13,12 @@ import { resolveSessionLiveState } from "@/src/runtime/live-state.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
-import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
-import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
+import {
+  extractStoredMessageUsage,
+  MessagesRepo,
+  type MessageUsage,
+  parseStoredUsageJson,
+} from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import type { Message, Session } from "@/src/storage/schema/types.js";
 
@@ -176,12 +180,12 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
   if (snapshot.sessionUsage == null) {
     lines.push("- 当前 session 还没有可用 usage。");
   } else {
-    lines.push(`- 当前 session 累计: ${formatUsageLine(snapshot.sessionUsage)}`);
+    lines.push(...formatUsageTextBlock("当前 session 累计", snapshot.sessionUsage));
   }
   if (snapshot.latestTurnUsage == null) {
     lines.push("- 最近一次回复: 暂无。");
   } else {
-    lines.push(`- 最近一次回复: ${formatUsageLine(snapshot.latestTurnUsage)}`);
+    lines.push(...formatUsageTextBlock("最近一次回复", snapshot.latestTurnUsage));
   }
 
   lines.push("");
@@ -236,10 +240,11 @@ export function buildConversationStatusPresentation(
         "### Usage",
         snapshot.sessionUsage == null
           ? "- 当前 session 还没有可用 usage。"
-          : `- 当前 session 累计: ${formatUsageLine(snapshot.sessionUsage)}`,
+          : formatUsageMarkdownBlock("当前 session 累计", snapshot.sessionUsage),
+        "",
         snapshot.latestTurnUsage == null
           ? "- 最近一次回复: 暂无。"
-          : `- 最近一次回复: ${formatUsageLine(snapshot.latestTurnUsage)}`,
+          : formatUsageMarkdownBlock("最近一次回复", snapshot.latestTurnUsage),
       ].join("\n"),
       [
         "### 运行中",
@@ -365,7 +370,9 @@ function aggregateSessionUsage(input: {
   const total = emptyUsage();
   let sawAny = false;
 
-  const compactSummaryUsage = parseUsageJson(input.session.compactSummaryUsageJson);
+  const compactSummaryUsage = toStatusUsageSnapshot(
+    parseStoredUsageJson(input.session.compactSummaryUsageJson),
+  );
   if (compactSummaryUsage != null) {
     addUsage(total, compactSummaryUsage);
     sawAny = true;
@@ -390,43 +397,28 @@ function aggregateSessionUsage(input: {
 }
 
 function parseMessageUsage(message: Message): StatusUsageSnapshot | null {
-  return parseUsageJson(message.usageJson);
+  return toStatusUsageSnapshot(extractStoredMessageUsage(message));
 }
 
-function parseUsageJson(usageJson: string | null | undefined): StatusUsageSnapshot | null {
-  if (usageJson == null) {
+function toStatusUsageSnapshot(usage: MessageUsage | null): StatusUsageSnapshot | null {
+  if (usage == null) {
     return null;
   }
 
-  try {
-    const parsed = JSON.parse(usageJson) as Partial<MessageUsage>;
-    if (
-      typeof parsed.input !== "number" ||
-      typeof parsed.output !== "number" ||
-      typeof parsed.cacheRead !== "number" ||
-      typeof parsed.cacheWrite !== "number" ||
-      typeof parsed.totalTokens !== "number"
-    ) {
-      return null;
-    }
-
-    return {
-      input: Math.floor(parsed.input),
-      output: Math.floor(parsed.output),
-      cacheRead: Math.floor(parsed.cacheRead),
-      cacheWrite: Math.floor(parsed.cacheWrite),
-      totalTokens: Math.floor(parsed.totalTokens),
-      cost: {
-        input: parsed.cost?.input ?? 0,
-        output: parsed.cost?.output ?? 0,
-        cacheRead: parsed.cost?.cacheRead ?? 0,
-        cacheWrite: parsed.cost?.cacheWrite ?? 0,
-        total: parsed.cost?.total ?? 0,
-      },
-    };
-  } catch {
-    return null;
-  }
+  return {
+    input: Math.floor(usage.input),
+    output: Math.floor(usage.output),
+    cacheRead: Math.floor(usage.cacheRead),
+    cacheWrite: Math.floor(usage.cacheWrite),
+    totalTokens: Math.floor(usage.totalTokens),
+    cost: {
+      input: usage.cost?.input ?? 0,
+      output: usage.cost?.output ?? 0,
+      cacheRead: usage.cost?.cacheRead ?? 0,
+      cacheWrite: usage.cost?.cacheWrite ?? 0,
+      total: usage.cost?.total ?? 0,
+    },
+  };
 }
 
 function emptyUsage(): StatusUsageSnapshot {
@@ -461,24 +453,22 @@ function addUsage(target: StatusUsageSnapshot, usage: StatusUsageSnapshot): void
   }
 }
 
-function formatUsageLine(usage: StatusUsageSnapshot): string {
-  const tokens = [
-    `总 ${formatCount(usage.totalTokens)}`,
-    `输入 ${formatCount(usage.input)}`,
-    `输出 ${formatCount(usage.output)}`,
+function formatUsageTextBlock(label: string, usage: StatusUsageSnapshot): string[] {
+  return [
+    `- ${label}`,
+    `  总 ${formatCount(usage.totalTokens)} / 输入 ${formatCount(usage.input)} / 输出 ${formatCount(usage.output)}`,
+    `  缓存读 ${formatCount(usage.cacheRead)} / 缓存写 ${formatCount(usage.cacheWrite)}`,
+    `  Cost $${(usage.cost?.total ?? 0).toFixed(6)}`,
   ];
+}
 
-  if (usage.cacheRead > 0 || usage.cacheWrite > 0) {
-    tokens.push(`缓存读 ${formatCount(usage.cacheRead)}`);
-    tokens.push(`缓存写 ${formatCount(usage.cacheWrite)}`);
-  }
-
-  const cost = usage.cost?.total ?? 0;
-  if (cost > 0) {
-    tokens.push(`Cost $${cost.toFixed(6)}`);
-  }
-
-  return tokens.join(" / ");
+function formatUsageMarkdownBlock(label: string, usage: StatusUsageSnapshot): string {
+  return [
+    `**${label}**`,
+    `- 总 ${formatCount(usage.totalTokens)} / 输入 ${formatCount(usage.input)} / 输出 ${formatCount(usage.output)}`,
+    `- 缓存读 ${formatCount(usage.cacheRead)} / 缓存写 ${formatCount(usage.cacheWrite)}`,
+    `- Cost $${(usage.cost?.total ?? 0).toFixed(6)}`,
+  ].join("\n");
 }
 
 function formatModelLine(model: StatusModelSnapshot): string {

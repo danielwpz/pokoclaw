@@ -130,6 +130,77 @@ export class MessagesRepo {
   }
 }
 
+export function extractStoredMessageUsage(
+  message: Pick<
+    Message,
+    "usageJson" | "tokenInput" | "tokenOutput" | "tokenCacheRead" | "tokenCacheWrite" | "tokenTotal"
+  >,
+): MessageUsage | null {
+  const parsed = parseStoredUsageJson(message.usageJson);
+  if (parsed != null) {
+    return parsed;
+  }
+
+  if (
+    message.tokenInput == null ||
+    message.tokenOutput == null ||
+    message.tokenCacheRead == null ||
+    message.tokenCacheWrite == null ||
+    message.tokenTotal == null
+  ) {
+    return null;
+  }
+
+  return {
+    input: message.tokenInput,
+    output: message.tokenOutput,
+    cacheRead: message.tokenCacheRead,
+    cacheWrite: message.tokenCacheWrite,
+    totalTokens: message.tokenTotal,
+  };
+}
+
+export function parseStoredUsageJson(usageJson: string | null | undefined): MessageUsage | null {
+  if (usageJson == null) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(usageJson) as Partial<MessageUsage>;
+    if (
+      typeof parsed.input !== "number" ||
+      typeof parsed.output !== "number" ||
+      typeof parsed.cacheRead !== "number" ||
+      typeof parsed.cacheWrite !== "number" ||
+      typeof parsed.totalTokens !== "number"
+    ) {
+      return null;
+    }
+
+    const normalized: MessageUsage = {
+      input: Math.floor(parsed.input),
+      output: Math.floor(parsed.output),
+      cacheRead: Math.floor(parsed.cacheRead),
+      cacheWrite: Math.floor(parsed.cacheWrite),
+      totalTokens: Math.floor(parsed.totalTokens),
+    };
+
+    if (parsed.cost != null) {
+      normalized.cost = {
+        input: typeof parsed.cost.input === "number" ? parsed.cost.input : 0,
+        output: typeof parsed.cost.output === "number" ? parsed.cost.output : 0,
+        cacheRead: typeof parsed.cost.cacheRead === "number" ? parsed.cost.cacheRead : 0,
+        cacheWrite: typeof parsed.cost.cacheWrite === "number" ? parsed.cost.cacheWrite : 0,
+        total: typeof parsed.cost.total === "number" ? parsed.cost.total : 0,
+      };
+    }
+
+    return normalized;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeMessageUsage(usage: MessageUsage): MessageUsage {
   const normalized: MessageUsage = {
     input: normalizeUsageInt("usage.input", usage.input),

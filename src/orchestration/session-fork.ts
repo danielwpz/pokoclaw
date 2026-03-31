@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { StorageDb } from "@/src/storage/db/client.js";
-import { MessagesRepo, type MessageUsage } from "@/src/storage/repos/messages.repo.js";
+import { extractStoredMessageUsage, MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { type CreateSessionInput, SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import type { Message, Session } from "@/src/storage/schema/types.js";
 
@@ -115,34 +115,6 @@ function copyMessageIntoTargetSession(source: Message, targetSessionId: string, 
     tokenCacheRead: source.tokenCacheRead,
     tokenCacheWrite: source.tokenCacheWrite,
     tokenTotal: source.tokenTotal,
-    usage: extractMessageUsage(source),
-  };
-}
-
-function extractMessageUsage(source: Message): MessageUsage | null {
-  if (source.usageJson != null) {
-    try {
-      return JSON.parse(source.usageJson) as MessageUsage;
-    } catch {
-      return null;
-    }
-  }
-
-  if (
-    source.tokenInput == null ||
-    source.tokenOutput == null ||
-    source.tokenCacheRead == null ||
-    source.tokenCacheWrite == null ||
-    source.tokenTotal == null
-  ) {
-    return null;
-  }
-
-  return {
-    input: source.tokenInput,
-    output: source.tokenOutput,
-    cacheRead: source.tokenCacheRead,
-    cacheWrite: source.tokenCacheWrite,
-    totalTokens: source.tokenTotal,
+    usage: extractStoredMessageUsage(source),
   };
 }
