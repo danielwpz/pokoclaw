@@ -50,7 +50,7 @@ function seedFixture(handle: TestDatabaseHandle): void {
   `);
 }
 
-function makeTextEvent(text: string) {
+function makeMessageEvent(messageType: string, content: unknown) {
   return {
     sender: {
       sender_id: { open_id: "ou_sender" },
@@ -60,11 +60,15 @@ function makeTextEvent(text: string) {
       message_id: "om_msg_1",
       chat_id: "oc_chat_1",
       chat_type: "p2p",
-      message_type: "text",
+      message_type: messageType,
       create_time: "1774569600000",
-      content: JSON.stringify({ text }),
+      content: JSON.stringify(content),
     },
   };
+}
+
+function makeTextEvent(text: string) {
+  return makeMessageEvent("text", { text });
 }
 
 describe("lark inbound message handling", () => {
@@ -105,6 +109,37 @@ describe("lark inbound message handling", () => {
     });
   });
 
+  test("normalizes a post event into markdown text", () => {
+    expect(
+      normalizeLarkTextMessage(
+        makeMessageEvent("post", {
+          zh_cn: {
+            content: [[{ tag: "md", text: "- 第一项\n- 第二项" }]],
+          },
+        }),
+      ),
+    ).toMatchObject({
+      chatId: "oc_chat_1",
+      messageId: "om_msg_1",
+      text: "- 第一项\n- 第二项",
+    });
+  });
+
+  test("preserves raw markdown blocks from post content", () => {
+    expect(
+      normalizeLarkTextMessage(
+        makeMessageEvent("post", {
+          zh_cn: {
+            title: "发布说明",
+            content: [[{ tag: "md", text: "## 标题\n- [文档](https://example.com)\n`code`" }]],
+          },
+        }),
+      ),
+    ).toMatchObject({
+      text: "**发布说明**\n\n## 标题\n- [文档](https://example.com)\n`code`",
+    });
+  });
+
   test("routes a text message through surface binding into runtime ingress", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
@@ -133,6 +168,88 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_chat_1",
         scenario: "chat",
         content: "hello from lark",
+        channelMessageId: "om_msg_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
+  test("routes a post message through surface binding into runtime ingress", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+      });
+
+      await handler(
+        makeMessageEvent("post", {
+          zh_cn: {
+            content: [[{ tag: "md", text: "- 第一项\n- 第二项" }]],
+          },
+        }),
+      );
+
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_chat_1",
+        scenario: "chat",
+        content: "- 第一项\n- 第二项",
+        channelMessageId: "om_msg_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
+  test("hydrates interactive inbound messages through message.get raw card content", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        quoteMessageFetcher: vi.fn(async () => ({
+          messageType: "interactive",
+          text: "- 第一项\n- 第二项",
+        })),
+      });
+
+      await handler(
+        makeMessageEvent("interactive", {
+          card_id: "card_xxx",
+        }),
+      );
+
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_chat_1",
+        scenario: "chat",
+        content: "- 第一项\n- 第二项",
         channelMessageId: "om_msg_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
@@ -932,7 +1049,7 @@ describe("lark inbound message handling", () => {
     });
   });
 
-  test("ignores non-text events without calling runtime ingress", async () => {
+  test("routes image placeholders through runtime ingress", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
 
@@ -957,7 +1074,12 @@ describe("lark inbound message handling", () => {
         },
       });
 
-      expect(submitMessage).not.toHaveBeenCalled();
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_chat_1",
+        scenario: "chat",
+        content: "[图片 img_1]",
+        channelMessageId: "om_msg_2",
+      });
     });
   });
 
