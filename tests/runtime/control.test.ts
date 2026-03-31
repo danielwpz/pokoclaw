@@ -106,4 +106,42 @@ describe("RuntimeControlService", () => {
       conversationId: null,
     });
   });
+
+  test("stops only runs for the requested session", () => {
+    const cancel = new SessionRunAbortRegistry();
+    const control = new RuntimeControlService(cancel);
+    const handle1 = cancel.begin("sess_1");
+    const handle2 = cancel.begin("sess_2");
+
+    control.beginRun({
+      runId: "run_1",
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      scenario: "chat",
+    });
+    control.beginRun({
+      runId: "run_2",
+      sessionId: "sess_2",
+      conversationId: "conv_1",
+      branchId: "branch_2",
+      scenario: "chat",
+    });
+
+    const result = control.stopSession({
+      sessionId: "sess_2",
+      actor: "test",
+    });
+
+    expect(result).toEqual({
+      accepted: true,
+      sessionId: "sess_2",
+      runIds: ["run_2"],
+      conversationId: "conv_1",
+    });
+    expect(handle1.signal.aborted).toBe(false);
+    expect(handle2.signal.aborted).toBe(true);
+    expect(cancel.isActive("sess_1")).toBe(true);
+    expect(cancel.isActive("sess_2")).toBe(false);
+  });
 });

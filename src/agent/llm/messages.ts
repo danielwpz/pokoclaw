@@ -174,6 +174,10 @@ function parsePayload<T>(payloadJson: string, messageId: string): T {
 
 function parseUsage(message: Message): Usage {
   if (!message.usageJson) {
+    const fallbackUsage = buildUsageFromTokenColumns(message);
+    if (fallbackUsage != null) {
+      return fallbackUsage;
+    }
     throw new Error(`Stored assistant message ${message.id} is missing usageJson`);
   }
 
@@ -183,6 +187,33 @@ function parseUsage(message: Message): Usage {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Stored assistant message ${message.id} has invalid usageJson: ${detail}`);
   }
+}
+
+function buildUsageFromTokenColumns(message: Message): Usage | null {
+  if (
+    message.tokenInput == null ||
+    message.tokenOutput == null ||
+    message.tokenCacheRead == null ||
+    message.tokenCacheWrite == null ||
+    message.tokenTotal == null
+  ) {
+    return null;
+  }
+
+  return {
+    input: message.tokenInput,
+    output: message.tokenOutput,
+    cacheRead: message.tokenCacheRead,
+    cacheWrite: message.tokenCacheWrite,
+    totalTokens: message.tokenTotal,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
 }
 
 function parseMessageTimestamp(message: Message): number {

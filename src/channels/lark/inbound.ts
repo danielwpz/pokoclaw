@@ -10,6 +10,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
+import { materializeForkedSessionSnapshotInStorage } from "@/src/orchestration/session-fork.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import {
   buildConversationStatusPresentation,
@@ -22,7 +23,10 @@ import { ChannelInstancesRepo } from "@/src/storage/repos/channel-instances.repo
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import { ConversationBranchesRepo } from "@/src/storage/repos/conversation-branches.repo.js";
 import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
+import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import type { ChannelSurface, LarkObjectBinding } from "@/src/storage/schema/types.js";
 
 const logger = createSubsystemLogger("channels/lark-inbound");
 
@@ -36,7 +40,7 @@ const LARK_INTERACTIVE_TEXT_TRUNCATED_NOTICE = "[卡片内容过长，引用文�
 export interface LarkInboundIngress {
   submitMessage(input: {
     sessionId: string;
-    scenario: "chat";
+    scenario: "chat" | "cron" | "subagent";
     content: string;
     channelMessageId?: string | null;
     channelParentMessageId?: string | null;
@@ -138,6 +142,21 @@ export function buildLarkChatSurfaceKey(chatId: string): string {
   return `chat:${chatId}`;
 }
 
+export function buildLarkThreadSurfaceKey(chatId: string, threadId: string): string {
+  return `chat:${chatId}:thread:${threadId}`;
+}
+
+interface LarkInboundRoute {
+  kind: "main_chat" | "ordinary_thread" | "task_thread";
+  conversationId: string;
+  branchId: string;
+  sessionId: string;
+  scenario: "chat" | "cron" | "subagent";
+  stopScope: "conversation" | "session";
+  chatId: string;
+  replyToMessageId: string | null;
+}
+
 export function normalizeLarkTextMessage(
   data: unknown,
 ): NormalizedLarkTextMessage | { skipReason: string } {
@@ -237,13 +256,13 @@ export function createLarkMessageReceiveHandler(input: {
       return;
     }
 
-    const surface = resolveOrPairLarkChatSurface({
+    const mainSurface = resolveOrPairLarkChatSurface({
       db: input.storage,
       installationId: input.installationId,
       chatId: normalized.chatId,
       chatType: normalized.chatType,
     });
-    if (surface == null) {
+    if (mainSurface == null) {
       logger.warn("dropping lark inbound message because no channel surface matched or paired", {
         installationId: input.installationId,
         chatId: normalized.chatId,
@@ -252,41 +271,53 @@ export function createLarkMessageReceiveHandler(input: {
       return;
     }
 
-    const sessionsRepo = new SessionsRepo(input.storage);
-    const session = sessionsRepo.findLatestByConversationBranch(
-      surface.conversationId,
-      surface.branchId,
-      {
-        purpose: "chat",
-        statuses: ["active", "paused"],
-      },
-    );
-    if (session == null) {
-      logger.warn("dropping lark inbound message because no chat session matched surface", {
+    const route = await resolveLarkInboundRoute({
+      db: input.storage,
+      installationId: input.installationId,
+      mainSurface,
+      normalized,
+      ...(input.quoteMessageFetcher == null
+        ? {}
+        : { quoteMessageFetcher: input.quoteMessageFetcher }),
+    });
+    if (route == null) {
+      logger.warn("dropping lark inbound message because no route was resolved", {
         installationId: input.installationId,
         chatId: normalized.chatId,
         messageId: normalized.messageId,
-        conversationId: surface.conversationId,
-        branchId: surface.branchId,
+        parentMessageId: normalized.parentMessageId,
+        threadId: normalized.threadId,
       });
       return;
     }
 
     if (normalized.text === "/stop") {
-      const result = input.control.stopConversation({
-        conversationId: surface.conversationId,
-        actor:
-          normalized.senderOpenId == null
-            ? `lark:${input.installationId}:unknown`
-            : `lark:${input.installationId}:${normalized.senderOpenId}`,
-        reasonText: "stop requested from lark command",
-      });
+      const result =
+        route.stopScope === "conversation"
+          ? input.control.stopConversation({
+              conversationId: route.conversationId,
+              actor:
+                normalized.senderOpenId == null
+                  ? `lark:${input.installationId}:unknown`
+                  : `lark:${input.installationId}:${normalized.senderOpenId}`,
+              reasonText: "stop requested from lark command",
+            })
+          : input.control.stopSession({
+              sessionId: route.sessionId,
+              actor:
+                normalized.senderOpenId == null
+                  ? `lark:${input.installationId}:unknown`
+                  : `lark:${input.installationId}:${normalized.senderOpenId}`,
+              reasonText: "stop requested from lark command",
+            });
       logger.info("processed lark stop command", {
         installationId: input.installationId,
         chatId: normalized.chatId,
         messageId: normalized.messageId,
-        conversationId: surface.conversationId,
-        acceptedCount: result.acceptedCount,
+        conversationId: route.conversationId,
+        sessionId: route.sessionId,
+        stopScope: route.stopScope,
+        acceptedCount: "acceptedCount" in result ? result.acceptedCount : Number(result.accepted),
       });
       return;
     }
@@ -301,13 +332,14 @@ export function createLarkMessageReceiveHandler(input: {
         return;
       }
       const snapshot = input.status.getConversationStatus({
-        conversationId: surface.conversationId,
-        sessionId: session.id,
-        scenario: "chat",
+        conversationId: route.conversationId,
+        sessionId: route.sessionId,
+        scenario: route.scenario,
       });
       await sendLarkStatusCard({
         installationId: input.installationId,
-        chatId: normalized.chatId,
+        chatId: route.chatId,
+        replyToMessageId: route.replyToMessageId,
         presentation: buildConversationStatusPresentation(snapshot),
         ...(input.clients == null ? {} : { clients: input.clients }),
       });
@@ -315,8 +347,10 @@ export function createLarkMessageReceiveHandler(input: {
         installationId: input.installationId,
         chatId: normalized.chatId,
         messageId: normalized.messageId,
-        conversationId: surface.conversationId,
-        sessionId: session.id,
+        conversationId: route.conversationId,
+        sessionId: route.sessionId,
+        scenario: route.scenario,
+        routeKind: route.kind,
       });
       return;
     }
@@ -327,18 +361,23 @@ export function createLarkMessageReceiveHandler(input: {
       messageId: normalized.messageId,
       parentMessageId: normalized.parentMessageId,
       threadId: normalized.threadId,
-      sessionId: session.id,
-      conversationId: surface.conversationId,
-      branchId: surface.branchId,
+      sessionId: route.sessionId,
+      conversationId: route.conversationId,
+      branchId: route.branchId,
+      routeKind: route.kind,
+      scenario: route.scenario,
       chatType: normalized.chatType,
       contentPreview: truncateLogText(normalized.text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
     });
 
-    const content = await buildInboundMessageContent(normalized, input);
+    const content =
+      route.kind === "ordinary_thread"
+        ? normalized.text
+        : await buildInboundMessageContent(normalized, input);
 
     await input.ingress.submitMessage({
-      sessionId: session.id,
-      scenario: "chat",
+      sessionId: route.sessionId,
+      scenario: route.scenario,
       content,
       channelMessageId: normalized.messageId,
       ...(normalized.parentMessageId == null
@@ -1074,6 +1113,362 @@ function pairInitialLarkInstallation(input: {
   });
 }
 
+async function resolveLarkInboundRoute(input: {
+  db: StorageDb;
+  installationId: string;
+  mainSurface: ChannelSurface;
+  normalized: NormalizedLarkTextMessage;
+  quoteMessageFetcher?: (input: {
+    installationId: string;
+    messageId: string;
+  }) => Promise<LarkQuotedMessage | null>;
+}): Promise<LarkInboundRoute | null> {
+  const sessionsRepo = new SessionsRepo(input.db);
+
+  if (input.normalized.threadId == null) {
+    const session = sessionsRepo.findLatestByConversationBranch(
+      input.mainSurface.conversationId,
+      input.mainSurface.branchId,
+      {
+        purpose: "chat",
+        statuses: ["active", "paused"],
+      },
+    );
+    if (session == null) {
+      logger.warn("dropping lark inbound message because no chat session matched main surface", {
+        installationId: input.installationId,
+        chatId: input.normalized.chatId,
+        messageId: input.normalized.messageId,
+        conversationId: input.mainSurface.conversationId,
+        branchId: input.mainSurface.branchId,
+      });
+      return null;
+    }
+
+    return {
+      kind: "main_chat",
+      conversationId: input.mainSurface.conversationId,
+      branchId: input.mainSurface.branchId,
+      sessionId: session.id,
+      scenario: "chat",
+      stopScope: "conversation",
+      chatId: input.normalized.chatId,
+      replyToMessageId: null,
+    };
+  }
+
+  const ordinaryThread = resolveExistingOrdinaryThreadRoute({
+    db: input.db,
+    installationId: input.installationId,
+    chatId: input.normalized.chatId,
+    threadId: input.normalized.threadId,
+  });
+  if (ordinaryThread != null) {
+    return ordinaryThread;
+  }
+
+  const taskThread = resolveTaskThreadRoute({
+    db: input.db,
+    installationId: input.installationId,
+    normalized: input.normalized,
+  });
+  if (taskThread != null) {
+    return taskThread;
+  }
+
+  return createOrdinaryThreadRoute({
+    db: input.db,
+    installationId: input.installationId,
+    mainSurface: input.mainSurface,
+    normalized: input.normalized,
+    ...(input.quoteMessageFetcher == null
+      ? {}
+      : { quoteMessageFetcher: input.quoteMessageFetcher }),
+  });
+}
+
+function resolveExistingOrdinaryThreadRoute(input: {
+  db: StorageDb;
+  installationId: string;
+  chatId: string;
+  threadId: string;
+}): LarkInboundRoute | null {
+  const surfacesRepo = new ChannelSurfacesRepo(input.db);
+  const sessionsRepo = new SessionsRepo(input.db);
+  const threadSurface = surfacesRepo.getBySurfaceKey({
+    channelType: LARK_CHANNEL_TYPE,
+    channelInstallationId: input.installationId,
+    surfaceKey: buildLarkThreadSurfaceKey(input.chatId, input.threadId),
+  });
+  if (threadSurface == null) {
+    return null;
+  }
+
+  const threadSession = sessionsRepo.findLatestByConversationBranch(
+    threadSurface.conversationId,
+    threadSurface.branchId,
+    {
+      purpose: "chat",
+      statuses: ["active", "paused"],
+    },
+  );
+  if (threadSession == null) {
+    logger.warn("lark thread surface exists without an active thread chat session", {
+      installationId: input.installationId,
+      chatId: input.chatId,
+      threadId: input.threadId,
+      conversationId: threadSurface.conversationId,
+      branchId: threadSurface.branchId,
+    });
+    return null;
+  }
+
+  const surfaceObject = parseSurfaceObject(threadSurface.surfaceObjectJson);
+  return {
+    kind: "ordinary_thread",
+    conversationId: threadSurface.conversationId,
+    branchId: threadSurface.branchId,
+    sessionId: threadSession.id,
+    scenario: "chat",
+    stopScope: "session",
+    chatId: input.chatId,
+    replyToMessageId: readString(surfaceObject.reply_to_message_id),
+  };
+}
+
+function resolveTaskThreadRoute(input: {
+  db: StorageDb;
+  installationId: string;
+  normalized: NormalizedLarkTextMessage;
+}): LarkInboundRoute | null {
+  const bindingsRepo = new LarkObjectBindingsRepo(input.db);
+  const threadBinding = bindingsRepo.getByThreadRootMessageId({
+    channelInstallationId: input.installationId,
+    threadRootMessageId: input.normalized.threadId ?? "",
+  });
+  const directTaskRoute = buildTaskThreadRouteFromBinding({
+    binding: threadBinding,
+    chatId: input.normalized.chatId,
+    replyToMessageId: input.normalized.parentMessageId,
+  });
+  if (directTaskRoute != null) {
+    return directTaskRoute;
+  }
+
+  if (input.normalized.parentMessageId == null) {
+    return null;
+  }
+
+  const parentBinding = bindingsRepo.getByLarkMessageId({
+    channelInstallationId: input.installationId,
+    larkMessageId: input.normalized.parentMessageId,
+  });
+  const route = buildTaskThreadRouteFromBinding({
+    binding: parentBinding,
+    chatId: input.normalized.chatId,
+    replyToMessageId: input.normalized.parentMessageId,
+  });
+  if (route == null || parentBinding == null) {
+    return null;
+  }
+
+  bindingsRepo.upsert({
+    id: parentBinding.id,
+    channelInstallationId: parentBinding.channelInstallationId,
+    conversationId: parentBinding.conversationId,
+    branchId: parentBinding.branchId,
+    internalObjectKind: parentBinding.internalObjectKind,
+    internalObjectId: parentBinding.internalObjectId,
+    larkMessageId: parentBinding.larkMessageId,
+    larkOpenMessageId: parentBinding.larkOpenMessageId,
+    larkCardId: parentBinding.larkCardId,
+    threadRootMessageId: input.normalized.threadId,
+    cardElementId: parentBinding.cardElementId,
+    lastSequence: parentBinding.lastSequence,
+    status: normalizeBindingStatus(parentBinding.status),
+    metadataJson: parentBinding.metadataJson,
+    createdAt: new Date(parentBinding.createdAt),
+    updatedAt: new Date(),
+  });
+
+  return route;
+}
+
+function buildTaskThreadRouteFromBinding(input: {
+  binding: LarkObjectBinding | null;
+  chatId: string;
+  replyToMessageId: string | null;
+}): LarkInboundRoute | null {
+  if (input.binding == null) {
+    return null;
+  }
+  const metadata = parseBindingMetadata(input.binding.metadataJson);
+  const sessionId = readString(metadata.sessionId);
+  const taskRunType = readString(metadata.taskRunType);
+  const taskRunId = readString(metadata.taskRunId);
+  if (sessionId == null || taskRunId == null) {
+    return null;
+  }
+
+  return {
+    kind: "task_thread",
+    conversationId: input.binding.conversationId,
+    branchId: input.binding.branchId,
+    sessionId,
+    scenario: taskRunType === "cron" ? "cron" : "subagent",
+    stopScope: "session",
+    chatId: input.chatId,
+    replyToMessageId: input.replyToMessageId,
+  };
+}
+
+async function createOrdinaryThreadRoute(input: {
+  db: StorageDb;
+  installationId: string;
+  mainSurface: ChannelSurface;
+  normalized: NormalizedLarkTextMessage;
+  quoteMessageFetcher?: (input: {
+    installationId: string;
+    messageId: string;
+  }) => Promise<LarkQuotedMessage | null>;
+}): Promise<LarkInboundRoute | null> {
+  const sessionsRepo = new SessionsRepo(input.db);
+  const branchesRepo = new ConversationBranchesRepo(input.db);
+  const surfacesRepo = new ChannelSurfacesRepo(input.db);
+  const messagesRepo = new MessagesRepo(input.db);
+  const now = input.normalized.createdAt ?? new Date();
+  const threadId = input.normalized.threadId;
+  if (threadId == null) {
+    return null;
+  }
+
+  const sourceSession = sessionsRepo.findLatestByConversationBranch(
+    input.mainSurface.conversationId,
+    input.mainSurface.branchId,
+    {
+      purpose: "chat",
+      statuses: ["active", "paused"],
+    },
+  );
+  if (sourceSession == null) {
+    logger.warn("cannot create ordinary lark thread because main chat session is missing", {
+      installationId: input.installationId,
+      chatId: input.normalized.chatId,
+      threadId,
+      conversationId: input.mainSurface.conversationId,
+      branchId: input.mainSurface.branchId,
+    });
+    return null;
+  }
+
+  const branchId = randomUUID();
+  const sessionId = randomUUID();
+  branchesRepo.create({
+    id: branchId,
+    conversationId: input.mainSurface.conversationId,
+    kind: input.normalized.chatType === "p2p" ? "dm_thread" : "group_thread",
+    branchKey: `thread:${threadId}`,
+    externalBranchId: threadId,
+    parentBranchId: input.mainSurface.branchId,
+    createdAt: now,
+    updatedAt: now,
+  });
+  materializeForkedSessionSnapshotInStorage({
+    db: input.db,
+    targetSession: {
+      id: sessionId,
+      conversationId: input.mainSurface.conversationId,
+      branchId,
+      ownerAgentId: sourceSession.ownerAgentId,
+      purpose: "chat",
+      contextMode: sourceSession.contextMode,
+      createdAt: now,
+      updatedAt: now,
+    },
+    sourceSessionId: sourceSession.id,
+  });
+  messagesRepo.append({
+    id: randomUUID(),
+    sessionId,
+    seq: messagesRepo.getNextSeq(sessionId),
+    role: "user",
+    messageType: "thread_kickoff",
+    visibility: "hidden_system",
+    payloadJson: JSON.stringify({
+      content: await buildOrdinaryThreadKickoffContent({
+        normalized: input.normalized,
+        installationId: input.installationId,
+        ...(input.quoteMessageFetcher == null
+          ? {}
+          : { quoteMessageFetcher: input.quoteMessageFetcher }),
+      }),
+    }),
+    createdAt: now,
+  });
+  surfacesRepo.upsert({
+    id: randomUUID(),
+    channelType: LARK_CHANNEL_TYPE,
+    channelInstallationId: input.installationId,
+    conversationId: input.mainSurface.conversationId,
+    branchId,
+    surfaceKey: buildLarkThreadSurfaceKey(input.normalized.chatId, threadId),
+    surfaceObjectJson: JSON.stringify({
+      chat_id: input.normalized.chatId,
+      thread_id: threadId,
+      reply_to_message_id: input.normalized.parentMessageId ?? input.normalized.messageId,
+    }),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return {
+    kind: "ordinary_thread",
+    conversationId: input.mainSurface.conversationId,
+    branchId,
+    sessionId,
+    scenario: "chat",
+    stopScope: "session",
+    chatId: input.normalized.chatId,
+    replyToMessageId: input.normalized.parentMessageId ?? input.normalized.messageId,
+  };
+}
+
+async function buildOrdinaryThreadKickoffContent(input: {
+  normalized: NormalizedLarkTextMessage;
+  installationId: string;
+  quoteMessageFetcher?: (input: {
+    installationId: string;
+    messageId: string;
+  }) => Promise<LarkQuotedMessage | null>;
+}): Promise<string> {
+  const lines = ["<thread_kickoff>", "  The user opened a separate thread."];
+  const parentMessageId = input.normalized.parentMessageId;
+  if (parentMessageId != null) {
+    const quoted =
+      input.quoteMessageFetcher == null
+        ? null
+        : await input.quoteMessageFetcher({
+            installationId: input.installationId,
+            messageId: parentMessageId,
+          });
+    if (quoted != null) {
+      lines.push("  The quoted message is below. Continue the discussion around it.");
+      lines.push("  <quoted_message>");
+      lines.push(indentBlock(quoted.text, 4));
+      lines.push("  </quoted_message>");
+    } else {
+      lines.push(
+        "  The user quoted an earlier message, but its text is unavailable. Tell the user you cannot see the quoted message and ask them to send it again.",
+      );
+      lines.push("  <quoted_message_unavailable>true</quoted_message_unavailable>");
+    }
+  } else {
+    lines.push("  Continue the discussion in this thread.");
+  }
+  lines.push("</thread_kickoff>");
+  return lines.join("\n");
+}
+
 function parseLarkMessageContent(messageType: string, content: string): string {
   if (content.length === 0) {
     return "";
@@ -1340,6 +1735,17 @@ function truncateLogText(text: string, maxLength: number): string {
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
+function parseSurfaceObject(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (isRecord(parsed)) {
+      return parsed;
+    }
+  } catch {}
+
+  return {};
+}
+
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value);
@@ -1379,13 +1785,20 @@ async function buildInboundMessageContent(
       threadId: normalized.threadId,
     });
     return [
-      "用户引用了一条消息，但系统未能读取原文。",
+      "The user quoted an earlier message, but the quoted text could not be retrieved.",
       "",
-      `用户的新消息：${normalized.text}`,
+      "Tell the user you cannot see the quoted message and ask them to send it again.",
+      "",
+      `The user's new message: ${normalized.text}`,
     ].join("\n");
   }
 
-  return ["用户引用了一条消息：", quoted.text, "", `用户的新消息：${normalized.text}`].join("\n");
+  return [
+    "The user quoted a message:",
+    quoted.text,
+    "",
+    `The user's new message: ${normalized.text}`,
+  ].join("\n");
 }
 
 export function createLarkQuoteMessageFetcher(input: {
@@ -1503,6 +1916,7 @@ async function fetchQuotedLarkMessage(input: {
 async function sendLarkStatusCard(input: {
   installationId: string;
   chatId: string;
+  replyToMessageId?: string | null;
   presentation: {
     title: string;
     summary: string;
@@ -1547,6 +1961,18 @@ async function sendLarkStatusCard(input: {
       ]),
     },
   };
+  if (input.replyToMessageId != null && input.replyToMessageId.length > 0) {
+    await client.sdk.im.message.reply({
+      path: { message_id: input.replyToMessageId },
+      data: {
+        msg_type: "interactive",
+        content: JSON.stringify(card),
+        reply_in_thread: true,
+      },
+    });
+    return;
+  }
+
   await client.sdk.im.message.create({
     params: { receive_id_type: "chat_id" },
     data: {
@@ -1555,6 +1981,37 @@ async function sendLarkStatusCard(input: {
       content: JSON.stringify(card),
     },
   });
+}
+
+function parseBindingMetadata(raw: string | null): Record<string, unknown> {
+  if (raw == null || raw.trim().length === 0) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (isRecord(parsed)) {
+      return parsed;
+    }
+  } catch {}
+
+  return {};
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeBindingStatus(value: string): "active" | "finalized" | "stale" {
+  return value === "finalized" || value === "stale" ? value : "active";
+}
+
+function indentBlock(text: string, spaces: number): string {
+  const prefix = " ".repeat(spaces);
+  return text
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
+    .join("\n");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

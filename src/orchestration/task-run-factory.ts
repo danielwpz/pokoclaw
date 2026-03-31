@@ -7,6 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 
+import { materializeForkedSessionSnapshotInStorage } from "@/src/orchestration/session-fork.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
@@ -18,6 +19,8 @@ export interface CreateTaskExecutionInput {
   conversationId: string;
   branchId: string;
   initiatorSessionId?: string | null;
+  forkSourceSessionId?: string | null;
+  forkSourceSeq?: number | null;
   parentRunId?: string | null;
   cronJobId?: string | null;
   contextMode?: string;
@@ -44,18 +47,38 @@ export function createTaskExecution(input: {
   return input.db.transaction((tx) => {
     const sessionsRepo = new SessionsRepo(tx);
     const taskRunsRepo = new TaskRunsRepo(tx);
+    const forkSourceSessionId = input.params.forkSourceSessionId ?? input.params.initiatorSessionId;
 
-    sessionsRepo.create({
-      id: executionSessionId,
-      conversationId: input.params.conversationId,
-      branchId: input.params.branchId,
-      ownerAgentId: input.params.ownerAgentId,
-      purpose: "task",
-      contextMode: input.params.contextMode ?? "isolated",
-      status: "active",
-      createdAt,
-      updatedAt: createdAt,
-    });
+    if (forkSourceSessionId != null) {
+      materializeForkedSessionSnapshotInStorage({
+        db: tx,
+        targetSession: {
+          id: executionSessionId,
+          conversationId: input.params.conversationId,
+          branchId: input.params.branchId,
+          ownerAgentId: input.params.ownerAgentId,
+          purpose: "task",
+          contextMode: input.params.contextMode ?? "isolated",
+          status: "active",
+          createdAt,
+          updatedAt: createdAt,
+        },
+        sourceSessionId: forkSourceSessionId,
+        forkSourceSeq: input.params.forkSourceSeq,
+      });
+    } else {
+      sessionsRepo.create({
+        id: executionSessionId,
+        conversationId: input.params.conversationId,
+        branchId: input.params.branchId,
+        ownerAgentId: input.params.ownerAgentId,
+        purpose: "task",
+        contextMode: input.params.contextMode ?? "isolated",
+        status: "active",
+        createdAt,
+        updatedAt: createdAt,
+      });
+    }
 
     taskRunsRepo.create({
       id: taskRunId,

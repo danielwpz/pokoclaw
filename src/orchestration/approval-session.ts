@@ -6,6 +6,7 @@
  */
 import { APPROVAL_SESSION_TOOL_ALLOWLIST } from "@/src/agent/session-policy.js";
 import { resolveMainAgentChatSessionForAgent } from "@/src/orchestration/main-agent-session.js";
+import { materializeForkedSessionSnapshot } from "@/src/orchestration/session-fork.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
@@ -71,17 +72,20 @@ export function resolveOrCreateMainAgentApprovalSession(input: {
     approvalId: input.approvalId,
   });
 
-  sessionsRepo.create({
-    id: sessionId,
-    conversationId: source.session.conversationId,
-    branchId: source.session.branchId,
-    ownerAgentId: source.mainAgentId,
-    purpose: "approval",
-    approvalForSessionId: input.sourceSessionId,
-    forkedFromSessionId: source.session.id,
+  materializeForkedSessionSnapshot({
+    db: input.db,
+    targetSession: {
+      id: sessionId,
+      conversationId: source.session.conversationId,
+      branchId: source.session.branchId,
+      ownerAgentId: source.mainAgentId,
+      purpose: "approval",
+      approvalForSessionId: input.sourceSessionId,
+      createdAt,
+      updatedAt: createdAt,
+    },
+    sourceSessionId: source.session.id,
     forkSourceSeq,
-    createdAt,
-    updatedAt: createdAt,
   });
 
   const createdSession = sessionsRepo.getById(sessionId);

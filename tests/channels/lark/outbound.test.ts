@@ -396,6 +396,135 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("delivers thread branch run cards with message.reply(reply_in_thread=true)", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, external_branch_id, parent_branch_id, created_at, updated_at)
+      VALUES
+        ('branch_1', 'conv_1', 'dm_main', 'main', NULL, NULL, '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'),
+        ('branch_thread_1', 'conv_1', 'dm_thread', 'thread:omt_thread_1', 'omt_thread_1', 'branch_1', '2026-03-28T00:00:01.000Z', '2026-03-28T00:00:01.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_thread_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_thread_1",
+      surfaceKey: "chat:oc_chat_1:thread:omt_thread_1",
+      surfaceObjectJson: JSON.stringify({
+        chat_id: "oc_chat_1",
+        thread_id: "omt_thread_1",
+        reply_to_message_id: "om_parent_1",
+      }),
+    });
+
+    const createCard = vi.fn(async () => ({
+      data: {
+        card_id: "card_thread_1",
+      },
+    }));
+    const reply = vi.fn(async () => ({
+      data: {
+        message_id: "om_thread_card_1",
+        open_message_id: "om_thread_open_1",
+      },
+    }));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: vi.fn(async () => ({})),
+                  },
+                  cardElement: {
+                    content: vi.fn(async () => ({})),
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: vi.fn(async () => {
+                    throw new Error("should not use chat create for thread delivery");
+                  }),
+                  reply,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+    bus.publish({
+      ...makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_thread_1",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_thread_1",
+        conversationId: "conv_1",
+        branchId: "branch_thread_1",
+        runId: "run_thread_1",
+        messageId: "msg_thread_1",
+        turn: 1,
+        text: "thread reply",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+      target: {
+        conversationId: "conv_1",
+        branchId: "branch_thread_1",
+      },
+      session: {
+        sessionId: "sess_thread_1",
+        purpose: "chat",
+      },
+      run: {
+        runId: "run_thread_1",
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(reply).toHaveBeenCalledOnce();
+    expect((reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]).toMatchObject(
+      {
+        path: { message_id: "om_parent_1" },
+        data: {
+          msg_type: "interactive",
+          reply_in_thread: true,
+        },
+      },
+    );
+
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_thread_1:seg:1",
+      }),
+    ).toMatchObject({
+      larkMessageId: "om_thread_card_1",
+      threadRootMessageId: "omt_thread_1",
+    });
+  });
+
   test("creates a task card on task_run_started and keeps updating the same card through transcript and settle", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lte } from "drizzle-orm";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { messages } from "@/src/storage/schema/tables.js";
@@ -48,6 +48,7 @@ export interface AppendMessageInput {
 
 export interface ListSessionMessagesOptions {
   afterSeq?: number;
+  uptoSeq?: number;
   limit?: number;
 }
 
@@ -86,10 +87,16 @@ export class MessagesRepo {
 
   listBySession(sessionId: string, options: ListSessionMessagesOptions = {}): Message[] {
     const afterSeq = options.afterSeq ?? 0;
+    const predicates = [eq(messages.sessionId, sessionId), gt(messages.seq, afterSeq)];
+
+    if (options.uptoSeq != null) {
+      predicates.push(lte(messages.seq, options.uptoSeq));
+    }
+
     const query = this.db
       .select()
       .from(messages)
-      .where(and(eq(messages.sessionId, sessionId), gt(messages.seq, afterSeq)))
+      .where(and(...predicates))
       .orderBy(asc(messages.seq));
 
     if (options.limit != null) {

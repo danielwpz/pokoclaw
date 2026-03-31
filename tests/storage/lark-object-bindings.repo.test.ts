@@ -81,6 +81,16 @@ describe("lark object bindings repo", () => {
       id: "lark_binding_1",
       internalObjectId: "run_1",
     });
+
+    expect(
+      repo.getByThreadRootMessageId({
+        channelInstallationId: "lark_install_1",
+        threadRootMessageId: "om_root_1",
+      }),
+    ).toMatchObject({
+      id: "lark_binding_1",
+      internalObjectId: "run_1",
+    });
   });
 
   test("updates delivery state and overwrites current durable anchors in place", async () => {

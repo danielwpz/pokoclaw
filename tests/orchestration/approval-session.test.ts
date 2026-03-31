@@ -1,11 +1,13 @@
 import { describe, expect, test } from "vitest";
 
+import { AgentSessionService } from "@/src/agent/session.js";
 import {
   createMainAgentApprovalSessionId,
   MAIN_AGENT_APPROVAL_SESSION_MAX_AGE_MS,
   MAIN_AGENT_APPROVAL_SESSION_TOOL_ALLOWLIST,
   resolveOrCreateMainAgentApprovalSession,
 } from "@/src/orchestration/approval-session.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import {
   createTestDatabase,
@@ -63,14 +65,40 @@ describe("approval session orchestration", () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
       const sessionsRepo = new SessionsRepo(handle.storage.db);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
       sessionsRepo.create({
         id: "sess_main",
         conversationId: "conv_main",
         branchId: "branch_main",
         ownerAgentId: "agent_main",
         purpose: "chat",
+        compactCursor: 1,
+        compactSummary: "main agent summary",
+        compactSummaryTokenTotal: 11,
+        compactSummaryUsageJson:
+          '{"input":7,"output":4,"cacheRead":0,"cacheWrite":0,"totalTokens":11}',
         createdAt: new Date("2026-03-25T00:00:01.000Z"),
         updatedAt: new Date("2026-03-25T00:00:02.000Z"),
+      });
+      messagesRepo.append({
+        id: "msg_main_1",
+        sessionId: "sess_main",
+        seq: 1,
+        role: "user",
+        payloadJson: '{"content":"older"}',
+        createdAt: new Date("2026-03-25T00:00:01.500Z"),
+      });
+      messagesRepo.append({
+        id: "msg_main_2",
+        sessionId: "sess_main",
+        seq: 2,
+        role: "assistant",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        modelApi: "anthropic-messages",
+        stopReason: "stop",
+        payloadJson: '{"content":[{"type":"text","text":"visible approval context"}]}',
+        createdAt: new Date("2026-03-25T00:00:02.500Z"),
       });
 
       const created = resolveOrCreateMainAgentApprovalSession({
@@ -94,6 +122,20 @@ describe("approval session orchestration", () => {
       expect(created?.session.purpose).toBe("approval");
       expect(created?.session.approvalForSessionId).toBe("sess_task");
       expect(created?.session.forkedFromSessionId).toBe("sess_main");
+      expect(created?.session.compactSummary).toBe("main agent summary");
+      expect(created?.session.compactCursor).toBe(0);
+
+      const approvalSessionId = created?.session.id;
+      expect(approvalSessionId).toBeTruthy();
+      const context = new AgentSessionService(sessionsRepo, messagesRepo).getContext(
+        approvalSessionId ?? "",
+      );
+      expect(context.compactSummary).toBe("main agent summary");
+      expect(context.messages).toHaveLength(1);
+      expect(context.messages[0]).toMatchObject({
+        seq: 1,
+        payloadJson: '{"content":[{"type":"text","text":"visible approval context"}]}',
+      });
     });
   });
 

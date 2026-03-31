@@ -1,10 +1,13 @@
 import { describe, expect, test, vi } from "vitest";
 
+import { AgentSessionService } from "@/src/agent/session.js";
 import { AgentManager } from "@/src/orchestration/agent-manager.js";
 import { createMainAgentApprovalSessionId } from "@/src/orchestration/approval-session.js";
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
+import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import {
   createTestDatabase,
@@ -686,6 +689,7 @@ describe("AgentManager", () => {
   test("creates cron task executions from cron job definitions", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
       handle.storage.sqlite.exec(`
         INSERT INTO cron_jobs (
           id, owner_agent_id, target_conversation_id, target_branch_id,
@@ -695,7 +699,36 @@ describe("AgentManager", () => {
           'cron', '*/5 * * * *', 'group', '{"job":"reconcile"}',
           '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
         );
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, context_mode, status,
+          compact_cursor, compact_summary, compact_summary_token_total, compact_summary_usage_json,
+          created_at, updated_at
+        ) VALUES (
+          'sess_sub_chat', 'conv_sub', 'branch_sub', 'agent_sub', 'chat', 'group', 'active',
+          1, 'subagent summary', 9, '{"input":5,"output":4,"cacheRead":0,"cacheWrite":0,"totalTokens":9}',
+          '2026-03-25T00:00:02.000Z', '2026-03-25T00:00:03.000Z'
+        );
       `);
+      messagesRepo.append({
+        id: "msg_sub_1",
+        sessionId: "sess_sub_chat",
+        seq: 1,
+        role: "user",
+        payloadJson: '{"content":"older"}',
+        createdAt: new Date("2026-03-25T00:00:02.100Z"),
+      });
+      messagesRepo.append({
+        id: "msg_sub_2",
+        sessionId: "sess_sub_chat",
+        seq: 2,
+        role: "assistant",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        modelApi: "anthropic-messages",
+        stopReason: "stop",
+        payloadJson: '{"content":[{"type":"text","text":"latest branch context"}]}',
+        createdAt: new Date("2026-03-25T00:00:02.200Z"),
+      });
 
       const manager = new AgentManager({
         storage: handle.storage.db,
@@ -717,6 +750,9 @@ describe("AgentManager", () => {
         conversationId: "conv_sub",
         branchId: "branch_sub",
         ownerAgentId: "agent_sub",
+        forkedFromSessionId: "sess_sub_chat",
+        forkSourceSeq: 2,
+        compactSummary: "subagent summary",
       });
       expect(created.taskRun).toMatchObject({
         runType: "cron",
@@ -731,6 +767,16 @@ describe("AgentManager", () => {
           lastSuccessfulRun: null,
         },
       });
+
+      const context = new AgentSessionService(
+        new SessionsRepo(handle.storage.db),
+        messagesRepo,
+      ).getContext(created.executionSession.id);
+      expect(context.compactSummary).toBe("subagent summary");
+      expect(context.messages).toHaveLength(1);
+      expect(context.messages[0]?.payloadJson).toBe(
+        '{"content":[{"type":"text","text":"latest branch context"}]}',
+      );
     });
   });
 

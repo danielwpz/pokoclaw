@@ -289,18 +289,11 @@ export function createLarkOutboundRuntime(
             LARK_CARD_LOG_PREVIEW_MAX_LENGTH,
           ),
         });
-        const response = (await client.sdk.im.message.create({
-          params: { receive_id_type: "chat_id" },
-          data: {
-            receive_id: chatId,
-            msg_type: "interactive",
-            content: JSON.stringify({
-              type: "card",
-              data: {
-                card_id: larkCardId,
-              },
-            }),
-          },
+        const response = (await sendLarkInteractiveCardReferenceMessage({
+          client,
+          chatId,
+          surfaceObject,
+          larkCardId,
         })) as { data?: { message_id?: string; open_message_id?: string } };
         const larkMessageId = response.data?.message_id ?? null;
         if (larkMessageId == null) {
@@ -323,12 +316,16 @@ export function createLarkOutboundRuntime(
           larkMessageId,
           larkOpenMessageId: response.data?.open_message_id ?? null,
           larkCardId,
+          threadRootMessageId: readStringValue(surfaceObject.thread_id),
           cardElementId: activeAssistantBlockId,
           lastSequence: 0,
           status: state.terminal === "running" ? "active" : "finalized",
           metadataJson: JSON.stringify({
             activeAssistantBlockId,
             runId: state.runId,
+            sessionId: state.sessionId,
+            taskRunId: state.taskRunId,
+            taskRunType: state.taskRunType,
           }),
         });
 
@@ -372,6 +369,9 @@ export function createLarkOutboundRuntime(
           metadataJson: JSON.stringify({
             activeAssistantBlockId,
             runId: state.runId,
+            sessionId: state.sessionId,
+            taskRunId: state.taskRunId,
+            taskRunType: state.taskRunType,
           }),
         });
         deliverySnapshots.set(snapshotKey, {
@@ -414,6 +414,9 @@ export function createLarkOutboundRuntime(
         metadataJson: JSON.stringify({
           activeAssistantBlockId,
           runId: state.runId,
+          sessionId: state.sessionId,
+          taskRunId: state.taskRunId,
+          taskRunType: state.taskRunType,
         }),
       });
       deliverySnapshots.set(snapshotKey, {
@@ -494,18 +497,11 @@ export function createLarkOutboundRuntime(
           continue;
         }
 
-        const response = (await client.sdk.im.message.create({
-          params: { receive_id_type: "chat_id" },
-          data: {
-            receive_id: chatId,
-            msg_type: "interactive",
-            content: JSON.stringify({
-              type: "card",
-              data: {
-                card_id: larkCardId,
-              },
-            }),
-          },
+        const response = (await sendLarkInteractiveCardReferenceMessage({
+          client,
+          chatId,
+          surfaceObject,
+          larkCardId,
         })) as { data?: { message_id?: string; open_message_id?: string } };
         const larkMessageId = response.data?.message_id ?? null;
         if (larkMessageId == null) {
@@ -617,18 +613,11 @@ export function createLarkOutboundRuntime(
           continue;
         }
 
-        const response = (await client.sdk.im.message.create({
-          params: { receive_id_type: "chat_id" },
-          data: {
-            receive_id: chatId,
-            msg_type: "interactive",
-            content: JSON.stringify({
-              type: "card",
-              data: {
-                card_id: larkCardId,
-              },
-            }),
-          },
+        const response = (await sendLarkInteractiveCardReferenceMessage({
+          client,
+          chatId,
+          surfaceObject,
+          larkCardId,
         })) as { data?: { message_id?: string; open_message_id?: string } };
         const larkMessageId = response.data?.message_id ?? null;
         if (larkMessageId == null) {
@@ -1070,6 +1059,45 @@ function parseSurfaceObject(raw: string): Record<string, unknown> {
   } catch {}
 
   return {};
+}
+
+async function sendLarkInteractiveCardReferenceMessage(input: {
+  client: LarkSdkClient;
+  chatId: string;
+  surfaceObject: Record<string, unknown>;
+  larkCardId: string;
+}): Promise<unknown> {
+  const threadReplyMessageId = readStringValue(input.surfaceObject.reply_to_message_id);
+  const content = JSON.stringify({
+    type: "card",
+    data: {
+      card_id: input.larkCardId,
+    },
+  });
+
+  if (threadReplyMessageId != null) {
+    return input.client.sdk.im.message.reply({
+      path: { message_id: threadReplyMessageId },
+      data: {
+        msg_type: "interactive",
+        content,
+        reply_in_thread: true,
+      },
+    });
+  }
+
+  return input.client.sdk.im.message.create({
+    params: { receive_id_type: "chat_id" },
+    data: {
+      receive_id: input.chatId,
+      msg_type: "interactive",
+      content,
+    },
+  });
+}
+
+function readStringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 function buildTaskRunCardObjectId(taskRunId: string): string {

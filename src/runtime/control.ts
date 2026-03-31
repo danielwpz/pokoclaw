@@ -30,6 +30,12 @@ export interface StopConversationInput {
   reasonText?: string;
 }
 
+export interface StopSessionInput {
+  sessionId: string;
+  actor: string;
+  reasonText?: string;
+}
+
 export interface StopRunResult {
   accepted: boolean;
   runId: string;
@@ -42,6 +48,13 @@ export interface StopConversationResult {
   conversationId: string;
   runIds: string[];
   sessionIds: string[];
+}
+
+export interface StopSessionResult {
+  accepted: boolean;
+  sessionId: string;
+  runIds: string[];
+  conversationId: string | null;
 }
 
 export class RuntimeControlService {
@@ -137,6 +150,37 @@ export class RuntimeControlService {
       conversationId: input.conversationId,
       runIds: stopped.map((run) => run.runId),
       sessionIds: stopped.map((run) => run.sessionId),
+    };
+  }
+
+  stopSession(input: StopSessionInput): StopSessionResult {
+    const matches = Array.from(this.runsByRunId.values()).filter(
+      (run) => run.sessionId === input.sessionId,
+    );
+    const stopped: ActiveRunRecord[] = [];
+
+    for (const run of matches) {
+      const accepted = this.cancel.cancel(
+        run.sessionId,
+        input.reasonText ?? `stop requested by ${input.actor}`,
+      );
+      if (accepted) {
+        stopped.push(run);
+      }
+    }
+
+    logger.info("processed stop session request", {
+      sessionId: input.sessionId,
+      actor: input.actor,
+      acceptedCount: stopped.length,
+      runIds: stopped.map((run) => run.runId),
+    });
+
+    return {
+      accepted: stopped.length > 0,
+      sessionId: input.sessionId,
+      runIds: stopped.map((run) => run.runId),
+      conversationId: stopped[0]?.conversationId ?? null,
     };
   }
 

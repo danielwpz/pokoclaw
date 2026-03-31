@@ -21,7 +21,7 @@ import type { Message, Session } from "@/src/storage/schema/types.js";
 export interface ConversationStatusInput {
   conversationId: string;
   sessionId: string;
-  scenario: "chat";
+  scenario: "chat" | "cron" | "subagent";
 }
 
 export interface StatusModelSnapshot {
@@ -282,7 +282,7 @@ function resolveStatusModel(input: {
   session: Session;
   agentsRepo: AgentsRepo;
   models: ProviderRegistry;
-  scenario: "chat";
+  scenario: "chat" | "cron" | "subagent";
 }): StatusModelSnapshot {
   const latestAssistantModel = resolveCatalogModelFromStoredAssistant({
     latestAssistant: input.latestAssistant,
