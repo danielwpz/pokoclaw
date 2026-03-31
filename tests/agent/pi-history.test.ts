@@ -165,4 +165,32 @@ describe("pi history", () => {
 
     expect(() => buildPiMessage(message)).toThrow("missing modelApi");
   });
+
+  test("reconstructs assistant usage from token columns when usageJson is missing", () => {
+    const message = makeStoredMessage({
+      role: "assistant",
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5",
+      modelApi: "anthropic-messages",
+      stopReason: "stop",
+      payloadJson: JSON.stringify({ content: [{ type: "text", text: "hi" }] }),
+      tokenInput: 11,
+      tokenOutput: 7,
+      tokenCacheRead: 3,
+      tokenCacheWrite: 0,
+      tokenTotal: 21,
+      usageJson: null,
+    });
+
+    expect(buildPiMessage(message)).toMatchObject({
+      role: "assistant",
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 3,
+        cacheWrite: 0,
+        totalTokens: 21,
+      },
+    });
+  });
 });

@@ -56,6 +56,7 @@ import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
+import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import type { SubagentCreationRequest } from "@/src/storage/schema/types.js";
@@ -359,6 +360,7 @@ export class AgentManager {
   }): CreatedTaskExecution {
     const cronJobsRepo = new CronJobsRepo(this.deps.storage);
     const taskRunsRepo = new TaskRunsRepo(this.deps.storage);
+    const sessionsRepo = new SessionsRepo(this.deps.storage);
     const cronJob = cronJobsRepo.getById(input.cronJobId);
     if (cronJob == null) {
       throw new Error(`Cannot create task execution for unknown cron job ${input.cronJobId}`);
@@ -381,12 +383,20 @@ export class AgentManager {
           lastSuccessfulRun == null ? null : summarizeCronTaskRunForKickoff(lastSuccessfulRun),
       },
     });
+    const forkSourceSession = sessionsRepo.findLatestByConversationBranch(
+      cronJob.targetConversationId,
+      cronJob.targetBranchId,
+      {
+        purpose: "chat",
+      },
+    );
 
     const created = this.createTaskExecution({
       runType: "cron",
       ownerAgentId: cronJob.ownerAgentId,
       conversationId: cronJob.targetConversationId,
       branchId: cronJob.targetBranchId,
+      forkSourceSessionId: forkSourceSession?.id ?? null,
       cronJobId: cronJob.id,
       contextMode: cronJob.contextMode,
       inputJson,

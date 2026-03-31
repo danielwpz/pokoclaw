@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "vitest";
 
+import { AgentSessionService } from "@/src/agent/session.js";
 import { createTaskExecution } from "@/src/orchestration/task-run-factory.js";
 import { resolveTaskRunLiveState } from "@/src/runtime/live-state.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import {
   createTestDatabase,
@@ -95,6 +97,7 @@ describe("task run factory", () => {
   test("preserves initiator, parent, priority, attempt, and context mode", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
     handle.storage.sqlite.exec(`
       INSERT INTO task_runs (
         id, run_type, owner_agent_id, conversation_id, branch_id,
@@ -104,6 +107,42 @@ describe("task run factory", () => {
         NULL, 'completed', '2026-03-26T00:00:30.000Z'
       );
     `);
+    handle.storage.sqlite.exec(`
+      UPDATE sessions
+      SET compact_cursor = 1,
+          compact_summary = 'main summary through seq 1',
+          compact_summary_token_total = 42,
+          compact_summary_usage_json = '{"input":30,"output":12,"cacheRead":0,"cacheWrite":0,"totalTokens":42}'
+      WHERE id = 'sess_main';
+    `);
+    messagesRepo.append({
+      id: "msg_main_1",
+      sessionId: "sess_main",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"older context"}',
+      createdAt: new Date("2026-03-26T00:00:00.500Z"),
+    });
+    messagesRepo.append({
+      id: "msg_main_2",
+      sessionId: "sess_main",
+      seq: 2,
+      role: "assistant",
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5",
+      modelApi: "anthropic-messages",
+      stopReason: "stop",
+      payloadJson: '{"content":[{"type":"text","text":"latest visible context"}]}',
+      createdAt: new Date("2026-03-26T00:00:01.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_main_3",
+      sessionId: "sess_main",
+      seq: 3,
+      role: "user",
+      payloadJson: '{"content":"latest user request"}',
+      createdAt: new Date("2026-03-26T00:00:01.500Z"),
+    });
 
     const created = createTaskExecution({
       db: handle.storage.db,
@@ -127,6 +166,11 @@ describe("task run factory", () => {
       purpose: "task",
       contextMode: "inherited",
       ownerAgentId: "agent_sub",
+      forkedFromSessionId: "sess_main",
+      forkSourceSeq: 3,
+      compactCursor: 0,
+      compactSummary: "main summary through seq 1",
+      compactSummaryTokenTotal: 42,
     });
     expect(created.taskRun).toMatchObject({
       runType: "delegate",
@@ -138,5 +182,15 @@ describe("task run factory", () => {
       inputJson: '{"task":"follow-up"}',
       status: "running",
     });
+
+    const service = new AgentSessionService(new SessionsRepo(handle.storage.db), messagesRepo);
+    const context = service.getContext(created.executionSession.id);
+    expect(context.compactSummary).toBe("main summary through seq 1");
+    expect(context.messages).toHaveLength(2);
+    expect(context.messages.map((message) => message.seq)).toEqual([1, 2]);
+    expect(context.messages.map((message) => message.payloadJson)).toEqual([
+      '{"content":[{"type":"text","text":"latest visible context"}]}',
+      '{"content":"latest user request"}',
+    ]);
   });
 });

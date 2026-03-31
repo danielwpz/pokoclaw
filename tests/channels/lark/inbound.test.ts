@@ -1,8 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-
+import { AgentSessionService } from "@/src/agent/session.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
   buildLarkChatSurfaceKey,
+  buildLarkThreadSurfaceKey,
   createLarkCardActionHandler,
   createLarkMessageReceiveHandler,
   createLarkQuoteMessageFetcher,
@@ -12,6 +13,9 @@ import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
 import type { RuntimeStatusService } from "@/src/runtime/status.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
+import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
+import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -135,6 +139,238 @@ describe("lark inbound message handling", () => {
     });
   });
 
+  test("creates an ordinary thread branch from the latest main chat context", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
+      handle.storage.sqlite.exec(`
+        UPDATE sessions
+        SET compact_cursor = 1,
+            compact_summary = 'main chat summary',
+            compact_summary_token_total = 12,
+            compact_summary_usage_json = '{"input":8,"output":4,"cacheRead":0,"cacheWrite":0,"totalTokens":12}'
+        WHERE id = 'sess_chat_1';
+      `);
+      messagesRepo.append({
+        id: "msg_main_1",
+        sessionId: "sess_chat_1",
+        seq: 1,
+        role: "user",
+        payloadJson: '{"content":"older"}',
+        createdAt: new Date("2026-03-27T00:00:00.500Z"),
+      });
+      messagesRepo.append({
+        id: "msg_main_2",
+        sessionId: "sess_chat_1",
+        seq: 2,
+        role: "assistant",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        modelApi: "anthropic-messages",
+        stopReason: "stop",
+        payloadJson: '{"content":[{"type":"text","text":"当前主聊天的最新上下文"}]}',
+        createdAt: new Date("2026-03-27T00:00:01.000Z"),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        quoteMessageFetcher: vi.fn(async () => ({
+          messageType: "text",
+          text: "很早之前的那条消息",
+        })),
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_thread_msg_1",
+          parent_id: "om_parent_old",
+          thread_id: "omt_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "我们单独在这里聊这个点" }),
+        },
+      });
+
+      expect(submitMessage).toHaveBeenCalledOnce();
+      const firstCall = (submitMessage as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls[0]?.[0] as { sessionId: string; scenario: string; content: string } | undefined;
+      expect(firstCall?.scenario).toBe("chat");
+      expect(firstCall?.content).toBe("我们单独在这里聊这个点");
+      expect(firstCall?.sessionId).not.toBe("sess_chat_1");
+
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      const threadSurface = surfacesRepo.getBySurfaceKey({
+        channelType: "lark",
+        channelInstallationId: "default",
+        surfaceKey: buildLarkThreadSurfaceKey("oc_chat_1", "omt_thread_1"),
+      });
+      expect(threadSurface).not.toBeNull();
+
+      const forkedSessionId = firstCall?.sessionId ?? "";
+      const forkedSession = new SessionsRepo(handle.storage.db).getById(forkedSessionId);
+      expect(forkedSession).toMatchObject({
+        purpose: "chat",
+        forkedFromSessionId: "sess_chat_1",
+        compactSummary: "main chat summary",
+      });
+
+      const context = new AgentSessionService(
+        new SessionsRepo(handle.storage.db),
+        messagesRepo,
+      ).getContext(forkedSessionId);
+      expect(context.messages.at(-1)).toMatchObject({
+        role: "user",
+        messageType: "thread_kickoff",
+        visibility: "hidden_system",
+      });
+      expect(context.messages.at(-1)?.payloadJson).toContain("The user opened a separate thread.");
+      expect(context.messages.at(-1)?.payloadJson).toContain(
+        "The quoted message is below. Continue the discussion around it.",
+      );
+      expect(context.messages.at(-1)?.payloadJson).toContain("很早之前的那条消息");
+      expect(context.messages.map((message) => message.payloadJson)).toContain(
+        '{"content":[{"type":"text","text":"当前主聊天的最新上下文"}]}',
+      );
+    });
+  });
+
+  test("routes task thread messages into the existing task session and records the thread anchor", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+        VALUES ('sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+      `);
+      new LarkObjectBindingsRepo(handle.storage.db).upsert({
+        id: "binding_task_card",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        internalObjectKind: "run_card",
+        internalObjectId: "task:task_1",
+        larkMessageId: "om_task_card_1",
+        larkCardId: "card_task_1",
+        metadataJson: JSON.stringify({
+          sessionId: "sess_task_1",
+          taskRunId: "task_1",
+          taskRunType: "cron",
+        }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "steered" as const }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_task_thread_msg_1",
+          parent_id: "om_task_card_1",
+          thread_id: "omt_task_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "请优先处理这个异常" }),
+        },
+      });
+
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_task_1",
+        scenario: "cron",
+        content: "请优先处理这个异常",
+        channelMessageId: "om_task_thread_msg_1",
+        channelParentMessageId: "om_task_card_1",
+        channelThreadId: "omt_task_thread_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+
+      expect(
+        new LarkObjectBindingsRepo(handle.storage.db).getByThreadRootMessageId({
+          channelInstallationId: "default",
+          threadRootMessageId: "omt_task_thread_1",
+        }),
+      ).toMatchObject({
+        internalObjectKind: "run_card",
+        internalObjectId: "task:task_1",
+      });
+    });
+  });
+
+  test("routes later task thread messages by stored thread binding without re-reading the task card", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      new LarkObjectBindingsRepo(handle.storage.db).upsert({
+        id: "binding_task_card",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        internalObjectKind: "run_card",
+        internalObjectId: "task:task_1",
+        larkMessageId: "om_task_card_1",
+        larkCardId: "card_task_1",
+        threadRootMessageId: "omt_task_thread_1",
+        metadataJson: JSON.stringify({
+          sessionId: "sess_task_1",
+          taskRunId: "task_1",
+          taskRunType: "cron",
+        }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "steered" as const }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_task_thread_msg_2",
+          parent_id: "om_user_reply_1",
+          thread_id: "omt_task_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "继续，但是优先修复刚才的错误" }),
+        },
+      });
+
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_task_1",
+        scenario: "cron",
+        content: "继续，但是优先修复刚才的错误",
+        channelMessageId: "om_task_thread_msg_2",
+        channelParentMessageId: "om_user_reply_1",
+        channelThreadId: "omt_task_thread_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
   test("expands quote replies by fetching the referenced message text", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
@@ -185,7 +421,8 @@ describe("lark inbound message handling", () => {
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_chat_1",
         scenario: "chat",
-        content: "用户引用了一条消息：\n被引用的原消息内容\n\n用户的新消息：请看这条引用消息",
+        content:
+          "The user quoted a message:\n被引用的原消息内容\n\nThe user's new message: 请看这条引用消息",
         channelMessageId: "om_msg_quote_1",
         channelParentMessageId: "om_parent_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
@@ -236,11 +473,58 @@ describe("lark inbound message handling", () => {
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_chat_1",
         scenario: "chat",
-        content: "用户引用了一条消息，但系统未能读取原文。\n\n用户的新消息：请继续",
+        content:
+          "The user quoted an earlier message, but the quoted text could not be retrieved.\n\nTell the user you cannot see the quoted message and ask them to send it again.\n\nThe user's new message: 请继续",
         channelMessageId: "om_msg_quote_2",
         channelParentMessageId: "om_parent_2",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
+    });
+  });
+
+  test("asks the user to resend the quoted message when an ordinary thread cannot load it", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        quoteMessageFetcher: vi.fn(async () => null),
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_thread_msg_2",
+          parent_id: "om_parent_old_2",
+          thread_id: "omt_thread_2",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "can you check this quote" }),
+        },
+      });
+
+      const firstCall = (submitMessage as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls[0]?.[0] as { sessionId: string } | undefined;
+      const forkedSessionId = firstCall?.sessionId ?? "";
+      const context = new AgentSessionService(
+        new SessionsRepo(handle.storage.db),
+        messagesRepo,
+      ).getContext(forkedSessionId);
+      expect(context.messages.at(-1)?.payloadJson).toContain(
+        "Tell the user you cannot see the quoted message and ask them to send it again.",
+      );
+      expect(context.messages.at(-1)?.payloadJson).toContain(
+        "<quoted_message_unavailable>true</quoted_message_unavailable>",
+      );
     });
   });
 
@@ -650,6 +934,247 @@ describe("lark inbound message handling", () => {
         conversationId: "conv_main",
         actor: "lark:default:ou_sender",
         reasonText: "stop requested from lark command",
+      });
+    });
+  });
+
+  test("routes /stop inside an ordinary thread to the thread session only", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, external_branch_id, parent_branch_id, created_at, updated_at)
+        VALUES ('branch_thread_1', 'conv_main', 'dm_thread', 'thread:omt_thread_1', 'omt_thread_1', 'branch_main', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:03.000Z');
+
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+        VALUES ('sess_thread_1', 'conv_main', 'branch_thread_1', 'agent_main', 'chat', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+      `);
+      new ChannelSurfacesRepo(handle.storage.db).upsert({
+        id: "surface_thread_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_thread_1",
+        surfaceKey: buildLarkThreadSurfaceKey("oc_chat_1", "omt_thread_1"),
+        surfaceObjectJson: JSON.stringify({
+          chat_id: "oc_chat_1",
+          thread_id: "omt_thread_1",
+          reply_to_message_id: "om_parent_1",
+        }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const control = {
+        stopSession: vi.fn(() => ({
+          accepted: true,
+          sessionId: "sess_thread_1",
+          runIds: ["run_thread_1"],
+          conversationId: "conv_main",
+        })),
+        stopConversation: vi.fn(),
+      } as unknown as RuntimeControlService;
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_thread_stop_1",
+          parent_id: "om_parent_1",
+          thread_id: "omt_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "/stop" }),
+        },
+      });
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(control.stopSession).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_thread_1",
+        actor: "lark:default:ou_sender",
+        reasonText: "stop requested from lark command",
+      });
+      expect(control.stopConversation).not.toHaveBeenCalled();
+    });
+  });
+
+  test("routes /stop inside a task thread to the source task session", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      new LarkObjectBindingsRepo(handle.storage.db).upsert({
+        id: "binding_task_card",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        internalObjectKind: "run_card",
+        internalObjectId: "task:task_1",
+        larkMessageId: "om_task_card_1",
+        larkCardId: "card_task_1",
+        threadRootMessageId: "omt_task_thread_1",
+        metadataJson: JSON.stringify({
+          sessionId: "sess_task_1",
+          taskRunId: "task_1",
+          taskRunType: "cron",
+        }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const control = {
+        stopSession: vi.fn(() => ({
+          accepted: true,
+          sessionId: "sess_task_1",
+          runIds: ["run_task_1"],
+          conversationId: "conv_main",
+        })),
+        stopConversation: vi.fn(),
+      } as unknown as RuntimeControlService;
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_task_thread_stop_1",
+          parent_id: "om_user_reply_1",
+          thread_id: "omt_task_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "/stop" }),
+        },
+      });
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(control.stopSession).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_task_1",
+        actor: "lark:default:ou_sender",
+        reasonText: "stop requested from lark command",
+      });
+      expect(control.stopConversation).not.toHaveBeenCalled();
+    });
+  });
+
+  test("routes /status inside an ordinary thread back into the same thread", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, external_branch_id, parent_branch_id, created_at, updated_at)
+        VALUES ('branch_thread_1', 'conv_main', 'dm_thread', 'thread:omt_thread_1', 'omt_thread_1', 'branch_main', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:03.000Z');
+
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+        VALUES ('sess_thread_1', 'conv_main', 'branch_thread_1', 'agent_main', 'chat', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+      `);
+      new ChannelSurfacesRepo(handle.storage.db).upsert({
+        id: "surface_thread_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_thread_1",
+        surfaceKey: buildLarkThreadSurfaceKey("oc_chat_1", "omt_thread_1"),
+        surfaceObjectJson: JSON.stringify({
+          chat_id: "oc_chat_1",
+          thread_id: "omt_thread_1",
+          reply_to_message_id: "om_parent_1",
+        }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const reply = vi.fn(async () => ({ data: { message_id: "om_status_thread_1" } }));
+      const status = {
+        getConversationStatus: vi.fn(() => ({
+          conversationId: "conv_main",
+          sessionId: "sess_thread_1",
+          model: {
+            configuredModelId: "openrouter-gpt5.4",
+            providerId: "openrouter",
+            upstreamModelId: "openai/gpt-5.4",
+            modelApi: "openai-responses",
+            supportsReasoning: true,
+            source: "scenario_default" as const,
+          },
+          sessionUsage: {
+            input: 1,
+            output: 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 3,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          latestTurnUsage: null,
+          activeRuns: [],
+          pendingApprovals: [],
+        })),
+      } satisfies Pick<RuntimeStatusService, "getConversationStatus">;
+      const clients = {
+        getOrCreate: vi.fn(() => ({
+          sdk: {
+            im: {
+              message: {
+                create: vi.fn(),
+                reply,
+              },
+            },
+          },
+        })),
+      } as unknown as { getOrCreate(installationId: string): LarkSdkClient };
+
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        status: status as unknown as RuntimeStatusService,
+        clients,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_thread_status_1",
+          parent_id: "om_parent_1",
+          thread_id: "omt_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "/status" }),
+        },
+      });
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(status.getConversationStatus).toHaveBeenCalledExactlyOnceWith({
+        conversationId: "conv_main",
+        sessionId: "sess_thread_1",
+        scenario: "chat",
+      });
+      expect(reply).toHaveBeenCalledOnce();
+      expect(
+        (reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0],
+      ).toMatchObject({
+        path: { message_id: "om_parent_1" },
+        data: {
+          msg_type: "interactive",
+          reply_in_thread: true,
+        },
       });
     });
   });

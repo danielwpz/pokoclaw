@@ -181,6 +181,33 @@ export class LarkObjectBindingsRepo {
     return binding;
   }
 
+  getByThreadRootMessageId(input: {
+    channelInstallationId: string;
+    threadRootMessageId: string;
+  }): LarkObjectBinding | null {
+    const binding =
+      this.db
+        .select()
+        .from(larkObjectBindings)
+        .where(
+          and(
+            eq(larkObjectBindings.channelInstallationId, input.channelInstallationId),
+            eq(larkObjectBindings.threadRootMessageId, input.threadRootMessageId),
+          ),
+        )
+        .get() ?? null;
+
+    logger.debug("resolved lark binding by thread root message id", {
+      channelInstallationId: input.channelInstallationId,
+      threadRootMessageId: input.threadRootMessageId,
+      found: binding != null,
+      internalObjectKind: binding?.internalObjectKind,
+      internalObjectId: binding?.internalObjectId,
+    });
+
+    return binding;
+  }
+
   updateDeliveryState(input: {
     channelInstallationId: string;
     internalObjectKind: string;
