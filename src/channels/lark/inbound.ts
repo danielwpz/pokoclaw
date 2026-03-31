@@ -109,6 +109,7 @@ export interface LarkMessageReceiveEvent {
 export interface NormalizedLarkTextMessage {
   chatId: string;
   messageId: string;
+  messageType: string;
   parentMessageId: string | null;
   threadId: string | null;
   senderOpenId: string | null;
@@ -169,9 +170,12 @@ export function normalizeLarkTextMessage(
     return { skipReason: "event payload is missing message" };
   }
 
-  const messageType = typeof message.message_type === "string" ? message.message_type : null;
-  if (messageType !== "text") {
-    return { skipReason: `unsupported message_type ${String(messageType)}` };
+  const messageType =
+    typeof message.message_type === "string" && message.message_type.trim().length > 0
+      ? message.message_type.trim()
+      : null;
+  if (messageType == null) {
+    return { skipReason: "message is missing message_type" };
   }
 
   const chatId = typeof message.chat_id === "string" ? message.chat_id.trim() : "";
@@ -212,6 +216,7 @@ export function normalizeLarkTextMessage(
   return {
     chatId,
     messageId,
+    messageType,
     parentMessageId,
     threadId,
     senderOpenId,
@@ -246,12 +251,20 @@ export function createLarkMessageReceiveHandler(input: {
       return;
     }
 
-    if (normalized.senderType != null && normalized.senderType !== "user") {
+    const hydrated = await hydrateLarkInboundMessageText({
+      installationId: input.installationId,
+      normalized,
+      ...(input.quoteMessageFetcher == null
+        ? {}
+        : { messageTextFetcher: input.quoteMessageFetcher }),
+    });
+
+    if (hydrated.senderType != null && hydrated.senderType !== "user") {
       logger.debug("ignoring non-user lark inbound message", {
         installationId: input.installationId,
-        chatId: normalized.chatId,
-        messageId: normalized.messageId,
-        senderType: normalized.senderType,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
+        senderType: hydrated.senderType,
       });
       return;
     }
@@ -259,14 +272,14 @@ export function createLarkMessageReceiveHandler(input: {
     const mainSurface = resolveOrPairLarkChatSurface({
       db: input.storage,
       installationId: input.installationId,
-      chatId: normalized.chatId,
-      chatType: normalized.chatType,
+      chatId: hydrated.chatId,
+      chatType: hydrated.chatType,
     });
     if (mainSurface == null) {
       logger.warn("dropping lark inbound message because no channel surface matched or paired", {
         installationId: input.installationId,
-        chatId: normalized.chatId,
-        messageId: normalized.messageId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
       });
       return;
     }
@@ -275,7 +288,7 @@ export function createLarkMessageReceiveHandler(input: {
       db: input.storage,
       installationId: input.installationId,
       mainSurface,
-      normalized,
+      normalized: hydrated,
       ...(input.quoteMessageFetcher == null
         ? {}
         : { quoteMessageFetcher: input.quoteMessageFetcher }),
@@ -283,37 +296,37 @@ export function createLarkMessageReceiveHandler(input: {
     if (route == null) {
       logger.warn("dropping lark inbound message because no route was resolved", {
         installationId: input.installationId,
-        chatId: normalized.chatId,
-        messageId: normalized.messageId,
-        parentMessageId: normalized.parentMessageId,
-        threadId: normalized.threadId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
+        parentMessageId: hydrated.parentMessageId,
+        threadId: hydrated.threadId,
       });
       return;
     }
 
-    if (normalized.text === "/stop") {
+    if (hydrated.text === "/stop") {
       const result =
         route.stopScope === "conversation"
           ? input.control.stopConversation({
               conversationId: route.conversationId,
               actor:
-                normalized.senderOpenId == null
+                hydrated.senderOpenId == null
                   ? `lark:${input.installationId}:unknown`
-                  : `lark:${input.installationId}:${normalized.senderOpenId}`,
+                  : `lark:${input.installationId}:${hydrated.senderOpenId}`,
               reasonText: "stop requested from lark command",
             })
           : input.control.stopSession({
               sessionId: route.sessionId,
               actor:
-                normalized.senderOpenId == null
+                hydrated.senderOpenId == null
                   ? `lark:${input.installationId}:unknown`
-                  : `lark:${input.installationId}:${normalized.senderOpenId}`,
+                  : `lark:${input.installationId}:${hydrated.senderOpenId}`,
               reasonText: "stop requested from lark command",
             });
       logger.info("processed lark stop command", {
         installationId: input.installationId,
-        chatId: normalized.chatId,
-        messageId: normalized.messageId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
         conversationId: route.conversationId,
         sessionId: route.sessionId,
         stopScope: route.stopScope,
@@ -322,12 +335,12 @@ export function createLarkMessageReceiveHandler(input: {
       return;
     }
 
-    if (normalized.text === "/status") {
+    if (hydrated.text === "/status") {
       if (input.status == null) {
         logger.warn("ignoring lark status command because no status service is configured", {
           installationId: input.installationId,
-          chatId: normalized.chatId,
-          messageId: normalized.messageId,
+          chatId: hydrated.chatId,
+          messageId: hydrated.messageId,
         });
         return;
       }
@@ -345,8 +358,8 @@ export function createLarkMessageReceiveHandler(input: {
       });
       logger.info("processed lark status command", {
         installationId: input.installationId,
-        chatId: normalized.chatId,
-        messageId: normalized.messageId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
         conversationId: route.conversationId,
         sessionId: route.sessionId,
         scenario: route.scenario,
@@ -357,35 +370,66 @@ export function createLarkMessageReceiveHandler(input: {
 
     logger.info("submitting lark inbound message to runtime ingress", {
       installationId: input.installationId,
-      chatId: normalized.chatId,
-      messageId: normalized.messageId,
-      parentMessageId: normalized.parentMessageId,
-      threadId: normalized.threadId,
+      chatId: hydrated.chatId,
+      messageId: hydrated.messageId,
+      parentMessageId: hydrated.parentMessageId,
+      threadId: hydrated.threadId,
       sessionId: route.sessionId,
       conversationId: route.conversationId,
       branchId: route.branchId,
       routeKind: route.kind,
       scenario: route.scenario,
-      chatType: normalized.chatType,
-      contentPreview: truncateLogText(normalized.text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
+      chatType: hydrated.chatType,
+      contentPreview: truncateLogText(hydrated.text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
     });
 
     const content =
       route.kind === "ordinary_thread"
-        ? normalized.text
-        : await buildInboundMessageContent(normalized, input);
+        ? hydrated.text
+        : await buildInboundMessageContent(hydrated, input);
 
     await input.ingress.submitMessage({
       sessionId: route.sessionId,
       scenario: route.scenario,
       content,
-      channelMessageId: normalized.messageId,
-      ...(normalized.parentMessageId == null
+      channelMessageId: hydrated.messageId,
+      ...(hydrated.parentMessageId == null
         ? {}
-        : { channelParentMessageId: normalized.parentMessageId }),
-      ...(normalized.threadId == null ? {} : { channelThreadId: normalized.threadId }),
-      ...(normalized.createdAt == null ? {} : { createdAt: normalized.createdAt }),
+        : { channelParentMessageId: hydrated.parentMessageId }),
+      ...(hydrated.threadId == null ? {} : { channelThreadId: hydrated.threadId }),
+      ...(hydrated.createdAt == null ? {} : { createdAt: hydrated.createdAt }),
     });
+  };
+}
+
+async function hydrateLarkInboundMessageText(input: {
+  installationId: string;
+  normalized: NormalizedLarkTextMessage;
+  messageTextFetcher?: (input: {
+    installationId: string;
+    messageId: string;
+  }) => Promise<LarkQuotedMessage | null>;
+}): Promise<NormalizedLarkTextMessage> {
+  if (input.normalized.messageType !== "interactive" || input.messageTextFetcher == null) {
+    return input.normalized;
+  }
+
+  const fetched = await input.messageTextFetcher({
+    installationId: input.installationId,
+    messageId: input.normalized.messageId,
+  });
+  if (fetched == null || fetched.text.length === 0 || fetched.text === input.normalized.text) {
+    return input.normalized;
+  }
+
+  logger.info("hydrated interactive lark inbound message via message.get", {
+    installationId: input.installationId,
+    messageId: input.normalized.messageId,
+    contentPreview: truncateLogText(fetched.text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
+  });
+  return {
+    ...input.normalized,
+    text: fetched.text,
   };
 }
 
@@ -1517,7 +1561,7 @@ function parseLarkMessageContent(messageType: string, content: string): string {
       case "file":
         return typeof parsed.file_key === "string" ? `[文件 ${parsed.file_key}]` : "[文件]";
       case "post":
-        return "[富文本]";
+        return parseLarkPostMessageContent(parsed);
       case "interactive": {
         const interactiveText = parseLarkInteractiveMessageContent(parsed);
         return interactiveText.length > 0 ? interactiveText : "[卡片消息]";
@@ -1528,6 +1572,118 @@ function parseLarkMessageContent(messageType: string, content: string): string {
   } catch {
     return content.trim().length > 0 ? `[${messageType}消息]` : "";
   }
+}
+
+function parseLarkPostMessageContent(parsed: Record<string, unknown>): string {
+  const body = unwrapLarkPostContent(parsed);
+  if (body == null) {
+    return "[富文本]";
+  }
+
+  const lines: string[] = [];
+  const title = readString(body.title);
+  if (title != null) {
+    lines.push(`**${title}**`, "");
+  }
+
+  const content = Array.isArray(body.content) ? body.content : [];
+  for (const paragraph of content) {
+    if (!Array.isArray(paragraph)) {
+      continue;
+    }
+    const line = paragraph
+      .map((element) => renderLarkPostElement(element))
+      .join("")
+      .trimEnd();
+    if (line.length > 0) {
+      lines.push(line);
+    }
+  }
+
+  return lines.join("\n").trim() || "[富文本]";
+}
+
+function unwrapLarkPostContent(parsed: Record<string, unknown>): Record<string, unknown> | null {
+  if ("title" in parsed || "content" in parsed) {
+    return parsed;
+  }
+
+  for (const locale of ["zh_cn", "en_us", "ja_jp"]) {
+    const localized = parsed[locale];
+    if (isRecord(localized)) {
+      return localized;
+    }
+  }
+
+  const firstLocalized = Object.values(parsed).find((value) => isRecord(value));
+  return isRecord(firstLocalized) ? firstLocalized : null;
+}
+
+function renderLarkPostElement(value: unknown): string {
+  if (!isRecord(value)) {
+    return "";
+  }
+
+  const tag = readString(value.tag);
+  switch (tag) {
+    case "text":
+      return applyLarkPostTextStyle(readString(value.text) ?? "", value.style);
+    case "md":
+      return readString(value.text) ?? "";
+    case "a": {
+      const text = readString(value.text) ?? readString(value.href) ?? "";
+      const href = readString(value.href);
+      return href == null ? text : `[${text}](${href})`;
+    }
+    case "at": {
+      const userId = readString(value.user_id);
+      if (userId === "all") {
+        return "@all";
+      }
+      return `@${readString(value.user_name) ?? userId ?? "user"}`;
+    }
+    case "img": {
+      const imageKey = readString(value.image_key);
+      return imageKey == null ? "[图片]" : `![image](${imageKey})`;
+    }
+    case "media": {
+      const fileKey = readString(value.file_key);
+      return fileKey == null ? "[文件]" : `[文件 ${fileKey}]`;
+    }
+    case "emotion":
+      return readString(value.emoji_type) ?? "[表情]";
+    case "code_block": {
+      const language = readString(value.language) ?? "";
+      const text = readString(value.text) ?? "";
+      return `\n\`\`\`${language}\n${text}\n\`\`\`\n`;
+    }
+    case "hr":
+      return "\n---\n";
+    default:
+      return readString(value.text) ?? "";
+  }
+}
+
+function applyLarkPostTextStyle(text: string, style: unknown): string {
+  if (!Array.isArray(style) || style.length === 0) {
+    return text;
+  }
+
+  let formatted = text;
+  const flags = new Set(style.filter((item): item is string => typeof item === "string"));
+  if (flags.has("bold")) {
+    formatted = `**${formatted}**`;
+  }
+  if (flags.has("italic")) {
+    formatted = `*${formatted}*`;
+  }
+  if (flags.has("codeInline")) {
+    formatted = `\`${formatted}\``;
+  }
+  if (flags.has("lineThrough")) {
+    formatted = `~~${formatted}~~`;
+  }
+  return formatted;
 }
 
 function parseLarkInteractiveMessageContent(parsed: Record<string, unknown>): string {
