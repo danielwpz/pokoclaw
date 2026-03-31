@@ -220,7 +220,10 @@ describe("runtime status service", () => {
       const text = formatConversationStatusText(snapshot);
       expect(text).toContain("当前状态");
       expect(text).toContain("openrouter-gpt5.4 / openai/gpt-5.4 / openrouter / openai-responses");
-      expect(text).toContain("当前 session 累计");
+      expect(text).toContain("- 当前 session 累计");
+      expect(text).toContain("  总 4,265 / 输入 1,050 / 输出 210");
+      expect(text).toContain("  缓存读 3,005 / 缓存写 0");
+      expect(text).toContain("Cost $0.033100");
       expect(text).toContain("待处理授权");
       expect(text).toContain("#1 (user) Approval required: Write /tmp/demo.js");
 
@@ -229,6 +232,92 @@ describe("runtime status service", () => {
       expect(presentation.summary).toBe("存在活跃 run");
       expect(presentation.markdownSections.join("\n")).toContain("**版本**");
       expect(presentation.markdownSections.join("\n")).toContain("openrouter-gpt5.4");
+      expect(presentation.markdownSections.join("\n")).toContain("**当前 session 累计**");
+      expect(presentation.markdownSections.join("\n")).toContain(
+        "- 总 4,265 / 输入 1,050 / 输出 210",
+      );
+      expect(presentation.markdownSections.join("\n")).toContain("- 缓存读 3,005 / 缓存写 0");
+      expect(presentation.markdownSections.join("\n")).toContain("- Cost $0.033100");
+    });
+  });
+
+  test("falls back to token columns when assistant usageJson is missing", async () => {
+    await withHandle(async (handle) => {
+      handle.storage.sqlite.exec(`
+        INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+        VALUES ('ci_1', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+        VALUES ('conv_1', 'ci_1', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+        VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO agents (id, conversation_id, kind, default_model, created_at)
+        VALUES ('agent_1', 'conv_1', 'main', 'openrouter-gpt5.4', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, status, compact_cursor, created_at, updated_at
+        ) VALUES (
+          'sess_chat', 'conv_1', 'branch_1', 'agent_1', 'chat', 'active', 0,
+          '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+        );
+
+        INSERT INTO messages (
+          id, session_id, seq, role, message_type, visibility, provider, model, model_api, stop_reason,
+          payload_json, token_input, token_output, token_cache_read, token_cache_write, token_total, usage_json, created_at
+        ) VALUES (
+          'msg_a_1', 'sess_chat', 1, 'assistant', 'text', 'user_visible', 'openrouter', 'openai/gpt-5.4', 'openai-responses', 'stop',
+          '{"content":[{"type":"text","text":"hello"}]}',
+          50, 10, 5, 0, 65,
+          NULL,
+          '2026-03-28T00:02:00.000Z'
+        );
+      `);
+
+      const service = new RuntimeStatusService({
+        storage: handle.storage.db,
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        models: new ProviderRegistry(createConfig()),
+      });
+
+      const snapshot = service.getConversationStatus({
+        conversationId: "conv_1",
+        sessionId: "sess_chat",
+        scenario: "chat",
+      });
+
+      expect(snapshot.latestTurnUsage).toMatchObject({
+        input: 50,
+        output: 10,
+        cacheRead: 5,
+        cacheWrite: 0,
+        totalTokens: 65,
+        cost: {
+          total: 0,
+        },
+      });
+      expect(snapshot.sessionUsage).toMatchObject({
+        input: 50,
+        output: 10,
+        cacheRead: 5,
+        cacheWrite: 0,
+        totalTokens: 65,
+        cost: {
+          total: 0,
+        },
+      });
+
+      const text = formatConversationStatusText(snapshot);
+      expect(text).toContain("- 最近一次回复");
+      expect(text).toContain("  总 65 / 输入 50 / 输出 10");
+      expect(text).toContain("Cost $0.000000");
+
+      const presentation = buildConversationStatusPresentation(snapshot);
+      expect(presentation.markdownSections.join("\n")).toContain("**最近一次回复**");
+      expect(presentation.markdownSections.join("\n")).toContain("- 总 65 / 输入 50 / 输出 10");
+      expect(presentation.markdownSections.join("\n")).toContain("- 缓存读 5 / 缓存写 0");
+      expect(presentation.markdownSections.join("\n")).toContain("- Cost $0.000000");
     });
   });
 });

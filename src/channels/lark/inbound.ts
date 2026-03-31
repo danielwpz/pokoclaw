@@ -1247,6 +1247,7 @@ function resolveTaskThreadRoute(input: {
     threadRootMessageId: input.normalized.threadId ?? "",
   });
   const directTaskRoute = buildTaskThreadRouteFromBinding({
+    db: input.db,
     binding: threadBinding,
     chatId: input.normalized.chatId,
     replyToMessageId: input.normalized.parentMessageId,
@@ -1264,6 +1265,7 @@ function resolveTaskThreadRoute(input: {
     larkMessageId: input.normalized.parentMessageId,
   });
   const route = buildTaskThreadRouteFromBinding({
+    db: input.db,
     binding: parentBinding,
     chatId: input.normalized.chatId,
     replyToMessageId: input.normalized.parentMessageId,
@@ -1295,6 +1297,7 @@ function resolveTaskThreadRoute(input: {
 }
 
 function buildTaskThreadRouteFromBinding(input: {
+  db: StorageDb;
   binding: LarkObjectBinding | null;
   chatId: string;
   replyToMessageId: string | null;
@@ -1310,11 +1313,35 @@ function buildTaskThreadRouteFromBinding(input: {
     return null;
   }
 
+  const session = new SessionsRepo(input.db).getById(sessionId);
+  if (
+    session == null ||
+    session.purpose !== "task" ||
+    (session.status !== "active" && session.status !== "paused") ||
+    session.conversationId !== input.binding.conversationId ||
+    session.branchId !== input.binding.branchId
+  ) {
+    logger.warn("ignoring stale or invalid lark task thread binding", {
+      channelInstallationId: input.binding.channelInstallationId,
+      larkMessageId: input.binding.larkMessageId,
+      threadRootMessageId: input.binding.threadRootMessageId,
+      internalObjectId: input.binding.internalObjectId,
+      boundSessionId: sessionId,
+      sessionPurpose: session?.purpose ?? null,
+      sessionStatus: session?.status ?? null,
+      bindingConversationId: input.binding.conversationId,
+      bindingBranchId: input.binding.branchId,
+      sessionConversationId: session?.conversationId ?? null,
+      sessionBranchId: session?.branchId ?? null,
+    });
+    return null;
+  }
+
   return {
     kind: "task_thread",
-    conversationId: input.binding.conversationId,
-    branchId: input.binding.branchId,
-    sessionId,
+    conversationId: session.conversationId,
+    branchId: session.branchId,
+    sessionId: session.id,
     scenario: taskRunType === "cron" ? "cron" : "subagent",
     stopScope: "session",
     chatId: input.chatId,
