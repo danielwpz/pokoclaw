@@ -43,6 +43,7 @@ interface BuildAgentSystemPromptInput {
   privateWorkspaceDir?: string | null;
   currentDate?: string | null;
   timezone?: string | null;
+  skillsCatalog?: string | null;
 }
 
 function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string {
@@ -59,8 +60,11 @@ function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     }),
     buildProjectContextSection(),
     buildMemorySection(),
-    buildSkillsSection(),
+    buildSkillsSection({
+      ...(input.skillsCatalog === undefined ? {} : { skillsCatalog: input.skillsCatalog }),
+    }),
     buildFutureRuntimeSections(),
+    input.skillsCatalog ?? "",
   ]);
 }
 
@@ -80,8 +84,11 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     }),
     buildProjectContextSection(),
     buildMemorySection(),
-    buildSkillsSection(),
+    buildSkillsSection({
+      ...(input.skillsCatalog === undefined ? {} : { skillsCatalog: input.skillsCatalog }),
+    }),
     buildFutureRuntimeSections(),
+    input.skillsCatalog ?? "",
   ]);
 }
 
@@ -108,8 +115,11 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
     }),
     buildProjectContextSection(),
     buildMemorySection(),
-    buildSkillsSection(),
+    buildSkillsSection({
+      ...(input.skillsCatalog === undefined ? {} : { skillsCatalog: input.skillsCatalog }),
+    }),
     buildFutureRuntimeSections(),
+    input.skillsCatalog ?? "",
   ]);
 }
 
@@ -126,8 +136,11 @@ function buildApprovalAgentSystemPrompt(input: BuildAgentSystemPromptInput): str
     }),
     buildProjectContextSection(),
     buildMemorySection(),
-    buildSkillsSection(),
+    buildSkillsSection({
+      ...(input.skillsCatalog === undefined ? {} : { skillsCatalog: input.skillsCatalog }),
+    }),
     buildFutureRuntimeSections(),
+    input.skillsCatalog ?? "",
   ]);
 }
 
