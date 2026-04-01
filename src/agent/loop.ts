@@ -29,6 +29,11 @@ import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
 import { assertToolAllowedForSession } from "@/src/agent/session-policy.js";
+import {
+  type AgentSkillsResolver,
+  FilesystemAgentSkillsResolver,
+  filterSkillCatalogSnapshot,
+} from "@/src/agent/skills.js";
 import { buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
 import { requestToolApproval } from "@/src/agent/tool-approval.js";
 import type { CompactionConfig, RuntimeConfig, SecurityConfig } from "@/src/config/schema.js";
@@ -168,6 +173,7 @@ export interface AgentLoopDependencies {
   messages: MessagesRepo;
   models: ProviderRegistry;
   tools: ToolRegistry;
+  skillsResolver?: AgentSkillsResolver;
   cancel: SessionRunAbortRegistry;
   modelRunner: AgentModelRunner;
   storage: StorageDb;
@@ -190,6 +196,7 @@ interface ExecutedToolCall {
 export class AgentLoop {
   private readonly compactor: AgentCompactionService | null;
   private readonly security: SecurityService;
+  private readonly skillsResolver: AgentSkillsResolver;
   private readonly approvalWaits = new SessionApprovalWaitRegistry();
   private readonly steerQueue = new SessionSteerQueueRegistry();
   private readonly defaultMaxTurns: number;
@@ -201,6 +208,7 @@ export class AgentLoop {
       deps.storage,
       buildSystemPolicy({ security: deps.securityConfig }),
     );
+    this.skillsResolver = deps.skillsResolver ?? new FilesystemAgentSkillsResolver();
     this.defaultMaxTurns = deps.runtime?.maxTurns ?? 20;
     this.approvalTimeoutMs =
       deps.approvalTimeoutMs ?? deps.runtime?.approvalTimeoutMs ?? 3 * 60 * 1000;
@@ -284,6 +292,30 @@ export class AgentLoop {
       context.session.ownerAgentId == null
         ? null
         : new AgentsRepo(this.deps.storage).getById(context.session.ownerAgentId);
+    const promptRuntimeContext = resolveLocalCalendarContext();
+    const resolvedSkillsSnapshot = this.skillsResolver.resolveForRun({
+      workdir: ownerAgent?.workdir ?? null,
+    });
+    const skillsSnapshot =
+      context.session.purpose === "approval"
+        ? filterSkillCatalogSnapshot(resolvedSkillsSnapshot, {
+            allowedSources: ["builtin"],
+          })
+        : resolvedSkillsSnapshot;
+    const systemPrompt = buildAgentSystemPrompt({
+      sessionPurpose: context.session.purpose,
+      agentKind: ownerAgent?.kind ?? null,
+      displayName: ownerAgent?.displayName ?? null,
+      description: ownerAgent?.description ?? null,
+      currentDate: promptRuntimeContext.currentDate,
+      timezone: promptRuntimeContext.timezone,
+      workdir: ownerAgent?.workdir ?? null,
+      privateWorkspaceDir:
+        ownerAgent?.kind === "sub" && ownerAgent.id.length > 0
+          ? buildSubagentWorkspaceDir(ownerAgent.id)
+          : null,
+      skillsCatalog: skillsSnapshot.prompt,
+    });
     let messages = [...context.messages];
     const events: AgentRuntimeEvent[] = [];
     const appendedMessageIds: string[] = [];
@@ -291,7 +323,6 @@ export class AgentLoop {
     let stopSignal: AgentLoopStopSignal | null = null;
     let nextSeq = this.deps.messages.getNextSeq(input.sessionId);
     const runId = randomUUID();
-    const promptRuntimeContext = resolveLocalCalendarContext();
     this.deps.control?.beginRun({
       runId,
       sessionId: input.sessionId,
@@ -377,19 +408,7 @@ export class AgentLoop {
               sessionPurpose: context.session.purpose,
               agentKind: ownerAgent?.kind ?? null,
               model,
-              systemPrompt: buildAgentSystemPrompt({
-                sessionPurpose: context.session.purpose,
-                agentKind: ownerAgent?.kind ?? null,
-                displayName: ownerAgent?.displayName ?? null,
-                description: ownerAgent?.description ?? null,
-                currentDate: promptRuntimeContext.currentDate,
-                timezone: promptRuntimeContext.timezone,
-                workdir: ownerAgent?.workdir ?? null,
-                privateWorkspaceDir:
-                  ownerAgent?.kind === "sub" && ownerAgent.id.length > 0
-                    ? buildSubagentWorkspaceDir(ownerAgent.id)
-                    : null,
-              }),
+              systemPrompt,
               compactSummary: context.compactSummary,
               messages,
               signal: handle.signal,
