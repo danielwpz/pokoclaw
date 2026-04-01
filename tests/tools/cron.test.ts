@@ -282,6 +282,14 @@ describe("schedule_task tool", () => {
       type: "text",
       text: expect.stringContaining('Triggered scheduled task "PR review"'),
     });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("A separate background task run starts immediately."),
+    });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("do not manually simulate the same work here"),
+    });
   });
 
   test("main agent cannot update a subagent-owned scheduled task definition", async () => {

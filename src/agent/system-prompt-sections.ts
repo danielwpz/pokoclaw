@@ -33,6 +33,8 @@ function buildScheduledTaskSharedGuidance(): string[] {
   return [
     "- Scheduled tasks are first-class product work. Users can see each run via a dedicated task card, and runtime history remains queryable later.",
     "- Use schedule_task for both one-time future work and recurring scheduled work.",
+    '- When you manually trigger a scheduled task with schedule_task action="run", it starts immediately as a separate background task run.',
+    '- After schedule_task action="run" succeeds, you will not directly observe that background run\'s full execution result inside the current run, and you should not manually simulate the same work yourself here.',
     '- Choose scheduleKind="at" for one-time future runs, scheduleKind="every" for fixed repeating intervals, and scheduleKind="cron" for calendar-style schedules.',
     '- Example values: scheduleKind="at" with scheduleValue="2026-03-30T18:00:00+08:00"; scheduleKind="every" with scheduleValue="3600000"; scheduleKind="cron" with scheduleValue="0 9 * * *".',
     "- Do not simulate scheduling by waiting in the current run, sleeping in bash, or keeping the agent occupied until later.",

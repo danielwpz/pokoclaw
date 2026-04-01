@@ -21,6 +21,15 @@ import type { Message } from "@/src/storage/schema/types.js";
 const logger = createSubsystemLogger("orchestration/delegated-approval");
 const APPROVAL_SESSION_MAX_DECISION_REMINDERS = 1;
 const AUTO_DENY_REASON = "Approval review session ended without an explicit decision.";
+const DELEGATED_APPROVAL_GUIDANCE_LINES = [
+  "A background run paused because it needs approval.",
+  "Review the request in the context of the current task before approving or denying it.",
+];
+const APPROVAL_DECISION_REMINDER_LINES = [
+  "The approval is still pending.",
+  "You may inspect available read-only tools if needed, but you must now call review_permission_request exactly once.",
+  "Do not continue the task itself.",
+];
 
 export interface DelegatedApprovalDeliveryResult {
   status:
@@ -185,23 +194,19 @@ export function renderDelegatedApprovalMessage(input: {
   const history = input.history ?? [];
 
   const rendered = [
-    "<delegated_approval_request>",
-    `  <approval_id>${input.approvalId}</approval_id>`,
-    `  <owner_agent_id>${input.ownerAgentId}</owner_agent_id>`,
-    "",
-    "  <summary>",
-    `    ${input.reasonText ?? "A background run needs additional approval."}`,
-    "  </summary>",
-    "",
-    "  <requested_permissions>",
-    ...lines.map((line) => `    ${line}`),
-    "  </requested_permissions>",
-    "",
-    "  <guidance>",
-    "    A background run paused because it needs approval.",
-    "    Review the request in the context of the current task before approving or denying it.",
-    "  </guidance>",
-    "</delegated_approval_request>",
+    renderXmlEnvelope("delegated_approval_request", [
+      ...renderSingleLineElement("approval_id", String(input.approvalId)),
+      ...renderSingleLineElement("owner_agent_id", input.ownerAgentId),
+      "",
+      ...renderMultilineElement(
+        "summary",
+        escapeXmlText(input.reasonText ?? "A background run needs additional approval."),
+      ),
+      "",
+      ...renderLineBlock("requested_permissions", lines),
+      "",
+      ...renderLineBlock("guidance", DELEGATED_APPROVAL_GUIDANCE_LINES),
+    ]),
   ];
 
   if (input.context != null && hasDelegatedApprovalContext(input.context)) {
@@ -329,67 +334,45 @@ function hasDelegatedApprovalContext(input: DelegatedApprovalContext): boolean {
 }
 
 function renderDelegatedApprovalContext(input: DelegatedApprovalContext): string[] {
-  const lines = ["<task_context>"];
-
-  if (input.sessionPurpose != null) {
-    lines.push(`  <session_purpose>${escapeXmlText(input.sessionPurpose)}</session_purpose>`);
-  }
-  if (input.agentKind != null) {
-    lines.push(`  <agent_kind>${escapeXmlText(input.agentKind)}</agent_kind>`);
-  }
-  if (input.agentDescription != null) {
-    lines.push("  <agent_description>");
-    lines.push(`    ${indentXmlText(input.agentDescription, 4)}`);
-    lines.push("  </agent_description>");
-  }
-  if (input.taskRunId != null) {
-    lines.push(`  <task_run_id>${escapeXmlText(input.taskRunId)}</task_run_id>`);
-  }
-  if (input.runType != null) {
-    lines.push(`  <run_type>${escapeXmlText(input.runType)}</run_type>`);
-  }
-  if (input.taskDescription != null) {
-    lines.push("  <task_description>");
-    lines.push(`    ${indentXmlText(input.taskDescription, 4)}`);
-    lines.push("  </task_description>");
-  }
-  if (input.taskInputSummary != null) {
-    lines.push("  <task_input>");
-    lines.push(`    ${indentXmlText(input.taskInputSummary, 4)}`);
-    lines.push("  </task_input>");
-  }
-  lines.push("</task_context>");
+  const lines = renderXmlBody([
+    ...renderOptionalSingleLineElement("session_purpose", input.sessionPurpose),
+    ...renderOptionalSingleLineElement("agent_kind", input.agentKind),
+    ...renderOptionalMultilineElement("agent_description", input.agentDescription),
+    ...renderOptionalSingleLineElement("task_run_id", input.taskRunId),
+    ...renderOptionalSingleLineElement("run_type", input.runType),
+    ...renderOptionalMultilineElement("task_description", input.taskDescription),
+    ...renderOptionalMultilineElement("task_input", input.taskInputSummary),
+  ]);
 
   if ((input.recentTranscript?.length ?? 0) === 0) {
-    return lines;
+    return ["<task_context>", ...lines, "</task_context>"];
   }
 
-  lines.push("", "<recent_task_transcript>");
-  for (const message of input.recentTranscript ?? []) {
-    lines.push("  <message>");
-    lines.push(`    <seq>${message.seq}</seq>`);
-    lines.push(`    <role>${escapeXmlText(message.role)}</role>`);
-    lines.push("    <summary>");
-    lines.push(`      ${indentXmlText(message.summary, 6)}`);
-    lines.push("    </summary>");
-    lines.push("  </message>");
-  }
-  lines.push("</recent_task_transcript>");
-  return lines;
+  return [
+    "<task_context>",
+    ...lines,
+    "</task_context>",
+    "",
+    "<recent_task_transcript>",
+    ...(input.recentTranscript ?? []).flatMap((message) =>
+      renderXmlBody([
+        "  <message>",
+        ...renderSingleLineElement("seq", String(message.seq), 4),
+        ...renderSingleLineElement("role", escapeXmlText(message.role), 4),
+        ...renderMultilineElement("summary", escapeXmlText(message.summary), 4, 6),
+        "  </message>",
+      ]),
+    ),
+    "</recent_task_transcript>",
+  ];
 }
 
 function renderApprovalDecisionReminder(input: { approvalId: number }): string {
-  return [
-    "<approval_decision_required>",
-    `  <approval_id>${input.approvalId}</approval_id>`,
+  return renderXmlEnvelope("approval_decision_required", [
+    ...renderSingleLineElement("approval_id", String(input.approvalId)),
     "",
-    "  <guidance>",
-    "    The approval is still pending.",
-    "    You may inspect available read-only tools if needed, but you must now call review_permission_request exactly once.",
-    "    Do not continue the task itself.",
-    "  </guidance>",
-    "</approval_decision_required>",
-  ].join("\n");
+    ...renderLineBlock("guidance", APPROVAL_DECISION_REMINDER_LINES),
+  ]);
 }
 
 function summarizeTranscriptMessage(message: Message): DelegatedTranscriptEntry | null {
@@ -461,6 +444,70 @@ function summarizeAssistantPayload(content: unknown): string {
   return parts.length === 0 ? "Assistant turn." : parts.join(" ; ");
 }
 
+function renderXmlEnvelope(tagName: string, bodyLines: string[]): string {
+  return [`<${tagName}>`, ...bodyLines, `</${tagName}>`].join("\n");
+}
+
+function renderXmlBody(lines: string[]): string[] {
+  return lines.filter((line, index, allLines) => {
+    if (line !== "") {
+      return true;
+    }
+    return index > 0 && index < allLines.length - 1;
+  });
+}
+
+function renderSingleLineElement(tagName: string, value: string, indent = 2): string[] {
+  const prefix = " ".repeat(indent);
+  return [`${prefix}<${tagName}>${value}</${tagName}>`];
+}
+
+function renderOptionalSingleLineElement(
+  tagName: string,
+  value: string | null | undefined,
+  indent = 2,
+): string[] {
+  return value == null ? [] : renderSingleLineElement(tagName, escapeXmlText(value), indent);
+}
+
+function renderOptionalMultilineElement(
+  tagName: string,
+  value: string | null | undefined,
+  indent = 2,
+  contentIndent = indent + 2,
+): string[] {
+  if (value == null) {
+    return [];
+  }
+
+  return renderMultilineElement(tagName, escapeXmlText(value), indent, contentIndent);
+}
+
+function renderMultilineElement(
+  tagName: string,
+  value: string,
+  indent = 2,
+  contentIndent = indent + 2,
+): string[] {
+  const prefix = " ".repeat(indent);
+  return [`${prefix}<${tagName}>`, indentText(value, contentIndent), `${prefix}</${tagName}>`];
+}
+
+function renderLineBlock(
+  tagName: string,
+  lines: readonly string[],
+  indent = 2,
+  contentIndent = indent + 2,
+): string[] {
+  const prefix = " ".repeat(indent);
+  const contentPrefix = " ".repeat(contentIndent);
+  return [
+    `${prefix}<${tagName}>`,
+    ...lines.map((line) => `${contentPrefix}${line}`),
+    `${prefix}</${tagName}>`,
+  ];
+}
+
 function summarizeToolPayload(payload: Record<string, unknown>): string {
   const isError = payload.isError === true;
   const details = payload.details;
@@ -517,8 +564,7 @@ function escapeXmlText(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-function indentXmlText(value: string, spaces: number): string {
+function indentText(value: string, spaces: number): string {
   const prefix = " ".repeat(spaces);
-  const normalized = value.length === 0 ? "" : escapeXmlText(value);
-  return normalized.split("\n").join(`\n${prefix}`);
+  return value.split("\n").join(`\n${prefix}`);
 }

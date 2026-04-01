@@ -85,45 +85,24 @@ export function renderPermissionBlock(payload: PermissionBlockPayload): string {
   const guidance =
     payload.guidance ??
     (payload.requestable ? DEFAULT_REQUESTABLE_GUIDANCE : DEFAULT_NON_REQUESTABLE_GUIDANCE);
-  const lines = [
-    "<permission_block>",
-    `  <requestable>${payload.requestable ? "true" : "false"}</requestable>`,
-  ];
-
-  if (payload.failedToolCallId != null) {
-    lines.push(
-      `  <failed_tool_call_id>${escapeXmlText(payload.failedToolCallId)}</failed_tool_call_id>`,
-    );
-  }
-
-  lines.push("");
-  lines.push("  <summary>");
-  lines.push(`    ${indentXmlText(payload.summary, 4)}`);
-  lines.push("  </summary>");
-  lines.push("");
-  lines.push("  <required_permissions>");
-
-  for (const entry of payload.entries) {
-    lines.push("    <entry>");
-    lines.push(`      <resource>${entry.resource}</resource>`);
-    lines.push(`      <path>${escapeXmlText(entry.path)}</path>`);
-    lines.push(`      <scope>${entry.scope}</scope>`);
-    lines.push(`      <access>${entry.access}</access>`);
-    lines.push("    </entry>");
-  }
-
-  lines.push("  </required_permissions>");
-  lines.push("");
-  lines.push("  <guidance>");
-  lines.push(`    ${indentXmlText(guidance, 4)}`);
-  lines.push("  </guidance>");
-  lines.push("</permission_block>");
+  const lines = renderXmlEnvelope("permission_block", [
+    ...renderSingleLineElement("requestable", payload.requestable ? "true" : "false"),
+    ...(payload.failedToolCallId == null
+      ? []
+      : renderSingleLineElement("failed_tool_call_id", escapeXmlText(payload.failedToolCallId))),
+    "",
+    ...renderMultilineElement("summary", escapeXmlText(payload.summary)),
+    "",
+    ...renderRequiredPermissionsBlock(payload.entries),
+    "",
+    ...renderMultilineElement("guidance", escapeXmlText(guidance)),
+  ]);
 
   if (payload.bashContext == null) {
-    return lines.join("\n");
+    return lines;
   }
 
-  return `${lines.join("\n")}\n\n${renderBashResultBlock(payload.bashContext)}`;
+  return `${lines}\n\n${renderBashResultBlock(payload.bashContext)}`;
 }
 
 export function renderBashResultBlock(input: BashFailureContext): string {
@@ -150,28 +129,20 @@ export function renderBashResultBlock(input: BashFailureContext): string {
 export function renderPermissionRequestResultBlock(
   input: PermissionRequestResultBlockInput,
 ): string {
-  const lines = [
-    "<permission_request_result>",
-    `  <status>${input.status}</status>`,
+  return renderXmlEnvelope("permission_request_result", [
+    ...renderSingleLineElement("status", input.status),
     "",
-    "  <justification>",
-    `    ${indentXmlText(input.justification, 4)}`,
-    "  </justification>",
-  ];
-
-  if (input.retryToolCallId != null) {
-    lines.push("");
-    lines.push(
-      `  <retry_tool_call_id>${escapeXmlText(input.retryToolCallId)}</retry_tool_call_id>`,
-    );
-  }
-
-  if (input.retriedToolName != null) {
-    lines.push(`  <retried_tool_name>${escapeXmlText(input.retriedToolName)}</retried_tool_name>`);
-  }
-
-  lines.push("</permission_request_result>");
-  return lines.join("\n");
+    ...renderMultilineElement("justification", escapeXmlText(input.justification)),
+    ...(input.retryToolCallId == null
+      ? []
+      : [
+          "",
+          ...renderSingleLineElement("retry_tool_call_id", escapeXmlText(input.retryToolCallId)),
+        ]),
+    ...(input.retriedToolName == null
+      ? []
+      : renderSingleLineElement("retried_tool_name", escapeXmlText(input.retriedToolName))),
+  ]);
 }
 
 export function renderPermissionRetryDivider(): string {
@@ -231,6 +202,48 @@ export function expandPermissionEntriesToScopes(
   }
 
   return scopes;
+}
+
+function renderRequiredPermissionsBlock(entries: PermissionRequestEntry[]): string[] {
+  return [
+    "  <required_permissions>",
+    ...entries.flatMap((entry) => [
+      "    <entry>",
+      ...renderSingleLineElement("resource", entry.resource, 6),
+      ...renderSingleLineElement("path", escapeXmlText(entry.path), 6),
+      ...renderSingleLineElement("scope", entry.scope, 6),
+      ...renderSingleLineElement("access", entry.access, 6),
+      "    </entry>",
+    ]),
+    "  </required_permissions>",
+  ];
+}
+
+function renderXmlEnvelope(tagName: string, bodyLines: string[]): string {
+  return [`<${tagName}>`, ...bodyLines, `</${tagName}>`].join("\n");
+}
+
+function renderSingleLineElement(tagName: string, value: string, indent = 2): string[] {
+  const prefix = " ".repeat(indent);
+  return [`${prefix}<${tagName}>${value}</${tagName}>`];
+}
+
+function renderMultilineElement(
+  tagName: string,
+  value: string,
+  indent = 2,
+  contentIndent = indent + 2,
+): string[] {
+  const prefix = " ".repeat(indent);
+  return [`${prefix}<${tagName}>`, indentText(value, contentIndent), `${prefix}</${tagName}>`];
+}
+
+function indentText(text: string, spaces: number): string {
+  const prefix = " ".repeat(spaces);
+  return text
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
+    .join("\n");
 }
 
 export function summarizePermissionEntries(entries: PermissionRequestEntry[]): string {
