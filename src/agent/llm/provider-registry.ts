@@ -118,9 +118,12 @@ export class ProviderRegistry {
       maxOutputTokens: entry.maxOutputTokens,
       supportsTools: entry.supportsTools,
       supportsVision: entry.supportsVision,
-      supportsReasoning: entry.supportsReasoning,
       provider,
     };
+
+    if (entry.reasoning != null) {
+      resolved.reasoning = { ...entry.reasoning };
+    }
 
     if (entry.pricing != null) {
       resolved.pricing = { ...entry.pricing };

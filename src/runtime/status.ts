@@ -299,7 +299,7 @@ function resolveStatusModel(input: {
       providerId: input.latestAssistant.provider ?? null,
       upstreamModelId: input.latestAssistant.model ?? null,
       modelApi: input.latestAssistant.modelApi ?? null,
-      supportsReasoning: latestAssistantModel?.supportsReasoning ?? null,
+      supportsReasoning: latestAssistantModel?.reasoning?.enabled === true,
       source: "latest_assistant",
     };
   }
@@ -358,7 +358,7 @@ function modelToStatusSnapshot(
     providerId: model.provider.id,
     upstreamModelId: model.upstreamId,
     modelApi: model.provider.api,
-    supportsReasoning: model.supportsReasoning,
+    supportsReasoning: model.reasoning?.enabled === true,
     source,
   };
 }

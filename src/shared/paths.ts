@@ -8,6 +8,7 @@ export const POKECLAW_SUBAGENT_WORKSPACES_DIR = path.join(POKECLAW_WORKSPACE_DIR
 
 export const DEFAULT_CONFIG_TOML_PATH = path.join(POKECLAW_SYSTEM_DIR, "config.toml");
 export const DEFAULT_SECRETS_TOML_PATH = path.join(POKECLAW_SYSTEM_DIR, "secrets.toml");
+export const CODEX_CREDENTIALS_PATH = path.join(POKECLAW_SYSTEM_DIR, "codex-credentials.json");
 
 export function buildSubagentWorkspaceDir(agentId: string): string {
   const normalized = agentId

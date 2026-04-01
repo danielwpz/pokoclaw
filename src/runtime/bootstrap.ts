@@ -7,6 +7,7 @@
  */
 import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import { CodexProviderApiKeyResolver } from "@/src/agent/llm/providers/codex/resolver.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
 import { createLarkChannelRuntime, type LarkChannelRuntime } from "@/src/channels/lark/channel.js";
@@ -62,6 +63,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const cancel = new SessionRunAbortRegistry();
   const control = new RuntimeControlService(cancel);
   const models = new ProviderRegistry(input.config);
+  const providerApiKeyResolver = new CodexProviderApiKeyResolver();
   const status = new RuntimeStatusService({
     storage: input.storage,
     control,
@@ -73,7 +75,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     models,
     tools,
     cancel,
-    modelRunner: new PiAgentModelRunner(new PiBridge(), tools),
+    modelRunner: new PiAgentModelRunner(new PiBridge(providerApiKeyResolver), tools),
     storage: input.storage,
     securityConfig: input.config.security,
     compaction: input.config.compaction,

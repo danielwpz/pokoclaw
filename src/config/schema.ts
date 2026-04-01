@@ -5,10 +5,14 @@ export interface LoggingConfig {
   useColors: boolean;
 }
 
+export type ProviderAuthSource = "config" | "codex-local";
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
 export interface ProviderConfig {
   api: string;
   baseUrl?: string;
   apiKey?: string;
+  authSource?: ProviderAuthSource;
 }
 
 export interface ModelPricingConfig {
@@ -16,6 +20,11 @@ export interface ModelPricingConfig {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+}
+
+export interface ModelReasoningConfig {
+  enabled: boolean;
+  effort?: ReasoningEffort;
 }
 
 export interface ModelCatalogEntry {
@@ -26,7 +35,7 @@ export interface ModelCatalogEntry {
   maxOutputTokens: number;
   supportsTools: boolean;
   supportsVision: boolean;
-  supportsReasoning: boolean;
+  reasoning?: ModelReasoningConfig;
   pricing?: ModelPricingConfig;
 }
 
@@ -120,6 +129,7 @@ interface ProviderConfigInput {
   api?: unknown;
   baseUrl?: unknown;
   apiKey?: unknown;
+  authSource?: unknown;
 }
 
 interface ModelPricingConfigInput {
@@ -127,6 +137,11 @@ interface ModelPricingConfigInput {
   output?: unknown;
   cacheRead?: unknown;
   cacheWrite?: unknown;
+}
+
+interface ModelReasoningConfigInput {
+  enabled?: unknown;
+  effort?: unknown;
 }
 
 interface ModelCatalogEntryInput {
@@ -137,7 +152,7 @@ interface ModelCatalogEntryInput {
   maxOutputTokens?: unknown;
   supportsTools?: unknown;
   supportsVision?: unknown;
-  supportsReasoning?: unknown;
+  reasoning?: unknown;
   pricing?: unknown;
 }
 
@@ -213,6 +228,8 @@ export type SecretsFileInput = Record<string, unknown>;
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
 const MODEL_SCENARIOS = ["chat", "compaction", "subagent", "cron"] as const;
 const LARK_CONNECTION_MODES: readonly LarkConnectionMode[] = ["websocket", "webhook"];
+const PROVIDER_AUTH_SOURCES: readonly ProviderAuthSource[] = ["config", "codex-local"];
+const REASONING_EFFORTS: readonly ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
 export function isLogLevel(value: unknown): value is LogLevel {
   return typeof value === "string" && LOG_LEVELS.includes(value as LogLevel);
@@ -366,7 +383,7 @@ function validateProvidersConfig(
     const provider = providerValue as ProviderConfigInput;
     assertAllowedKeys(
       provider,
-      new Set(["api", "baseUrl", "apiKey"]),
+      new Set(["api", "baseUrl", "apiKey", "authSource"]),
       `config.toml providers.${providerId}`,
     );
 
@@ -388,6 +405,33 @@ function validateProvidersConfig(
     );
     if (apiKey != null) {
       normalizedProvider.apiKey = apiKey;
+    }
+
+    const authSource = validateOptionalProviderAuthSource(
+      provider.authSource,
+      `config.toml providers.${providerId}.authSource`,
+    );
+    if (authSource != null) {
+      normalizedProvider.authSource = authSource;
+    }
+
+    if (normalizedProvider.authSource === "codex-local") {
+      if (normalizedProvider.api !== "openai-codex-responses") {
+        throw new Error(
+          `config.toml providers.${providerId}.authSource = "codex-local" requires api = "openai-codex-responses"`,
+        );
+      }
+      if (normalizedProvider.baseUrl != null) {
+        throw new Error(
+          `config.toml providers.${providerId} cannot set baseUrl when authSource = "codex-local"`,
+        );
+      }
+    }
+
+    if (normalizedProvider.authSource === "codex-local" && normalizedProvider.apiKey != null) {
+      throw new Error(
+        `config.toml providers.${providerId} cannot set both authSource = "codex-local" and apiKey`,
+      );
     }
 
     providers[providerId] = normalizedProvider;
@@ -461,7 +505,7 @@ function validateModelCatalog(
         "maxOutputTokens",
         "supportsTools",
         "supportsVision",
-        "supportsReasoning",
+        "reasoning",
         "pricing",
       ]),
       `config.toml models.catalog[${index}]`,
@@ -506,11 +550,15 @@ function validateModelCatalog(
         entry.supportsVision,
         `config.toml models.catalog[${index}].supportsVision`,
       ),
-      supportsReasoning: validateBoolean(
-        entry.supportsReasoning,
-        `config.toml models.catalog[${index}].supportsReasoning`,
-      ),
     };
+
+    const reasoning = validateReasoningConfig(
+      entry.reasoning,
+      `config.toml models.catalog[${index}].reasoning`,
+    );
+    if (reasoning != null) {
+      normalizedEntry.reasoning = reasoning;
+    }
 
     const pricing = validatePricingConfig(
       entry.pricing,
@@ -948,6 +996,10 @@ function cloneProviderConfig(provider: ProviderConfig): ProviderConfig {
     cloned.apiKey = provider.apiKey;
   }
 
+  if (provider.authSource != null) {
+    cloned.authSource = provider.authSource;
+  }
+
   return cloned;
 }
 
@@ -960,14 +1012,63 @@ function cloneModelCatalogEntry(entry: ModelCatalogEntry): ModelCatalogEntry {
     maxOutputTokens: entry.maxOutputTokens,
     supportsTools: entry.supportsTools,
     supportsVision: entry.supportsVision,
-    supportsReasoning: entry.supportsReasoning,
   };
+
+  if (entry.reasoning != null) {
+    cloned.reasoning = { ...entry.reasoning };
+  }
 
   if (entry.pricing != null) {
     cloned.pricing = { ...entry.pricing };
   }
 
   return cloned;
+}
+
+function validateOptionalProviderAuthSource(
+  value: unknown,
+  path: string,
+): ProviderAuthSource | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !PROVIDER_AUTH_SOURCES.includes(value as ProviderAuthSource)) {
+    throw new Error(`${path} must be one of: config, codex-local`);
+  }
+  return value as ProviderAuthSource;
+}
+
+function validateReasoningConfig(input: unknown, path: string): ModelReasoningConfig | undefined {
+  if (input == null) {
+    return undefined;
+  }
+  if (!isPlainObject(input)) {
+    throw new Error(`${path} must be a table/object`);
+  }
+  const reasoning = input as ModelReasoningConfigInput;
+  assertAllowedKeys(reasoning, new Set(["enabled", "effort"]), path);
+
+  const enabled = validateBoolean(reasoning.enabled, `${path}.enabled`);
+  const effort = validateOptionalReasoningEffort(reasoning.effort, `${path}.effort`);
+
+  if (!enabled && effort != null) {
+    throw new Error(`${path}.effort cannot be set when ${path}.enabled is false`);
+  }
+
+  return effort == null ? { enabled } : { enabled, effort };
+}
+
+function validateOptionalReasoningEffort(
+  value: unknown,
+  path: string,
+): ReasoningEffort | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !REASONING_EFFORTS.includes(value as ReasoningEffort)) {
+    throw new Error(`${path} must be one of: minimal, low, medium, high, xhigh`);
+  }
+  return value as ReasoningEffort;
 }
 
 function validateNonEmptyString(value: unknown, path: string): string {

@@ -200,7 +200,8 @@ describe("config loader", () => {
         "maxOutputTokens = 16384",
         "supportsTools = true",
         "supportsVision = true",
-        "supportsReasoning = true",
+        "[models.catalog.reasoning]",
+        "enabled = true",
         "[models.catalog.pricing]",
         "input = 3.0",
         "output = 15.0",
@@ -215,7 +216,8 @@ describe("config loader", () => {
         "maxOutputTokens = 16384",
         "supportsTools = true",
         "supportsVision = true",
-        "supportsReasoning = true",
+        "[models.catalog.reasoning]",
+        "enabled = true",
         "",
         "[models.scenarios]",
         'chat = ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"]',
@@ -436,6 +438,43 @@ describe("config loader", () => {
     ).rejects.toThrow("Config cannot contain both level and level_ref");
   });
 
+  test("rejects codex-local auth on non-codex providers", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.bad_provider]",
+        'api = "anthropic-messages"',
+        'authSource = "codex-local"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      'config.toml providers.bad_provider.authSource = "codex-local" requires api = "openai-codex-responses"',
+    );
+  });
+
+  test("rejects custom baseUrl for codex-local auth", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.openai_codex]",
+        'api = "openai-codex-responses"',
+        'authSource = "codex-local"',
+        'baseUrl = "https://third-party.example.com"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      'config.toml providers.openai_codex cannot set baseUrl when authSource = "codex-local"',
+    );
+  });
+
   test("rejects model scenarios that reference unknown catalog ids", async () => {
     const configPath = path.join(tempDir, "config.toml");
     await writeFile(
@@ -452,7 +491,8 @@ describe("config loader", () => {
         "maxOutputTokens = 16384",
         "supportsTools = true",
         "supportsVision = true",
-        "supportsReasoning = true",
+        "[models.catalog.reasoning]",
+        "enabled = true",
         "",
         "[models.scenarios]",
         'chat = ["missing/model"]',

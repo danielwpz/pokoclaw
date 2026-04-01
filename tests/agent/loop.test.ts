@@ -56,7 +56,7 @@ function createModelConfig(
           maxOutputTokens: 16_384,
           supportsTools: options.supportsTools ?? true,
           supportsVision: true,
-          supportsReasoning: true,
+          reasoning: { enabled: true },
         },
       ],
       scenarios: {
