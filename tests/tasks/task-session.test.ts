@@ -20,6 +20,12 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     expect(envelope.content).not.toContain("<recent_runs>");
     expect(envelope.content).toContain("scheduled task has been triggered");
     expect(envelope.content).toContain("You are running in background mode");
+    expect(envelope.content).toContain("defines what this run should do");
+    expect(envelope.content).toContain("Do not do more than the kickoff asks");
+    expect(envelope.content).toContain("Inherited context is background reference");
+    expect(envelope.content).toContain("explicit user instructions that still apply");
+    expect(envelope.content).toContain("Do not automatically continue earlier setup conversation");
+    expect(envelope.content).toContain("scheduled execution");
     expect(envelope.content).toContain("The final response is the primary user-facing output");
     expect(envelope.content).toContain("You must explicitly call finish_task");
   });

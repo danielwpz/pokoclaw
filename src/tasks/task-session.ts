@@ -22,6 +22,41 @@ export interface CronKickoffContext {
   lastSuccessfulRun?: CronKickoffRunReference | null;
 }
 
+const TASK_SUPERVISOR_GUIDANCE_LINES = [
+  "This unattended task run ended without calling finish_task.",
+  "Do not wait for a user reply.",
+  "Continue the work if there is still concrete work left to do.",
+  'If the task is already complete, explicitly call finish_task with status="completed".',
+  'If the task is blocked on missing information, credentials, or a user decision, explicitly call finish_task with status="blocked".',
+  'If the task has failed and should stop, explicitly call finish_task with status="failed".',
+  "You must call finish_task before this task can be considered settled.",
+];
+
+const TASK_EXECUTION_GUIDANCE_LINES = [
+  "Execute this background task in this session.",
+  "Use tools directly when they help move the task forward.",
+  "Keep the work in this task session; do not assume a user is watching live.",
+  "The current kickoff message defines what this run should do, its scope, and what counts as done.",
+  "Do not do more than the kickoff asks, and do not do less.",
+  "Inherited context is background reference for how to carry out the run: use it for relevant user preferences, standing instructions, constraints, and task background.",
+  "If prior context contains explicit user instructions that still apply, continue to follow them.",
+  "Do not automatically continue earlier setup conversation, temporary assistant plans, or unfinished narration unless they are still relevant to the current kickoff.",
+  "This session is unattended. Do not wait for live user feedback before ending the task.",
+  "You must explicitly call finish_task to end this task with completed, blocked, or failed status.",
+];
+
+const CRON_EXECUTION_GUIDANCE_LINES = [
+  "Seeing this message means the scheduled task has been triggered and should be executed now.",
+  "You are running in background mode rather than an interactive chat turn.",
+  "Treat this as a scheduled execution, not as an unfinished interactive conversation that should simply be continued.",
+  "Keep intermediate assistant text minimal unless it materially helps execution.",
+  "Prefer direct tool use and concrete work over status narration.",
+  "The final response is the primary user-facing output, so make it complete and standalone.",
+  "If the task fails or is blocked, end with a clear final result explaining what happened and what follow-up is needed.",
+  "Use recent run context as reference, not as a hard constraint.",
+  "If the previous run failed, avoid blindly repeating the same failing path.",
+];
+
 export function resolveTaskExecutionScenario(runType: string): ModelScenario {
   return runType === "cron" ? "cron" : "subagent";
 }
@@ -45,28 +80,16 @@ export function buildTaskExecutionSupervisorReminderEnvelope(input: {
   nextPass: number;
   maxPasses: number;
 }): TaskExecutionKickoffEnvelope {
-  const lines = [
-    "<task_supervisor_followup>",
-    `  <run_type>${input.runType}</run_type>`,
-    `  <next_pass>${input.nextPass}</next_pass>`,
-    `  <max_passes>${input.maxPasses}</max_passes>`,
-    "  <guidance>",
-    "    This unattended task run ended without calling finish_task.",
-    "    Do not wait for a user reply.",
-    "    Continue the work if there is still concrete work left to do.",
-    '    If the task is already complete, explicitly call finish_task with status="completed".',
-    '    If the task is blocked on missing information, credentials, or a user decision, explicitly call finish_task with status="blocked".',
-    '    If the task has failed and should stop, explicitly call finish_task with status="failed".',
-    "    You must call finish_task before this task can be considered settled.",
-    "  </guidance>",
-    "</task_supervisor_followup>",
-  ];
-
   return {
     scenario: resolveTaskExecutionScenario(input.runType),
     messageType: "task_supervisor_followup",
     visibility: "hidden_system",
-    content: lines.join("\n"),
+    content: renderXmlEnvelope("task_supervisor_followup", [
+      ...renderSingleLineElement("run_type", input.runType),
+      ...renderSingleLineElement("next_pass", String(input.nextPass)),
+      ...renderSingleLineElement("max_passes", String(input.maxPasses)),
+      ...renderLineBlock("guidance", TASK_SUPERVISOR_GUIDANCE_LINES),
+    ]),
   };
 }
 
@@ -76,63 +99,18 @@ function renderTaskKickoffMessage(
     cronContext?: CronKickoffContext;
   },
 ) {
-  const lines = ["<task_execution>"];
   const cronContext = options.cronContext ?? extractCronContextFromInput(taskRun);
+  const guidanceLines =
+    taskRun.runType === "cron"
+      ? [...TASK_EXECUTION_GUIDANCE_LINES, ...CRON_EXECUTION_GUIDANCE_LINES]
+      : TASK_EXECUTION_GUIDANCE_LINES;
 
-  lines.push(`  <run_type>${taskRun.runType}</run_type>`);
-
-  if (taskRun.description != null && taskRun.description.trim().length > 0) {
-    lines.push("  <description>");
-    lines.push(`  ${taskRun.description.trim()}`);
-    lines.push("  </description>");
-  }
-
-  if (taskRun.inputJson != null && taskRun.inputJson.trim().length > 0) {
-    if (taskRun.runType === "cron") {
-      appendCronTaskDefinition(lines, cronContext);
-      appendCronRecentRuns(lines, cronContext);
-    } else {
-      lines.push("  <input>");
-      lines.push(indentBlock(formatTaskInput(taskRun.inputJson), 4));
-      lines.push("  </input>");
-    }
-  } else if (taskRun.runType === "cron") {
-    appendCronTaskDefinition(lines, cronContext);
-    appendCronRecentRuns(lines, cronContext);
-  }
-
-  lines.push("  <guidance>");
-  lines.push("    Execute this background task in this session.");
-  lines.push("    Use tools directly when they help move the task forward.");
-  lines.push("    Keep the work in this task session; do not assume a user is watching live.");
-  lines.push(
-    "    This session is unattended. Do not wait for live user feedback before ending the task.",
-  );
-  lines.push(
-    "    You must explicitly call finish_task to end this task with completed, blocked, or failed status.",
-  );
-  if (taskRun.runType === "cron") {
-    lines.push(
-      "    Seeing this message means the scheduled task has been triggered and should be executed now.",
-    );
-    lines.push("    You are running in background mode rather than an interactive chat turn.");
-    lines.push(
-      "    Keep intermediate assistant text minimal unless it materially helps execution.",
-    );
-    lines.push("    Prefer direct tool use and concrete work over status narration.");
-    lines.push(
-      "    The final response is the primary user-facing output, so make it complete and standalone.",
-    );
-    lines.push(
-      "    If the task fails or is blocked, end with a clear final result explaining what happened and what follow-up is needed.",
-    );
-    lines.push("    Use recent run context as reference, not as a hard constraint.");
-    lines.push("    If the previous run failed, avoid blindly repeating the same failing path.");
-  }
-  lines.push("  </guidance>");
-  lines.push("</task_execution>");
-
-  return lines.join("\n");
+  return renderXmlEnvelope("task_execution", [
+    ...renderSingleLineElement("run_type", taskRun.runType),
+    ...renderOptionalMultilineElement("description", taskRun.description?.trim() ?? ""),
+    ...renderKickoffInput(taskRun, cronContext),
+    ...renderLineBlock("guidance", guidanceLines),
+  ]);
 }
 
 function formatTaskInput(inputJson: string): string {
@@ -143,16 +121,35 @@ function formatTaskInput(inputJson: string): string {
   }
 }
 
-function appendCronRecentRuns(lines: string[], context?: CronKickoffContext) {
+function renderKickoffInput(
+  taskRun: Pick<TaskRun, "runType" | "inputJson">,
+  cronContext?: CronKickoffContext,
+): string[] {
+  if (taskRun.inputJson != null && taskRun.inputJson.trim().length > 0) {
+    if (taskRun.runType === "cron") {
+      return [...renderCronTaskDefinition(cronContext), ...renderCronRecentRuns(cronContext)];
+    }
+
+    return renderMultilineElement("input", formatTaskInput(taskRun.inputJson));
+  }
+
+  if (taskRun.runType === "cron") {
+    return [...renderCronTaskDefinition(cronContext), ...renderCronRecentRuns(cronContext)];
+  }
+
+  return [];
+}
+
+function renderCronRecentRuns(context?: CronKickoffContext): string[] {
   const lastRun = context?.lastRun ?? null;
   const lastSuccessfulRun = context?.lastSuccessfulRun ?? null;
   if (lastRun == null && lastSuccessfulRun == null) {
-    return;
+    return [];
   }
 
-  lines.push("  <recent_runs>");
+  const blocks: string[] = [];
   if (lastRun != null) {
-    appendRunBlock(lines, "last_run", lastRun);
+    blocks.push(...renderRunBlock("last_run", lastRun));
   }
   if (lastSuccessfulRun != null) {
     const duplicate =
@@ -160,10 +157,11 @@ function appendCronRecentRuns(lines: string[], context?: CronKickoffContext) {
       lastRun.startedAt === lastSuccessfulRun.startedAt &&
       lastRun.status === lastSuccessfulRun.status;
     if (!duplicate) {
-      appendRunBlock(lines, "last_successful_run", lastSuccessfulRun);
+      blocks.push(...renderRunBlock("last_successful_run", lastSuccessfulRun));
     }
   }
-  lines.push("  </recent_runs>");
+
+  return ["  <recent_runs>", ...blocks, "  </recent_runs>"];
 }
 
 function extractCronContextFromInput(
@@ -209,36 +207,70 @@ function extractCronContextFromInput(
   }
 }
 
-function appendCronTaskDefinition(lines: string[], context?: CronKickoffContext) {
+function renderCronTaskDefinition(context?: CronKickoffContext): string[] {
   const taskDefinition = context?.taskDefinition?.trim() ?? "";
   if (taskDefinition.length === 0) {
-    return;
+    return [];
   }
 
-  lines.push("  <task_definition>");
-  lines.push(indentBlock(escapeXml(taskDefinition), 4));
-  lines.push("  </task_definition>");
+  return renderMultilineElement("task_definition", escapeXml(taskDefinition));
 }
 
-function appendRunBlock(
-  lines: string[],
+function renderRunBlock(
   tagName: "last_run" | "last_successful_run",
   run: CronKickoffRunReference,
-) {
-  lines.push(`    <${tagName}>`);
-  lines.push(`      <run_at>${escapeXml(run.startedAt)}</run_at>`);
-  lines.push(`      <status>${escapeXml(run.status)}</status>`);
+): string[] {
+  const lines = [
+    `    <${tagName}>`,
+    ...renderSingleLineElement("run_at", escapeXml(run.startedAt), 6),
+    ...renderSingleLineElement("status", escapeXml(run.status), 6),
+  ];
   if (run.summary != null && run.summary.trim().length > 0) {
-    lines.push("      <summary>");
-    lines.push(indentBlock(escapeXml(run.summary.trim()), 8));
-    lines.push("      </summary>");
+    lines.push(...renderMultilineElement("summary", escapeXml(run.summary.trim()), 6, 8));
   }
   if (run.error != null && run.error.trim().length > 0) {
-    lines.push("      <error>");
-    lines.push(indentBlock(escapeXml(run.error.trim()), 8));
-    lines.push("      </error>");
+    lines.push(...renderMultilineElement("error", escapeXml(run.error.trim()), 6, 8));
   }
   lines.push(`    </${tagName}>`);
+  return lines;
+}
+
+function renderXmlEnvelope(tagName: string, bodyLines: string[]): string {
+  return [`<${tagName}>`, ...bodyLines, `</${tagName}>`].join("\n");
+}
+
+function renderSingleLineElement(tagName: string, value: string, indent = 2): string[] {
+  const prefix = " ".repeat(indent);
+  return [`${prefix}<${tagName}>${value}</${tagName}>`];
+}
+
+function renderOptionalMultilineElement(tagName: string, value: string, indent = 2): string[] {
+  return value.length === 0 ? [] : renderMultilineElement(tagName, value, indent);
+}
+
+function renderMultilineElement(
+  tagName: string,
+  value: string,
+  indent = 2,
+  contentIndent = indent + 2,
+): string[] {
+  const prefix = " ".repeat(indent);
+  return [`${prefix}<${tagName}>`, indentBlock(value, contentIndent), `${prefix}</${tagName}>`];
+}
+
+function renderLineBlock(
+  tagName: string,
+  entries: readonly string[],
+  indent = 2,
+  contentIndent = indent + 2,
+): string[] {
+  const prefix = " ".repeat(indent);
+  const contentPrefix = " ".repeat(contentIndent);
+  return [
+    `${prefix}<${tagName}>`,
+    ...entries.map((entry) => `${contentPrefix}${entry}`),
+    `${prefix}</${tagName}>`,
+  ];
 }
 
 function indentBlock(text: string, spaces: number): string {

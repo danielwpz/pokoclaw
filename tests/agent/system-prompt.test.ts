@@ -198,6 +198,12 @@ describe("agent system prompt", () => {
       "Users can see each run via a dedicated task card, and runtime history remains queryable later.",
     );
     expect(prompt).toContain(
+      'When you manually trigger a scheduled task with schedule_task action="run", it starts immediately as a separate background task run.',
+    );
+    expect(prompt).toContain(
+      'After schedule_task action="run" succeeds, you will not directly observe that background run\'s full execution result inside the current run, and you should not manually simulate the same work yourself here.',
+    );
+    expect(prompt).toContain(
       "Do not simulate scheduling by waiting in the current run, sleeping in bash, or keeping the agent occupied until later.",
     );
     expect(prompt).toContain('scheduleKind="at"');
@@ -289,6 +295,12 @@ describe("agent system prompt", () => {
     );
     expect(prompt).toContain(
       "Users can see each run via a dedicated task card, and runtime history remains queryable later.",
+    );
+    expect(prompt).toContain(
+      'When you manually trigger a scheduled task with schedule_task action="run", it starts immediately as a separate background task run.',
+    );
+    expect(prompt).toContain(
+      'After schedule_task action="run" succeeds, you will not directly observe that background run\'s full execution result inside the current run, and you should not manually simulate the same work yourself here.',
     );
     expect(prompt).toContain(
       "Do not simulate scheduling by waiting in the current run, sleeping in bash, or keeping the agent occupied until later.",

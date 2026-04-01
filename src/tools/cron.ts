@@ -180,10 +180,13 @@ export function createScheduleTaskTool() {
             throw toolInternalError("schedule_task.run is missing host runtime control.");
           }
           const result = await context.runtimeControl.runCronJobNow({ jobId: job.id });
-          return textToolResult(`Triggered scheduled task "${job.name ?? job.id}" to run now.`, {
-            accepted: result.accepted,
-            scheduledTaskId: result.cronJobId,
-          });
+          return textToolResult(
+            `Triggered scheduled task "${job.name ?? job.id}" to run now. A separate background task run starts immediately. You will not directly see that run's full execution result inside the current run, so do not manually simulate the same work here.`,
+            {
+              accepted: result.accepted,
+              scheduledTaskId: result.cronJobId,
+            },
+          );
         }
       }
     },
