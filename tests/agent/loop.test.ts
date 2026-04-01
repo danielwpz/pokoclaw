@@ -7,6 +7,7 @@ import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop, type AgentModelRunner } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
+import { buildSkillsCatalogPrompt } from "@/src/agent/skills.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
@@ -305,6 +306,109 @@ describe("agent loop", () => {
     expect(seenSystemPrompts[0]).toContain("## Workspace & Runtime");
     expect(seenSystemPrompts[0]).toContain(`Current date: ${runtimeContext.currentDate}`);
     expect(seenSystemPrompts[0]).toContain(`Time zone: ${runtimeContext.timezone}`);
+  });
+
+  test("resolves the skills catalog once per run and reuses the frozen prompt across turns", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    handle.storage.sqlite.exec(`
+      INSERT INTO agents (id, conversation_id, kind, created_at)
+      VALUES ('agent_main', 'conv_1', 'main', '2026-03-22T00:00:00.000Z');
+    `);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_main",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"help me review this repository"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const seenSystemPrompts: string[] = [];
+    let turns = 0;
+    let skillResolverCalls = 0;
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        seenSystemPrompts.push(input.systemPrompt ?? "");
+        turns += 1;
+        if (turns === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "ping",
+                arguments: {},
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry([
+        defineTool({
+          name: "ping",
+          description: "no-op",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("pong");
+          },
+        }),
+      ]),
+      skillsResolver: {
+        resolveForRun() {
+          skillResolverCalls += 1;
+          return {
+            entries: [],
+            warnings: [],
+            prompt: [
+              "<available_skills>",
+              "  <skill>",
+              "    <name>repo-review</name>",
+              "    <description>Review the current repository.</description>",
+              "    <location>/tmp/repo-review/SKILL.md</location>",
+              "  </skill>",
+              "</available_skills>",
+            ].join("\n"),
+          };
+        },
+      },
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(skillResolverCalls).toBe(1);
+    expect(seenSystemPrompts).toHaveLength(2);
+    expect(seenSystemPrompts[0]).toBe(seenSystemPrompts[1]);
+    expect(seenSystemPrompts[0]).toContain("## Skills");
+    expect(seenSystemPrompts[0]).toContain("<available_skills>");
+    expect(seenSystemPrompts[0]).toContain("<name>repo-review</name>");
   });
 
   test("passes session purpose into the model runner for session-scoped tool visibility", async () => {
@@ -652,6 +756,89 @@ describe("agent loop", () => {
       toolName: "bash",
       sessionPurpose: "approval",
     });
+  });
+
+  test("filters approval-session skills down to built-in entries before prompt injection", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_approval",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "approval",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_approval",
+      sessionId: "sess_approval",
+      seq: 1,
+      role: "user",
+      messageType: "approval_request",
+      visibility: "hidden_system",
+      payloadJson: '{"content":"review this delegated approval"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const seenSystemPrompts: string[] = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      skillsResolver: {
+        resolveForRun() {
+          const entries = [
+            {
+              name: "repo-review",
+              description: "Review repository-local instructions.",
+              skillKey: "repo_agents:repo-review/SKILL.md",
+              source: "repo_agents" as const,
+              rootDir: "/tmp/repo/.agents/skills",
+              skillDir: "/tmp/repo/.agents/skills/repo-review",
+              skillFilePath: "/tmp/repo/.agents/skills/repo-review/SKILL.md",
+            },
+            {
+              name: "approval-review",
+              description: "Review permission requests safely.",
+              skillKey: "builtin:approval-review/SKILL.md",
+              source: "builtin" as const,
+              rootDir: "/app/skills",
+              skillDir: "/app/skills/approval-review",
+              skillFilePath: "/app/skills/approval-review/SKILL.md",
+            },
+          ];
+
+          return {
+            entries,
+            warnings: [],
+            prompt: buildSkillsCatalogPrompt(entries),
+          };
+        },
+      },
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: {
+        async runTurn(input) {
+          seenSystemPrompts.push(input.systemPrompt ?? "");
+          return makeAssistantResult({
+            content: [{ type: "text", text: "reviewed" }],
+          });
+        },
+      },
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_approval", scenario: "chat" });
+
+    expect(seenSystemPrompts).toHaveLength(1);
+    expect(seenSystemPrompts[0]).toContain("## Skills");
+    expect(seenSystemPrompts[0]).toContain("<name>approval-review</name>");
+    expect(seenSystemPrompts[0]).not.toContain("<name>repo-review</name>");
   });
 
   test("fails early when a task session resolves to a model without tool support", async () => {
