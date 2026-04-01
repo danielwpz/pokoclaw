@@ -16,7 +16,7 @@ function createModel(overrides?: Partial<ResolvedModel>): ResolvedModel {
     maxOutputTokens: 16_384,
     supportsTools: true,
     supportsVision: true,
-    supportsReasoning: true,
+    reasoning: { enabled: true },
     pricing: {
       input: 3,
       output: 15,

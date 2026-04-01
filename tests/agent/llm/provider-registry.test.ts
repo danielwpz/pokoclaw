@@ -24,7 +24,7 @@ function createConfig(): Pick<AppConfig, "providers" | "models"> {
           maxOutputTokens: 16_384,
           supportsTools: true,
           supportsVision: true,
-          supportsReasoning: true,
+          reasoning: { enabled: true },
           pricing: {
             input: 3,
             output: 15,
@@ -40,7 +40,7 @@ function createConfig(): Pick<AppConfig, "providers" | "models"> {
           maxOutputTokens: 16_384,
           supportsTools: true,
           supportsVision: true,
-          supportsReasoning: true,
+          reasoning: { enabled: true },
         },
       ],
       scenarios: {
@@ -100,7 +100,7 @@ describe("provider registry", () => {
       maxOutputTokens: existing.maxOutputTokens,
       supportsTools: existing.supportsTools,
       supportsVision: existing.supportsVision,
-      supportsReasoning: existing.supportsReasoning,
+      ...(existing.reasoning == null ? {} : { reasoning: existing.reasoning }),
     };
     if (existing.pricing != null) {
       nextEntry.pricing = existing.pricing;

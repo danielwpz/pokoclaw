@@ -58,7 +58,7 @@ function createResolvedModel(overrides?: Partial<ResolvedModel>): ResolvedModel 
     maxOutputTokens: 16_384,
     supportsTools: true,
     supportsVision: true,
-    supportsReasoning: true,
+    reasoning: { enabled: true },
     provider: {
       id: "anthropic_main",
       api: "anthropic-messages",

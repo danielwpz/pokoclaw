@@ -49,7 +49,7 @@ function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
           maxOutputTokens: 16_384,
           supportsTools: true,
           supportsVision: true,
-          supportsReasoning: true,
+          reasoning: { enabled: true },
         },
       ],
       scenarios: {

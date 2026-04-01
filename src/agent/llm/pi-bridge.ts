@@ -21,7 +21,7 @@ import type {
 import { normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
 import { type AgentAssistantContentBlock, buildPiMessages } from "@/src/agent/llm/messages.js";
 import { isGptFamilyResolvedModel } from "@/src/agent/llm/model-family.js";
-import type { ResolvedModel } from "@/src/agent/llm/models.js";
+import type { ResolvedModel, ResolvedProvider } from "@/src/agent/llm/models.js";
 import { streamWithNormalizedUpstreamUsage } from "@/src/agent/llm/upstream-openai.js";
 import type {
   AgentModelRunner,
@@ -75,7 +75,13 @@ export interface PiBridgeRunTurnResult {
   errorMessage?: string;
 }
 
+export interface ProviderApiKeyResolver {
+  resolveApiKey(provider: ResolvedProvider): Promise<string | undefined>;
+}
+
 export class PiBridge {
+  constructor(private readonly providerApiKeyResolver?: ProviderApiKeyResolver) {}
+
   async streamTurn(input: PiBridgeRunTurnInput): Promise<PiBridgeRunTurnResult> {
     // The bridge is intentionally thin: it translates our stored/session state
     // into pi input, forwards the streaming events we care about, and returns a
@@ -104,7 +110,9 @@ export class PiBridge {
       const stream = streamWithNormalizedUpstreamUsage(
         model,
         context,
-        buildPiStreamOptions(input.model, input.signal, { enableReasoning: true }),
+        await buildPiStreamOptions(this.providerApiKeyResolver, input.model, input.signal, {
+          enableReasoning: true,
+        }),
       );
       let accumulatedText = "";
       for await (const event of stream) {
@@ -172,7 +180,9 @@ export class PiBridge {
       const finalMessage = await completeSimple(
         model,
         context,
-        buildPiStreamOptions(input.model, input.signal, { enableReasoning: true }),
+        await buildPiStreamOptions(this.providerApiKeyResolver, input.model, input.signal, {
+          enableReasoning: true,
+        }),
       );
       const contentSummary = summarizeAssistantContent(finalMessage.content);
       logger.debug("non-stream llm turn finished", {
@@ -213,9 +223,14 @@ export class PiBridge {
             },
           ],
         },
-        buildPiStreamOptions(input.model, input.signal ?? new AbortController().signal, {
-          enableReasoning: false,
-        }),
+        await buildPiStreamOptions(
+          this.providerApiKeyResolver,
+          input.model,
+          input.signal ?? new AbortController().signal,
+          {
+            enableReasoning: false,
+          },
+        ),
       );
 
       const normalized = normalizeAssistantResult(finalMessage, "complete");
@@ -311,7 +326,8 @@ function buildPiTools(
   }));
 }
 
-function buildPiStreamOptions(
+async function buildPiStreamOptions(
+  providerApiKeyResolver: ProviderApiKeyResolver | undefined,
   model: ResolvedModel,
   signal: AbortSignal,
   input: {
@@ -327,14 +343,18 @@ function buildPiStreamOptions(
     signal,
     sessionId: model.id,
   };
-  if (model.provider.apiKey != null) {
+  const apiKey =
+    (await providerApiKeyResolver?.resolveApiKey(model.provider)) ??
+    model.provider.apiKey ??
+    undefined;
+  if (apiKey != null) {
     Object.assign(options, {
-      apiKey: model.provider.apiKey,
+      apiKey,
     });
   }
 
-  if (input.enableReasoning && model.supportsReasoning) {
-    options.reasoning = DEFAULT_REASONING_LEVEL;
+  if (input.enableReasoning && model.reasoning?.enabled) {
+    options.reasoning = model.reasoning.effort ?? DEFAULT_REASONING_LEVEL;
   }
 
   return options;
@@ -350,7 +370,7 @@ function toPiModel(model: ResolvedModel): Model<Api> {
     api,
     provider: model.provider.id,
     baseUrl: resolvePiBaseUrl(model),
-    reasoning: model.supportsReasoning,
+    reasoning: model.reasoning?.enabled === true,
     input: model.supportsVision ? ["text", "image"] : ["text"],
     cost: {
       input: model.pricing?.input ?? 0,
@@ -394,8 +414,9 @@ function resolvePiBaseUrl(model: ResolvedModel): string {
       return "https://api.anthropic.com";
     case "openai-completions":
     case "openai-responses":
-    case "openai-codex-responses":
       return "https://api.openai.com/v1";
+    case "openai-codex-responses":
+      return "https://chatgpt.com/backend-api";
     case "google-generative-ai":
       return "https://generativelanguage.googleapis.com";
     default:

@@ -6,6 +6,7 @@
  */
 import type {
   ModelPricingConfig,
+  ModelReasoningConfig,
   ModelScenarioConfig,
   ProviderConfig,
 } from "@/src/config/schema.js";
@@ -29,6 +30,7 @@ export interface ResolvedProvider {
   api: string;
   baseUrl?: string;
   apiKey?: string;
+  authSource?: ProviderConfig["authSource"];
 }
 
 export interface ResolvedModel {
@@ -39,7 +41,7 @@ export interface ResolvedModel {
   maxOutputTokens: number;
   supportsTools: boolean;
   supportsVision: boolean;
-  supportsReasoning: boolean;
+  reasoning?: ModelReasoningConfig;
   pricing?: ModelPricingConfig;
   provider: ResolvedProvider;
 }
@@ -62,6 +64,10 @@ export function resolveProvider(id: string, provider: ProviderConfig): ResolvedP
 
   if (provider.apiKey != null) {
     resolved.apiKey = provider.apiKey;
+  }
+
+  if (provider.authSource != null) {
+    resolved.authSource = provider.authSource;
   }
 
   return resolved;

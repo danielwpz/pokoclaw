@@ -25,7 +25,7 @@ export interface IntegrationLlmProfile {
   maxOutputTokens: number;
   supportsTools: boolean;
   supportsVision: boolean;
-  supportsReasoning: boolean;
+  reasoningEnabled: boolean;
 }
 
 export interface IntegrationLlmFixture {
@@ -227,7 +227,7 @@ async function loadRequiredIntegrationLlmProfile(): Promise<IntegrationLlmProfil
     maxOutputTokens: getIntegerEnv(env, "POKECLAW_IT_LLM_MAX_OUTPUT_TOKENS", 16_384),
     supportsTools: getBooleanEnv(env, "POKECLAW_IT_LLM_SUPPORTS_TOOLS", true),
     supportsVision: getBooleanEnv(env, "POKECLAW_IT_LLM_SUPPORTS_VISION", false),
-    supportsReasoning: getBooleanEnv(env, "POKECLAW_IT_LLM_SUPPORTS_REASONING", true),
+    reasoningEnabled: getBooleanEnv(env, "POKECLAW_IT_LLM_SUPPORTS_REASONING", true),
   };
 }
 
@@ -246,7 +246,8 @@ function buildConfigToml(profile: IntegrationLlmProfile): string {
     `maxOutputTokens = ${profile.maxOutputTokens}`,
     `supportsTools = ${profile.supportsTools}`,
     `supportsVision = ${profile.supportsVision}`,
-    `supportsReasoning = ${profile.supportsReasoning}`,
+    "[models.catalog.reasoning]",
+    `enabled = ${profile.reasoningEnabled}`,
     "",
     "[models.scenarios]",
     `chat = [${toTomlString(MODEL_ID)}]`,

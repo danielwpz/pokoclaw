@@ -46,7 +46,7 @@ function createConfig(): AppConfig {
           maxOutputTokens: 32_000,
           supportsTools: true,
           supportsVision: false,
-          supportsReasoning: true,
+          reasoning: { enabled: true },
         },
       ],
       scenarios: {
@@ -238,6 +238,53 @@ describe("runtime status service", () => {
       );
       expect(presentation.markdownSections.join("\n")).toContain("- 缓存读 3,005 / 缓存写 0");
       expect(presentation.markdownSections.join("\n")).toContain("- Cost $0.033100");
+    });
+  });
+
+  test("treats reasoning.enabled = false as reasoning disabled in status output", async () => {
+    await withHandle(async (handle) => {
+      const config = createConfig();
+      const model = config.models.catalog[0];
+      if (model == null) {
+        throw new Error("expected seeded model");
+      }
+      model.reasoning = { enabled: false };
+
+      handle.storage.sqlite.exec(`
+        INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+        VALUES ('ci_1', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+        VALUES ('conv_1', 'ci_1', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+        VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO agents (id, conversation_id, kind, default_model, created_at)
+        VALUES ('agent_1', 'conv_1', 'main', 'openrouter-gpt5.4', '2026-03-28T00:00:00.000Z');
+
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, status, compact_cursor, created_at, updated_at
+        ) VALUES (
+          'sess_chat', 'conv_1', 'branch_1', 'agent_1', 'chat', 'active', 0,
+          '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+        );
+      `);
+
+      const service = new RuntimeStatusService({
+        storage: handle.storage.db,
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        models: new ProviderRegistry(config),
+      });
+
+      const snapshot = service.getConversationStatus({
+        conversationId: "conv_1",
+        sessionId: "sess_chat",
+        scenario: "chat",
+      });
+
+      expect(snapshot.model.supportsReasoning).toBe(false);
+      expect(formatConversationStatusText(snapshot)).toContain("Reasoning: 不支持");
     });
   });
 
