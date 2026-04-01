@@ -310,9 +310,24 @@ export function buildMemorySection(): string {
   return "";
 }
 
-// TODO: add skills discovery / loading rules once skills are wired into normal turns.
-export function buildSkillsSection(): string {
-  return "";
+export interface SkillsPromptSectionContext {
+  skillsCatalog?: string | null;
+}
+
+export function buildSkillsSection(input: SkillsPromptSectionContext = {}): string {
+  if (input.skillsCatalog == null || input.skillsCatalog.trim().length === 0) {
+    return "";
+  }
+
+  return renderSection("Skills", [
+    "- Before replying, scan the <available_skills> entries near the end of this prompt.",
+    "- If exactly one skill clearly applies, read its SKILL.md with the read tool and follow it.",
+    "- If multiple skills could apply, choose the most specific one first, then read only that SKILL.md.",
+    "- If no skill clearly applies, do not read any SKILL.md.",
+    "- Never read more than one skill up front before you decide which one is the best match.",
+    "- When a selected skill references relative paths, resolve them relative to the skill directory.",
+    "- If a selected skill includes a <note> path, read skill-note.md only when it is relevant to the task.",
+  ]);
 }
 
 // TODO: add subagent, task-agent, cron, and channel-specific guidance.

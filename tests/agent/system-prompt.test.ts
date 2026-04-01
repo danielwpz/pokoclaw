@@ -45,6 +45,40 @@ describe("agent system prompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  test("adds a dedicated Skills section and appends the skill catalog at the end when provided", () => {
+    const skillsCatalog = [
+      "<skills_catalog>",
+      "The block below is a discovery catalog only, not the full instruction body of any skill.",
+      "Skill bodies live on disk at the listed paths. A skill becomes actionable only after you read its SKILL.md.",
+      "<available_skills>",
+      "  <skill>",
+      "    <name>repo-review</name>",
+      "    <description>Review this repository.</description>",
+      "    <location>/tmp/repo-review/SKILL.md</location>",
+      "    <note>/tmp/repo-review/skill-note.md</note>",
+      "  </skill>",
+      "</available_skills>",
+      "</skills_catalog>",
+    ].join("\n");
+
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      skillsCatalog,
+    });
+
+    expect(prompt).toContain("## Skills");
+    expect(prompt).toContain("scan the <available_skills> entries");
+    expect(prompt).toContain("read its SKILL.md with the read tool");
+    expect(prompt).toContain("Never read more than one skill up front");
+    expect(prompt).toContain("<skills_catalog>");
+    expect(prompt).toContain("The block below is a discovery catalog only");
+    expect(prompt).toContain("Skill bodies live on disk at the listed paths");
+    expect(prompt).toContain(skillsCatalog);
+    expect(prompt.endsWith(skillsCatalog)).toBe(true);
+    expect(prompt.indexOf("## Skills")).toBeLessThan(prompt.indexOf("<available_skills>"));
+  });
+
   test("defaults chat sessions without agentKind to the main-agent prompt", () => {
     const prompt = buildAgentSystemPrompt({
       sessionPurpose: "chat",
@@ -146,6 +180,32 @@ describe("agent system prompt", () => {
     expect(approvalPrompt).not.toContain(
       "You are Pokeclaw, an agent that completes the user's request",
     );
+  });
+
+  test("allows approval prompts to include trusted built-in skills when a catalog is provided", () => {
+    const skillsCatalog = [
+      "<skills_catalog>",
+      "The block below is a discovery catalog only, not the full instruction body of any skill.",
+      "Skill bodies live on disk at the listed paths. A skill becomes actionable only after you read its SKILL.md.",
+      "<available_skills>",
+      "  <skill>",
+      "    <name>approval-review</name>",
+      "    <description>Review permission requests safely.</description>",
+      "    <location>/app/skills/approval-review/SKILL.md</location>",
+      "  </skill>",
+      "</available_skills>",
+      "</skills_catalog>",
+    ].join("\n");
+
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "approval",
+      skillsCatalog,
+    });
+
+    expect(prompt).toContain("Pokeclaw Approval Reviewer");
+    expect(prompt).toContain("## Skills");
+    expect(prompt).toContain("<name>approval-review</name>");
+    expect(prompt.endsWith(skillsCatalog)).toBe(true);
   });
 
   test("includes the currently required permission and bash guidance", () => {
