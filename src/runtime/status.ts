@@ -64,6 +64,7 @@ export interface ConversationStatusSnapshot {
   model: StatusModelSnapshot;
   sessionUsage: StatusUsageSnapshot | null;
   latestTurnUsage: StatusUsageSnapshot | null;
+  latestTurnErrorMessage: string | null;
   activeRuns: StatusActiveRunSnapshot[];
   pendingApprovals: StatusPendingApprovalSnapshot[];
 }
@@ -146,12 +147,18 @@ export class RuntimeStatusService {
         };
       });
 
+    const latestTurnUsage = latestAssistant == null ? null : parseMessageUsage(latestAssistant);
+
     return {
       conversationId: input.conversationId,
       sessionId: input.sessionId,
       model,
       sessionUsage,
-      latestTurnUsage: latestAssistant == null ? null : parseMessageUsage(latestAssistant),
+      latestTurnUsage,
+      latestTurnErrorMessage:
+        latestAssistant != null && latestTurnUsage == null && latestAssistant.stopReason === "error"
+          ? (latestAssistant.errorMessage ?? "上一次回复出错")
+          : null,
       activeRuns,
       pendingApprovals,
     };
@@ -183,7 +190,7 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
     lines.push(...formatUsageTextBlock("当前 session 累计", snapshot.sessionUsage));
   }
   if (snapshot.latestTurnUsage == null) {
-    lines.push("- 最近一次回复: 暂无。");
+    lines.push(formatLatestTurnFallbackLine(snapshot));
   } else {
     lines.push(...formatUsageTextBlock("最近一次回复", snapshot.latestTurnUsage));
   }
@@ -243,7 +250,7 @@ export function buildConversationStatusPresentation(
           : formatUsageMarkdownBlock("当前 session 累计", snapshot.sessionUsage),
         "",
         snapshot.latestTurnUsage == null
-          ? "- 最近一次回复: 暂无。"
+          ? formatLatestTurnFallbackLine(snapshot)
           : formatUsageMarkdownBlock("最近一次回复", snapshot.latestTurnUsage),
       ].join("\n"),
       [
@@ -397,7 +404,12 @@ function aggregateSessionUsage(input: {
 }
 
 function parseMessageUsage(message: Message): StatusUsageSnapshot | null {
-  return toStatusUsageSnapshot(extractStoredMessageUsage(message));
+  const usage = extractStoredMessageUsage(message);
+  if (isUnknownErrorUsagePlaceholder(message, usage)) {
+    return null;
+  }
+
+  return toStatusUsageSnapshot(usage);
 }
 
 function toStatusUsageSnapshot(usage: MessageUsage | null): StatusUsageSnapshot | null {
@@ -453,6 +465,30 @@ function addUsage(target: StatusUsageSnapshot, usage: StatusUsageSnapshot): void
   }
 }
 
+function isUnknownErrorUsagePlaceholder(message: Message, usage: MessageUsage | null): boolean {
+  if (
+    message.role !== "assistant" ||
+    message.stopReason !== "error" ||
+    message.errorMessage == null ||
+    usage == null
+  ) {
+    return false;
+  }
+
+  return (
+    usage.input === 0 &&
+    usage.output === 0 &&
+    usage.cacheRead === 0 &&
+    usage.cacheWrite === 0 &&
+    usage.totalTokens === 0 &&
+    (usage.cost?.input ?? 0) === 0 &&
+    (usage.cost?.output ?? 0) === 0 &&
+    (usage.cost?.cacheRead ?? 0) === 0 &&
+    (usage.cost?.cacheWrite ?? 0) === 0 &&
+    (usage.cost?.total ?? 0) === 0
+  );
+}
+
 function formatUsageTextBlock(label: string, usage: StatusUsageSnapshot): string[] {
   return [
     `- ${label}`,
@@ -469,6 +505,14 @@ function formatUsageMarkdownBlock(label: string, usage: StatusUsageSnapshot): st
     `- 缓存读 ${formatCount(usage.cacheRead)} / 缓存写 ${formatCount(usage.cacheWrite)}`,
     `- Cost $${(usage.cost?.total ?? 0).toFixed(6)}`,
   ].join("\n");
+}
+
+function formatLatestTurnFallbackLine(snapshot: ConversationStatusSnapshot): string {
+  if (snapshot.latestTurnErrorMessage != null) {
+    return `- 最近一次回复: 出错（${snapshot.latestTurnErrorMessage}），usage 无法统计。`;
+  }
+
+  return "- 最近一次回复: 暂无。";
 }
 
 function formatModelLine(model: StatusModelSnapshot): string {

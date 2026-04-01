@@ -2054,6 +2054,161 @@ describe("agent loop", () => {
     });
   });
 
+  test("retries a retryable llm failure once when no visible output was streamed", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let runTurnCount = 0;
+    const emittedEvents: Array<{ type: string }> = [];
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        runTurnCount += 1;
+        if (runTurnCount === 1) {
+          throw new AgentLlmError({
+            kind: "upstream",
+            message: "terminated",
+            retryable: true,
+            provider: "anthropic_main",
+            model: "anthropic_main/claude-sonnet-4-5",
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "recovered reply" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(runTurnCount).toBe(2);
+    expect(result.events.some((event) => event.type === "run_failed")).toBe(false);
+    expect(
+      emittedEvents.filter((event) => event.type === "assistant_message_started"),
+    ).toHaveLength(2);
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(2);
+    expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({
+      content: [{ type: "text", text: "recovered reply" }],
+    });
+  });
+
+  test("persists partial streamed output and does not retry when visible output already exists", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let runTurnCount = 0;
+    const emittedEvents: Array<{ type: string }> = [];
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        runTurnCount += 1;
+        input.onThinkingDelta?.({
+          delta: "Let me think...",
+        });
+        input.onTextDelta?.({
+          delta: "partial answer",
+          accumulatedText: "partial answer",
+        });
+        throw new AgentLlmError({
+          kind: "upstream",
+          message: "terminated",
+          retryable: true,
+          provider: "anthropic_main",
+          model: "anthropic_main/claude-sonnet-4-5",
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow("terminated");
+
+    expect(runTurnCount).toBe(1);
+    expect(emittedEvents.map((event) => event.type)).toContain("assistant_message_completed");
+    expect(emittedEvents.at(-1)?.type).toBe("run_failed");
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "terminated",
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5-20250929",
+      modelApi: "anthropic-messages",
+    });
+    expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({
+      content: [
+        { type: "thinking", thinking: "Let me think..." },
+        { type: "text", text: "partial answer" },
+      ],
+    });
+  });
+
   test("fails the run on internal tool errors instead of returning them to the model", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
