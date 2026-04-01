@@ -74,6 +74,14 @@ import {
 const logger = createSubsystemLogger("agent-loop");
 const ASSISTANT_RESPONSE_LOG_PREVIEW_MAX_LENGTH = 144;
 const ASSISTANT_REASONING_LOG_PREVIEW_MAX_LENGTH = 144;
+const EMPTY_OUTPUT_LLM_RETRY_LIMIT = 1;
+const UNKNOWN_ASSISTANT_ERROR_USAGE: MessageUsage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+};
 
 // AgentLoop is the execution core for a single session run.
 // It owns model turns, tool execution, compaction hooks, and the runtime-side
@@ -332,9 +340,12 @@ export class AgentLoop {
         const assistantMessageId = randomUUID();
         let sawStreamedText = false;
         let sawStreamedReasoning = false;
+        let streamedAssistantText = "";
+        let streamedReasoningText = "";
         let streamedReasoningDeltaCount = 0;
         let streamedReasoningChars = 0;
         let overflowRecovered = false;
+        let emptyOutputRetryCount = 0;
         let response: AgentModelTurnResult;
 
         while (true) {
@@ -384,6 +395,7 @@ export class AgentLoop {
               signal: handle.signal,
               onTextDelta: (event) => {
                 sawStreamedText = true;
+                streamedAssistantText = event.accumulatedText;
                 this.recordEvent(events, {
                   type: "assistant_message_delta",
                   turn: turn + 1,
@@ -398,6 +410,7 @@ export class AgentLoop {
               },
               onThinkingDelta: (event) => {
                 sawStreamedReasoning = true;
+                streamedReasoningText += event.delta;
                 streamedReasoningDeltaCount += 1;
                 streamedReasoningChars += event.delta.length;
                 if (streamedReasoningDeltaCount === 1 && event.delta.length > 0) {
@@ -431,63 +444,110 @@ export class AgentLoop {
             break;
           } catch (error) {
             if (
-              overflowRecovered ||
-              !isAgentLlmError(error) ||
-              error.kind !== "context_overflow" ||
-              this.compactor == null
+              !overflowRecovered &&
+              isAgentLlmError(error) &&
+              error.kind === "context_overflow" &&
+              this.compactor != null
             ) {
-              throw error;
+              latestCompaction = decideCompaction({
+                contextTokens: 0,
+                contextWindow: model.contextWindow,
+                config: this.deps.compaction,
+                overflow: true,
+              });
+              compactionRequested = true;
+              this.recordEvent(events, {
+                type: "compaction_requested",
+                reason: "overflow",
+                thresholdTokens: latestCompaction.thresholdTokens,
+                effectiveWindow: latestCompaction.effectiveWindow,
+                sessionId: input.sessionId,
+                conversationId: context.session.conversationId,
+                branchId: context.session.branchId,
+                runId,
+              });
+              logger.info("context overflow; compacting before retry", {
+                sessionId: input.sessionId,
+                modelId: model.id,
+                runId,
+              });
+
+              const compactionResult = await this.compactor.compactNow({
+                sessionId: input.sessionId,
+                conversationId: context.session.conversationId,
+                branchId: context.session.branchId,
+                runId,
+                reason: "overflow",
+                signal: handle.signal,
+                emitEvent: (event) => this.recordEvent(events, event),
+              });
+
+              if (!compactionResult.compacted) {
+                throw error;
+              }
+
+              logger.info("compaction finished; retrying turn", {
+                sessionId: input.sessionId,
+                cursor: compactionResult.compactCursor,
+                summaryTokens: compactionResult.summaryTokenTotal,
+                runId,
+              });
+
+              overflowRecovered = true;
+              sawStreamedText = false;
+              sawStreamedReasoning = false;
+              streamedAssistantText = "";
+              streamedReasoningText = "";
+              context = this.deps.sessions.getContext(input.sessionId);
+              messages = [...context.messages];
+              continue;
             }
 
-            latestCompaction = decideCompaction({
-              contextTokens: 0,
-              contextWindow: model.contextWindow,
-              config: this.deps.compaction,
-              overflow: true,
+            const emptyOutputRetryError = getRetryableLlmFailureWithoutVisibleOutput({
+              error,
+              sawStreamedText,
+              sawStreamedReasoning,
+              retryCount: emptyOutputRetryCount,
             });
-            compactionRequested = true;
-            this.recordEvent(events, {
-              type: "compaction_requested",
-              reason: "overflow",
-              thresholdTokens: latestCompaction.thresholdTokens,
-              effectiveWindow: latestCompaction.effectiveWindow,
-              sessionId: input.sessionId,
-              conversationId: context.session.conversationId,
-              branchId: context.session.branchId,
-              runId,
-            });
-            logger.info("context overflow; compacting before retry", {
-              sessionId: input.sessionId,
-              modelId: model.id,
-              runId,
-            });
-
-            const compactionResult = await this.compactor.compactNow({
-              sessionId: input.sessionId,
-              conversationId: context.session.conversationId,
-              branchId: context.session.branchId,
-              runId,
-              reason: "overflow",
-              signal: handle.signal,
-              emitEvent: (event) => this.recordEvent(events, event),
-            });
-
-            if (!compactionResult.compacted) {
-              throw error;
+            if (emptyOutputRetryError != null) {
+              emptyOutputRetryCount += 1;
+              logger.warn("retrying assistant response after empty-output llm failure", {
+                sessionId: input.sessionId,
+                conversationId: context.session.conversationId,
+                branchId: context.session.branchId,
+                scenario: input.scenario,
+                turn: turn + 1,
+                runId,
+                assistantMessageId,
+                modelId: model.id,
+                errorKind: emptyOutputRetryError.kind,
+                errorMessage: emptyOutputRetryError.message,
+                retryAttempt: emptyOutputRetryCount,
+                retryLimit: EMPTY_OUTPUT_LLM_RETRY_LIMIT,
+              });
+              continue;
             }
 
-            logger.info("compaction finished; retrying turn", {
+            nextSeq = appendPartialStreamedAssistantMessageOnFailure({
+              repo: this.deps.messages,
               sessionId: input.sessionId,
-              cursor: compactionResult.compactCursor,
-              summaryTokens: compactionResult.summaryTokenTotal,
+              messageId: assistantMessageId,
+              nextSeq,
+              appendedMessageIds,
+              messages,
+              turn: turn + 1,
               runId,
+              conversationId: context.session.conversationId,
+              branchId: context.session.branchId,
+              modelId: model.upstreamId,
+              providerId: model.provider.id,
+              modelApi: model.provider.api,
+              text: streamedAssistantText,
+              reasoningText: streamedReasoningText,
+              errorMessage: getErrorMessage(error),
+              recordEvent: (event) => this.recordEvent(events, event),
             });
-
-            overflowRecovered = true;
-            sawStreamedText = false;
-            sawStreamedReasoning = false;
-            context = this.deps.sessions.getContext(input.sessionId);
-            messages = [...context.messages];
+            throw error;
           }
         }
 
@@ -1404,6 +1464,100 @@ function appendMessageAndHydrate(input: {
     usageJson: input.usage == null ? null : JSON.stringify(input.usage),
     createdAt: input.createdAt.toISOString(),
   };
+}
+
+function getRetryableLlmFailureWithoutVisibleOutput(input: {
+  error: unknown;
+  sawStreamedText: boolean;
+  sawStreamedReasoning: boolean;
+  retryCount: number;
+}): import("@/src/agent/llm/errors.js").AgentLlmError | null {
+  if (
+    input.retryCount >= EMPTY_OUTPUT_LLM_RETRY_LIMIT ||
+    !isAgentLlmError(input.error) ||
+    !input.error.retryable ||
+    input.sawStreamedText ||
+    input.sawStreamedReasoning
+  ) {
+    return null;
+  }
+
+  return input.error;
+}
+
+function appendPartialStreamedAssistantMessageOnFailure(input: {
+  repo: MessagesRepo;
+  sessionId: string;
+  messageId: string;
+  nextSeq: number;
+  appendedMessageIds: string[];
+  messages: Message[];
+  turn: number;
+  runId: string;
+  conversationId: string;
+  branchId: string;
+  modelId: string;
+  providerId: string;
+  modelApi: string;
+  text: string;
+  reasoningText: string;
+  errorMessage: string;
+  recordEvent: (event: AgentRuntimeEventInput) => void;
+}): number {
+  const content: AgentAssistantContentBlock[] = [];
+  if (input.reasoningText.trim().length > 0) {
+    content.push({
+      type: "thinking",
+      thinking: input.reasoningText,
+    });
+  }
+  if (input.text.length > 0) {
+    content.push({
+      type: "text",
+      text: input.text,
+    });
+  }
+
+  if (content.length === 0) {
+    return input.nextSeq;
+  }
+
+  const assistantMessage = appendMessageAndHydrate({
+    repo: input.repo,
+    sessionId: input.sessionId,
+    messageId: input.messageId,
+    seq: input.nextSeq,
+    role: "assistant",
+    messageType: "text",
+    visibility: "user_visible",
+    provider: input.providerId,
+    model: input.modelId,
+    modelApi: input.modelApi,
+    stopReason: "error",
+    errorMessage: input.errorMessage,
+    payload: {
+      content,
+    } satisfies AgentAssistantPayload,
+    usage: UNKNOWN_ASSISTANT_ERROR_USAGE,
+    createdAt: new Date(),
+  });
+  input.messages.push(assistantMessage);
+  input.appendedMessageIds.push(input.messageId);
+  input.recordEvent({
+    type: "assistant_message_completed",
+    turn: input.turn,
+    messageId: input.messageId,
+    text: input.text,
+    reasoningText: input.reasoningText.trim().length > 0 ? input.reasoningText : null,
+    toolCalls: [],
+    usage: null,
+    sessionId: input.sessionId,
+    conversationId: input.conversationId,
+    branchId: input.branchId,
+    runId: input.runId,
+  });
+
+  return input.nextSeq + 1;
 }
 
 function collectAssistantText(content: AgentAssistantContentBlock[]): string {
