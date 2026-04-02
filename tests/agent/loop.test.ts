@@ -558,7 +558,7 @@ describe("agent loop", () => {
     });
   });
 
-  test("uses the default max turn limit of 20 when runtime config is omitted", async () => {
+  test("uses the default max turn limit of 60 when runtime config is omitted", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
 
@@ -618,9 +618,9 @@ describe("agent loop", () => {
     });
 
     await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
-      "configured max turn limit (20)",
+      "configured max turn limit (60)",
     );
-    expect(turn).toBe(20);
+    expect(turn).toBe(60);
   });
 
   test("passes owner agent and workspace cwd into tool execution context", async () => {
@@ -2498,7 +2498,7 @@ describe("agent loop", () => {
     });
   });
 
-  test("fails the run on internal tool errors instead of returning them to the model", async () => {
+  test("returns internal tool errors to the model instead of failing the run", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
 
@@ -2521,11 +2521,19 @@ describe("agent loop", () => {
     });
 
     const emittedEvents: Array<{ type: string; errorKind?: string }> = [];
+    let turns = 0;
     const runner: AgentModelRunner = {
       async runTurn() {
+        turns += 1;
+        if (turns === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "tool_1", name: "fragile", arguments: {} }],
+          });
+        }
+
         return makeAssistantResult({
-          stopReason: "toolUse",
-          content: [{ type: "toolCall", id: "tool_1", name: "fragile", arguments: {} }],
+          content: [{ type: "text", text: "The tool failed internally, so I need another plan." }],
         });
       },
     };
@@ -2557,12 +2565,21 @@ describe("agent loop", () => {
       },
     });
 
-    await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
-      "Tool execution failed due to an internal runtime error.",
-    );
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
 
     const rows = messagesRepo.listBySession("sess_1");
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(4);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_1",
+      toolName: "fragile",
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining("Tool execution failed due to an internal runtime error."),
+        },
+      ],
+    });
     expect(emittedEvents.some((event) => event.type === "tool_call_failed")).toBe(true);
     expect(emittedEvents.find((event) => event.type === "tool_call_failed")).toMatchObject({
       type: "tool_call_failed",
@@ -2570,10 +2587,8 @@ describe("agent loop", () => {
       errorMessage: "Tool execution failed due to an internal runtime error.",
       rawErrorMessage: "cannot read properties of undefined",
     });
-    expect(emittedEvents.at(-1)).toMatchObject({
-      type: "run_failed",
-      errorKind: "internal_error",
-    });
+    expect(emittedEvents.at(-1)).toMatchObject({ type: "run_completed" });
+    expect(result.events.at(-1)?.type).toBe("run_completed");
   });
 
   test("returns invalid tool args to the model instead of failing the run", async () => {

@@ -64,6 +64,20 @@ export interface RuntimeConfig {
   approvalGrantTtlMs: number;
 }
 
+export interface WebToolConfig {
+  enabled: boolean;
+  provider?: string;
+}
+
+export interface WebToolsConfig {
+  search: WebToolConfig;
+  fetch: WebToolConfig;
+}
+
+export interface ToolsConfig {
+  web: WebToolsConfig;
+}
+
 export interface SecurityFilesystemConfig {
   overrideHardDenyRead: boolean;
   overrideHardDenyWrite: boolean;
@@ -104,6 +118,7 @@ export interface RawConfig {
   models: ModelsConfig;
   compaction: CompactionConfig;
   runtime: RuntimeConfig;
+  tools: ToolsConfig;
   security: SecurityConfig;
   channels: ChannelsConfig;
 }
@@ -181,6 +196,20 @@ interface RuntimeConfigInput {
   approvalGrantTtlMs?: unknown;
 }
 
+interface WebToolConfigInput {
+  enabled?: unknown;
+  provider?: unknown;
+}
+
+interface WebToolsConfigInput {
+  search?: unknown;
+  fetch?: unknown;
+}
+
+interface ToolsConfigInput {
+  web?: unknown;
+}
+
 interface SecurityFilesystemConfigInput {
   overrideHardDenyRead?: unknown;
   overrideHardDenyWrite?: unknown;
@@ -219,6 +248,7 @@ interface FileConfigInput {
   models?: unknown;
   compaction?: unknown;
   runtime?: unknown;
+  tools?: unknown;
   security?: unknown;
   channels?: unknown;
 }
@@ -251,6 +281,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     "models",
     "compaction",
     "runtime",
+    "tools",
     "security",
     "channels",
   ]);
@@ -265,6 +296,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   const models = validateModelsConfig(config.models, defaults.models, providers);
   const compaction = validateCompactionConfig(config.compaction, defaults.compaction);
   const runtime = validateRuntimeConfig(config.runtime, defaults.runtime);
+  const tools = validateToolsConfig(config.tools, defaults.tools, providers);
   const security = validateSecurityConfig(config.security, defaults.security);
   const channels = validateChannelsConfig(config.channels, defaults.channels);
 
@@ -278,6 +310,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     models,
     compaction,
     runtime,
+    tools,
     security,
     channels,
   };
@@ -303,6 +336,12 @@ function cloneRawConfig(config: RawConfig): RawConfig {
     },
     compaction: { ...config.compaction },
     runtime: { ...config.runtime },
+    tools: {
+      web: {
+        search: cloneWebToolConfig(config.tools.web.search),
+        fetch: cloneWebToolConfig(config.tools.web.fetch),
+      },
+    },
     security: {
       filesystem: {
         overrideHardDenyRead: config.security.filesystem.overrideHardDenyRead,
@@ -727,6 +766,113 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
   };
 }
 
+function validateToolsConfig(
+  input: unknown,
+  defaults: ToolsConfig,
+  providers: Record<string, ProviderConfig>,
+): ToolsConfig {
+  if (input == null) {
+    return {
+      web: {
+        search: cloneWebToolConfig(defaults.web.search),
+        fetch: cloneWebToolConfig(defaults.web.fetch),
+      },
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml tools must be a table/object");
+  }
+
+  const config = input as ToolsConfigInput;
+  assertAllowedKeys(config, new Set(["web"]), "config.toml tools");
+
+  return {
+    web: validateWebToolsConfig(config.web, defaults.web, providers),
+  };
+}
+
+function validateWebToolsConfig(
+  input: unknown,
+  defaults: WebToolsConfig,
+  providers: Record<string, ProviderConfig>,
+): WebToolsConfig {
+  if (input == null) {
+    return {
+      search: cloneWebToolConfig(defaults.search),
+      fetch: cloneWebToolConfig(defaults.fetch),
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml tools.web must be a table/object");
+  }
+
+  const config = input as WebToolsConfigInput;
+  assertAllowedKeys(config, new Set(["search", "fetch"]), "config.toml tools.web");
+
+  return {
+    search: validateWebToolConfig(config.search, defaults.search, providers, {
+      path: "config.toml tools.web.search",
+      supportedApis: ["tavily", "brave"],
+    }),
+    fetch: validateWebToolConfig(config.fetch, defaults.fetch, providers, {
+      path: "config.toml tools.web.fetch",
+      supportedApis: ["tavily", "firecrawl"],
+    }),
+  };
+}
+
+function validateWebToolConfig(
+  input: unknown,
+  defaults: WebToolConfig,
+  providers: Record<string, ProviderConfig>,
+  options: {
+    path: string;
+    supportedApis: string[];
+  },
+): WebToolConfig {
+  if (input == null) {
+    return cloneWebToolConfig(defaults);
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error(`${options.path} must be a table/object`);
+  }
+
+  const config = input as WebToolConfigInput;
+  assertAllowedKeys(config, new Set(["enabled", "provider"]), options.path);
+
+  const enabled = validateOptionalBoolean(
+    config.enabled,
+    defaults.enabled,
+    `${options.path}.enabled`,
+  );
+  const provider = validateOptionalNonEmptyString(config.provider, `${options.path}.provider`);
+
+  const resolved: WebToolConfig = { enabled };
+  if (provider != null) {
+    if (!Object.hasOwn(providers, provider)) {
+      throw new Error(`${options.path}.provider references unknown provider: ${provider}`);
+    }
+    const providerApi = providers[provider]?.api;
+    if (providerApi == null || !options.supportedApis.includes(providerApi)) {
+      throw new Error(
+        `${options.path}.provider must reference a provider with api ${options.supportedApis.join(" or ")}`,
+      );
+    }
+    resolved.provider = provider;
+  } else if (defaults.provider != null && !enabled) {
+    resolved.provider = defaults.provider;
+  }
+
+  if (resolved.enabled && resolved.provider == null) {
+    throw new Error(`${options.path}.provider is required when enabled = true`);
+  }
+
+  return resolved;
+}
+
 function validateSecurityConfig(input: unknown, defaults: SecurityConfig): SecurityConfig {
   if (input == null) {
     return {
@@ -1001,6 +1147,12 @@ function cloneProviderConfig(provider: ProviderConfig): ProviderConfig {
   }
 
   return cloned;
+}
+
+function cloneWebToolConfig(config: WebToolConfig): WebToolConfig {
+  return config.provider == null
+    ? { enabled: config.enabled }
+    : { enabled: config.enabled, provider: config.provider };
 }
 
 function cloneModelCatalogEntry(entry: ModelCatalogEntry): ModelCatalogEntry {

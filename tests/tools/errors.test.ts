@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildToolFailureContent,
   normalizeToolFailure,
+  toolFatalError,
   toolInternalError,
   toolRecoverableError,
 } from "@/src/tools/core/errors.js";
@@ -22,6 +23,15 @@ describe("tool errors", () => {
 
     expect(error.kind).toBe("internal_error");
     expect(error.message).toBe("runtime blew up");
+    expect(error.shouldReturnToLlm).toBe(true);
+    expect(error.retryable).toBe(false);
+  });
+
+  test("keeps fatal tool errors as run-terminating", () => {
+    const error = toolFatalError("host runtime is inconsistent");
+
+    expect(error.kind).toBe("fatal_error");
+    expect(error.message).toBe("host runtime is inconsistent");
     expect(error.shouldReturnToLlm).toBe(false);
     expect(error.retryable).toBe(false);
   });

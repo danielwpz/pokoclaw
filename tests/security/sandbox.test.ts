@@ -101,8 +101,12 @@ describe("sandbox config compilation", () => {
 
     expect(config.filesystem.readMode).toBe("allow_only");
     expect(config.filesystem.allowRead).toContain(`${path.resolve(os.homedir())}/**`);
+    expect(config.filesystem.allowRead).toContain(path.resolve(os.homedir()));
     expect(config.filesystem.allowWrite).toContain(
       `${path.resolve(path.join(os.homedir(), ".pokeclaw", "workspace"))}/**`,
+    );
+    expect(config.filesystem.allowWrite).toContain(
+      path.resolve(path.join(os.homedir(), ".pokeclaw", "workspace")),
     );
     expect(config.filesystem.allowWrite).not.toContain(`${path.resolve(os.homedir())}/**`);
   });
@@ -118,11 +122,57 @@ describe("sandbox config compilation", () => {
 
     expect(config.filesystem.readMode).toBe("allow_only");
     expect(config.filesystem.allowRead).toEqual([
+      path.resolve(POKECLAW_WORKSPACE_DIR),
       `${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`,
+      path.resolve(POKECLAW_SKILLS_DIR),
       `${path.resolve(POKECLAW_SKILLS_DIR)}/**`,
+      path.resolve(POKECLAW_REPO_DIR),
       `${path.resolve(POKECLAW_REPO_DIR)}/**`,
     ]);
-    expect(config.filesystem.allowWrite).toEqual([`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`]);
+    expect(config.filesystem.allowWrite).toEqual([
+      path.resolve(POKECLAW_WORKSPACE_DIR),
+      `${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`,
+    ]);
+  });
+
+  test("expands a granted read subtree so the directory node itself remains readable to sandboxed processes", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+
+    grantFilesystemScope(handle, "agent_sub", {
+      kind: "fs.read",
+      path: `${tempDir}/**`,
+    });
+
+    const config = buildSandboxConfigForAgent({
+      storage: handle.storage.db,
+      ownerAgentId: "agent_sub",
+    });
+
+    const normalizedTempDir = normalizeFilesystemTargetPath(tempDir);
+    expect(config.filesystem.allowRead).toContain(normalizedTempDir);
+    expect(config.filesystem.allowRead).toContain(`${normalizedTempDir}/**`);
+  });
+
+  test("expands a granted write subtree so the directory node itself remains writable to sandboxed processes", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+
+    grantFilesystemScope(handle, "agent_sub", {
+      kind: "fs.write",
+      path: `${tempDir}/**`,
+    });
+
+    const config = buildSandboxConfigForAgent({
+      storage: handle.storage.db,
+      ownerAgentId: "agent_sub",
+    });
+
+    const normalizedTempDir = normalizeFilesystemTargetPath(tempDir);
+    expect(config.filesystem.allowWrite).toContain(normalizedTempDir);
+    expect(config.filesystem.allowWrite).toContain(`${normalizedTempDir}/**`);
   });
 
   test("compiles network hard-deny hosts into deny_only sandbox mode", async () => {

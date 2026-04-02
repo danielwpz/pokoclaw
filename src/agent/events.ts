@@ -122,7 +122,7 @@ export interface ToolCallFailedEvent extends AgentRuntimeEventBase {
   turn: number;
   toolCallId: string;
   toolName: string;
-  errorKind: "recoverable_error" | "internal_error";
+  errorKind: ToolFailureKind;
   errorMessage: string;
   rawErrorMessage?: string | null;
   retryable: boolean;

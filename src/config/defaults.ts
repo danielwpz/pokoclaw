@@ -1,5 +1,9 @@
 import type { RawConfig } from "@/src/config/schema.js";
 
+export const DEFAULT_RUNTIME_MAX_TURNS = 60;
+export const DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS = 3 * 60 * 1000;
+export const DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export const DEFAULT_CONFIG: RawConfig = {
   logging: {
     level: "info",
@@ -22,9 +26,19 @@ export const DEFAULT_CONFIG: RawConfig = {
     recentTurnsPreserve: 3,
   },
   runtime: {
-    maxTurns: 20,
-    approvalTimeoutMs: 3 * 60 * 1000,
-    approvalGrantTtlMs: 7 * 24 * 60 * 60 * 1000,
+    maxTurns: DEFAULT_RUNTIME_MAX_TURNS,
+    approvalTimeoutMs: DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
+    approvalGrantTtlMs: DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: false,
+      },
+      fetch: {
+        enabled: false,
+      },
+    },
   },
   security: {
     filesystem: {

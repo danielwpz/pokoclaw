@@ -140,9 +140,19 @@ describe("config loader", () => {
       recentTurnsPreserve: 3,
     });
     expect(config.runtime).toEqual({
-      maxTurns: 20,
+      maxTurns: 60,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
+    });
+    expect(config.tools).toEqual({
+      web: {
+        search: {
+          enabled: false,
+        },
+        fetch: {
+          enabled: false,
+        },
+      },
     });
     expect(config.security).toEqual({
       filesystem: {
@@ -192,6 +202,10 @@ describe("config loader", () => {
         "[providers.openai_main]",
         'api = "openai-responses"',
         "",
+        "[providers.tavily]",
+        'api = "tavily"',
+        'apiKey_ref = "secret://web/tavily/apiKey"',
+        "",
         "[[models.catalog]]",
         'id = "anthropic_main/claude-sonnet-4-5"',
         'provider = "anthropic_main"',
@@ -225,6 +239,14 @@ describe("config loader", () => {
         'subagent = ["anthropic_main/claude-sonnet-4-5"]',
         'cron = ["anthropic_main/claude-sonnet-4-5"]',
         "",
+        "[tools.web.search]",
+        "enabled = true",
+        'provider = "tavily"',
+        "",
+        "[tools.web.fetch]",
+        "enabled = true",
+        'provider = "tavily"',
+        "",
         "[compaction]",
         "reserveTokens = 60000",
         "keepRecentTokens = 40000",
@@ -236,7 +258,14 @@ describe("config loader", () => {
     );
     await writeFile(
       secretsPath,
-      ["[llm.anthropic]", 'apiKey = "anthropic-secret"', ""].join("\n"),
+      [
+        "[llm.anthropic]",
+        'apiKey = "anthropic-secret"',
+        "",
+        "[web.tavily]",
+        'apiKey = "tvly-secret"',
+        "",
+      ].join("\n"),
       "utf8",
     );
 
@@ -251,6 +280,10 @@ describe("config loader", () => {
       openai_main: {
         api: "openai-responses",
       },
+      tavily: {
+        api: "tavily",
+        apiKey: "tvly-secret",
+      },
     });
     expect(config.models.catalog).toHaveLength(2);
     expect(config.models.scenarios.chat).toEqual([
@@ -259,6 +292,18 @@ describe("config loader", () => {
     ]);
     expect(config.models.scenarios.compaction).toEqual(["openai_main/gpt-5-mini"]);
     expect(config.compaction.keepRecentTokens).toBe(40_000);
+    expect(config.tools).toEqual({
+      web: {
+        search: {
+          enabled: true,
+          provider: "tavily",
+        },
+        fetch: {
+          enabled: true,
+          provider: "tavily",
+        },
+      },
+    });
   });
 
   test("loads secrets.toml when present", async () => {
@@ -332,6 +377,36 @@ describe("config loader", () => {
       approvalTimeoutMs: 240_000,
       approvalGrantTtlMs: 172_800_000,
     });
+  });
+
+  test("rejects enabled web tools without a provider", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(configPath, ["[tools.web.search]", "enabled = true", ""].join("\n"), "utf8");
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml tools.web.search.provider is required when enabled = true",
+    );
+  });
+
+  test("rejects web tool providers with unsupported api types", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.openai_main]",
+        'api = "openai-responses"',
+        "",
+        "[tools.web.search]",
+        "enabled = true",
+        'provider = "openai_main"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml tools.web.search.provider must reference a provider with api tavily or brave",
+    );
   });
 
   test("loads minimal lark installation config", async () => {
