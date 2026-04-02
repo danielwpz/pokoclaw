@@ -98,14 +98,14 @@ describe("lark inbound message handling", () => {
           chat_type: "p2p",
           message_type: "text",
           create_time: "1774569600000",
-          content: JSON.stringify({ text: "为什么这里这样写？" }),
+          content: JSON.stringify({ text: "Why is this written this way?" }),
         },
       }),
     ).toMatchObject({
       messageId: "om_msg_quote",
       parentMessageId: "om_parent_1",
       threadId: null,
-      text: "为什么这里这样写？",
+      text: "Why is this written this way?",
     });
   });
 
@@ -114,14 +114,14 @@ describe("lark inbound message handling", () => {
       normalizeLarkTextMessage(
         makeMessageEvent("post", {
           zh_cn: {
-            content: [[{ tag: "md", text: "- 第一项\n- 第二项" }]],
+            content: [[{ tag: "md", text: "- First item\n- Second item" }]],
           },
         }),
       ),
     ).toMatchObject({
       chatId: "oc_chat_1",
       messageId: "om_msg_1",
-      text: "- 第一项\n- 第二项",
+      text: "- First item\n- Second item",
     });
   });
 
@@ -130,13 +130,13 @@ describe("lark inbound message handling", () => {
       normalizeLarkTextMessage(
         makeMessageEvent("post", {
           zh_cn: {
-            title: "发布说明",
-            content: [[{ tag: "md", text: "## 标题\n- [文档](https://example.com)\n`code`" }]],
+            title: "Release Notes",
+            content: [[{ tag: "md", text: "## Heading\n- [Docs](https://example.com)\n`code`" }]],
           },
         }),
       ),
     ).toMatchObject({
-      text: "**发布说明**\n\n## 标题\n- [文档](https://example.com)\n`code`",
+      text: "**Release Notes**\n\n## Heading\n- [Docs](https://example.com)\n`code`",
     });
   });
 
@@ -199,7 +199,7 @@ describe("lark inbound message handling", () => {
       await handler(
         makeMessageEvent("post", {
           zh_cn: {
-            content: [[{ tag: "md", text: "- 第一项\n- 第二项" }]],
+            content: [[{ tag: "md", text: "- First item\n- Second item" }]],
           },
         }),
       );
@@ -207,7 +207,7 @@ describe("lark inbound message handling", () => {
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_chat_1",
         scenario: "chat",
-        content: "- 第一项\n- 第二项",
+        content: "- First item\n- Second item",
         channelMessageId: "om_msg_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
@@ -236,7 +236,7 @@ describe("lark inbound message handling", () => {
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
         quoteMessageFetcher: vi.fn(async () => ({
           messageType: "interactive",
-          text: "- 第一项\n- 第二项",
+          text: "- First item\n- Second item",
         })),
       });
 
@@ -249,7 +249,7 @@ describe("lark inbound message handling", () => {
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_chat_1",
         scenario: "chat",
-        content: "- 第一项\n- 第二项",
+        content: "- First item\n- Second item",
         channelMessageId: "om_msg_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
@@ -285,7 +285,7 @@ describe("lark inbound message handling", () => {
         model: "claude-sonnet-4-5",
         modelApi: "anthropic-messages",
         stopReason: "stop",
-        payloadJson: '{"content":[{"type":"text","text":"当前主聊天的最新上下文"}]}',
+        payloadJson: '{"content":[{"type":"text","text":"Latest context from the main chat"}]}',
         createdAt: new Date("2026-03-27T00:00:01.000Z"),
       });
 
@@ -297,7 +297,7 @@ describe("lark inbound message handling", () => {
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
         quoteMessageFetcher: vi.fn(async () => ({
           messageType: "text",
-          text: "很早之前的那条消息",
+          text: "A much older message",
         })),
       });
 
@@ -314,7 +314,7 @@ describe("lark inbound message handling", () => {
           chat_type: "p2p",
           message_type: "text",
           create_time: "1774569600000",
-          content: JSON.stringify({ text: "我们单独在这里聊这个点" }),
+          content: JSON.stringify({ text: "Let's discuss this point separately here." }),
         },
       });
 
@@ -322,7 +322,7 @@ describe("lark inbound message handling", () => {
       const firstCall = (submitMessage as unknown as { mock: { calls: unknown[][] } }).mock
         .calls[0]?.[0] as { sessionId: string; scenario: string; content: string } | undefined;
       expect(firstCall?.scenario).toBe("chat");
-      expect(firstCall?.content).toBe("我们单独在这里聊这个点");
+      expect(firstCall?.content).toBe("Let's discuss this point separately here.");
       expect(firstCall?.sessionId).not.toBe("sess_chat_1");
 
       const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
@@ -354,9 +354,9 @@ describe("lark inbound message handling", () => {
       expect(context.messages.at(-1)?.payloadJson).toContain(
         "The quoted message is below. Continue the discussion around it.",
       );
-      expect(context.messages.at(-1)?.payloadJson).toContain("很早之前的那条消息");
+      expect(context.messages.at(-1)?.payloadJson).toContain("A much older message");
       expect(context.messages.map((message) => message.payloadJson)).toContain(
-        '{"content":[{"type":"text","text":"当前主聊天的最新上下文"}]}',
+        '{"content":[{"type":"text","text":"Latest context from the main chat"}]}',
       );
     });
   });
@@ -405,14 +405,14 @@ describe("lark inbound message handling", () => {
           chat_type: "p2p",
           message_type: "text",
           create_time: "1774569600000",
-          content: JSON.stringify({ text: "请优先处理这个异常" }),
+          content: JSON.stringify({ text: "Please prioritize this error." }),
         },
       });
 
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
         scenario: "cron",
-        content: "请优先处理这个异常",
+        content: "Please prioritize this error.",
         channelMessageId: "om_task_thread_msg_1",
         channelParentMessageId: "om_task_card_1",
         channelThreadId: "omt_task_thread_1",
@@ -476,14 +476,14 @@ describe("lark inbound message handling", () => {
           chat_type: "p2p",
           message_type: "text",
           create_time: "1774569600000",
-          content: JSON.stringify({ text: "继续，但是优先修复刚才的错误" }),
+          content: JSON.stringify({ text: "Continue, but prioritize fixing the previous error." }),
         },
       });
 
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
         scenario: "cron",
-        content: "继续，但是优先修复刚才的错误",
+        content: "Continue, but prioritize fixing the previous error.",
         channelMessageId: "om_task_thread_msg_2",
         channelParentMessageId: "om_user_reply_1",
         channelThreadId: "omt_task_thread_1",
@@ -533,7 +533,7 @@ describe("lark inbound message handling", () => {
           chat_type: "p2p",
           message_type: "text",
           create_time: "1774569600000",
-          content: JSON.stringify({ text: "这条 thread 还能继续聊么" }),
+          content: JSON.stringify({ text: "Can we keep discussing this in the thread?" }),
         },
       });
 
@@ -542,7 +542,7 @@ describe("lark inbound message handling", () => {
         .calls[0]?.[0] as { sessionId: string; scenario: string; content: string } | undefined;
       expect(firstCall?.scenario).toBe("chat");
       expect(firstCall?.sessionId).not.toBe("sess_task_missing");
-      expect(firstCall?.content).toBe("这条 thread 还能继续聊么");
+      expect(firstCall?.content).toBe("Can we keep discussing this in the thread?");
 
       const forkedSession = new SessionsRepo(handle.storage.db).getById(firstCall?.sessionId ?? "");
       expect(forkedSession).toMatchObject({
@@ -569,7 +569,7 @@ describe("lark inbound message handling", () => {
       const submitMessage = vi.fn(async () => ({ status: "started" as const }));
       const quoteMessageFetcher = vi.fn(async () => ({
         messageType: "text",
-        text: "被引用的原消息内容",
+        text: "Original quoted message content",
       }));
       const handler = createLarkMessageReceiveHandler({
         installationId: "default",
@@ -591,7 +591,7 @@ describe("lark inbound message handling", () => {
           chat_type: "p2p",
           message_type: "text",
           create_time: "1774569600000",
-          content: JSON.stringify({ text: "请看这条引用消息" }),
+          content: JSON.stringify({ text: "Please look at this quoted message." }),
         },
       });
 
@@ -603,7 +603,7 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_chat_1",
         scenario: "chat",
         content:
-          "The user quoted a message:\n被引用的原消息内容\n\nThe user's new message: 请看这条引用消息",
+          "The user quoted a message:\nOriginal quoted message content\n\nThe user's new message: Please look at this quoted message.",
         channelMessageId: "om_msg_quote_1",
         channelParentMessageId: "om_parent_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
@@ -647,7 +647,7 @@ describe("lark inbound message handling", () => {
           chat_type: "p2p",
           message_type: "text",
           create_time: "1774569600000",
-          content: JSON.stringify({ text: "请继续" }),
+          content: JSON.stringify({ text: "Please continue." }),
         },
       });
 
@@ -655,7 +655,7 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_chat_1",
         scenario: "chat",
         content:
-          "The user quoted an earlier message, but the quoted text could not be retrieved.\n\nTell the user you cannot see the quoted message and ask them to send it again.\n\nThe user's new message: 请继续",
+          "The user quoted an earlier message, but the quoted text could not be retrieved.\n\nTell the user you cannot see the quoted message and ask them to send it again.\n\nThe user's new message: Please continue.",
         channelMessageId: "om_msg_quote_2",
         channelParentMessageId: "om_parent_2",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
@@ -722,14 +722,14 @@ describe("lark inbound message handling", () => {
                   header: {
                     title: {
                       tag: "plain_text",
-                      content: "当前状态",
+                      content: "Current Status",
                     },
                   },
                   body: {
                     elements: [
                       {
                         tag: "markdown",
-                        content: "请升级至最新版本客户端，以查看内容",
+                        content: "Please upgrade to the latest client to view this content.",
                       },
                     ],
                   },
@@ -770,7 +770,7 @@ describe("lark inbound message handling", () => {
     });
     expect(quoted).toEqual({
       messageType: "interactive",
-      text: "当前状态\n请升级至最新版本客户端，以查看内容",
+      text: "Current Status\nPlease upgrade to the latest client to view this content.",
     });
   });
 
@@ -782,8 +782,8 @@ describe("lark inbound message handling", () => {
             msg_type: "interactive",
             body: {
               content: JSON.stringify({
-                title: "旧卡片",
-                elements: [[{ tag: "text", text: "占位内容" }]],
+                title: "Legacy Card",
+                elements: [[{ tag: "text", text: "Placeholder content" }]],
               }),
             },
           },
@@ -820,12 +820,12 @@ describe("lark inbound message handling", () => {
     });
     expect(quoted).toEqual({
       messageType: "interactive",
-      text: "旧卡片\n占位内容",
+      text: "Legacy Card\nPlaceholder content",
     });
   });
 
   test("keeps long raw card content instead of truncating after a few nodes", async () => {
-    const bodyLines = Array.from({ length: 12 }, (_, index) => `第${index + 1}段`);
+    const bodyLines = Array.from({ length: 12 }, (_, index) => `Paragraph ${index + 1}`);
     const request = vi.fn(async () => ({
       data: {
         items: [
@@ -838,7 +838,7 @@ describe("lark inbound message handling", () => {
                   header: {
                     title: {
                       tag: "plain_text",
-                      content: "长卡片",
+                      content: "Long Card",
                     },
                   },
                   body: {
@@ -876,12 +876,12 @@ describe("lark inbound message handling", () => {
 
     expect(quoted).toEqual({
       messageType: "interactive",
-      text: `长卡片\n${bodyLines.join(" ")}`,
+      text: `Long Card\n${bodyLines.join(" ")}`,
     });
   });
 
   test("marks quoted card content when fallback truncation limits are hit", async () => {
-    const bodyLines = Array.from({ length: 60 }, (_, index) => `第${index + 1}段`);
+    const bodyLines = Array.from({ length: 60 }, (_, index) => `Paragraph ${index + 1}`);
     const request = vi.fn(async () => ({
       data: {
         items: [
@@ -894,7 +894,7 @@ describe("lark inbound message handling", () => {
                   header: {
                     title: {
                       tag: "plain_text",
-                      content: "超长卡片",
+                      content: "Overlong Card",
                     },
                   },
                   body: {
@@ -937,9 +937,9 @@ describe("lark inbound message handling", () => {
     if (quoted == null) {
       throw new Error("Expected quoted message");
     }
-    expect(quoted.text).toContain("超长卡片");
-    expect(quoted.text).toContain("第48段");
-    expect(quoted.text).not.toContain("第49段");
+    expect(quoted.text).toContain("Overlong Card");
+    expect(quoted.text).toContain("Paragraph 48");
+    expect(quoted.text).not.toContain("Paragraph 49");
   });
 
   test("backfills a surface from legacy conversation mapping before routing", async () => {

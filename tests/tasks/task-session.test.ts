@@ -10,13 +10,16 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     const envelope = buildTaskExecutionKickoffEnvelope({
       runType: "cron",
       description: null,
-      inputJson: "看到这条消息意味着现在要执行日报任务。请整理昨天完成的事项并输出一条完整日报。",
+      inputJson:
+        "Seeing this message means the daily report task should run now. Organize what was completed yesterday and produce a complete daily report.",
     });
 
     expect(envelope.scenario).toBe("cron");
     expect(envelope.messageType).toBe("cron_kickoff");
     expect(envelope.content).toContain("<task_definition>");
-    expect(envelope.content).toContain("看到这条消息意味着现在要执行日报任务");
+    expect(envelope.content).toContain(
+      "Seeing this message means the daily report task should run now",
+    );
     expect(envelope.content).not.toContain("<recent_runs>");
     expect(envelope.content).toContain("scheduled task has been triggered");
     expect(envelope.content).toContain("You are running in background mode");
@@ -35,7 +38,8 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
       runType: "cron",
       description: null,
       inputJson: JSON.stringify({
-        taskDefinition: "看到这条消息意味着要检查今天的 PR 队列，并给用户一条完整结果更新。",
+        taskDefinition:
+          "Seeing this message means you should check today's PR queue and give the user a complete update.",
         recentRuns: {
           lastRun: {
             startedAt: "2026-03-27T08:00:00.000Z",
@@ -63,7 +67,7 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
       description: null,
       inputJson: JSON.stringify({
         taskDefinition:
-          "看到这条消息意味着现在要执行 <日报> 任务。请汇总昨天的 & 关键事项，并给出可直接发送的结果。",
+          "Seeing this message means the <daily report> task should run now. Summarize yesterday's & key items and give a result that can be sent directly.",
         recentRuns: {
           lastRun: {
             startedAt: "2026-03-27T08:00:00.000Z",
@@ -79,8 +83,8 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
       }),
     });
 
-    expect(envelope.content).toContain("&lt;日报&gt;");
-    expect(envelope.content).toContain("&amp; 关键事项");
+    expect(envelope.content).toContain("&lt;daily report&gt;");
+    expect(envelope.content).toContain("&amp; key items");
     expect(envelope.content).toContain("<recent_runs>");
     expect(envelope.content).toContain("<last_run>");
     expect(envelope.content).toContain("Slack &lt;API&gt; timeout &amp; retry exhausted");

@@ -556,7 +556,7 @@ describe("TaskExecutionRunner", () => {
         cronJobId: "cron_1",
         inputJson: JSON.stringify({
           taskDefinition:
-            "看到这条消息意味着现在要执行日报任务。请汇总昨天完成的事项并生成一条可直接发送给用户的日报。",
+            "Seeing this message means the daily report task should run now. Summarize what was completed yesterday and generate a report that can be sent directly to the user.",
           recentRuns: {
             lastRun: {
               startedAt: "2026-03-27T08:00:00.000Z",
@@ -583,7 +583,9 @@ describe("TaskExecutionRunner", () => {
             visibility: "hidden_system",
           });
           expect(input.content).toContain("<task_definition>");
-          expect(input.content).toContain("看到这条消息意味着现在要执行日报任务");
+          expect(input.content).toContain(
+            "Seeing this message means the daily report task should run now",
+          );
           expect(input.content).toContain("<recent_runs>");
           expect(input.content).toContain("<last_run>");
           expect(input.content).toContain("Slack API timeout");
