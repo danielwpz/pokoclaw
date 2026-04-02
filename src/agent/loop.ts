@@ -37,6 +37,11 @@ import {
 } from "@/src/agent/skills.js";
 import { buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
 import { requestToolApproval } from "@/src/agent/tool-approval.js";
+import {
+  DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
+  DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
+  DEFAULT_RUNTIME_MAX_TURNS,
+} from "@/src/config/defaults.js";
 import type { CompactionConfig, RuntimeConfig, SecurityConfig } from "@/src/config/schema.js";
 import {
   type ApprovalResponseInput,
@@ -210,11 +215,15 @@ export class AgentLoop {
       buildSystemPolicy({ security: deps.securityConfig }),
     );
     this.skillsResolver = deps.skillsResolver ?? new FilesystemAgentSkillsResolver();
-    this.defaultMaxTurns = deps.runtime?.maxTurns ?? 20;
+    this.defaultMaxTurns = deps.runtime?.maxTurns ?? DEFAULT_RUNTIME_MAX_TURNS;
     this.approvalTimeoutMs =
-      deps.approvalTimeoutMs ?? deps.runtime?.approvalTimeoutMs ?? 3 * 60 * 1000;
+      deps.approvalTimeoutMs ??
+      deps.runtime?.approvalTimeoutMs ??
+      DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS;
     this.approvalGrantTtlMs =
-      deps.approvalGrantTtlMs ?? deps.runtime?.approvalGrantTtlMs ?? 7 * 24 * 60 * 60 * 1000;
+      deps.approvalGrantTtlMs ??
+      deps.runtime?.approvalGrantTtlMs ??
+      DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS;
     this.compactor = isCompactionModelRunner(deps.modelRunner)
       ? new AgentCompactionService({
           sessions: deps.sessions,

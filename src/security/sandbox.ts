@@ -100,10 +100,16 @@ export function buildSandboxConfigForAgent(
   return {
     filesystem: {
       readMode: permissions.fs.read.mode,
-      denyRead: dedupeStrings([...permissions.fs.read.hardDeny, ...permissions.fs.read.deny]),
-      allowRead: permissions.fs.read.allow,
-      allowWrite: permissions.fs.write.allow,
-      denyWrite: dedupeStrings([...permissions.fs.write.hardDeny, ...permissions.fs.write.deny]),
+      denyRead: expandSandboxPathPatterns([
+        ...permissions.fs.read.hardDeny,
+        ...permissions.fs.read.deny,
+      ]),
+      allowRead: expandSandboxPathPatterns(permissions.fs.read.allow),
+      allowWrite: expandSandboxPathPatterns(permissions.fs.write.allow),
+      denyWrite: expandSandboxPathPatterns([
+        ...permissions.fs.write.hardDeny,
+        ...permissions.fs.write.deny,
+      ]),
     },
     network: {
       mode: "deny_only",
@@ -111,6 +117,19 @@ export function buildSandboxConfigForAgent(
       deniedDomains: dedupeStrings(systemPolicy.network.hardDenyHosts),
     },
   };
+}
+
+function expandSandboxPathPatterns(patterns: readonly string[]): string[] {
+  const expanded: string[] = [];
+
+  for (const pattern of patterns) {
+    if (pattern.endsWith("/**")) {
+      expanded.push(pattern.slice(0, -3));
+    }
+    expanded.push(pattern);
+  }
+
+  return dedupeStrings(expanded);
 }
 
 // This is the only execution path that should talk to sandbox-runtime directly.

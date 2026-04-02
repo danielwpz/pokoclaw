@@ -6,7 +6,6 @@ import {
 } from "@/src/tools/core/errors.js";
 import {
   parseToolArgs,
-  ToolArgumentValidationError,
   type ToolDefinition,
   type ToolExecutionContext,
   ToolLookupError,
@@ -132,20 +131,7 @@ export class ToolRegistry {
         throw error;
       }
 
-      if (error instanceof ToolLookupError || error instanceof ToolArgumentValidationError) {
-        const normalized = normalizeToolFailure(error);
-        logger.warn("tool execution finished", {
-          toolName: name,
-          toolCallId: context.toolCallId,
-          sessionId: context.sessionId,
-          success: false,
-          durationMs: Date.now() - startedAt,
-          errorKind: normalized.kind,
-          errorMessage: truncateText(normalized.message, 160),
-        });
-        throw normalized;
-      }
-
+      const normalized = normalizeToolFailure(error);
       logger.warn("tool execution finished", {
         toolName: name,
         toolCallId: context.toolCallId,
@@ -153,9 +139,10 @@ export class ToolRegistry {
         success: false,
         durationMs: Date.now() - startedAt,
         ...(timedOut ? { timedOut: true } : {}),
-        errorMessage: truncateText(error instanceof Error ? error.message : String(error), 160),
+        errorKind: normalized.kind,
+        errorMessage: truncateText(normalized.rawMessage ?? normalized.message, 160),
       });
-      throw error;
+      throw normalized;
     } finally {
       if (timeoutHandle != null) {
         clearTimeout(timeoutHandle);

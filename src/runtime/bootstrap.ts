@@ -57,7 +57,10 @@ export interface CreateRuntimeBootstrapInput {
 export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): RuntimeBootstrap {
   const messages = new MessagesRepo(input.storage);
   const sessions = new SessionsRepo(input.storage);
-  const tools = createBuiltinToolRegistry();
+  const tools = createBuiltinToolRegistry({
+    providers: input.config.providers,
+    tools: input.config.tools,
+  });
   const bridge = createRuntimeOrchestrationBridge();
   const outboundEventBus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
   const cancel = new SessionRunAbortRegistry();

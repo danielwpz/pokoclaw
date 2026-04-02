@@ -38,6 +38,7 @@
     "@mariozechner/pi-agent-core": "0.58.0",
     "@mariozechner/pi-ai": "0.58.0",
     "@sinclair/typebox": "^0.34.48",
+    "@tavily/core": "^0.7.2",
     "better-sqlite3": "^12.8.0",
     "croner": "^10.0.1",
     "drizzle-orm": "^0.45.1",

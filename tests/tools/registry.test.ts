@@ -304,4 +304,38 @@ describe("tool registry", () => {
 
     await execution;
   });
+
+  test("normalizes unexpected tool exceptions into internal tool failures", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const registry = new ToolRegistry();
+    registry.register(
+      defineTool({
+        name: "fragile",
+        description: "Throws unexpectedly",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          throw new Error("cannot read properties of undefined");
+        },
+      }),
+    );
+
+    await expect(
+      registry.execute(
+        "fragile",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          toolCallId: "tool_fragile",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {},
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "internal_error",
+      message: "Tool execution failed due to an internal runtime error.",
+      rawMessage: "cannot read properties of undefined",
+    } satisfies Partial<ToolFailure>);
+  });
 });

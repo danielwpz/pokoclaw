@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 
+import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { createBuiltinToolRegistry } from "@/src/tools/builtins.js";
 
 describe("builtin tools", () => {
@@ -19,6 +20,8 @@ describe("builtin tools", () => {
     expect(registry.has("review_permission_request")).toBe(true);
     expect(registry.has("create_subagent")).toBe(true);
     expect(registry.has("schedule_task")).toBe(true);
+    expect(registry.has("web_search")).toBe(false);
+    expect(registry.has("web_fetch")).toBe(false);
     expect(registry.list().map((tool) => tool.name)).toEqual([
       "bash",
       "read",
@@ -34,5 +37,32 @@ describe("builtin tools", () => {
       "create_subagent",
       "schedule_task",
     ]);
+  });
+
+  test("registers configured web tools", () => {
+    const registry = createBuiltinToolRegistry({
+      providers: {
+        tavily: {
+          api: "tavily",
+          apiKey: "tvly-test",
+        },
+      },
+      tools: {
+        ...DEFAULT_CONFIG.tools,
+        web: {
+          search: {
+            enabled: true,
+            provider: "tavily",
+          },
+          fetch: {
+            enabled: true,
+            provider: "tavily",
+          },
+        },
+      },
+    });
+
+    expect(registry.has("web_search")).toBe(true);
+    expect(registry.has("web_fetch")).toBe(true);
   });
 });

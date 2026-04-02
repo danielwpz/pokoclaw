@@ -125,9 +125,25 @@ export function createLarkOutboundRuntime(
   const deliverySnapshots = new Map<string, LarkRunDeliverySnapshot>();
   const deliveryVersions = new Map<string, number>();
   const flushing = new Set<string>();
+  const urgentFlushes = new Set<string>();
   let unsubscribe: (() => void) | null = null;
 
-  const scheduleFlush = (deliveryId: string) => {
+  const scheduleFlush = (deliveryId: string, options?: { immediate?: boolean }) => {
+    if (options?.immediate === true) {
+      urgentFlushes.add(deliveryId);
+      const existing = scheduled.get(deliveryId);
+      if (existing != null) {
+        clearTimeout(existing);
+        scheduled.delete(deliveryId);
+      }
+      void flushDelivery(deliveryId).catch((error: unknown) => {
+        logger.error("failed to flush lark delivery object", {
+          deliveryId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return;
+    }
     if (scheduled.has(deliveryId)) {
       return;
     }
@@ -144,9 +160,9 @@ export function createLarkOutboundRuntime(
     );
   };
 
-  const bumpVersionAndSchedule = (deliveryId: string) => {
+  const bumpVersionAndSchedule = (deliveryId: string, options?: { immediate?: boolean }) => {
     deliveryVersions.set(deliveryId, (deliveryVersions.get(deliveryId) ?? 0) + 1);
-    scheduleFlush(deliveryId);
+    scheduleFlush(deliveryId, options);
   };
 
   const flushDelivery = async (deliveryId: string) => {
@@ -167,13 +183,14 @@ export function createLarkOutboundRuntime(
       }
     } finally {
       flushing.delete(deliveryId);
+      const rescheduleImmediate = urgentFlushes.delete(deliveryId);
       if ((deliveryVersions.get(deliveryId) ?? 0) !== flushVersion) {
         logger.debug("re-scheduling lark outbound flush after newer events arrived", {
           deliveryId,
           completedVersion: flushVersion,
           latestVersion: deliveryVersions.get(deliveryId) ?? 0,
         });
-        scheduleFlush(deliveryId);
+        scheduleFlush(deliveryId, { immediate: rescheduleImmediate });
       }
     }
   };
@@ -850,7 +867,9 @@ export function createLarkOutboundRuntime(
             eventType: envelope.event.type,
             terminal: next.terminal,
           });
-          bumpVersionAndSchedule(`run:${runCardObjectId}`);
+          bumpVersionAndSchedule(`run:${runCardObjectId}`, {
+            immediate: isTaskLifecycleTerminalEvent(envelope),
+          });
           return;
         }
 
@@ -943,7 +962,9 @@ export function createLarkOutboundRuntime(
             footerStatus: next.footerStatus,
             terminal: next.terminal,
           });
-          bumpVersionAndSchedule(`run:${runCardObjectId}`);
+          bumpVersionAndSchedule(`run:${runCardObjectId}`, {
+            immediate: isTaskRuntimeTerminalEvent(envelope),
+          });
           return;
         }
 
@@ -1015,7 +1036,9 @@ export function createLarkOutboundRuntime(
           footerStatus: next.footerStatus,
           terminal: next.terminal,
         });
-        bumpVersionAndSchedule(`run:${runCardObjectId}`);
+        bumpVersionAndSchedule(`run:${runCardObjectId}`, {
+          immediate: isRunTerminalEvent(envelope),
+        });
       });
 
       logger.info("lark outbound runtime started");
@@ -1117,6 +1140,23 @@ function isTaskRuntimeTerminalEvent(envelope: OrchestratedRuntimeEventEnvelope):
     envelope.event.type === "run_completed" ||
     envelope.event.type === "run_failed" ||
     envelope.event.type === "run_cancelled"
+  );
+}
+
+function isRunTerminalEvent(envelope: OrchestratedRuntimeEventEnvelope): boolean {
+  return (
+    envelope.event.type === "run_completed" ||
+    envelope.event.type === "run_failed" ||
+    envelope.event.type === "run_cancelled"
+  );
+}
+
+function isTaskLifecycleTerminalEvent(envelope: OrchestratedOutboundEventEnvelope): boolean {
+  return (
+    envelope.kind === "task_run_event" &&
+    (envelope.event.type === "task_run_completed" ||
+      envelope.event.type === "task_run_failed" ||
+      envelope.event.type === "task_run_cancelled")
   );
 }
 

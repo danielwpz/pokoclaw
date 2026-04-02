@@ -2262,6 +2262,113 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("flushes a terminal run failure immediately so the stop button does not linger", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: { card_id: "card_1" },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: { message_id: "om_card_1", open_message_id: "om_open_1" },
+    }));
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: streamContent },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_fail_fast_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(createCard).toHaveBeenCalledOnce();
+
+    bus.publish(
+      makeEnvelope({
+        type: "run_failed",
+        eventId: "evt_fail_fast_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        errorKind: "unknown",
+        errorMessage:
+          "Run hit the configured max turn limit (60) before producing a final response.",
+        retryable: false,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(updateCard).toHaveBeenCalledOnce();
+    const updatePayload = updateCard.mock.calls.at(0)?.[0] as
+      | { data?: { card?: { data?: string } } }
+      | undefined;
+    expect(updatePayload?.data?.card?.data ?? "").toContain("执行失败");
+    expect(updatePayload?.data?.card?.data ?? "").toContain("max turn limit (60)");
+
+    await runtime.shutdown();
+  });
+
   test("adds an explicit terminal failure summary when a run fails after visible transcript exists", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);

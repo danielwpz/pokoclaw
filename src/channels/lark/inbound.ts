@@ -388,17 +388,37 @@ export function createLarkMessageReceiveHandler(input: {
         ? hydrated.text
         : await buildInboundMessageContent(hydrated, input);
 
-    await input.ingress.submitMessage({
-      sessionId: route.sessionId,
-      scenario: route.scenario,
-      content,
-      channelMessageId: hydrated.messageId,
-      ...(hydrated.parentMessageId == null
-        ? {}
-        : { channelParentMessageId: hydrated.parentMessageId }),
-      ...(hydrated.threadId == null ? {} : { channelThreadId: hydrated.threadId }),
-      ...(hydrated.createdAt == null ? {} : { createdAt: hydrated.createdAt }),
-    });
+    try {
+      await input.ingress.submitMessage({
+        sessionId: route.sessionId,
+        scenario: route.scenario,
+        content,
+        channelMessageId: hydrated.messageId,
+        ...(hydrated.parentMessageId == null
+          ? {}
+          : { channelParentMessageId: hydrated.parentMessageId }),
+        ...(hydrated.threadId == null ? {} : { channelThreadId: hydrated.threadId }),
+        ...(hydrated.createdAt == null ? {} : { createdAt: hydrated.createdAt }),
+      });
+    } catch (error) {
+      if (!isAbortLikeError(error)) {
+        await sendLarkRunFailureCard({
+          installationId: input.installationId,
+          chatId: route.chatId,
+          replyToMessageId: route.replyToMessageId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          ...(input.clients == null ? {} : { clients: input.clients }),
+        }).catch((notifyError: unknown) => {
+          logger.warn("failed to send lark run failure card", {
+            installationId: input.installationId,
+            chatId: route.chatId,
+            replyToMessageId: route.replyToMessageId,
+            error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+          });
+        });
+      }
+      throw error;
+    }
   };
 }
 
@@ -2100,6 +2120,7 @@ async function sendLarkStatusCard(input: {
   installationId: string;
   chatId: string;
   replyToMessageId?: string | null;
+  template?: string;
   presentation: {
     title: string;
     summary: string;
@@ -2132,7 +2153,7 @@ async function sendLarkStatusCard(input: {
         tag: "plain_text",
         content: input.presentation.title,
       },
-      template: "turquoise",
+      template: input.template ?? "turquoise",
     },
     body: {
       elements: input.presentation.markdownSections.flatMap((section, index) => [
@@ -2163,6 +2184,32 @@ async function sendLarkStatusCard(input: {
       msg_type: "interactive",
       content: JSON.stringify(card),
     },
+  });
+}
+
+async function sendLarkRunFailureCard(input: {
+  installationId: string;
+  chatId: string;
+  replyToMessageId?: string | null;
+  errorMessage: string;
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<void> {
+  await sendLarkStatusCard({
+    installationId: input.installationId,
+    chatId: input.chatId,
+    template: "red",
+    presentation: {
+      title: "执行失败",
+      summary: truncateLogText(input.errorMessage, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
+      markdownSections: [
+        "本轮运行在返回最终答复前失败了。",
+        ["**错误信息**", "```text", input.errorMessage, "```"].join("\n"),
+      ],
+    },
+    ...(input.replyToMessageId === undefined ? {} : { replyToMessageId: input.replyToMessageId }),
+    ...(input.clients == null ? {} : { clients: input.clients }),
   });
 }
 

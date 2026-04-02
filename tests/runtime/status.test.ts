@@ -63,9 +63,19 @@ function createConfig(): AppConfig {
       recentTurnsPreserve: 3,
     },
     runtime: {
-      maxTurns: 20,
+      maxTurns: 60,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
+    },
+    tools: {
+      web: {
+        search: {
+          enabled: false,
+        },
+        fetch: {
+          enabled: false,
+        },
+      },
     },
     security: {
       filesystem: {

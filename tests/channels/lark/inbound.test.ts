@@ -174,6 +174,64 @@ describe("lark inbound message handling", () => {
     });
   });
 
+  test("replies with a failure card when runtime ingress rejects a lark message", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => {
+        throw new Error(
+          "Run hit the configured max turn limit (60) before producing a final response.",
+        );
+      });
+      const create = vi.fn(async () => ({ data: { message_id: "om_fail_1" } }));
+      const clients = {
+        getOrCreate: vi.fn(() => ({
+          sdk: {
+            im: {
+              message: {
+                create,
+              },
+            },
+          },
+        })),
+      } as unknown as { getOrCreate(installationId: string): LarkSdkClient };
+
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        clients,
+      });
+
+      await expect(handler(makeTextEvent("hello from lark"))).rejects.toThrow(
+        "configured max turn limit (60)",
+      );
+      expect(create).toHaveBeenCalledOnce();
+      const createCall = (create as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls[0]?.[0] as { params?: unknown; data?: { content?: string } } | undefined;
+      expect(createCall).toMatchObject({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: "oc_chat_1",
+          msg_type: "interactive",
+        },
+      });
+      expect(createCall?.data?.content ?? "").toContain("执行失败");
+      expect(createCall?.data?.content ?? "").toContain("max turn limit (60)");
+    });
+  });
+
   test("routes a post message through surface binding into runtime ingress", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);

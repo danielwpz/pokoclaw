@@ -14,9 +14,11 @@ export type ToolFailureKind =
   // A tool-declared, recoverable failure that should be returned to the model
   // as an error tool_result so it can decide what to do next.
   | "recoverable_error"
-  // Anything the tool did not classify explicitly. This represents a runtime
-  // or implementation problem and should be treated as non-recoverable.
-  | "internal_error";
+  // A tool/runtime problem that should still be surfaced back to the model so
+  // the turn can continue with that failure visible in-context.
+  | "internal_error"
+  // A rare host/runtime invariant failure that should terminate the run.
+  | "fatal_error";
 
 export interface ToolFailureShape {
   kind: ToolFailureKind;
@@ -56,7 +58,7 @@ export class ToolFailure extends Error {
   }
 
   get shouldReturnToLlm(): boolean {
-    return this.kind === "recoverable_error";
+    return this.kind !== "fatal_error";
   }
 }
 
@@ -106,6 +108,15 @@ export const toolExecutionError = toolRecoverableError;
 export function toolInternalError(message: string, details?: unknown): ToolFailure {
   return new ToolFailure({
     kind: "internal_error",
+    message,
+    ...(details !== undefined ? { details } : {}),
+    rawMessage: message,
+  });
+}
+
+export function toolFatalError(message: string, details?: unknown): ToolFailure {
+  return new ToolFailure({
+    kind: "fatal_error",
     message,
     ...(details !== undefined ? { details } : {}),
     rawMessage: message,
@@ -170,7 +181,8 @@ export function buildToolFailureContent(failure: ToolFailure): ToolContentBlock[
     {
       type: "text",
       text:
-        failure.kind === "internal_error" && failure.rawMessage != null
+        (failure.kind === "internal_error" || failure.kind === "fatal_error") &&
+        failure.rawMessage != null
           ? `${failure.message}\n\nRaw error: ${failure.rawMessage}`
           : failure.message,
     },
