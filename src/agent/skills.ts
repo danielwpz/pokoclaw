@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { POKECLAW_HOME_DIR, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import {
+  POKECLAW_BUILTIN_SKILLS_DIR,
+  POKECLAW_SKILLS_DIR,
+  POKECLAW_WORKSPACE_DIR,
+} from "@/src/shared/paths.js";
+import { resolveRepoLocalSkillDirs } from "@/src/shared/repo-skill-roots.js";
 
 const logger = createSubsystemLogger("agent-skills");
 
@@ -11,7 +15,6 @@ const SKILL_NOTE_FILE_NAME = "skill-note.md";
 const MAX_FRONTMATTER_BYTES = 8 * 1024;
 const MAX_FRONTMATTER_LINES = 64;
 const MAX_NESTED_ROOT_SCAN = 100;
-const MAX_GIT_ROOT_PARENT_STEPS = 3;
 
 export type AgentSkillSource = "global" | "workspace" | "repo_agents" | "repo_claude" | "builtin";
 
@@ -154,11 +157,45 @@ export function filterSkillCatalogSnapshot(
   };
 }
 
+export function filterReadableSkillCatalogSnapshot(
+  snapshot: AgentSkillCatalogSnapshot,
+  input: {
+    canReadPath: (absolutePath: string) => boolean;
+  },
+): AgentSkillCatalogSnapshot {
+  const entries = snapshot.entries.flatMap((entry): AgentSkillCatalogEntry[] => {
+    if (!input.canReadPath(entry.skillFilePath)) {
+      return [];
+    }
+
+    const readableEntry: AgentSkillCatalogEntry = {
+      name: entry.name,
+      description: entry.description,
+      skillKey: entry.skillKey,
+      source: entry.source,
+      rootDir: entry.rootDir,
+      skillDir: entry.skillDir,
+      skillFilePath: entry.skillFilePath,
+    };
+    if (entry.noteFilePath != null && input.canReadPath(entry.noteFilePath)) {
+      readableEntry.noteFilePath = entry.noteFilePath;
+    }
+
+    return [readableEntry];
+  });
+
+  return {
+    entries,
+    prompt: buildSkillsCatalogPrompt(entries),
+    warnings: snapshot.warnings,
+  };
+}
+
 export function resolveDefaultSkillRoots(workdir?: string | null): AgentSkillRoot[] {
   const roots: AgentSkillRoot[] = [
     {
       source: "global",
-      rootDir: path.join(POKECLAW_HOME_DIR, "skills"),
+      rootDir: POKECLAW_SKILLS_DIR,
     },
     {
       source: "workspace",
@@ -176,49 +213,26 @@ export function resolveDefaultSkillRoots(workdir?: string | null): AgentSkillRoo
   return roots;
 }
 
-function resolveBundledSkillsDir(): string {
-  return path.resolve(fileURLToPath(new URL("../../skills", import.meta.url)));
+export function resolveBundledSkillsDir(): string {
+  return POKECLAW_BUILTIN_SKILLS_DIR;
 }
 
 function resolveRepoSkillRoots(workdir?: string | null): AgentSkillRoot[] {
-  const repoRoot = findRepoRootFromGit(workdir);
-  if (repoRoot == null) {
+  const repoLocalSkillDirs = resolveRepoLocalSkillDirs(workdir);
+  if (repoLocalSkillDirs == null) {
     return [];
   }
 
   return [
     {
       source: "repo_agents",
-      rootDir: path.join(repoRoot, ".agents", "skills"),
+      rootDir: repoLocalSkillDirs.agentsSkillsDir,
     },
     {
       source: "repo_claude",
-      rootDir: path.join(repoRoot, ".claude", "skills"),
+      rootDir: repoLocalSkillDirs.claudeSkillsDir,
     },
   ];
-}
-
-function findRepoRootFromGit(workdir?: string | null): string | null {
-  const trimmedWorkdir = workdir?.trim();
-  if (!trimmedWorkdir) {
-    return null;
-  }
-
-  let currentDir = path.resolve(trimmedWorkdir);
-  for (let step = 0; step <= MAX_GIT_ROOT_PARENT_STEPS; step += 1) {
-    const gitMarker = path.join(currentDir, ".git");
-    if (isExistingDirectory(gitMarker) || isExistingFile(gitMarker)) {
-      return currentDir;
-    }
-
-    const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) {
-      break;
-    }
-    currentDir = parentDir;
-  }
-
-  return null;
 }
 
 function dedupeSkillRoots(roots: AgentSkillRoot[]): AgentSkillRoot[] {

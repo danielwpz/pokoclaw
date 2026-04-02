@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
@@ -17,6 +20,7 @@ import {
 
 describe("subagent orchestration", () => {
   let handle: TestDatabaseHandle | null = null;
+  const tempDirs: string[] = [];
 
   function createPrivateWorkspaceManager() {
     return {
@@ -26,6 +30,7 @@ describe("subagent orchestration", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
@@ -202,6 +207,14 @@ describe("subagent orchestration", () => {
         JSON.stringify({ kind: "db.read", database: "system" }),
         JSON.stringify({
           kind: "fs.read",
+          path: "/Users/daniel/Programs/ai/openclaw/pokeclaw/.agents/skills/**",
+        }),
+        JSON.stringify({
+          kind: "fs.read",
+          path: "/Users/daniel/Programs/ai/openclaw/pokeclaw/.claude/skills/**",
+        }),
+        JSON.stringify({
+          kind: "fs.read",
           path: "/Users/daniel/Programs/ai/openclaw/pokeclaw/**",
         }),
         JSON.stringify({
@@ -221,6 +234,67 @@ describe("subagent orchestration", () => {
       visibility: "hidden_system",
       createdAt: new Date("2026-03-26T00:06:00.000Z"),
     });
+  });
+
+  test("approving a nested-repo subagent grants repo-local skill directories for reading", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedMainAgentFixture();
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-subagent-repo-"));
+    tempDirs.push(repoRoot);
+    const nestedWorkdir = path.join(repoRoot, "packages", "web");
+    await mkdir(nestedWorkdir, { recursive: true });
+    await writeFile(path.join(repoRoot, ".git"), "gitdir: .git/worktrees/test\n", "utf8");
+
+    const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+    const provisioner = {
+      provisionSubagentSurface: vi.fn(async () => ({
+        status: "provisioned" as const,
+        externalChatId: "chat_sub_2",
+        shareLink: null,
+        conversationKind: "group" as const,
+        channelSurface: {
+          channelType: "lark",
+          channelInstallationId: "default",
+          surfaceKey: "chat:chat_sub_2",
+          surfaceObjectJson: JSON.stringify({ chat_id: "chat_sub_2" }),
+        },
+      })),
+    };
+    const manager = new SubagentManager({
+      storage: handle.storage.db,
+      ingress: { submitMessage },
+      privateWorkspace: createPrivateWorkspaceManager(),
+      provisioner,
+    });
+
+    const submitted = manager.submitCreateRequest({
+      sourceSessionId: "sess_main",
+      title: "Nested Repo Review",
+      description: "Inspect a nested repo workdir.",
+      initialTask: "Read the repo-local skills and continue.",
+      cwd: nestedWorkdir,
+      createdAt: new Date("2026-03-26T00:05:00.000Z"),
+    });
+
+    const created = await manager.approveCreateRequest({
+      requestId: submitted.request.id,
+      decidedAt: new Date("2026-03-26T00:06:00.000Z"),
+    });
+
+    const scopes = new PermissionGrantsRepo(handle.storage.db)
+      .listByOwner(created.agent.id)
+      .map((grant) => JSON.parse(grant.scopeJson))
+      .map((scope) => JSON.stringify(scope))
+      .sort();
+
+    expect(scopes).toEqual(
+      [
+        JSON.stringify({ kind: "fs.read", path: `${path.join(repoRoot, ".agents", "skills")}/**` }),
+        JSON.stringify({ kind: "fs.read", path: `${path.join(repoRoot, ".claude", "skills")}/**` }),
+        JSON.stringify({ kind: "fs.read", path: `${nestedWorkdir}/**` }),
+        JSON.stringify({ kind: "fs.write", path: `${nestedWorkdir}/**` }),
+      ].sort(),
+    );
   });
 
   test("denying a pending request marks it denied without provisioning", async () => {

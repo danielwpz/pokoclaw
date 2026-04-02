@@ -32,6 +32,7 @@ import { assertToolAllowedForSession } from "@/src/agent/session-policy.js";
 import {
   type AgentSkillsResolver,
   FilesystemAgentSkillsResolver,
+  filterReadableSkillCatalogSnapshot,
   filterSkillCatalogSnapshot,
 } from "@/src/agent/skills.js";
 import { buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
@@ -292,6 +293,7 @@ export class AgentLoop {
       context.session.ownerAgentId == null
         ? null
         : new AgentsRepo(this.deps.storage).getById(context.session.ownerAgentId);
+    const ownerAgentId = context.session.ownerAgentId;
     const promptRuntimeContext = resolveLocalCalendarContext();
     const resolvedSkillsSnapshot = this.skillsResolver.resolveForRun({
       workdir: ownerAgent?.workdir ?? null,
@@ -302,6 +304,17 @@ export class AgentLoop {
             allowedSources: ["builtin"],
           })
         : resolvedSkillsSnapshot;
+    const readableSkillsSnapshot =
+      ownerAgentId == null
+        ? skillsSnapshot
+        : filterReadableSkillCatalogSnapshot(skillsSnapshot, {
+            canReadPath: (absolutePath) =>
+              this.security.checkFilesystemAccess({
+                ownerAgentId,
+                kind: "fs.read",
+                targetPath: absolutePath,
+              }).result === "allow",
+          });
     const systemPrompt = buildAgentSystemPrompt({
       sessionPurpose: context.session.purpose,
       agentKind: ownerAgent?.kind ?? null,
@@ -314,7 +327,7 @@ export class AgentLoop {
         ownerAgent?.kind === "sub" && ownerAgent.id.length > 0
           ? buildSubagentWorkspaceDir(ownerAgent.id)
           : null,
-      skillsCatalog: skillsSnapshot.prompt,
+      skillsCatalog: readableSkillsSnapshot.prompt,
     });
     let messages = [...context.messages];
     const events: AgentRuntimeEvent[] = [];

@@ -15,6 +15,11 @@ import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import { buildSandboxConfigForAgent, executeSandboxedBash } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
+import {
+  POKECLAW_REPO_DIR,
+  POKECLAW_SKILLS_DIR,
+  POKECLAW_WORKSPACE_DIR,
+} from "@/src/shared/paths.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
 import {
   createTestDatabase,
@@ -102,7 +107,7 @@ describe("sandbox config compilation", () => {
     expect(config.filesystem.allowWrite).not.toContain(`${path.resolve(os.homedir())}/**`);
   });
 
-  test("builds subagent sandbox config with workspace-only read and write", async () => {
+  test("builds subagent sandbox config with workspace write plus trusted skill/source read paths", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
 
@@ -113,11 +118,11 @@ describe("sandbox config compilation", () => {
 
     expect(config.filesystem.readMode).toBe("allow_only");
     expect(config.filesystem.allowRead).toEqual([
-      `${path.resolve(path.join(os.homedir(), ".pokeclaw", "workspace"))}/**`,
+      `${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`,
+      `${path.resolve(POKECLAW_SKILLS_DIR)}/**`,
+      `${path.resolve(POKECLAW_REPO_DIR)}/**`,
     ]);
-    expect(config.filesystem.allowWrite).toEqual([
-      `${path.resolve(path.join(os.homedir(), ".pokeclaw", "workspace"))}/**`,
-    ]);
+    expect(config.filesystem.allowWrite).toEqual([`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`]);
   });
 
   test("compiles network hard-deny hosts into deny_only sandbox mode", async () => {

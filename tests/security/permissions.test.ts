@@ -16,7 +16,11 @@ import {
   buildSystemPolicy,
   DEFAULT_SYSTEM_POLICY,
 } from "@/src/security/policy.js";
-import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import {
+  POKECLAW_REPO_DIR,
+  POKECLAW_SKILLS_DIR,
+  POKECLAW_WORKSPACE_DIR,
+} from "@/src/shared/paths.js";
 
 let tempDir: string;
 
@@ -52,10 +56,12 @@ describe("effective permissions", () => {
 
     expect(permissions.fs.read.mode).toBe("allow_only");
     expect(permissions.fs.read.allow).toContain(`${path.resolve(os.homedir())}/**`);
+    expect(permissions.fs.read.allow).toContain(`${path.resolve(POKECLAW_SKILLS_DIR)}/**`);
+    expect(permissions.fs.read.allow).toContain(`${path.resolve(POKECLAW_REPO_DIR)}/**`);
     expect(permissions.fs.write.allow).toContain(`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`);
   });
 
-  test("subagent baseline only grants workspace read and write", () => {
+  test("subagent baseline grants workspace, global skills, and pokeclaw repo read by default", () => {
     const permissions = buildEffectivePermissions(
       [],
       buildSystemPolicy(),
@@ -63,7 +69,11 @@ describe("effective permissions", () => {
     );
 
     expect(permissions.fs.read.mode).toBe("allow_only");
-    expect(permissions.fs.read.allow).toEqual([`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`]);
+    expect(permissions.fs.read.allow).toEqual([
+      `${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`,
+      `${path.resolve(POKECLAW_SKILLS_DIR)}/**`,
+      `${path.resolve(POKECLAW_REPO_DIR)}/**`,
+    ]);
     expect(permissions.fs.write.allow).toEqual([`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`]);
   });
 
@@ -129,7 +139,7 @@ describe("filesystem permission checks", () => {
     });
   });
 
-  test("subagent requires approval to read outside workspace by default", () => {
+  test("subagent still requires approval to read unrelated paths outside the default allowlist", () => {
     const permissions = buildEffectivePermissions(
       [],
       buildSystemPolicy(),

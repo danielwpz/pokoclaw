@@ -11,7 +11,11 @@ import { buildSkillsCatalogPrompt } from "@/src/agent/skills.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
-import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import {
+  POKECLAW_REPO_DIR,
+  POKECLAW_SKILLS_DIR,
+  POKECLAW_WORKSPACE_DIR,
+} from "@/src/shared/paths.js";
 import { resolveLocalCalendarContext } from "@/src/shared/time.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
@@ -379,18 +383,21 @@ describe("agent loop", () => {
       skillsResolver: {
         resolveForRun() {
           skillResolverCalls += 1;
+          const entries = [
+            {
+              name: "repo-review",
+              description: "Review the current repository.",
+              skillKey: "builtin:repo-review/SKILL.md",
+              source: "builtin" as const,
+              rootDir: `${POKECLAW_REPO_DIR}/skills`,
+              skillDir: `${POKECLAW_REPO_DIR}/skills/repo-review`,
+              skillFilePath: `${POKECLAW_REPO_DIR}/skills/repo-review/SKILL.md`,
+            },
+          ];
           return {
-            entries: [],
+            entries,
             warnings: [],
-            prompt: [
-              "<available_skills>",
-              "  <skill>",
-              "    <name>repo-review</name>",
-              "    <description>Review the current repository.</description>",
-              "    <location>/tmp/repo-review/SKILL.md</location>",
-              "  </skill>",
-              "</available_skills>",
-            ].join("\n"),
+            prompt: buildSkillsCatalogPrompt(entries),
           };
         },
       },
@@ -806,9 +813,9 @@ describe("agent loop", () => {
               description: "Review permission requests safely.",
               skillKey: "builtin:approval-review/SKILL.md",
               source: "builtin" as const,
-              rootDir: "/app/skills",
-              skillDir: "/app/skills/approval-review",
-              skillFilePath: "/app/skills/approval-review/SKILL.md",
+              rootDir: `${POKECLAW_REPO_DIR}/skills`,
+              skillDir: `${POKECLAW_REPO_DIR}/skills/approval-review`,
+              skillFilePath: `${POKECLAW_REPO_DIR}/skills/approval-review/SKILL.md`,
             },
           ];
 
@@ -838,6 +845,101 @@ describe("agent loop", () => {
     expect(seenSystemPrompts).toHaveLength(1);
     expect(seenSystemPrompts[0]).toContain("## Skills");
     expect(seenSystemPrompts[0]).toContain("<name>approval-review</name>");
+    expect(seenSystemPrompts[0]).not.toContain("<name>repo-review</name>");
+  });
+
+  test("filters non-readable skills out of the injected catalog for subagent sessions", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    handle.storage.sqlite.exec(`
+      UPDATE agents
+      SET workdir = '/tmp/external-repo/packages/web'
+      WHERE id = 'agent_1';
+    `);
+    sessionsRepo.create({
+      id: "sess_subagent",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_subagent",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"which skills do I have?"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const seenSystemPrompts: string[] = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      skillsResolver: {
+        resolveForRun() {
+          const entries = [
+            {
+              name: "global-review",
+              description: "Global skill.",
+              skillKey: "global:global-review/SKILL.md",
+              source: "global" as const,
+              rootDir: POKECLAW_SKILLS_DIR,
+              skillDir: `${POKECLAW_SKILLS_DIR}/global-review`,
+              skillFilePath: `${POKECLAW_SKILLS_DIR}/global-review/SKILL.md`,
+            },
+            {
+              name: "repo-review",
+              description: "Repo-local skill.",
+              skillKey: "repo_claude:repo-review/SKILL.md",
+              source: "repo_claude" as const,
+              rootDir: "/tmp/external-repo/.claude/skills",
+              skillDir: "/tmp/external-repo/.claude/skills/repo-review",
+              skillFilePath: "/tmp/external-repo/.claude/skills/repo-review/SKILL.md",
+            },
+            {
+              name: "system-observe",
+              description: "Builtin skill.",
+              skillKey: "builtin:system-observe/SKILL.md",
+              source: "builtin" as const,
+              rootDir: `${POKECLAW_REPO_DIR}/skills`,
+              skillDir: `${POKECLAW_REPO_DIR}/skills/system-observe`,
+              skillFilePath: `${POKECLAW_REPO_DIR}/skills/system-observe/SKILL.md`,
+            },
+          ];
+
+          return {
+            entries,
+            warnings: [],
+            prompt: buildSkillsCatalogPrompt(entries),
+          };
+        },
+      },
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: {
+        async runTurn(input) {
+          seenSystemPrompts.push(input.systemPrompt ?? "");
+          return makeAssistantResult({
+            content: [{ type: "text", text: "done" }],
+          });
+        },
+      },
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_subagent", scenario: "chat" });
+
+    expect(seenSystemPrompts).toHaveLength(1);
+    expect(seenSystemPrompts[0]).toContain("<name>global-review</name>");
+    expect(seenSystemPrompts[0]).toContain("<name>system-observe</name>");
     expect(seenSystemPrompts[0]).not.toContain("<name>repo-review</name>");
   });
 

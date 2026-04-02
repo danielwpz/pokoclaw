@@ -2,7 +2,12 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AppConfig } from "@/src/config/schema.js";
-import { POKECLAW_SYSTEM_DIR, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import {
+  POKECLAW_REPO_DIR,
+  POKECLAW_SKILLS_DIR,
+  POKECLAW_SYSTEM_DIR,
+  POKECLAW_WORKSPACE_DIR,
+} from "@/src/shared/paths.js";
 
 export interface FilesystemPermissionPolicy {
   hardDeny: string[];
@@ -113,7 +118,12 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
         role,
         fs: {
           readMode: "allow_only",
-          readAllow: [subtree(HOME_DIR), subtree(POKECLAW_WORKSPACE_DIR)],
+          readAllow: [
+            subtree(HOME_DIR),
+            subtree(POKECLAW_WORKSPACE_DIR),
+            subtree(POKECLAW_SKILLS_DIR),
+            subtree(POKECLAW_REPO_DIR),
+          ],
           writeAllow: [subtree(POKECLAW_WORKSPACE_DIR)],
         },
       };
@@ -123,7 +133,11 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
         role,
         fs: {
           readMode: "allow_only",
-          readAllow: [subtree(POKECLAW_WORKSPACE_DIR)],
+          readAllow: [
+            subtree(POKECLAW_WORKSPACE_DIR),
+            subtree(POKECLAW_SKILLS_DIR),
+            subtree(POKECLAW_REPO_DIR),
+          ],
           writeAllow: [subtree(POKECLAW_WORKSPACE_DIR)],
         },
       };
