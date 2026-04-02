@@ -319,8 +319,8 @@ describe("real llm loop integration", () => {
 
     expect(normalizedAssistantText).toContain("build");
     expect(normalizedAssistantText).toContain("lint");
-    expect(normalizedAssistantText).toMatch(/one line|single line|一行/);
-    expect(normalizedAssistantText).toMatch(/multi-line|多行/);
+    expect(normalizedAssistantText).toMatch(/one line|single line/);
+    expect(normalizedAssistantText).toMatch(/multi-line/);
     expect(storedMessages.at(-1)?.stopReason).toBe("stop");
   }, 45_000);
 });

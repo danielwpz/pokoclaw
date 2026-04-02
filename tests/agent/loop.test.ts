@@ -247,7 +247,7 @@ describe("agent loop", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      payloadJson: '{"content":"提醒我今天下午三点开会"}',
+      payloadJson: '{"content":"Remind me about my 3 PM meeting this afternoon."}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
