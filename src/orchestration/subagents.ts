@@ -17,6 +17,7 @@ import {
   POKECLAW_SYSTEM_DIR,
   POKECLAW_WORKSPACE_DIR,
 } from "@/src/shared/paths.js";
+import { resolveRepoLocalSkillDirs } from "@/src/shared/repo-skill-roots.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
@@ -617,7 +618,18 @@ function buildInitialSubagentScopes(input: {
   workdir: string;
   initialExtraScopes: PermissionScope[];
 }): PermissionScope[] {
-  const scopes: PermissionScope[] = [];
+  const repoLocalSkillDirs = resolveRepoLocalSkillDirs(input.workdir);
+  const repoLocalSkillScopes =
+    repoLocalSkillDirs == null
+      ? []
+      : [repoLocalSkillDirs.agentsSkillsDir, repoLocalSkillDirs.claudeSkillsDir].map(
+          (rootDir) =>
+            ({
+              kind: "fs.read" as const,
+              path: toSubtreePath(rootDir),
+            }) satisfies PermissionScope,
+        );
+  const scopes: PermissionScope[] = [...repoLocalSkillScopes];
 
   if (!isPathWithinOrEqual(input.workdir, POKECLAW_WORKSPACE_DIR)) {
     scopes.push(
