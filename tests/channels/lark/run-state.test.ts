@@ -537,7 +537,7 @@ describe("lark run state", () => {
     }
   });
 
-  test("collapses a finalized tool sequence only when it has more than two tools", () => {
+  test("shows only the latest tool outside the folded history while a long tool sequence is still active", () => {
     let state = reduceLarkRunState(
       null,
       makeEnvelope({
@@ -591,36 +591,6 @@ describe("lark run state", () => {
         );
       }
     }
-    state = reduceLarkRunState(
-      state,
-      makeEnvelope({
-        type: "assistant_message_started",
-        eventId: "evt_7",
-        createdAt: "2026-03-28T00:00:06.000Z",
-        sessionId: "sess_1",
-        conversationId: "conv_1",
-        branchId: "branch_1",
-        runId: "run_1",
-        turn: 2,
-        messageId: "msg_2",
-      }),
-    );
-    state = reduceLarkRunState(
-      state,
-      makeEnvelope({
-        type: "assistant_message_delta",
-        eventId: "evt_7b",
-        createdAt: "2026-03-28T00:00:06.500Z",
-        sessionId: "sess_1",
-        conversationId: "conv_1",
-        branchId: "branch_1",
-        runId: "run_1",
-        turn: 2,
-        messageId: "msg_2",
-        delta: "done",
-        accumulatedText: "done",
-      }),
-    );
 
     const card = renderLarkRunCard(state);
     const elements = ((card.body as { elements: unknown[] }).elements ?? []) as Array<
@@ -630,9 +600,184 @@ describe("lark run state", () => {
       elements.some(
         (element) =>
           element.tag === "collapsible_panel" &&
-          JSON.stringify(element.header).includes("个工具调用"),
+          JSON.stringify(element.header).includes("2个工具调用") &&
+          JSON.stringify(element.header).includes("已结束"),
       ),
     ).toBe(true);
+    expect(
+      elements.some(
+        (element) =>
+          element.tag === "collapsible_panel" &&
+          element.expanded === true &&
+          JSON.stringify(element.header).includes("tool_3"),
+      ),
+    ).toBe(false);
+    expect(
+      elements.some(
+        (element) =>
+          element.tag === "collapsible_panel" &&
+          element.expanded === false &&
+          JSON.stringify(element.header).includes("read_file"),
+      ),
+    ).toBe(true);
+  });
+
+  test("collapses the full tool sequence after a later assistant reply finalizes it", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_live_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_live_1",
+        toolName: "grep",
+        args: { query: "auth" },
+      }),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "tool_call_completed",
+        eventId: "evt_live_1_done",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_live_1",
+        toolName: "grep",
+        messageId: "tool_live_msg_1",
+        result: { ok: true },
+      } as never),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_live_2",
+        createdAt: "2026-03-28T00:00:01.500Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_live_2",
+        toolName: "read",
+        args: { path: "file_1" },
+      }),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "tool_call_completed",
+        eventId: "evt_live_2_done",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_live_2",
+        toolName: "read",
+        messageId: "tool_live_msg_2",
+        result: { ok: true },
+      } as never),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_live_3",
+        createdAt: "2026-03-28T00:00:02.500Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_live_3",
+        toolName: "bash",
+        args: { command: "pwd" },
+      }),
+    );
+
+    const card = renderLarkRunCard(state);
+    let elements = ((card.body as { elements: unknown[] }).elements ?? []) as Array<
+      Record<string, unknown>
+    >;
+
+    expect(
+      elements.some(
+        (element) =>
+          element.tag === "collapsible_panel" &&
+          JSON.stringify(element.header).includes("2个工具调用") &&
+          JSON.stringify(element.header).includes("已结束"),
+      ),
+    ).toBe(true);
+    expect(
+      elements.some(
+        (element) =>
+          element.tag === "collapsible_panel" &&
+          element.expanded === false &&
+          JSON.stringify(element.header).includes("**bash**"),
+      ),
+    ).toBe(true);
+
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_live_final_1",
+        createdAt: "2026-03-28T00:00:03.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_live_final_1",
+      }),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_live_final_2",
+        createdAt: "2026-03-28T00:00:03.100Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_live_final_1",
+        delta: "done",
+        accumulatedText: "done",
+      }),
+    );
+
+    const finalizedCard = renderLarkRunCard(state);
+    elements = ((finalizedCard.body as { elements: unknown[] }).elements ?? []) as Array<
+      Record<string, unknown>
+    >;
+    expect(
+      elements.some(
+        (element) =>
+          element.tag === "collapsible_panel" &&
+          JSON.stringify(element.header).includes("3个工具调用"),
+      ),
+    ).toBe(true);
+    expect(
+      elements.some(
+        (element) =>
+          element.tag === "collapsible_panel" &&
+          element.expanded === true &&
+          JSON.stringify(element.header).includes("**bash**"),
+      ),
+    ).toBe(false);
   });
 
   test("appends completed reasoning into the shared top reasoning area", () => {
@@ -1258,6 +1403,38 @@ describe("lark run state", () => {
     expect(JSON.stringify(toolPanel)).toContain("**Command**");
     expect(JSON.stringify(toolPanel)).toContain("**Stdout**");
     expect(JSON.stringify(toolPanel)).not.toContain('"content": [');
+  });
+
+  test("normalizes multiline bash command summaries into one line in the title", () => {
+    const state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_bash_multi_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_bash_multi_1",
+        toolName: "bash",
+        args: {
+          command: "echo first line\n  && echo second line",
+          cwd: ".",
+          timeoutMs: 10000,
+        },
+      }),
+    );
+
+    const card = renderLarkRunCard(state);
+    const elements = ((card.body as { elements: unknown[] }).elements ?? []) as Array<
+      Record<string, unknown>
+    >;
+    const toolPanel = elements.find((element) => element.tag === "collapsible_panel");
+    const header = JSON.stringify(toolPanel?.header ?? {});
+    expect(header).toContain("echo first line && echo second line");
+    expect(header).not.toContain("echo first line\\n");
   });
 
   test("renders terminal failure details even when no transcript blocks exist", () => {

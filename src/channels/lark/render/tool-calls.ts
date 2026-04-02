@@ -7,33 +7,55 @@ export function renderToolSequenceBlock(
     return [];
   }
 
-  if (!block.finalized || block.tools.length <= 2) {
+  if (block.tools.length <= 2) {
     return block.tools.map((tool) => renderToolDetail(tool));
   }
 
+  if (block.finalized) {
+    return [renderCollapsedToolHistoryPanel(block.tools)];
+  }
+
+  const latestTool = block.tools.at(-1);
+  if (latestTool == null) {
+    return [];
+  }
+
   return [
-    {
-      tag: "collapsible_panel",
-      expanded: false,
-      header: {
-        title: {
-          tag: "markdown",
-          content: `☕ **${block.tools.length}个工具调用**`,
-        },
-        vertical_align: "center",
-        icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
-        icon_position: "follow_text",
-        icon_expanded_angle: -180,
-      },
-      border: { color: "blue", corner_radius: "5px" },
-      vertical_spacing: "8px",
-      padding: "8px 8px 8px 8px",
-      elements: block.tools.map((tool) => renderToolDetail(tool)),
-    },
+    renderCollapsedToolHistoryPanel(block.tools.slice(0, -1), "（已结束）"),
+    renderToolDetail(latestTool),
   ];
 }
 
-function renderToolDetail(tool: LarkToolSequenceTool): Record<string, unknown> {
+function renderCollapsedToolHistoryPanel(
+  tools: LarkToolSequenceTool[],
+  suffix = "",
+): Record<string, unknown> {
+  return {
+    tag: "collapsible_panel",
+    expanded: false,
+    header: {
+      title: {
+        tag: "markdown",
+        content: `☕ **${tools.length}个工具调用**${suffix}`,
+      },
+      vertical_align: "center",
+      icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
+      icon_position: "follow_text",
+      icon_expanded_angle: -180,
+    },
+    border: { color: "blue", corner_radius: "5px" },
+    vertical_spacing: "8px",
+    padding: "8px 8px 8px 8px",
+    elements: tools.map((tool) => renderToolDetail(tool)),
+  };
+}
+
+function renderToolDetail(
+  tool: LarkToolSequenceTool,
+  options: {
+    expanded?: boolean;
+  } = {},
+): Record<string, unknown> {
   const icon = tool.status === "completed" ? "✅" : tool.status === "failed" ? "❌" : "⏳";
   const summary = summarizeToolHeader(tool);
   const label = summarizeToolLabel(tool);
@@ -41,7 +63,7 @@ function renderToolDetail(tool: LarkToolSequenceTool): Record<string, unknown> {
 
   return {
     tag: "collapsible_panel",
-    expanded: tool.status === "running",
+    expanded: options.expanded ?? false,
     header: {
       title: {
         tag: "markdown",
@@ -92,6 +114,7 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
 
   const command = firstString(args?.command, details?.command) ?? "";
   const cwd = firstString(args?.cwd, details?.cwd);
+  const timeoutSec = firstNumber(args?.timeoutSec);
   const timeoutMs = firstNumber(args?.timeoutMs, details?.timeoutMs);
   const exitCode = firstNumber(details?.exitCode);
   const signal = firstString(details?.signal);
@@ -102,7 +125,9 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
   if (cwd != null) {
     content += `\n\n**Cwd**\n\`${cwd}\``;
   }
-  if (timeoutMs != null) {
+  if (timeoutSec != null) {
+    content += `\n\n**Timeout**\n\`${timeoutSec}s\``;
+  } else if (timeoutMs != null) {
     content += `\n\n**Timeout**\n\`${timeoutMs}ms\``;
   }
 
@@ -273,7 +298,7 @@ function summarizePermissionReview(args: Record<string, unknown> | null): string
 
 function summarizeBash(args: Record<string, unknown> | null): string {
   const command = readString(args?.command);
-  return command == null ? "" : truncateText(command, 80);
+  return command == null ? "" : truncateText(normalizeSingleLine(command), 80);
 }
 
 function summarizePath(args: Record<string, unknown> | null): string {
@@ -335,6 +360,13 @@ function summarizeParts(...parts: Array<string | null | undefined>): string {
     return "";
   }
   return truncateText(normalized.join(" · "), 80);
+}
+
+function normalizeSingleLine(text: string): string {
+  return text
+    .replace(/\s*\r?\n\s*/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 function prettyPrint(value: unknown): string {

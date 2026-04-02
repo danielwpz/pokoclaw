@@ -22,6 +22,7 @@ export interface ToolResult<TDetails = unknown> {
 export interface ToolExecutionContext {
   sessionId: string;
   conversationId: string;
+  sessionPurpose?: string;
   ownerAgentId?: string | null;
   agentKind?: string | null;
   cwd?: string;
@@ -81,6 +82,7 @@ export interface ToolDefinition<TArgs = unknown, TDetails = unknown> {
   name: string;
   description: string;
   inputSchema?: TSchema;
+  getInvocationTimeoutMs?(context: ToolExecutionContext, args: TArgs): number;
   execute(
     context: ToolExecutionContext,
     args: TArgs,
@@ -108,6 +110,7 @@ export function defineTool<TInputSchema extends TSchema, TDetails = unknown>(inp
   name: string;
   description: string;
   inputSchema: TInputSchema;
+  getInvocationTimeoutMs?: (context: ToolExecutionContext, args: Static<TInputSchema>) => number;
   execute: (
     context: ToolExecutionContext,
     args: Static<TInputSchema>,

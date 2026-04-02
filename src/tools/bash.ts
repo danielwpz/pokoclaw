@@ -11,8 +11,9 @@ import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/core/err
 import { defineTool, type ToolExecutionContext, textToolResult } from "@/src/tools/core/types.js";
 import { renderBashResultBlock } from "@/src/tools/helpers/permission-block.js";
 
-const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_TIMEOUT_SEC = 10;
+const MAX_TIMEOUT_SEC = 10 * 60;
+const MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC = 60;
 const MAX_OUTPUT_CHARS = 128_000;
 
 export const BASH_TOOL_SCHEMA = Type.Object(
@@ -26,12 +27,12 @@ export const BASH_TOOL_SCHEMA = Type.Object(
         description: "Working directory for the command. Defaults to the session workspace.",
       }),
     ),
-    timeoutMs: Type.Optional(
+    timeoutSec: Type.Optional(
       Type.Integer({
         minimum: 1,
-        maximum: MAX_TIMEOUT_MS,
-        default: DEFAULT_TIMEOUT_MS,
-        description: `Command timeout in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS}.`,
+        maximum: MAX_TIMEOUT_SEC,
+        default: DEFAULT_TIMEOUT_SEC,
+        description: `Command timeout in seconds. Defaults to ${DEFAULT_TIMEOUT_SEC}. Maximum is ${MAX_TIMEOUT_SEC}.`,
       }),
     ),
     sandboxMode: Type.Optional(
@@ -77,8 +78,9 @@ export function createBashTool() {
   return defineTool({
     name: "bash",
     description:
-      "Run a shell command. By default it runs in the sandbox and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. If sandboxed execution is blocked but the command is genuinely necessary, rerun bash with sandboxMode=full_access and a short justification. Optional prefix enables a reusable long-lived approval, but only for a single simple command shape.",
+      "Run a shell command. By default it runs in the sandbox and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. The default timeout is 10 seconds. You may override it with timeoutSec, but main chat agents cannot request more than 60 seconds; use a subagent for longer work. If sandboxed execution is blocked but the command is genuinely necessary, rerun bash with sandboxMode=full_access and a short justification. Optional prefix enables a reusable long-lived approval, but only for a single simple command shape.",
     inputSchema: BASH_TOOL_SCHEMA,
+    getInvocationTimeoutMs: getBashInvocationTimeoutMs,
     async execute(context, args) {
       const backgroundReason = detectUnsupportedBackgroundSyntax(args.command);
       if (backgroundReason != null) {
@@ -91,7 +93,8 @@ export function createBashTool() {
         );
       }
 
-      const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      assertBashTimeoutAllowed(context, args);
+      const timeoutMs = getBashInvocationTimeoutMs(context, args);
       const sandboxMode = args.sandboxMode ?? "sandboxed";
       if (sandboxMode !== "full_access" && (args.justification != null || args.prefix != null)) {
         throw toolRecoverableError(
@@ -134,6 +137,26 @@ export function createBashTool() {
       });
     },
   });
+}
+
+function getBashInvocationTimeoutMs(_context: ToolExecutionContext, args: BashToolArgs): number {
+  return (args.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
+}
+
+function assertBashTimeoutAllowed(context: ToolExecutionContext, args: BashToolArgs): void {
+  const timeoutSec = args.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
+  if (context.agentKind === "main" && context.sessionPurpose === "chat") {
+    if (timeoutSec > MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC) {
+      throw toolRecoverableError(
+        `Main-agent bash commands cannot request more than ${MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC} seconds. Use a subagent for longer-running work.`,
+        {
+          code: "bash_timeout_exceeds_main_agent_limit",
+          requestedTimeoutSec: timeoutSec,
+          maxTimeoutSec: MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC,
+        },
+      );
+    }
+  }
 }
 
 async function executeBashWithFullAccessIfAllowed(input: {

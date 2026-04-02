@@ -232,6 +232,7 @@ export class AgentLoop {
   private createToolExecutionContext(input: {
     sessionId: string;
     conversationId: string;
+    sessionPurpose?: string;
     ownerAgentId?: string | null;
     agentKind?: string | null;
     cwd?: string;
@@ -247,6 +248,7 @@ export class AgentLoop {
     return {
       sessionId: input.sessionId,
       conversationId: input.conversationId,
+      ...(input.sessionPurpose === undefined ? {} : { sessionPurpose: input.sessionPurpose }),
       cwd: input.cwd ?? POKECLAW_WORKSPACE_DIR,
       securityConfig: this.deps.securityConfig,
       storage: this.deps.storage,
@@ -1092,6 +1094,7 @@ export class AgentLoop {
           this.createToolExecutionContext({
             sessionId: input.input.sessionId,
             conversationId: input.context.session.conversationId,
+            sessionPurpose: input.context.session.purpose,
             ownerAgentId: input.context.session.ownerAgentId,
             agentKind: input.ownerAgent?.kind ?? null,
             signal: input.signal,
