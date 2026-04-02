@@ -166,6 +166,46 @@ describe("bash tool", () => {
     ]);
   });
 
+  test("passes timeoutSec through as timeoutMs to sandbox execution", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeSandboxedBashMock.mockResolvedValue({
+      command: "pwd",
+      cwd: "/tmp/work",
+      timeoutMs: 45_000,
+      stdout: "/tmp/work\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        agentKind: "sub",
+        sessionPurpose: "chat",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "pwd",
+        timeoutSec: 45,
+      },
+    );
+
+    expect(executeSandboxedBashMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "pwd",
+        timeoutMs: 45_000,
+      }),
+    );
+  });
+
   test("passes through permission-blocked failures from the sandbox adapter", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
@@ -249,6 +289,43 @@ describe("bash tool", () => {
         code: "bash_full_access_requires_justification",
       },
     } satisfies Partial<ToolFailure>);
+  });
+
+  test("rejects bash timeouts over 60 seconds for main chat agents", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          agentKind: "main",
+          sessionPurpose: "chat",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command: "sleep 65",
+          timeoutSec: 65,
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_timeout_exceeds_main_agent_limit",
+        requestedTimeoutSec: 65,
+        maxTimeoutSec: 60,
+      },
+    } satisfies Partial<ToolFailure>);
+
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
   });
 
   test("rejects full-access-only arguments in sandboxed mode", async () => {

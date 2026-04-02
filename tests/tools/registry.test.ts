@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { Type } from "@sinclair/typebox";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
@@ -259,5 +260,48 @@ describe("tool registry", () => {
     expect(output).toContain("[tools] tool execution waiting for approval");
     expect(output).toContain("toolCallId='tool_approval'");
     expect(output).not.toContain("success=false");
+  });
+
+  test("enforces the default 10s timeout for tools at the registry layer", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    vi.useFakeTimers();
+    const registry = new ToolRegistry();
+    registry.register(
+      defineTool({
+        name: "slow_tool",
+        description: "Sleeps for too long",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        async execute(context) {
+          await delay(60_000, undefined, { signal: context.abortSignal });
+          return textToolResult("done");
+        },
+      }),
+    );
+
+    const execution = expect(
+      registry.execute(
+        "slow_tool",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {},
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      message: "The slow_tool tool timed out after 10000ms.",
+      details: {
+        code: "tool_timeout",
+        toolName: "slow_tool",
+        timeoutMs: 10_000,
+      },
+    } satisfies Partial<ToolFailure>);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await execution;
   });
 });

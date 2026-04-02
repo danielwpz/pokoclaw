@@ -1,5 +1,9 @@
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { isToolApprovalRequired, normalizeToolFailure } from "@/src/tools/core/errors.js";
+import {
+  isToolApprovalRequired,
+  normalizeToolFailure,
+  toolRecoverableError,
+} from "@/src/tools/core/errors.js";
 import {
   parseToolArgs,
   ToolArgumentValidationError,
@@ -10,6 +14,7 @@ import {
 } from "@/src/tools/core/types.js";
 
 const logger = createSubsystemLogger("tools");
+const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition<unknown, unknown>>();
@@ -59,6 +64,8 @@ export class ToolRegistry {
     rawArgs: unknown,
   ): Promise<ToolResult> {
     const startedAt = Date.now();
+    let timedOut = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     logger.info("tool execution started", {
       toolName: name,
       toolCallId: context.toolCallId,
@@ -72,8 +79,37 @@ export class ToolRegistry {
       const tool = this.getRequired(name);
       const args =
         tool.inputSchema == null ? rawArgs : parseToolArgs(tool.name, tool.inputSchema, rawArgs);
-
-      const result = await tool.execute(context, args);
+      const timeoutMs = Math.max(
+        1,
+        Math.floor(tool.getInvocationTimeoutMs?.(context, args) ?? DEFAULT_TOOL_TIMEOUT_MS),
+      );
+      const timeoutController = new AbortController();
+      const combinedAbortSignal =
+        context.abortSignal == null
+          ? timeoutController.signal
+          : AbortSignal.any([context.abortSignal, timeoutController.signal]);
+      const executionContext: ToolExecutionContext = {
+        ...context,
+        abortSignal: combinedAbortSignal,
+      };
+      const executionPromise = Promise.resolve(tool.execute(executionContext, args));
+      executionPromise.catch(() => {});
+      const result = await Promise.race([
+        executionPromise,
+        new Promise<ToolResult>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            timedOut = true;
+            timeoutController.abort();
+            reject(
+              toolRecoverableError(`The ${name} tool timed out after ${timeoutMs}ms.`, {
+                code: "tool_timeout",
+                toolName: name,
+                timeoutMs,
+              }),
+            );
+          }, timeoutMs);
+        }),
+      ]);
       logger.info("tool execution finished", {
         toolName: name,
         toolCallId: context.toolCallId,
@@ -116,9 +152,14 @@ export class ToolRegistry {
         sessionId: context.sessionId,
         success: false,
         durationMs: Date.now() - startedAt,
+        ...(timedOut ? { timedOut: true } : {}),
         errorMessage: truncateText(error instanceof Error ? error.message : String(error), 160),
       });
       throw error;
+    } finally {
+      if (timeoutHandle != null) {
+        clearTimeout(timeoutHandle);
+      }
     }
   }
 }
