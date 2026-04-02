@@ -7,7 +7,11 @@
  */
 import { loadConfig } from "@/src/config/load.js";
 import { createRuntimeBootstrap } from "@/src/runtime/bootstrap.js";
-import { createBootstrapLogger, createSubsystemLogger } from "@/src/shared/logger.js";
+import {
+  configureRuntimeLogging,
+  createBootstrapLogger,
+  createSubsystemLogger,
+} from "@/src/shared/logger.js";
 import type { StorageDatabase } from "@/src/storage/index.js";
 import { initializeStorageOnStartup } from "@/src/storage/index.js";
 
@@ -22,6 +26,7 @@ export async function main(): Promise<void> {
 
   try {
     const config = await loadConfig();
+    configureRuntimeLogging(config.logging);
     logger.info("application config loaded", {
       providers: Object.keys(config.providers).length,
       models: config.models.catalog.length,

@@ -136,8 +136,8 @@ export function buildEffectivePermissions(
       },
     },
     db: {
-      read: systemPolicy.db.read && hasDbGrant(scopes, "db.read"),
-      write: systemPolicy.db.write && hasDbGrant(scopes, "db.write"),
+      read: systemPolicy.db.read && (baseline.db.read || hasDbGrant(scopes, "db.read")),
+      write: systemPolicy.db.write && (baseline.db.write || hasDbGrant(scopes, "db.write")),
     },
     bash: {
       fullAccessPrefixes: getBashFullAccessPrefixes(scopes),

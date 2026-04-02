@@ -27,6 +27,7 @@ export interface ToolExecutionContext {
   cwd?: string;
   securityConfig: SecurityConfig;
   storage: StorageDb;
+  systemDatabasePath?: string;
   abortSignal?: AbortSignal;
   toolCallId?: string;
   approvalState?: ToolExecutionApprovalState;

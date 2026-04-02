@@ -180,6 +180,27 @@ describe("agent skills catalog", () => {
     expect(roots.map((root) => root.source)).toEqual(["global", "workspace", "builtin"]);
   });
 
+  test("loads the real builtin system-observe skill from the repository skills directory", () => {
+    const builtinRoot = resolveDefaultSkillRoots(process.cwd()).find(
+      (root) => root.source === "builtin",
+    );
+    expect(builtinRoot).not.toBeUndefined();
+    if (builtinRoot == null) {
+      throw new Error("Expected builtin skills root to exist");
+    }
+
+    const snapshot = loadSkillCatalog({
+      roots: [
+        {
+          source: "builtin",
+          rootDir: builtinRoot.rootDir,
+        },
+      ],
+    });
+
+    expect(snapshot.entries.some((entry) => entry.name === "system-observe")).toBe(true);
+  });
+
   async function createTempDir(): Promise<string> {
     const dir = await mkdtemp(path.join(tmpdir(), "pokeclaw-skills-"));
     tempDirs.push(dir);
