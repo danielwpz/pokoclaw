@@ -13,6 +13,7 @@ describe("builtin tools", () => {
     expect(registry.has("ls")).toBe(true);
     expect(registry.has("find")).toBe(true);
     expect(registry.has("grep")).toBe(true);
+    expect(registry.has("query_system_db")).toBe(true);
     expect(registry.has("finish_task")).toBe(true);
     expect(registry.has("request_permissions")).toBe(true);
     expect(registry.has("review_permission_request")).toBe(true);
@@ -26,6 +27,7 @@ describe("builtin tools", () => {
       "ls",
       "find",
       "grep",
+      "query_system_db",
       "finish_task",
       "request_permissions",
       "review_permission_request",

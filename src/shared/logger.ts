@@ -1,8 +1,11 @@
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
+import path from "node:path";
 import util from "node:util";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { loadConfig } from "@/src/config/load.js";
 import type { LoggingConfig, LogLevel } from "@/src/config/schema.js";
+import { POKECLAW_RUNTIME_LOG_PATH } from "@/src/shared/paths.js";
 
 export interface LoggerContext {
   [key: string]: unknown;
@@ -20,6 +23,10 @@ export interface LoggerOptions {
   subsystem: string;
 }
 
+export interface ConfigureRuntimeLoggingOptions {
+  runtimeLogPath?: string;
+}
+
 const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
   debug: 10,
   info: 20,
@@ -34,6 +41,15 @@ const LEVEL_COLORS: Record<LogLevel, string> = {
   warn: "\u001B[33m",
   error: "\u001B[31m",
 };
+
+let loggingConfigPromise: Promise<LoggingConfig> | null = null;
+let resolvedLoggingConfig: LoggingConfig | null = null;
+let runtimeLogPath = POKECLAW_RUNTIME_LOG_PATH;
+let runtimeFileSinkEnabled = false;
+let runtimeLogStream: WriteStream | null = null;
+let runtimeLogStreamPath: string | null = null;
+let runtimeLogSinkErrorPrinted = false;
+
 function shouldLog(currentLevel: LogLevel, targetLevel: LogLevel): boolean {
   return LOG_LEVEL_ORDER[targetLevel] >= LOG_LEVEL_ORDER[currentLevel];
 }
@@ -101,7 +117,9 @@ function createLoggerWithLevel(
       return;
     }
 
-    write(formatLine(targetLevel, message, context, new Date(), options.subsystem, useColors));
+    const now = new Date();
+    write(formatLine(targetLevel, message, context, now, options.subsystem, useColors));
+    writeRuntimeFileLine(targetLevel, message, context, now, options.subsystem);
   };
 
   return {
@@ -128,9 +146,6 @@ export function createTestLogger(config: LoggingConfig, options: LoggerOptions):
   return createLoggerWithLevel(config.level, config.useColors, options);
 }
 
-let loggingConfigPromise: Promise<LoggingConfig> | null = null;
-let resolvedLoggingConfig: LoggingConfig | null = null;
-
 async function getLoggingConfig(): Promise<LoggingConfig> {
   loggingConfigPromise ??= loadConfig().then((config) => {
     resolvedLoggingConfig = config.logging;
@@ -142,6 +157,42 @@ async function getLoggingConfig(): Promise<LoggingConfig> {
 export async function createLogger(options: LoggerOptions): Promise<Logger> {
   const config = await getLoggingConfig();
   return createTestLogger(config, options);
+}
+
+export function configureRuntimeLogging(
+  config: LoggingConfig,
+  options: ConfigureRuntimeLoggingOptions = {},
+): void {
+  resolvedLoggingConfig = config;
+  runtimeFileSinkEnabled = true;
+  runtimeLogPath = options.runtimeLogPath ?? POKECLAW_RUNTIME_LOG_PATH;
+  if (runtimeLogStreamPath != null && runtimeLogStreamPath !== runtimeLogPath) {
+    void closeRuntimeLogStream();
+  }
+}
+
+export async function flushRuntimeLoggingForTests(): Promise<void> {
+  if (runtimeLogStream == null) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    runtimeLogStream?.write("", (error) => {
+      if (error != null) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+export async function resetRuntimeLoggingForTests(): Promise<void> {
+  runtimeFileSinkEnabled = false;
+  runtimeLogPath = POKECLAW_RUNTIME_LOG_PATH;
+  loggingConfigPromise = null;
+  resolvedLoggingConfig = null;
+  await closeRuntimeLogStream();
 }
 
 export function createSubsystemLogger(subsystem: string): Logger {
@@ -188,4 +239,84 @@ export function createSubsystemLogger(subsystem: string): Logger {
       logger.error(message, context);
     },
   };
+}
+
+function writeRuntimeFileLine(
+  level: LogLevel,
+  message: string,
+  context: LoggerContext | undefined,
+  now: Date,
+  subsystem: string,
+): void {
+  if (!runtimeFileSinkEnabled || !shouldLog("info", level)) {
+    return;
+  }
+
+  const stream = ensureRuntimeLogStream();
+  if (stream == null) {
+    return;
+  }
+
+  stream.write(`${formatLine(level, message, context, now, subsystem, false)}\n`);
+}
+
+function ensureRuntimeLogStream(): WriteStream | null {
+  if (!runtimeFileSinkEnabled) {
+    return null;
+  }
+
+  if (
+    runtimeLogStream != null &&
+    runtimeLogStreamPath === runtimeLogPath &&
+    !runtimeLogStream.destroyed
+  ) {
+    return runtimeLogStream;
+  }
+
+  void closeRuntimeLogStream();
+
+  try {
+    mkdirSync(path.dirname(runtimeLogPath), { recursive: true });
+    const stream = createWriteStream(runtimeLogPath, {
+      flags: "a",
+      encoding: "utf8",
+    });
+    stream.on("error", (error) => {
+      reportRuntimeLogSinkError(error);
+    });
+    runtimeLogStream = stream;
+    runtimeLogStreamPath = runtimeLogPath;
+    runtimeLogSinkErrorPrinted = false;
+    return stream;
+  } catch (error) {
+    reportRuntimeLogSinkError(error);
+    return null;
+  }
+}
+
+function closeRuntimeLogStream(): Promise<void> {
+  if (runtimeLogStream == null) {
+    runtimeLogStreamPath = null;
+    return Promise.resolve();
+  }
+
+  const stream = runtimeLogStream;
+  runtimeLogStream = null;
+  runtimeLogStreamPath = null;
+
+  return new Promise((resolve) => {
+    stream.end(() => {
+      resolve();
+    });
+  });
+}
+
+function reportRuntimeLogSinkError(error: unknown): void {
+  if (runtimeLogSinkErrorPrinted) {
+    return;
+  }
+
+  runtimeLogSinkErrorPrinted = true;
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Failed to write runtime log file at ${runtimeLogPath}: ${message}`);
 }

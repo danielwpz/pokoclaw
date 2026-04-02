@@ -7,6 +7,7 @@ import { createFindTool } from "@/src/tools/find.js";
 import { createFinishTaskTool } from "@/src/tools/finish-task.js";
 import { createGrepTool } from "@/src/tools/grep.js";
 import { createLsTool } from "@/src/tools/ls.js";
+import { createQuerySystemDbTool } from "@/src/tools/query-system-db.js";
 import { createReadTool } from "@/src/tools/read.js";
 import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
 import { createReviewPermissionRequestTool } from "@/src/tools/review-permission-request.js";
@@ -21,6 +22,7 @@ export function createBuiltinToolRegistry(): ToolRegistry {
   registry.register(createLsTool());
   registry.register(createFindTool());
   registry.register(createGrepTool());
+  registry.register(createQuerySystemDbTool());
   registry.register(createFinishTaskTool());
   registry.register(createRequestPermissionsTool());
   registry.register(createReviewPermissionRequestTool());

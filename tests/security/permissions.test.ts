@@ -17,6 +17,7 @@ import {
   DEFAULT_SYSTEM_POLICY,
 } from "@/src/security/policy.js";
 import {
+  POKECLAW_LOGS_DIR,
   POKECLAW_REPO_DIR,
   POKECLAW_SKILLS_DIR,
   POKECLAW_WORKSPACE_DIR,
@@ -59,6 +60,8 @@ describe("effective permissions", () => {
     expect(permissions.fs.read.allow).toContain(`${path.resolve(POKECLAW_SKILLS_DIR)}/**`);
     expect(permissions.fs.read.allow).toContain(`${path.resolve(POKECLAW_REPO_DIR)}/**`);
     expect(permissions.fs.write.allow).toContain(`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`);
+    expect(permissions.db.read).toBe(true);
+    expect(permissions.db.write).toBe(false);
   });
 
   test("subagent baseline grants workspace, global skills, and pokeclaw repo read by default", () => {
@@ -75,6 +78,8 @@ describe("effective permissions", () => {
       `${path.resolve(POKECLAW_REPO_DIR)}/**`,
     ]);
     expect(permissions.fs.write.allow).toEqual([`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`]);
+    expect(permissions.db.read).toBe(false);
+    expect(permissions.db.write).toBe(false);
   });
 
   test("buildEffectivePermissionsForRole merges explicit grants with the role baseline", () => {
@@ -116,6 +121,27 @@ describe("filesystem permission checks", () => {
       result: "allow",
       reason: "granted",
       summary: `fs.read is granted for ${path.join(os.homedir(), "Documents", "notes.md")}`,
+    });
+  });
+
+  test("main agent can read runtime logs through the existing home baseline", () => {
+    const permissions = buildEffectivePermissions(
+      [],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("main"),
+    );
+    const targetPath = path.join(POKECLAW_LOGS_DIR, "runtime.log");
+
+    expect(
+      checkFilesystemPermission({
+        kind: "fs.read",
+        targetPath,
+        permissions,
+      }),
+    ).toEqual({
+      result: "allow",
+      reason: "granted",
+      summary: `fs.read is granted for ${targetPath}`,
     });
   });
 
@@ -355,6 +381,16 @@ describe("bash full-access permission checks", () => {
 });
 
 describe("database permission checks", () => {
+  test("main agent can read the system database without an explicit grant", () => {
+    const permissions = buildEffectivePermissionsForRole([], "main");
+
+    expect(checkDatabasePermission({ kind: "db.read", permissions })).toEqual({
+      result: "allow",
+      reason: "granted",
+      summary: "db.read is granted for the system database",
+    });
+  });
+
   test("allows granted db read access", () => {
     const permissions = buildEffectivePermissionsForRole(
       [{ kind: "db.read", database: "system" }],

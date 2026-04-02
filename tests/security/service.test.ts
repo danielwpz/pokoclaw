@@ -129,7 +129,7 @@ describe("security service", () => {
     const service = new SecurityService(handle.storage.db);
 
     service.grantScopes({
-      ownerAgentId: "agent_1",
+      ownerAgentId: "agent_2",
       scopes: [{ kind: "db.read", database: "system" }],
       grantedBy: "user",
       createdAt: new Date("2026-03-22T00:00:00.000Z"),
@@ -138,7 +138,7 @@ describe("security service", () => {
 
     expect(
       service.checkDatabaseAccess({
-        ownerAgentId: "agent_1",
+        ownerAgentId: "agent_2",
         kind: "db.read",
         activeAt: new Date("2026-03-22T12:00:00.000Z"),
       }),

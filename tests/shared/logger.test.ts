@@ -1,97 +1,51 @@
-import { describe, expect, test, vi } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
-import { createBootstrapLogger, createTestLogger } from "@/src/shared/logger.js";
+import { afterEach, describe, expect, test } from "vitest";
 
-describe("logger", () => {
-  test("bootstrap logger works without config", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-20T12:00:00.000Z"));
-    const writes: string[] = [];
-    const logger = createBootstrapLogger({
-      subsystem: "bootstrap",
-      write(line) {
-        writes.push(line);
-      },
-    });
+import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import {
+  configureRuntimeLogging,
+  createSubsystemLogger,
+  flushRuntimeLoggingForTests,
+  resetRuntimeLoggingForTests,
+} from "@/src/shared/logger.js";
 
-    logger.info("booting app", { step: "config" });
+describe("runtime log file sink", () => {
+  let tempDir: string | null = null;
 
-    expect(writes).toHaveLength(1);
-    expect(writes[0]).toContain("INFO [bootstrap] booting app");
-    expect(writes[0]).toContain("step='config'");
-    vi.useRealTimers();
+  afterEach(async () => {
+    await resetRuntimeLoggingForTests();
+    if (tempDir != null) {
+      await rm(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
   });
 
-  test("logger respects configured level", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-20T12:00:00.000Z"));
-    const write = vi.fn<(line: string) => void>();
-    const logger = createTestLogger(
+  test("writes plain info+ lines to the runtime log file", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-logger-test-"));
+    const runtimeLogPath = path.join(tempDir, "runtime.log");
+
+    configureRuntimeLogging(
       {
-        level: "warn",
-        useColors: false,
-      },
-      {
-        subsystem: "runtime",
-        write,
-      },
-    );
-
-    logger.info("hidden");
-    logger.warn("visible");
-
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(write.mock.calls[0]?.[0]).toContain("WARN [runtime] visible");
-    vi.useRealTimers();
-  });
-
-  test("logger prints human-readable lines instead of json", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-20T12:00:00.000Z"));
-    const writes: string[] = [];
-    const logger = createTestLogger(
-      {
-        level: "debug",
-        useColors: false,
-      },
-      {
-        write(line) {
-          writes.push(line);
-        },
-        subsystem: "config",
-      },
-    );
-
-    logger.debug("loaded config", { source: "config.toml" });
-
-    expect(writes[0]).toContain("DEBUG [config] loaded config");
-    expect(writes[0]).toContain("source='config.toml'");
-    expect(writes[0]?.trim().startsWith("{")).toBe(false);
-    vi.useRealTimers();
-  });
-
-  test("logger colors only level label when enabled", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-20T12:00:00.000Z"));
-    const writes: string[] = [];
-    const logger = createTestLogger(
-      {
+        ...DEFAULT_CONFIG.logging,
         level: "debug",
         useColors: true,
       },
-      {
-        write(line) {
-          writes.push(line);
-        },
-        subsystem: "runtime",
-      },
+      { runtimeLogPath },
     );
 
-    logger.warn("visible");
+    const logger = createSubsystemLogger("logger-test");
+    logger.debug("debug line");
+    logger.info("info line", { foo: "bar" });
+    logger.warn("warn line");
+    await flushRuntimeLoggingForTests();
 
-    expect(writes[0]).toContain("\u001B[33mWARN\u001B[0m [runtime] visible");
-    expect(writes[0]).not.toContain("\u001B[33m[runtime]");
-    expect(writes[0]).not.toContain("\u001B[33mvisible");
-    vi.useRealTimers();
+    const text = await readFile(runtimeLogPath, "utf8");
+    expect(text).not.toContain("\u001B[");
+    expect(text).toContain("[logger-test] info line foo='bar'");
+    expect(text).toContain("[logger-test] warn line");
+    expect(text).not.toContain("debug line");
   });
 });

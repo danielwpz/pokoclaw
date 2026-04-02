@@ -32,6 +32,10 @@ export type AgentRuntimeRole = "main" | "subagent" | "task";
 
 export interface AgentPermissionBaseline {
   role: AgentRuntimeRole;
+  db: {
+    read: boolean;
+    write: boolean;
+  };
   fs: {
     readMode: "allow_only" | "deny_only";
     readAllow: string[];
@@ -116,6 +120,10 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
     case "main":
       return {
         role,
+        db: {
+          read: true,
+          write: false,
+        },
         fs: {
           readMode: "allow_only",
           readAllow: [
@@ -131,6 +139,10 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
     case "task":
       return {
         role,
+        db: {
+          read: false,
+          write: false,
+        },
         fs: {
           readMode: "allow_only",
           readAllow: [
