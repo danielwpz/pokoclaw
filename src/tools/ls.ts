@@ -41,7 +41,7 @@ export function createLsTool() {
   return defineTool({
     name: "ls",
     description:
-      "List the contents of one directory. Use this only for a simple directory listing by path. Do not pass command text, chained commands, pipes, `find`, `pwd`, or any other shell expression here. Returns visible entries sorted alphabetically and appends '/' to directories.",
+      "List the contents of one directory. Use this only for a simple directory listing by path. Do not pass command text, chained commands, pipes, `list_dir`, `pwd`, or any other shell expression here. Returns visible entries sorted alphabetically and appends '/' to directories.",
     inputSchema: LS_TOOL_SCHEMA,
     async execute(context, args) {
       const access = createFilesystemAccessController(context);

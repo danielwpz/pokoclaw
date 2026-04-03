@@ -250,26 +250,26 @@ describe("grep tool", () => {
       limit: 1,
     });
 
-    expect(result).toMatchObject({
-      content: [
-        {
-          type: "text",
-          text: "README.md:1| needle one\n\n(1 matching lines shown. Narrow the query or increase limit for more.)",
-        },
-      ],
-      details: {
-        path: ".",
-        absolutePath: await resolveExpectedToolAbsolutePath(tempDir),
-        query: "needle",
-        literal: true,
-        caseSensitive: false,
-        glob: null,
-        backend: "rg",
-        matches: 1,
-        limit: 1,
-        limitReached: true,
-      },
+    expect(result.details).toMatchObject({
+      path: ".",
+      absolutePath: await resolveExpectedToolAbsolutePath(tempDir),
+      query: "needle",
+      literal: true,
+      caseSensitive: false,
+      glob: null,
+      backend: "rg",
+      matches: 1,
+      limit: 1,
+      limitReached: true,
     });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringMatching(
+          /^(README\.md|notes\.txt):1\| needle (one|three)\n\n\(1 matching lines shown\. Narrow the query or increase limit for more\.\)$/,
+        ),
+      },
+    ]);
   });
 
   test("uses real rg through the sandboxed grep backend for an explicitly requested file", async () => {

@@ -1077,7 +1077,7 @@ describe("lark run state", () => {
     expect(header).not.toContain("{");
   });
 
-  test("renders concise headers for read/find tools without repeated verbs", () => {
+  test("renders concise headers for read/list_dir tools without repeated verbs", () => {
     const readState = reduceLarkRunState(
       null,
       makeEnvelope({
@@ -1100,28 +1100,28 @@ describe("lark run state", () => {
     expect(readHeader).toBe("⏳ **read** — /tmp/report.txt");
     expect(readHeader).not.toContain("读取");
 
-    const findState = reduceLarkRunState(
+    const listDirState = reduceLarkRunState(
       null,
       makeEnvelope({
         type: "tool_call_started",
-        eventId: "evt_find_1",
+        eventId: "evt_list_dir_1",
         createdAt: "2026-03-28T00:00:00.000Z",
         sessionId: "sess_1",
         conversationId: "conv_1",
         branchId: "branch_1",
         runId: "run_1",
         turn: 1,
-        toolCallId: "tool_find_1",
-        toolName: "find",
+        toolCallId: "tool_list_dir_1",
+        toolName: "list_dir",
         args: {
-          pattern: "TODO",
-          path: "/workspace/src",
+          dir_path: "/workspace/src",
+          depth: 2,
         },
       }),
     );
-    const findHeader = findFirstToolHeaderContent(renderLarkRunCard(findState));
-    expect(findHeader).toBe("⏳ **find** — TODO · /workspace/src");
-    expect(findHeader).not.toContain("查找");
+    const listDirHeader = findFirstToolHeaderContent(renderLarkRunCard(listDirState));
+    expect(listDirHeader).toBe("⏳ **list_dir** — /workspace/src");
+    expect(listDirHeader).not.toContain("列出");
   });
 
   test("renders review_permission_request header when approvalId is a string", () => {

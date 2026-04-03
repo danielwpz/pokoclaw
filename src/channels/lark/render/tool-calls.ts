@@ -218,8 +218,8 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
     case "edit":
     case "ls":
       return summarizePath(args);
-    case "find":
-      return summarizeFind(args);
+    case "list_dir":
+      return summarizeListDir(args);
     case "grep":
       return summarizeGrep(args);
     default:
@@ -305,10 +305,8 @@ function summarizePath(args: Record<string, unknown> | null): string {
   return readString(args?.path) ?? "";
 }
 
-function summarizeFind(args: Record<string, unknown> | null): string {
-  const query = readString(args?.query) ?? readString(args?.pattern);
-  const path = readString(args?.path);
-  return summarizeParts(query, path);
+function summarizeListDir(args: Record<string, unknown> | null): string {
+  return readString(args?.dir_path) ?? summarizePath(args);
 }
 
 function summarizeGrep(args: Record<string, unknown> | null): string {

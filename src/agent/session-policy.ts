@@ -11,7 +11,7 @@ import type { ToolDefinition } from "@/src/tools/core/types.js";
 export const APPROVAL_SESSION_TOOL_ALLOWLIST = [
   "read",
   "ls",
-  "find",
+  "list_dir",
   "grep",
   "review_permission_request",
 ] as const;
