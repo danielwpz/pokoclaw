@@ -309,6 +309,7 @@ function renderAssistantTextBlock(
 
 function buildApprovalCardElements(state: LarkApprovalState): Array<Record<string, unknown>> {
   const approved = state.decision === "approve";
+  const requestedPermissionLines = formatRequestedPermissionLines(state.requestedPermissionLines);
   const requestedBashPrefixLines = formatRequestedBashPrefixLines(state.requestedBashPrefixes);
   const elements: Array<Record<string, unknown>> = [
     {
@@ -318,6 +319,7 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
             "### 需要你的授权",
             "",
             `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+            ...requestedPermissionLines,
             ...requestedBashPrefixLines,
             "",
             `**原因**：${state.reasonText}`,
@@ -328,12 +330,14 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
         : approved
           ? [
               `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+              ...requestedPermissionLines,
               ...requestedBashPrefixLines,
               "",
               "**结果**：agent 将继续执行。",
             ].join("\n")
           : [
               `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+              ...requestedPermissionLines,
               ...requestedBashPrefixLines,
               "",
               "**结果**：当前操作已停止。",
@@ -822,6 +826,14 @@ function summarizeApprovalState(state: LarkApprovalState): string {
   return state.decision === "approve" ? "授权成功" : "已拒绝";
 }
 
+function formatRequestedPermissionLines(lines: string[]): string[] {
+  if (lines.length === 0) {
+    return [];
+  }
+
+  return ["", "**权限**", ...lines.map((line) => `- ${formatPermissionScopeMarkdown(line)}`)];
+}
+
 function formatRequestedBashPrefixLines(prefixes: string[][]): string[] {
   if (prefixes.length === 0) {
     return [];
@@ -834,14 +846,32 @@ function formatRequestedBashPrefixLines(prefixes: string[][]): string[] {
 }
 
 function formatApprovalTitleMarkdown(title: string): string {
-  const match = title.match(/^Approval required:\s+(Read\/write|Read|Write)\s+(.+)$/i);
-  if (match == null) {
+  const prefix = "Approval required: ";
+  if (!title.startsWith(prefix)) {
     return title;
+  }
+
+  const scopes = title
+    .slice(prefix.length)
+    .split("; ")
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+  if (scopes.length === 0) {
+    return title;
+  }
+
+  return `${prefix}${scopes.map((scope) => formatPermissionScopeMarkdown(scope)).join("; ")}`;
+}
+
+function formatPermissionScopeMarkdown(scopeText: string): string {
+  const match = scopeText.match(/^(Read\/write|Read|Write)\s+(.+)$/i);
+  if (match == null) {
+    return scopeText;
   }
 
   const access = match[1] ?? "";
   const target = match[2] ?? "";
-  return `Approval required: **${access}** \`${target}\``;
+  return `**${access}** \`${target}\``;
 }
 
 function findActiveAssistantBlock(state: LarkRunState): LarkAssistantTextBlock | null {

@@ -191,3 +191,14 @@ export function describePermissionScope(scope: PermissionScope): string {
       return `Run bash commands with full access for prefix: ${scope.prefix.join(" ")}`;
   }
 }
+
+export function describePermissionRequestLines(request: PermissionRequest): string[] {
+  return request.scopes.map((scope) => describePermissionScope(scope));
+}
+
+export function describePermissionRequest(
+  request: PermissionRequest,
+  options?: { separator?: string },
+): string {
+  return describePermissionRequestLines(request).join(options?.separator ?? "; ");
+}

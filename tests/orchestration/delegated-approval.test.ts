@@ -307,6 +307,57 @@ describe("delegated approval orchestration", () => {
     });
   });
 
+  test("renders every requested permission in approval history entries", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO approval_ledger (
+          owner_agent_id, requested_by_session_id, requested_scope_json, approval_target, status,
+          reason_text, created_at, decided_at
+        ) VALUES (
+          'agent_sub',
+          'sess_task',
+          '{"scopes":[{"kind":"fs.read","path":"/tmp/archive.csv"},{"kind":"fs.write","path":"/tmp/report.txt"}]}',
+          'main_agent',
+          'approved',
+          'Approved because both files are part of the daily finance task.',
+          '2026-03-24T00:00:00.000Z',
+          '2026-03-24T00:01:00.000Z'
+        );
+      `);
+
+      const submitted: SubmitMessageInput[] = [];
+      const approvalsRepo = new ApprovalsRepo(handle.storage.db);
+      const ingress = {
+        async submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
+          submitted.push(input);
+          approvalsRepo.resolve({
+            id: 1,
+            status: "approved",
+            reasonText: "Approved during test delivery.",
+            decidedAt: new Date("2026-03-25T00:00:02.500Z"),
+          });
+          return { status: "steered" };
+        },
+        submitApprovalDecision() {
+          return true;
+        },
+      } as const;
+
+      await deliverDelegatedApprovalRequest({
+        db: handle.storage.db,
+        ingress,
+        approvalId: 1,
+      });
+
+      expect(submitted).toHaveLength(1);
+      expect(submitted[0]?.content).toContain(
+        "<permissions>Read /tmp/archive.csv; Write /tmp/report.txt</permissions>",
+      );
+      expect(submitted[0]?.content).not.toContain("2 permissions");
+    });
+  });
+
   test("auto-denies when the approval session finishes without an explicit decision", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);

@@ -1167,6 +1167,10 @@ describe("lark run state", () => {
         expiresAt: null,
       },
       sourceRunCardObjectId: "run_1:seg:1",
+      requestedPermissionLines: [
+        "Read /Users/daniel/project/README.md",
+        "Write /Users/daniel/project/output.txt",
+      ],
     });
 
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
@@ -1175,6 +1179,9 @@ describe("lark run state", () => {
     expect(cardText).not.toContain('"subtitle"');
     expect(cardText).toContain("### 需要你的授权");
     expect(cardText).toContain("**操作**");
+    expect(cardText).toContain("**权限**");
+    expect(cardText).toContain("**Read** `/Users/daniel/project/README.md`");
+    expect(cardText).toContain("**Write** `/Users/daniel/project/output.txt`");
     expect(cardText).toContain("**原因**");
     expect(cardText).toContain("允许 1天");
     expect(cardText).toContain("允许 永久");

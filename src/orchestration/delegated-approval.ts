@@ -8,7 +8,11 @@
 import { resolveOrCreateMainAgentApprovalSession } from "@/src/orchestration/approval-session.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
-import { describePermissionScope, parsePermissionRequestJson } from "@/src/security/scope.js";
+import {
+  describePermissionRequest,
+  describePermissionScope,
+  parsePermissionRequestJson,
+} from "@/src/security/scope.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -271,10 +275,7 @@ function listRecentApprovalHistory(input: {
     .reverse()
     .map((approval) => {
       const request = parsePermissionRequestJson(approval.requestedScopeJson);
-      const permissions =
-        request.scopes.length === 1 && request.scopes[0] != null
-          ? describePermissionScope(request.scopes[0])
-          : `${request.scopes.length} permissions`;
+      const permissions = describePermissionRequest(request);
       const decision: ApprovalHistoryItem["decision"] =
         approval.status === "approved" ? "approved" : "denied";
 
