@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  describePermissionRequest,
   describePermissionScope,
   isFsSubtreeScopePath,
   parsePermissionRequestJson,
@@ -137,6 +138,29 @@ describe("permission scope serialization", () => {
         database: "system",
       }),
     ).toBe("Read system database");
+  });
+
+  test("describes permission requests with every requested scope", () => {
+    expect(
+      describePermissionRequest({
+        scopes: [
+          {
+            kind: "fs.read",
+            path: "/Users/daniel/project/README.md",
+          },
+          {
+            kind: "fs.write",
+            path: "/Users/daniel/project/output.txt",
+          },
+          {
+            kind: "db.read",
+            database: "system",
+          },
+        ],
+      }),
+    ).toBe(
+      "Read /Users/daniel/project/README.md; Write /Users/daniel/project/output.txt; Read system database",
+    );
   });
 
   test("detects non-subtree filesystem paths correctly", () => {

@@ -1834,6 +1834,117 @@ describe("agent loop", () => {
     });
   });
 
+  test("approval_requested events list every requested permission in the title", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"request the extra access"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: "/tmp/requested-read.txt",
+                      scope: "exact",
+                      access: "read",
+                    },
+                    {
+                      resource: "filesystem",
+                      path: "/tmp/requested-write.txt",
+                      scope: "exact",
+                      access: "write",
+                    },
+                  ],
+                  justification: "Need to inspect one file and update another.",
+                },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry([createRequestPermissionsTool()]);
+    const emittedEvents: Array<{
+      type: string;
+      approvalId?: string;
+      decision?: string;
+      title?: string;
+    }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    const approvalId = Number(await waitForApprovalRequested(emittedEvents));
+
+    expect(emittedEvents.find((event) => event.type === "approval_requested")?.title).toBe(
+      "Approval required: Read /tmp/requested-read.txt; Write /tmp/requested-write.txt",
+    );
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId,
+        decision: "approve",
+        actor: "user",
+        rawInput: "approve",
+        grantedBy: "user",
+        expiresAt: null,
+      }),
+    ).toBe(true);
+
+    const result = await runPromise;
+    expect(
+      result.events.some(
+        (event) => event.type === "approval_resolved" && event.decision === "approve",
+      ),
+    ).toBe(true);
+  });
+
   test("writes an error request_permissions tool result when approval is denied", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
