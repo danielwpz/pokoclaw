@@ -383,12 +383,16 @@ function isContextOverflowMessage(message: string): boolean {
   return (
     lower.includes("prompt is too long") ||
     lower.includes("exceeds the context window") ||
+    lower.includes("context window exceeded") ||
+    lower.includes("context window exceeds limit") ||
     (lower.includes("input token count") && lower.includes("exceeds the maximum")) ||
     lower.includes("maximum prompt length") ||
     lower.includes("maximum context length") ||
     lower.includes("context length exceeded") ||
     lower.includes("context_window_exceeded") ||
     lower.includes("request_too_large") ||
+    lower.includes("too many tokens") ||
+    lower.includes("token limit exceeded") ||
     lower.includes("exceeded model token limit") ||
     message.includes("上下文过长") ||
     message.includes("上下文超出") ||
