@@ -949,7 +949,7 @@ describe("grep tool", () => {
           {
             resource: "filesystem",
             path: POKECLAW_SYSTEM_DIR,
-            scope: "exact",
+            scope: "subtree",
             access: "read",
           },
         ],

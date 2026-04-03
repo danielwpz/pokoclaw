@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -324,6 +324,95 @@ describe("sandbox config compilation", () => {
         process.env.PATH = originalPath;
       }
     }
+  });
+
+  test("adds direct children of an exactly granted read directory to sandbox allowRead", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    const chatApiDir = path.join(tempDir, "chat-api");
+    const stripeNodeDir = path.join(tempDir, "stripe-node");
+    await mkdir(chatApiDir);
+    await mkdir(stripeNodeDir);
+
+    grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: tempDir });
+    grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${chatApiDir}/**` });
+
+    executeSandboxedCommandMock.mockResolvedValue({
+      stdout: "chat-api/\nstripe-node/\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    await executeSandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_2",
+        ownerAgentId: "agent_sub",
+        cwd: chatApiDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+      },
+      command: "ls",
+      cwd: tempDir,
+      timeoutMs: 10_000,
+    });
+
+    const [, options] = executeSandboxedCommandMock.mock.calls[0] ?? [];
+    expect(options?.customConfig?.filesystem?.allowRead).toContain(
+      normalizeFilesystemTargetPath(chatApiDir),
+    );
+    expect(options?.customConfig?.filesystem?.allowRead).toContain(
+      normalizeFilesystemTargetPath(stripeNodeDir),
+    );
+  });
+
+  test("does not expand exact read directory grants through escaping symlink children", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    const parentDir = path.join(tempDir, "near-ai");
+    const allowedChildDir = path.join(parentDir, "chat-api");
+    const outsideDir = path.join(tempDir, "outside");
+    const escapingLink = path.join(parentDir, "stripe-node");
+    await mkdir(allowedChildDir, { recursive: true });
+    await mkdir(outsideDir, { recursive: true });
+    await writeFile(path.join(outsideDir, "package.json"), "{}", "utf8");
+    await symlink(outsideDir, escapingLink);
+
+    grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: parentDir });
+
+    executeSandboxedCommandMock.mockResolvedValue({
+      stdout: "chat-api/\nstripe-node@\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    await executeSandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_2",
+        ownerAgentId: "agent_sub",
+        cwd: allowedChildDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+      },
+      command: "ls",
+      cwd: parentDir,
+      timeoutMs: 10_000,
+    });
+
+    const [, options] = executeSandboxedCommandMock.mock.calls[0] ?? [];
+    expect(options?.customConfig?.filesystem?.allowRead).toContain(
+      normalizeFilesystemTargetPath(allowedChildDir),
+    );
+    expect(options?.customConfig?.filesystem?.allowRead).not.toContain(
+      normalizeFilesystemTargetPath(outsideDir),
+    );
   });
 
   test("turns ungranted filesystem sandbox blocks into approval requests", async () => {

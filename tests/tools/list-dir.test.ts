@@ -347,4 +347,60 @@ describe("list_dir tool", () => {
       },
     ]);
   });
+
+  test("shows all top-level children when the parent directory is granted exactly", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-list-dir-tool-"));
+
+    const chatApiDir = path.join(tempDir, "chat-api");
+    const stripeNodeDir = path.join(tempDir, "stripe-node");
+    await mkdir(chatApiDir);
+    await mkdir(stripeNodeDir);
+    await writeFile(path.join(chatApiDir, "Cargo.toml"), "workspace", "utf8");
+    await writeFile(path.join(stripeNodeDir, "package.json"), "{}", "utf8");
+
+    const security = new SecurityService(handle.storage.db);
+    security.grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "main_agent",
+      scopes: [
+        { kind: "fs.read", path: tempDir },
+        { kind: "fs.read", path: `${chatApiDir}/**` },
+      ],
+    });
+
+    const registry = new ToolRegistry();
+    registry.register(createListDirTool());
+
+    const result = await registry.execute(
+      "list_dir",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: chatApiDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        dir_path: tempDir,
+        depth: 2,
+        offset: 1,
+        limit: 20,
+      },
+    );
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: [
+          `Absolute path: ${await resolveExpectedToolAbsolutePath(tempDir)}`,
+          "chat-api/",
+          "  Cargo.toml",
+          "stripe-node/",
+        ].join("\n"),
+      },
+    ]);
+  });
 });
