@@ -54,6 +54,11 @@ const CRON_EXECUTION_GUIDANCE_LINES = [
   "The final response is the primary user-facing output, so make it complete and standalone.",
   "If the task fails or is blocked, end with a clear final result explaining what happened and what follow-up is needed.",
   "Use recent run context as reference, not as a hard constraint.",
+  "recent_runs and last_run are historical reference only.",
+  "They are not evidence that the current run has already completed its required work.",
+  "Only mark the task completed when this run has actually produced the required result for the current kickoff.",
+  "The internal kickoff/reference blocks above are not visible to the user.",
+  "Do not tell the user to look at them. If they contain useful context, restate it explicitly in your own final user-facing output.",
   "If the previous run failed, avoid blindly repeating the same failing path.",
 ];
 
@@ -161,7 +166,16 @@ function renderCronRecentRuns(context?: CronKickoffContext): string[] {
     }
   }
 
-  return ["  <recent_runs>", ...blocks, "  </recent_runs>"];
+  return [
+    "  <recent_runs>",
+    ...renderSingleLineElement(
+      "reference_only",
+      "Historical context only. Not proof that the current run has already produced its required result.",
+      4,
+    ),
+    ...blocks,
+    "  </recent_runs>",
+  ];
 }
 
 function extractCronContextFromInput(

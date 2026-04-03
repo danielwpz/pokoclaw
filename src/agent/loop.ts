@@ -7,6 +7,10 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  type AgentBootstrapResolver,
+  FilesystemAgentBootstrapResolver,
+} from "@/src/agent/bootstrap.js";
+import {
   AgentCompactionService,
   type CompactionDecision,
   type CompactionModelRunner,
@@ -27,6 +31,7 @@ import type {
 } from "@/src/agent/llm/messages.js";
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import { type AgentMemoryResolver, FilesystemAgentMemoryResolver } from "@/src/agent/memory.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
 import { assertToolAllowedForSession } from "@/src/agent/session-policy.js";
 import {
@@ -180,6 +185,8 @@ export interface AgentLoopDependencies {
   models: ProviderRegistry;
   tools: ToolRegistry;
   skillsResolver?: AgentSkillsResolver;
+  bootstrapResolver?: AgentBootstrapResolver;
+  memoryResolver?: AgentMemoryResolver;
   cancel: SessionRunAbortRegistry;
   modelRunner: AgentModelRunner;
   storage: StorageDb;
@@ -203,6 +210,8 @@ export class AgentLoop {
   private readonly compactor: AgentCompactionService | null;
   private readonly security: SecurityService;
   private readonly skillsResolver: AgentSkillsResolver;
+  private readonly bootstrapResolver: AgentBootstrapResolver;
+  private readonly memoryResolver: AgentMemoryResolver;
   private readonly approvalWaits = new SessionApprovalWaitRegistry();
   private readonly steerQueue = new SessionSteerQueueRegistry();
   private readonly defaultMaxTurns: number;
@@ -215,6 +224,8 @@ export class AgentLoop {
       buildSystemPolicy({ security: deps.securityConfig }),
     );
     this.skillsResolver = deps.skillsResolver ?? new FilesystemAgentSkillsResolver();
+    this.bootstrapResolver = deps.bootstrapResolver ?? new FilesystemAgentBootstrapResolver();
+    this.memoryResolver = deps.memoryResolver ?? new FilesystemAgentMemoryResolver();
     this.defaultMaxTurns = deps.runtime?.maxTurns ?? DEFAULT_RUNTIME_MAX_TURNS;
     this.approvalTimeoutMs =
       deps.approvalTimeoutMs ??
@@ -305,7 +316,19 @@ export class AgentLoop {
         ? null
         : new AgentsRepo(this.deps.storage).getById(context.session.ownerAgentId);
     const ownerAgentId = context.session.ownerAgentId;
+    const privateWorkspaceDir =
+      ownerAgent?.kind === "sub" && ownerAgent.id.length > 0
+        ? buildSubagentWorkspaceDir(ownerAgent.id)
+        : null;
     const promptRuntimeContext = resolveLocalCalendarContext();
+    const memorySnapshot = this.memoryResolver.resolveForRun({
+      agentKind: ownerAgent?.kind ?? null,
+      privateWorkspaceDir,
+    });
+    const bootstrapSnapshot = this.bootstrapResolver.resolveForRun({
+      sessionPurpose: context.session.purpose,
+      agentKind: ownerAgent?.kind ?? null,
+    });
     const resolvedSkillsSnapshot = this.skillsResolver.resolveForRun({
       workdir: ownerAgent?.workdir ?? null,
     });
@@ -334,10 +357,9 @@ export class AgentLoop {
       currentDate: promptRuntimeContext.currentDate,
       timezone: promptRuntimeContext.timezone,
       workdir: ownerAgent?.workdir ?? null,
-      privateWorkspaceDir:
-        ownerAgent?.kind === "sub" && ownerAgent.id.length > 0
-          ? buildSubagentWorkspaceDir(ownerAgent.id)
-          : null,
+      privateWorkspaceDir,
+      bootstrapPrompt: bootstrapSnapshot?.prompt ?? null,
+      memoryCatalog: memorySnapshot.prompt,
       skillsCatalog: readableSkillsSnapshot.prompt,
     });
     let messages = [...context.messages];

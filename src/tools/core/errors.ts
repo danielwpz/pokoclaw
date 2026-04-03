@@ -133,6 +133,8 @@ export function normalizeToolFailure(error: unknown): ToolFailure {
       code: "invalid_tool_args",
       toolName: error.toolName,
       validationMessage: error.validationMessage,
+      issues: error.issues,
+      allowedFields: error.allowedFields,
     });
   }
 
