@@ -83,6 +83,7 @@ export interface ToolDefinition<TArgs = unknown, TDetails = unknown> {
   description: string;
   inputSchema?: TSchema;
   getInvocationTimeoutMs?(context: ToolExecutionContext, args: TArgs): number;
+  getResultMaxChars?(context: ToolExecutionContext, args: TArgs): number;
   execute(
     context: ToolExecutionContext,
     args: TArgs,
@@ -126,6 +127,7 @@ export function defineTool<TInputSchema extends TSchema, TDetails = unknown>(inp
   description: string;
   inputSchema: TInputSchema;
   getInvocationTimeoutMs?: (context: ToolExecutionContext, args: Static<TInputSchema>) => number;
+  getResultMaxChars?: (context: ToolExecutionContext, args: Static<TInputSchema>) => number;
   execute: (
     context: ToolExecutionContext,
     args: Static<TInputSchema>,

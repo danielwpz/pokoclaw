@@ -63,15 +63,32 @@ describe("schedule_task tool", () => {
 
   test("describes one-time and recurring scheduled task management", async () => {
     const tool = createScheduleTaskTool();
+    const serializedSchema = JSON.stringify(tool.inputSchema);
+    const actionSchema = (
+      tool.inputSchema as { properties?: { action?: { description?: string } } }
+    ).properties?.action;
 
     expect(tool.name).toBe("schedule_task");
     expect(tool.description).toContain("one-time future or recurring scheduled tasks");
-    expect(JSON.stringify(tool.inputSchema)).toContain("2026-03-30T18:00:00+08:00");
-    expect(JSON.stringify(tool.inputSchema)).toContain("in 2 hours");
-    expect(JSON.stringify(tool.inputSchema)).toContain("3600000");
-    expect(JSON.stringify(tool.inputSchema)).toContain("0 9 * * *");
+    expect(tool.description).toContain('action="list"');
+    expect(tool.description).toContain('action="create"');
+    expect(tool.description).toContain('action="update"');
+    expect(tool.description).toContain('action="remove"');
+    expect(tool.description).toContain('action="run"');
+    expect(tool.description).toContain('action="pause"');
+    expect(tool.description).toContain('action="resume"');
+    expect(actionSchema?.description).toContain(
+      'Use exactly one of these literal values: "list", "create", "update", "remove", "run", "pause", or "resume".',
+    );
+    expect(actionSchema?.description).toContain('Do not guess synonyms like "add" or "inspect".');
+    expect(actionSchema?.description).toContain('"create" to create a scheduled task');
+    expect(actionSchema?.description).toContain('"list" to inspect scheduled tasks');
+    expect(serializedSchema).toContain("2026-03-30T18:00:00+08:00");
+    expect(serializedSchema).toContain("in 2 hours");
+    expect(serializedSchema).toContain("3600000");
+    expect(serializedSchema).toContain("0 9 * * *");
     expect(tool.description).not.toContain("write routine results to files");
-    expect(JSON.stringify(tool.inputSchema)).not.toContain("write routine results to files");
+    expect(serializedSchema).not.toContain("write routine results to files");
   });
 
   test("accepts relative one-time schedule values like in 1 minute", async () => {
@@ -95,7 +112,7 @@ describe("schedule_task tool", () => {
         },
       },
       {
-        action: "add",
+        action: "create",
         name: "Relative reminder",
         scheduleKind: "at",
         scheduleValue: "in 1 minute",
@@ -139,7 +156,7 @@ describe("schedule_task tool", () => {
           },
         },
         {
-          action: "add",
+          action: "create",
           name: "Broken reminder",
           scheduleKind: "at",
           scheduleValue: "next lunchtime maybe",
@@ -176,7 +193,7 @@ describe("schedule_task tool", () => {
         },
       },
       {
-        action: "add",
+        action: "create",
         name: "Morning review",
         scheduleKind: "every",
         scheduleValue: "60000",

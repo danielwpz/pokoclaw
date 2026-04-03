@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
 import { toolApprovalRequired } from "@/src/tools/core/errors.js";
-import { ToolRegistry } from "@/src/tools/core/registry.js";
+import {
+  DEFAULT_TOOL_RESULT_MAX_CHARS,
+  TOOL_RESULT_TRUNCATION_NOTICE,
+  ToolRegistry,
+} from "@/src/tools/core/registry.js";
 import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/core/types.js";
 import {
   createTestDatabase,
@@ -227,6 +231,110 @@ describe("tool registry", () => {
         toolName: "missing",
       },
     } satisfies Partial<ToolFailure>);
+  });
+
+  test("truncates oversized text tool results with the global default limit", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const registry = new ToolRegistry([
+      defineTool({
+        name: "large_text",
+        description: "Return a large text payload",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          return textToolResult("A".repeat(DEFAULT_TOOL_RESULT_MAX_CHARS + 500));
+        },
+      }),
+    ]);
+
+    const result = await registry.execute(
+      "large_text",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {},
+    );
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `${"A".repeat(DEFAULT_TOOL_RESULT_MAX_CHARS - TOOL_RESULT_TRUNCATION_NOTICE.length)}${TOOL_RESULT_TRUNCATION_NOTICE}`,
+    });
+  });
+
+  test("truncates oversized json tool results with the global default limit", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const registry = new ToolRegistry([
+      defineTool({
+        name: "large_json",
+        description: "Return a large json payload",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          return jsonToolResult({
+            payload: "B".repeat(DEFAULT_TOOL_RESULT_MAX_CHARS + 500),
+          });
+        },
+      }),
+    ]);
+
+    const result = await registry.execute(
+      "large_json",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {},
+    );
+
+    expect(result.content).toHaveLength(1);
+    const firstBlock = result.content[0];
+    expect(firstBlock).toBeDefined();
+    expect(firstBlock?.type).toBe("text");
+    expect((firstBlock as { type: "text"; text: string }).text).toContain(
+      TOOL_RESULT_TRUNCATION_NOTICE,
+    );
+    expect((firstBlock as { type: "text"; text: string }).text.length).toBe(
+      DEFAULT_TOOL_RESULT_MAX_CHARS,
+    );
+  });
+
+  test("honors per-tool result size overrides", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const registry = new ToolRegistry([
+      defineTool({
+        name: "small_cap",
+        description: "Return a capped payload",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        getResultMaxChars() {
+          return 64;
+        },
+        execute() {
+          return textToolResult("C".repeat(200));
+        },
+      }),
+    ]);
+
+    const result = await registry.execute(
+      "small_cap",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {},
+    );
+
+    const firstBlock = result.content[0];
+    expect(firstBlock).toBeDefined();
+    expect(firstBlock).toEqual({
+      type: "text",
+      text: `${"C".repeat(64 - TOOL_RESULT_TRUNCATION_NOTICE.length)}${TOOL_RESULT_TRUNCATION_NOTICE}`,
+    });
   });
 
   test("tool result helpers build text and json payloads", () => {
