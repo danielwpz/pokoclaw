@@ -60,6 +60,24 @@ describe("normalizeAgentLlmError", () => {
     });
   });
 
+  test("classifies provider-style 400 context window errors as context overflow", () => {
+    const error = Object.assign(
+      new Error(
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"invalid params, context window exceeds limit (2013)"},"request_id":"req_123"}',
+      ),
+      {
+        status: 400,
+      },
+    );
+
+    expect(normalizeAgentLlmError({ error })).toMatchObject({
+      kind: "context_overflow",
+      retryable: false,
+      message:
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"invalid params, context window exceeds limit (2013)"},"request_id":"req_123"}',
+    });
+  });
+
   test("treats 5xx responses as retryable upstream overloads", () => {
     const error = Object.assign(new Error("Service unavailable"), {
       statusCode: 503,
