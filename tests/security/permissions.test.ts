@@ -338,6 +338,60 @@ describe("filesystem permission checks", () => {
       summary: `fs.read requires approval for ${path.join(realOutsideDir, "secret.txt")}`,
     });
   });
+
+  test("exact directory read grants direct children but not deeper descendants", async () => {
+    const parentDir = path.join(tempDir, "near-ai");
+    const childDir = path.join(parentDir, "chat-api");
+    const directFile = path.join(parentDir, "README.md");
+    const nestedFile = path.join(childDir, "Cargo.toml");
+    await mkdir(childDir, { recursive: true });
+    await writeFile(directFile, "top", "utf8");
+    await writeFile(nestedFile, "nested", "utf8");
+
+    const permissions = buildEffectivePermissionsForRole(
+      [{ kind: "fs.read", path: parentDir }],
+      "subagent",
+    );
+    const normalizedDirectFile = await realpath(directFile);
+    const normalizedChildDir = await realpath(childDir);
+    const normalizedNestedFile = await realpath(nestedFile);
+
+    expect(
+      checkFilesystemPermission({
+        kind: "fs.read",
+        targetPath: directFile,
+        permissions,
+      }),
+    ).toEqual({
+      result: "allow",
+      reason: "granted",
+      summary: `fs.read is granted for ${normalizedDirectFile}`,
+    });
+
+    expect(
+      checkFilesystemPermission({
+        kind: "fs.read",
+        targetPath: childDir,
+        permissions,
+      }),
+    ).toEqual({
+      result: "allow",
+      reason: "granted",
+      summary: `fs.read is granted for ${normalizedChildDir}`,
+    });
+
+    expect(
+      checkFilesystemPermission({
+        kind: "fs.read",
+        targetPath: nestedFile,
+        permissions,
+      }),
+    ).toEqual({
+      result: "deny",
+      reason: "not_granted",
+      summary: `fs.read requires approval for ${normalizedNestedFile}`,
+    });
+  });
 });
 
 describe("bash full-access permission checks", () => {

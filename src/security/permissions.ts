@@ -90,6 +90,29 @@ function matchesPolicyPath(pattern: string, targetPath: string): boolean {
   return targetPath === pattern;
 }
 
+function isDirectChildOfExactDirectory(
+  pattern: string,
+  targetPath: string,
+  directoryCache: Map<string, boolean>,
+): boolean {
+  if (isFsSubtreeScopePath(pattern) || path.dirname(targetPath) !== pattern) {
+    return false;
+  }
+
+  return isExistingDirectoryPattern(pattern, directoryCache);
+}
+
+function hasFilesystemReadPolicyMatch(patterns: string[], targetPath: string): boolean {
+  const directoryCache = new Map<string, boolean>();
+  return patterns.some(
+    (pattern) =>
+      // Exact directory read grants are intentionally shallow: the directory node
+      // itself plus its immediate children are readable, but not deeper descendants.
+      matchesPolicyPath(pattern, targetPath) ||
+      isDirectChildOfExactDirectory(pattern, targetPath, directoryCache),
+  );
+}
+
 function getFsAllowPaths(scopes: PermissionScope[], kind: FsPermissionKind): string[] {
   return scopes
     .filter(
@@ -149,6 +172,68 @@ function hasPolicyMatch(patterns: string[], targetPath: string): boolean {
   return patterns.some((pattern) => matchesPolicyPath(pattern, targetPath));
 }
 
+export function expandExactDirectoryReadChildren(patterns: readonly string[]): string[] {
+  const directoryCache = new Map<string, boolean>();
+  const seen = new Set<string>();
+  const expanded: string[] = [];
+
+  for (const pattern of patterns) {
+    if (!isDirectReadableDirectoryPattern(pattern, directoryCache)) {
+      continue;
+    }
+
+    let childNames: string[];
+    try {
+      childNames = fs.readdirSync(pattern);
+    } catch {
+      continue;
+    }
+
+    for (const childName of childNames) {
+      const normalizedChildPath = normalizeCheckedPath(path.join(pattern, childName));
+      if (path.dirname(normalizedChildPath) !== pattern || seen.has(normalizedChildPath)) {
+        continue;
+      }
+
+      seen.add(normalizedChildPath);
+      expanded.push(normalizedChildPath);
+    }
+  }
+
+  return expanded;
+}
+
+function isDirectReadableDirectoryPattern(
+  pattern: string,
+  directoryCache: Map<string, boolean>,
+): boolean {
+  if (isFsSubtreeScopePath(pattern)) {
+    return false;
+  }
+
+  return isExistingDirectoryPattern(pattern, directoryCache);
+}
+
+function isExistingDirectoryPattern(
+  pattern: string,
+  directoryCache: Map<string, boolean>,
+): boolean {
+  const cached = directoryCache.get(pattern);
+  if (cached != null) {
+    return cached;
+  }
+
+  let isDirectory = false;
+  try {
+    isDirectory = fs.statSync(pattern).isDirectory();
+  } catch {
+    isDirectory = false;
+  }
+
+  directoryCache.set(pattern, isDirectory);
+  return isDirectory;
+}
+
 export function checkFilesystemPermission(input: {
   kind: FsPermissionKind;
   targetPath: string;
@@ -159,8 +244,9 @@ export function checkFilesystemPermission(input: {
   const readRules = input.permissions.fs.read;
   const writeRules = input.permissions.fs.write;
   const rules = input.kind === "fs.read" ? readRules : writeRules;
+  const hasMatch = input.kind === "fs.read" ? hasFilesystemReadPolicyMatch : hasPolicyMatch;
 
-  if (hasPolicyMatch(rules.hardDeny, normalizedTargetPath)) {
+  if (hasMatch(rules.hardDeny, normalizedTargetPath)) {
     return {
       result: "deny",
       reason: "hard_deny",
@@ -168,8 +254,8 @@ export function checkFilesystemPermission(input: {
     };
   }
 
-  const allowMatch = hasPolicyMatch(rules.allow, normalizedTargetPath);
-  const denyMatch = hasPolicyMatch(rules.deny, normalizedTargetPath);
+  const allowMatch = hasMatch(rules.allow, normalizedTargetPath);
+  const denyMatch = hasMatch(rules.deny, normalizedTargetPath);
 
   if (input.kind === "fs.read") {
     if (readRules.mode === "deny_only") {

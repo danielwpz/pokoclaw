@@ -130,6 +130,58 @@ describe("ls tool", () => {
     });
   });
 
+  test("shows all direct children when the parent directory itself is granted exactly", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-ls-tool-"));
+
+    const chatApiDir = path.join(tempDir, "chat-api");
+    const stripeNodeDir = path.join(tempDir, "stripe-node");
+    await mkdir(chatApiDir);
+    await mkdir(stripeNodeDir);
+    await writeFile(path.join(chatApiDir, "Cargo.toml"), "workspace", "utf8");
+    await writeFile(path.join(stripeNodeDir, "package.json"), "{}", "utf8");
+
+    const security = new SecurityService(handle.storage.db);
+    security.grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "main_agent",
+      scopes: [
+        { kind: "fs.read", path: tempDir },
+        { kind: "fs.read", path: `${chatApiDir}/**` },
+      ],
+    });
+
+    const registry = new ToolRegistry();
+    registry.register(createLsTool());
+
+    const result = await registry.execute(
+      "ls",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: chatApiDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        path: tempDir,
+      },
+    );
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "chat-api/\nstripe-node/" }],
+      details: {
+        path: tempDir,
+        absolutePath: await resolveExpectedToolAbsolutePath(tempDir),
+        visibleEntries: 2,
+        totalEntries: 2,
+        entryLimitReached: false,
+      },
+    });
+  });
+
   test("denies listing the system directory", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
@@ -163,7 +215,49 @@ describe("ls tool", () => {
           {
             resource: "filesystem",
             path: POKECLAW_SYSTEM_DIR,
-            scope: "exact",
+            scope: "subtree",
+            access: "read",
+          },
+        ],
+      },
+    } satisfies Partial<ToolFailure>);
+  });
+
+  test("recommends subtree read when listing an ungranted directory", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-ls-tool-"));
+    await mkdir(path.join(tempDir, "src"), { recursive: true });
+
+    const registry = new ToolRegistry();
+    registry.register(createLsTool());
+
+    await expect(
+      registry.execute(
+        "ls",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: path.join(tempDir, "src"),
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          path: tempDir,
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        entries: [
+          {
+            resource: "filesystem",
+            path: await resolveExpectedToolAbsolutePath(tempDir),
+            scope: "subtree",
             access: "read",
           },
         ],

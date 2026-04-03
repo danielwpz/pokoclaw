@@ -12,6 +12,7 @@ import {
 
 import {
   checkFilesystemPermission,
+  expandExactDirectoryReadChildren,
   normalizeFilesystemTargetPath,
 } from "@/src/security/permissions.js";
 import { buildSystemPolicy, type SystemPermissionPolicy } from "@/src/security/policy.js";
@@ -96,15 +97,20 @@ export function buildSandboxConfigForAgent(
   const systemPolicy = input.systemPolicy ?? buildSystemPolicy();
   const security = new SecurityService(input.storage, systemPolicy);
   const permissions = security.getEffectivePermissions(input.ownerAgentId, input.activeAt);
+  const denyReadPatterns = [...permissions.fs.read.hardDeny, ...permissions.fs.read.deny];
+  const allowReadPatterns = [
+    ...permissions.fs.read.allow,
+    ...expandExactDirectoryReadChildren(permissions.fs.read.allow),
+  ];
 
   return {
     filesystem: {
       readMode: permissions.fs.read.mode,
       denyRead: expandSandboxPathPatterns([
-        ...permissions.fs.read.hardDeny,
-        ...permissions.fs.read.deny,
+        ...denyReadPatterns,
+        ...expandExactDirectoryReadChildren(denyReadPatterns),
       ]),
-      allowRead: expandSandboxPathPatterns(permissions.fs.read.allow),
+      allowRead: expandSandboxPathPatterns(allowReadPatterns),
       allowWrite: expandSandboxPathPatterns(permissions.fs.write.allow),
       denyWrite: expandSandboxPathPatterns([
         ...permissions.fs.write.hardDeny,

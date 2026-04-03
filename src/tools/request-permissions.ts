@@ -26,10 +26,12 @@ const REQUEST_PERMISSIONS_ENTRY_SCHEMA = Type.Object(
     path: Type.String({
       description: "Absolute filesystem path. Do not use relative paths.",
     }),
-    scope: Type.Union([Type.Literal("exact"), Type.Literal("subtree")], {
-      description:
-        "Use exact for a single file or path. Use subtree for a directory and everything under it.",
-    }),
+    scope: Type.Optional(
+      Type.Union([Type.Literal("exact"), Type.Literal("subtree")], {
+        description:
+          "Optional. If omitted, read requests default to subtree for existing directories and exact otherwise. Write requests default to exact unless you explicitly ask for subtree.",
+      }),
+    ),
     access: Type.Union([Type.Literal("read"), Type.Literal("write"), Type.Literal("read_write")], {
       description:
         "Prefer the smallest access that is still necessary. Use read_write only when both are needed.",
@@ -78,7 +80,7 @@ export function createRequestPermissionsTool() {
   return defineTool({
     name: "request_permissions",
     description:
-      "Request additional filesystem permissions when another tool was blocked. Only use this after a permission-blocked tool result, and only if the access is necessary and legitimate for the user's request. Prefer the smallest valid scope. For a single file use scope=exact. For a directory tree use scope=subtree.",
+      "Request additional filesystem permissions when another tool was blocked. Only use this after a permission-blocked tool result, and only if the access is necessary and legitimate for the user's request. Prefer the smallest valid scope. If scope is omitted, read requests default to subtree for existing directories and exact otherwise. Write requests default to exact unless you explicitly ask for subtree.",
     inputSchema: REQUEST_PERMISSIONS_TOOL_SCHEMA,
     async execute(context, args) {
       const ownerAgentId = resolveToolOwnerAgentId(context);
@@ -197,8 +199,15 @@ async function validateRequestEntries(input: {
       );
     }
 
-    if (rawEntry.scope === "subtree") {
-      const stats = await safeStat(normalizedPath);
+    const stats = await safeStat(normalizedPath);
+    const resolvedScope = inferPermissionEntryScope({
+      path: normalizedPath,
+      access: rawEntry.access,
+      stats,
+      ...(rawEntry.scope == null ? {} : { scope: rawEntry.scope }),
+    });
+
+    if (resolvedScope === "subtree") {
       if (stats == null || !stats.isDirectory()) {
         throw toolRecoverableError(
           `subtree permission requests must target an existing directory: ${normalizedPath}`,
@@ -214,7 +223,7 @@ async function validateRequestEntries(input: {
       ownerAgentId: input.ownerAgentId,
       security: input.security,
       path: normalizedPath,
-      scope: rawEntry.scope,
+      scope: resolvedScope,
       access: rawEntry.access,
       ...(input.cwd == null ? {} : { cwd: input.cwd }),
     });
@@ -222,7 +231,7 @@ async function validateRequestEntries(input: {
     validated.push({
       resource: "filesystem",
       path: normalizedPath,
-      scope: rawEntry.scope,
+      scope: resolvedScope,
       access: rawEntry.access,
     });
   }
@@ -329,4 +338,21 @@ async function safeStat(targetPath: string) {
   } catch {
     return null;
   }
+}
+
+function inferPermissionEntryScope(input: {
+  scope?: PermissionEntryScope;
+  path: string;
+  access: PermissionAccess;
+  stats: Awaited<ReturnType<typeof safeStat>>;
+}): PermissionEntryScope {
+  if (input.scope != null) {
+    return input.scope;
+  }
+
+  if (input.access === "read" && input.stats?.isDirectory()) {
+    return "subtree";
+  }
+
+  return "exact";
 }

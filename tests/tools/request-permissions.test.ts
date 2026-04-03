@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -245,6 +245,86 @@ describe("request_permissions tool", () => {
       reasonText: "Need to write the requested file.",
       request: {
         scopes: [{ kind: "fs.write", path: "/tmp/requested.txt" }],
+      },
+    } satisfies Partial<ToolApprovalRequired>);
+  });
+
+  test("defaults directory read requests to subtree when scope is omitted", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    const srcDir = path.join(tempDir, "src");
+    await mkdir(path.join(srcDir, "resources"), { recursive: true });
+
+    const registry = new ToolRegistry([createRequestPermissionsTool()]);
+
+    await expect(
+      registry.execute(
+        "request_permissions",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          entries: [
+            {
+              resource: "filesystem",
+              path: srcDir,
+              access: "read",
+            },
+          ],
+          justification: "Need to inspect this source directory recursively.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      reasonText: "Need to inspect this source directory recursively.",
+      request: {
+        scopes: [{ kind: "fs.read", path: `${srcDir}/**` }],
+      },
+    } satisfies Partial<ToolApprovalRequired>);
+  });
+
+  test("keeps directory write requests exact when scope is omitted", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    const outputDir = path.join(tempDir, "output");
+    await mkdir(outputDir);
+
+    const registry = new ToolRegistry([createRequestPermissionsTool()]);
+
+    await expect(
+      registry.execute(
+        "request_permissions",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          entries: [
+            {
+              resource: "filesystem",
+              path: outputDir,
+              access: "write",
+            },
+          ],
+          justification: "Need to write one top-level artifact here.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      reasonText: "Need to write one top-level artifact here.",
+      request: {
+        scopes: [{ kind: "fs.write", path: outputDir }],
       },
     } satisfies Partial<ToolApprovalRequired>);
   });

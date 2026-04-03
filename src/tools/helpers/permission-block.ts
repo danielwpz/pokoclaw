@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { PermissionScope } from "@/src/security/scope.js";
 
@@ -181,7 +182,7 @@ export function compressPermissionScopesToEntries(
   return [...byPath.entries()].map(([scopePath, access]) => ({
     resource: "filesystem",
     path: scopePath.endsWith("/**") ? scopePath.slice(0, -3) : scopePath,
-    scope: scopePath.endsWith("/**") ? "subtree" : "exact",
+    scope: inferPermissionEntryScope(scopePath, access),
     access: access.read && access.write ? "read_write" : access.read ? "read" : "write",
   }));
 }
@@ -270,6 +271,29 @@ function describeEntryAccess(access: PermissionAccess): string {
 
 function describeEntryScope(entry: PermissionRequestEntry): string {
   return entry.scope === "subtree" ? `${entry.path}/**` : entry.path;
+}
+
+function inferPermissionEntryScope(
+  scopePath: string,
+  access: { read: boolean; write: boolean },
+): PermissionEntryScope {
+  if (scopePath.endsWith("/**")) {
+    return "subtree";
+  }
+
+  if (access.read && !access.write && isExistingDirectory(scopePath)) {
+    return "subtree";
+  }
+
+  return "exact";
+}
+
+function isExistingDirectory(targetPath: string): boolean {
+  try {
+    return fs.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function escapeXmlText(value: string): string {
