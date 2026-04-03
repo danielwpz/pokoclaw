@@ -32,13 +32,8 @@ import type {
   OrchestratedRuntimeEventEnvelope,
 } from "@/src/orchestration/outbound-events.js";
 import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
-import {
-  describePermissionRequestLines,
-  parsePermissionRequestJson,
-} from "@/src/security/scope.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
-import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
 
@@ -748,7 +743,6 @@ export function createLarkOutboundRuntime(
         createLarkApprovalStateFromRequest({
           event,
           sourceRunCardObjectId,
-          ...loadRequestedApprovalDetails(input.storage, approvalId),
         }),
       );
       latestApprovalByRunId.set(runId, approvalId);
@@ -1259,46 +1253,6 @@ function findResolvedApprovalToolRunCardObjectId(
   )
     ? latestRunCardObjectId
     : null;
-}
-
-function loadRequestedApprovalDetails(
-  storage: StorageDb,
-  approvalId: string,
-): { requestedPermissionLines: string[]; requestedBashPrefixes: string[][] } {
-  const numericApprovalId = Number.parseInt(approvalId, 10);
-  if (!Number.isFinite(numericApprovalId)) {
-    return {
-      requestedPermissionLines: [],
-      requestedBashPrefixes: [],
-    };
-  }
-
-  const approval = new ApprovalsRepo(storage).getById(numericApprovalId);
-  if (approval == null) {
-    return {
-      requestedPermissionLines: [],
-      requestedBashPrefixes: [],
-    };
-  }
-
-  try {
-    const request = parsePermissionRequestJson(approval.requestedScopeJson);
-    return {
-      requestedPermissionLines: describePermissionRequestLines(request),
-      requestedBashPrefixes: request.scopes.flatMap((scope) =>
-        scope.kind === "bash.full_access" ? [scope.prefix] : [],
-      ),
-    };
-  } catch (error: unknown) {
-    logger.warn("failed to parse requested approval scopes for lark approval card", {
-      approvalId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return {
-      requestedPermissionLines: [],
-      requestedBashPrefixes: [],
-    };
-  }
 }
 
 function truncateLogText(text: string, maxLength: number): string {

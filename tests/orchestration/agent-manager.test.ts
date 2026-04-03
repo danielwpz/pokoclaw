@@ -202,6 +202,9 @@ describe("AgentManager", () => {
         approvalId: "1",
         approvalTarget: "main_agent",
         title: "Need approval",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/tmp/demo.txt" }],
+        },
         reasonText: "Need to update the requested task output.",
         expiresAt: null,
       });
@@ -261,6 +264,9 @@ describe("AgentManager", () => {
       approvalId: "1",
       approvalTarget: "user",
       title: "Need approval",
+      request: {
+        scopes: [{ kind: "fs.write", path: "/tmp/demo.txt" }],
+      },
       reasonText: "Need permission.",
       expiresAt: null,
     });
@@ -298,6 +304,9 @@ describe("AgentManager", () => {
         approvalId: "1",
         approvalTarget: "main_agent",
         title: "Need approval",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/tmp/demo.txt" }],
+        },
         reasonText: "Need to update the requested task output.",
         expiresAt: null,
       });
@@ -1163,6 +1172,9 @@ describe("AgentManager", () => {
       approvalId: "not-a-number",
       approvalTarget: "main_agent",
       title: "Need approval",
+      request: {
+        scopes: [{ kind: "fs.write", path: "/tmp/demo.txt" }],
+      },
       reasonText: "Need permission.",
       expiresAt: null,
     });

@@ -1163,14 +1163,16 @@ describe("lark run state", () => {
         approvalId: "approval_1",
         approvalTarget: "user",
         title: "需要授权",
+        request: {
+          scopes: [
+            { kind: "fs.read", path: "/Users/daniel/project/README.md" },
+            { kind: "fs.write", path: "/Users/daniel/project/output.txt" },
+          ],
+        },
         reasonText: "当前操作需要你的授权才能继续。",
         expiresAt: null,
       },
       sourceRunCardObjectId: "run_1:seg:1",
-      requestedPermissionLines: [
-        "Read /Users/daniel/project/README.md",
-        "Write /Users/daniel/project/output.txt",
-      ],
     });
 
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
@@ -1201,6 +1203,9 @@ describe("lark run state", () => {
         approvalId: "approval_fmt_1",
         approvalTarget: "user",
         title: "Approval required: Write /Users/daniel/Desktop/test-new-2.js",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/Users/daniel/Desktop/test-new-2.js" }],
+        },
         reasonText: "当前操作需要你的授权才能继续。",
         expiresAt: null,
       },
@@ -1226,6 +1231,9 @@ describe("lark run state", () => {
         approvalId: "approval_fmt_2",
         approvalTarget: "user",
         title: "Approval required: Write /Users/daniel/Desktop/test-new-2.js",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/Users/daniel/Desktop/test-new-2.js" }],
+        },
         reasonText: "当前操作需要你的授权才能继续。",
         expiresAt: null,
       },

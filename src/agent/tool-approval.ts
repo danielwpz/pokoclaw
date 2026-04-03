@@ -12,11 +12,7 @@ import type {
   ApprovalWaitOutcome,
   SessionApprovalWaitRegistry,
 } from "@/src/runtime/approval-waits.js";
-import {
-  describePermissionRequest,
-  describePermissionScope,
-  type PermissionRequest,
-} from "@/src/security/scope.js";
+import { describePermissionScope, type PermissionRequest } from "@/src/security/scope.js";
 import type { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { Session } from "@/src/storage/schema/types.js";
@@ -103,7 +99,8 @@ export async function requestToolApproval(input: {
     type: "approval_requested",
     approvalId: String(approvalId),
     approvalTarget: approvalRoute.target,
-    title: input.approvalTitle ?? buildApprovalTitle(input.request),
+    title: input.approvalTitle ?? buildApprovalTitle(),
+    request: input.request,
     reasonText: input.reasonText,
     expiresAt: expiresAt.toISOString(),
     sessionId: input.runInput.sessionId,
@@ -169,10 +166,6 @@ export async function requestToolApproval(input: {
   }
 }
 
-function buildApprovalTitle(request: PermissionRequest): string {
-  if (request.scopes.length === 0) {
-    return "Approval required";
-  }
-
-  return `Approval required: ${describePermissionRequest(request)}`;
+function buildApprovalTitle(): string {
+  return "Approval required";
 }

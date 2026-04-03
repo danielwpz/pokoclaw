@@ -13,6 +13,7 @@ import {
   type LarkFooterStatus,
   type LarkRunState,
 } from "@/src/channels/lark/run-state.js";
+import { describePermissionRequestLines } from "@/src/security/scope.js";
 
 export interface LarkRenderedRunCard {
   card: Record<string, unknown>;
@@ -309,8 +310,14 @@ function renderAssistantTextBlock(
 
 function buildApprovalCardElements(state: LarkApprovalState): Array<Record<string, unknown>> {
   const approved = state.decision === "approve";
-  const requestedPermissionLines = formatRequestedPermissionLines(state.requestedPermissionLines);
-  const requestedBashPrefixLines = formatRequestedBashPrefixLines(state.requestedBashPrefixes);
+  const requestedPermissionLines = formatRequestedPermissionLines(
+    describePermissionRequestLines(state.request),
+  );
+  const requestedBashPrefixLines = formatRequestedBashPrefixLines(
+    state.request.scopes.flatMap((scope) =>
+      scope.kind === "bash.full_access" ? [scope.prefix] : [],
+    ),
+  );
   const elements: Array<Record<string, unknown>> = [
     {
       tag: "markdown",

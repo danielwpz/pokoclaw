@@ -1215,6 +1215,9 @@ describe("lark outbound runtime", () => {
         approvalId: "approval_1",
         approvalTarget: "user",
         title: "需要授权",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/tmp/secret.txt" }],
+        },
         reasonText: "需要执行危险操作。",
         expiresAt: null,
       }),
@@ -1420,6 +1423,9 @@ describe("lark outbound runtime", () => {
         approvalId: "1",
         approvalTarget: "user",
         title: "Approval required: run bash with full access for prefix git status",
+        request: {
+          scopes: [{ kind: "bash.full_access", prefix: ["git", "status"] }],
+        },
         reasonText: "Need git status.",
         expiresAt: null,
       }),
@@ -1519,8 +1525,13 @@ describe("lark outbound runtime", () => {
         runId: "run_1",
         approvalId: "1",
         approvalTarget: "user",
-        title:
-          "Approval required: Read /Users/daniel/project/README.md; Write /Users/daniel/project/output.txt",
+        title: "Approval required",
+        request: {
+          scopes: [
+            { kind: "fs.read", path: "/Users/daniel/project/README.md" },
+            { kind: "fs.write", path: "/Users/daniel/project/output.txt" },
+          ],
+        },
         reasonText: "Need to inspect and update project files.",
         expiresAt: null,
       }),
@@ -1536,9 +1547,7 @@ describe("lark outbound runtime", () => {
     expect(approvalCardText).toContain("**Read** `/Users/daniel/project/README.md`");
     expect(approvalCardText).toContain("**Write** `/Users/daniel/project/output.txt`");
     expect(approvalCardText).not.toContain("2 permissions");
-    expect(approvalCardText).toContain(
-      "Approval required: **Read** `/Users/daniel/project/README.md`; **Write** `/Users/daniel/project/output.txt`",
-    );
+    expect(approvalCardText).toContain("**操作**：Approval required");
 
     await runtime.shutdown();
   });
@@ -1651,6 +1660,9 @@ describe("lark outbound runtime", () => {
         approvalId: "approval_1",
         approvalTarget: "main_agent",
         title: "需要授权",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/tmp/secret.txt" }],
+        },
         reasonText: "需要执行危险操作。",
         expiresAt: null,
       }),
@@ -1772,6 +1784,9 @@ describe("lark outbound runtime", () => {
         approvalId: "2",
         approvalTarget: "user",
         title: "Approval required: run bash with full access for prefix git status",
+        request: {
+          scopes: [{ kind: "bash.full_access", prefix: ["git", "status"] }],
+        },
         reasonText: "Need to inspect the repo state.",
         expiresAt: null,
       }),
@@ -2077,6 +2092,9 @@ describe("lark outbound runtime", () => {
         approvalId: "approval_1",
         approvalTarget: "user",
         title: "需要授权",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/tmp/secret.txt" }],
+        },
         reasonText: "需要执行危险操作。",
         expiresAt: null,
       }),
