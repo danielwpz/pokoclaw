@@ -1834,7 +1834,7 @@ describe("agent loop", () => {
     });
   });
 
-  test("approval_requested events list every requested permission in the title", async () => {
+  test("approval_requested events carry the full structured permission request", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
 
@@ -1903,6 +1903,15 @@ describe("agent loop", () => {
       approvalId?: string;
       decision?: string;
       title?: string;
+      request?: {
+        scopes: Array<
+          | { kind: "fs.read"; path: string }
+          | { kind: "fs.write"; path: string }
+          | { kind: "db.read"; database: "system" }
+          | { kind: "db.write"; database: "system" }
+          | { kind: "bash.full_access"; prefix: string[] }
+        >;
+      };
     }> = [];
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
@@ -1922,9 +1931,12 @@ describe("agent loop", () => {
     const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
     const approvalId = Number(await waitForApprovalRequested(emittedEvents));
 
-    expect(emittedEvents.find((event) => event.type === "approval_requested")?.title).toBe(
-      "Approval required: Read /tmp/requested-read.txt; Write /tmp/requested-write.txt",
-    );
+    expect(emittedEvents.find((event) => event.type === "approval_requested")?.request).toEqual({
+      scopes: [
+        { kind: "fs.read", path: "/tmp/requested-read.txt" },
+        { kind: "fs.write", path: "/tmp/requested-write.txt" },
+      ],
+    });
 
     expect(
       loop.submitApprovalResponse({

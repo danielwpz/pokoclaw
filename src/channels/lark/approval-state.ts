@@ -6,6 +6,7 @@
  */
 import type { ApprovalRequestedEvent } from "@/src/agent/events.js";
 import type { OrchestratedRuntimeEventEnvelope } from "@/src/orchestration/outbound-events.js";
+import type { PermissionRequest } from "@/src/security/scope.js";
 
 export interface LarkApprovalState {
   approvalId: string;
@@ -13,6 +14,7 @@ export interface LarkApprovalState {
   conversationId: string;
   branchId: string;
   title: string;
+  request: PermissionRequest;
   reasonText: string;
   approvalTarget: "user" | "main_agent";
   expiresAt: string | null;
@@ -20,15 +22,11 @@ export interface LarkApprovalState {
   decision: "approve" | "deny" | null;
   actor: string | null;
   sourceRunCardObjectId: string | null;
-  requestedPermissionLines: string[];
-  requestedBashPrefixes: string[][];
 }
 
 export function createLarkApprovalStateFromRequest(input: {
   event: ApprovalRequestedEvent;
   sourceRunCardObjectId: string | null;
-  requestedPermissionLines?: string[];
-  requestedBashPrefixes?: string[][];
 }): LarkApprovalState {
   return {
     approvalId: input.event.approvalId,
@@ -36,6 +34,7 @@ export function createLarkApprovalStateFromRequest(input: {
     conversationId: input.event.conversationId,
     branchId: input.event.branchId,
     title: input.event.title,
+    request: input.event.request,
     reasonText: input.event.reasonText,
     approvalTarget: input.event.approvalTarget,
     expiresAt: input.event.expiresAt,
@@ -43,8 +42,6 @@ export function createLarkApprovalStateFromRequest(input: {
     decision: null,
     actor: null,
     sourceRunCardObjectId: input.sourceRunCardObjectId,
-    requestedPermissionLines: input.requestedPermissionLines ?? [],
-    requestedBashPrefixes: input.requestedBashPrefixes ?? [],
   };
 }
 
@@ -53,8 +50,6 @@ export function reduceLarkApprovalState(
   envelope: OrchestratedRuntimeEventEnvelope,
   input?: {
     sourceRunCardObjectId?: string | null;
-    requestedPermissionLines?: string[];
-    requestedBashPrefixes?: string[][];
   },
 ): LarkApprovalState | null {
   switch (envelope.event.type) {
@@ -64,8 +59,6 @@ export function reduceLarkApprovalState(
         createLarkApprovalStateFromRequest({
           event: envelope.event,
           sourceRunCardObjectId: input?.sourceRunCardObjectId ?? null,
-          requestedPermissionLines: input?.requestedPermissionLines ?? [],
-          requestedBashPrefixes: input?.requestedBashPrefixes ?? [],
         })
       );
     case "approval_resolved":

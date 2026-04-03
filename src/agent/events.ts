@@ -8,6 +8,7 @@
 import type { CompactionReason } from "@/src/agent/compaction.js";
 import type { AgentLlmErrorKind } from "@/src/agent/llm/errors.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
+import type { PermissionRequest } from "@/src/security/scope.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { ToolFailureKind } from "@/src/tools/core/errors.js";
 
@@ -164,6 +165,7 @@ export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
   approvalId: string;
   approvalTarget: "user" | "main_agent";
   title: string;
+  request: PermissionRequest;
   reasonText: string;
   expiresAt: string | null;
 }
