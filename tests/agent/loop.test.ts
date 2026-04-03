@@ -2405,7 +2405,7 @@ describe("agent loop", () => {
                 id: "tool_1",
                 name: "schedule_task",
                 arguments: {
-                  action: "add",
+                  action: "create",
                   name: "Broken reminder",
                   scheduleKind: "at",
                   scheduleValue: "sometime later",

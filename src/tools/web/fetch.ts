@@ -6,6 +6,7 @@ import { defineTool, jsonToolResult, type ToolExecutionContext } from "@/src/too
 import { createFetchProvider } from "@/src/tools/web/providers.js";
 
 const MAX_CONTENT_CHARS = 100_000;
+const WEB_FETCH_RESULT_MAX_CHARS = 8_000;
 
 export const WEB_FETCH_TOOL_SCHEMA = Type.Object(
   {
@@ -26,6 +27,9 @@ export function createWebFetchTool(input: { providerId: string; providerConfig: 
     name: "web_fetch",
     description: "Fetch and extract the main content of a web page using the configured provider.",
     inputSchema: WEB_FETCH_TOOL_SCHEMA,
+    getResultMaxChars() {
+      return WEB_FETCH_RESULT_MAX_CHARS;
+    },
     async execute(context, args) {
       const targetUrl = parseAllowedFetchUrl(context, args.url);
 
@@ -56,6 +60,8 @@ export function createWebFetchTool(input: { providerId: string; providerConfig: 
     },
   });
 }
+
+export { MAX_CONTENT_CHARS, WEB_FETCH_RESULT_MAX_CHARS };
 
 function parseAllowedFetchUrl(context: ToolExecutionContext, rawUrl: string): URL {
   let parsed: URL;

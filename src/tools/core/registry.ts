@@ -6,6 +6,7 @@ import {
 } from "@/src/tools/core/errors.js";
 import {
   parseToolArgs,
+  type ToolContentBlock,
   type ToolDefinition,
   type ToolExecutionContext,
   ToolLookupError,
@@ -14,6 +15,8 @@ import {
 
 const logger = createSubsystemLogger("tools");
 const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
+export const DEFAULT_TOOL_RESULT_MAX_CHARS = 12_000;
+export const TOOL_RESULT_TRUNCATION_NOTICE = "\n\n[Tool result truncated due to size limit.]";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition<unknown, unknown>>();
@@ -82,6 +85,10 @@ export class ToolRegistry {
         1,
         Math.floor(tool.getInvocationTimeoutMs?.(context, args) ?? DEFAULT_TOOL_TIMEOUT_MS),
       );
+      const resultMaxChars = Math.max(
+        1,
+        Math.floor(tool.getResultMaxChars?.(context, args) ?? DEFAULT_TOOL_RESULT_MAX_CHARS),
+      );
       const timeoutController = new AbortController();
       const combinedAbortSignal =
         context.abortSignal == null
@@ -93,7 +100,7 @@ export class ToolRegistry {
       };
       const executionPromise = Promise.resolve(tool.execute(executionContext, args));
       executionPromise.catch(() => {});
-      const result = await Promise.race([
+      const rawResult = await Promise.race([
         executionPromise,
         new Promise<ToolResult>((_, reject) => {
           timeoutHandle = setTimeout(() => {
@@ -109,6 +116,7 @@ export class ToolRegistry {
           }, timeoutMs);
         }),
       ]);
+      const result = truncateToolResult(rawResult, resultMaxChars);
       logger.info("tool execution finished", {
         toolName: name,
         toolCallId: context.toolCallId,
@@ -160,6 +168,63 @@ function summarizeToolResult(result: ToolResult): string {
     ),
     240,
   );
+}
+
+function truncateToolResult(result: ToolResult, maxChars: number): ToolResult {
+  const truncatedContent = truncateToolContentBlocks(result.content, maxChars);
+  if (truncatedContent === result.content) {
+    return result;
+  }
+
+  return {
+    ...result,
+    content: truncatedContent,
+  };
+}
+
+function truncateToolContentBlocks(
+  blocks: ToolContentBlock[],
+  maxChars: number,
+): ToolContentBlock[] {
+  const serializedLength = blocks.reduce((total, block) => total + measureBlock(block), 0);
+  if (serializedLength <= maxChars) {
+    return blocks;
+  }
+
+  const truncated: ToolContentBlock[] = [];
+  let remaining = Math.max(0, maxChars);
+  for (const block of blocks) {
+    if (remaining <= 0) {
+      break;
+    }
+
+    const measured = measureBlock(block);
+    if (measured <= remaining) {
+      truncated.push(block);
+      remaining -= measured;
+      continue;
+    }
+
+    truncated.push(truncateBlock(block, remaining));
+    remaining = 0;
+    break;
+  }
+
+  return truncated;
+}
+
+function measureBlock(block: ToolContentBlock): number {
+  return block.type === "text" ? block.text.length : safeSerialize(block.json).length;
+}
+
+function truncateBlock(block: ToolContentBlock, remaining: number): ToolContentBlock {
+  const budget = Math.max(0, remaining - TOOL_RESULT_TRUNCATION_NOTICE.length);
+  const source = block.type === "text" ? block.text : safeSerialize(block.json);
+  const truncatedSource = budget <= 0 ? "" : source.slice(0, Math.max(0, budget));
+  return {
+    type: "text",
+    text: `${truncatedSource}${TOOL_RESULT_TRUNCATION_NOTICE}`,
+  };
 }
 
 function truncateSerialized(value: unknown, maxLength: number = 240): string {

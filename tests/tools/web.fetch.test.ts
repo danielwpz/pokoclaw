@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
-import { createWebFetchTool } from "@/src/tools/web/fetch.js";
+import { TOOL_RESULT_TRUNCATION_NOTICE, ToolRegistry } from "@/src/tools/core/registry.js";
+import { createWebFetchTool, WEB_FETCH_RESULT_MAX_CHARS } from "@/src/tools/web/fetch.js";
 
 const { extractMock } = vi.hoisted(() => ({
   extractMock: vi.fn(),
@@ -33,15 +34,18 @@ describe("web_fetch tool", () => {
       ],
     });
 
-    const tool = createWebFetchTool({
-      providerId: "tavily",
-      providerConfig: {
-        api: "tavily",
-        apiKey: "tvly-test",
-      },
-    });
+    const registry = new ToolRegistry([
+      createWebFetchTool({
+        providerId: "tavily",
+        providerConfig: {
+          api: "tavily",
+          apiKey: "tvly-test",
+        },
+      }),
+    ]);
 
-    const result = await tool.execute(
+    const result = await registry.execute(
+      "web_fetch",
       {
         sessionId: "session_1",
         conversationId: "conversation_1",
@@ -58,21 +62,17 @@ describe("web_fetch tool", () => {
       format: "markdown",
       includeImages: false,
     });
-    expect(result.content[0]).toEqual({
-      type: "json",
-      json: {
-        providerId: "tavily",
-        providerApi: "tavily",
-        url: "https://example.com/post",
-        title: "Example title",
-        content: "A".repeat(100_000),
-        requestId: "req_fetch",
-        responseTimeMs: 222,
-        creditsUsed: 1,
-        truncated: true,
-        originalContentLength: 110_000,
-      },
-    });
+    expect(result.content).toHaveLength(1);
+    const firstBlock = result.content[0];
+    expect(firstBlock).toBeDefined();
+    expect(firstBlock?.type).toBe("text");
+    expect((firstBlock as { type: "text"; text: string }).text).toContain('"providerId":"tavily"');
+    expect((firstBlock as { type: "text"; text: string }).text).toContain(
+      TOOL_RESULT_TRUNCATION_NOTICE,
+    );
+    expect((firstBlock as { type: "text"; text: string }).text.length).toBe(
+      WEB_FETCH_RESULT_MAX_CHARS,
+    );
   });
 
   test("blocks fetches to denied hosts before provider execution", async () => {

@@ -237,7 +237,7 @@ function summarizeScheduleTask(args: Record<string, unknown> | null): string {
     return "任务列表";
   }
 
-  if (action === "add") {
+  if (action === "create") {
     const name = readString(args?.name);
     const scheduleKind = readString(args?.scheduleKind);
     const scheduleValue = readString(args?.scheduleValue);

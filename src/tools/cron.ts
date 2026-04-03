@@ -19,7 +19,7 @@ import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/core/typ
 
 const CRON_ACTION_SCHEMA = Type.Union([
   Type.Literal("list"),
-  Type.Literal("add"),
+  Type.Literal("create"),
   Type.Literal("update"),
   Type.Literal("remove"),
   Type.Literal("run"),
@@ -27,9 +27,16 @@ const CRON_ACTION_SCHEMA = Type.Union([
   Type.Literal("resume"),
 ]);
 
+const CRON_ACTION_DESCRIPTION =
+  'Action to perform. Use exactly one of these literal values: "list", "create", "update", "remove", "run", "pause", or "resume". ' +
+  'Do not guess synonyms like "add" or "inspect". Use "create" to create a scheduled task and "list" to inspect scheduled tasks.';
+
 export const CRON_TOOL_SCHEMA = Type.Object(
   {
-    action: CRON_ACTION_SCHEMA,
+    action: Type.Unsafe<Static<typeof CRON_ACTION_SCHEMA>>({
+      ...CRON_ACTION_SCHEMA,
+      description: CRON_ACTION_DESCRIPTION,
+    }),
     jobId: Type.Optional(Type.String({ minLength: 1 })),
     includeDisabled: Type.Optional(Type.Boolean()),
     name: Type.Optional(Type.String({ minLength: 1 })),
@@ -65,7 +72,7 @@ export function createScheduleTaskTool() {
   return defineTool({
     name: "schedule_task",
     description:
-      "Create, inspect, update, pause, resume, remove, and manually run one-time future or recurring scheduled tasks that belong to the current agent context. When creating or updating a scheduled task, write the task definition as a future-facing instruction for yourself: when this text is seen again at runtime, it should clearly explain the background, what should be done now, what good completion looks like, and any important constraints or reference steps.",
+      'Manage one-time future or recurring scheduled tasks that belong to the current agent context. Use action="list" to inspect tasks, action="create" to create one, action="update" to modify one, action="remove" to delete one, action="run" to trigger one now, action="pause" to disable one, and action="resume" to re-enable one. When creating or updating a scheduled task, write the task definition as a future-facing instruction for yourself: when this text is seen again at runtime, it should clearly explain the background, what should be done now, what good completion looks like, and any important constraints or reference steps.',
     inputSchema: CRON_TOOL_SCHEMA,
     async execute(context, args) {
       const resolved = resolveCronCaller(context);
@@ -83,7 +90,7 @@ export function createScheduleTaskTool() {
           return jsonToolResult({ jobs });
         }
 
-        case "add": {
+        case "create": {
           const prompt = requireField(args.prompt, "prompt");
           const scheduleKind = requireScheduleKind(args.scheduleKind);
           const scheduleValue = requireField(args.scheduleValue, "scheduleValue");

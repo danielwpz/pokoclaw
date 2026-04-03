@@ -34,7 +34,7 @@ describe("upstream openai completions streaming", () => {
           [
             'data: {"choices":[{"finish_reason":null,"delta":{"reasoning_content":"Need a tool."}}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}',
             "",
-            'data: {"choices":[{"finish_reason":"tool_calls","delta":{"tool_calls":[{"index":0,"id":"call_123","function":{"name":"schedule_task","arguments":"{\\"action\\":\\"add\\"}"}}],"reasoning_details":[{"type":"reasoning.encrypted","id":"call_123","data":"encrypted-signature"}]}}]}',
+            'data: {"choices":[{"finish_reason":"tool_calls","delta":{"tool_calls":[{"index":0,"id":"call_123","function":{"name":"schedule_task","arguments":"{\\"action\\":\\"create\\"}"}}],"reasoning_details":[{"type":"reasoning.encrypted","id":"call_123","data":"encrypted-signature"}]}}]}',
             "",
             "data: [DONE]",
             "",
@@ -92,7 +92,7 @@ describe("upstream openai completions streaming", () => {
       type: "toolCall",
       id: "call_123",
       name: "schedule_task",
-      arguments: { action: "add" },
+      arguments: { action: "create" },
       thoughtSignature: JSON.stringify({
         type: "reasoning.encrypted",
         id: "call_123",
@@ -106,7 +106,7 @@ describe("upstream openai completions streaming", () => {
       asResponse: vi.fn().mockResolvedValue(
         new Response(
           [
-            'data: {"choices":[{"finish_reason":null,"delta":{"tool_calls":[{"index":0,"id":"call_late","function":{"name":"schedule_task","arguments":"{\\"action\\":\\"add\\"}"}}]}}]}',
+            'data: {"choices":[{"finish_reason":null,"delta":{"tool_calls":[{"index":0,"id":"call_late","function":{"name":"schedule_task","arguments":"{\\"action\\":\\"create\\"}"}}]}}]}',
             "",
             'data: {"choices":[{"finish_reason":"tool_calls","delta":{"reasoning_details":[{"type":"reasoning.encrypted","id":"call_late","data":"late-signature"}]}}]}',
             "",
@@ -174,7 +174,7 @@ describe("upstream openai completions streaming", () => {
           [
             'data: {"choices":[{"finish_reason":null,"delta":{"reasoning_details":[{"type":"reasoning.encrypted","id":"call_early","data":"early-signature"}]}}]}',
             "",
-            'data: {"choices":[{"finish_reason":"tool_calls","delta":{"tool_calls":[{"index":0,"id":"call_early","function":{"name":"schedule_task","arguments":"{\\"action\\":\\"add\\"}"}}]}}]}',
+            'data: {"choices":[{"finish_reason":"tool_calls","delta":{"tool_calls":[{"index":0,"id":"call_early","function":{"name":"schedule_task","arguments":"{\\"action\\":\\"create\\"}"}}]}}]}',
             "",
             "data: [DONE]",
             "",
