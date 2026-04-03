@@ -12,7 +12,7 @@ describe("builtin tools", () => {
     expect(registry.has("write")).toBe(true);
     expect(registry.has("edit")).toBe(true);
     expect(registry.has("ls")).toBe(true);
-    expect(registry.has("find")).toBe(true);
+    expect(registry.has("list_dir")).toBe(true);
     expect(registry.has("grep")).toBe(true);
     expect(registry.has("query_system_db")).toBe(true);
     expect(registry.has("finish_task")).toBe(true);
@@ -28,7 +28,7 @@ describe("builtin tools", () => {
       "write",
       "edit",
       "ls",
-      "find",
+      "list_dir",
       "grep",
       "query_system_db",
       "finish_task",

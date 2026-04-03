@@ -55,7 +55,7 @@ describe("approval session orchestration", () => {
     expect(MAIN_AGENT_APPROVAL_SESSION_TOOL_ALLOWLIST).toEqual([
       "read",
       "ls",
-      "find",
+      "list_dir",
       "grep",
       "review_permission_request",
     ]);
