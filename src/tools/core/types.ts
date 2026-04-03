@@ -89,13 +89,28 @@ export interface ToolDefinition<TArgs = unknown, TDetails = unknown> {
   ): Promise<ToolResult<TDetails>> | ToolResult<TDetails>;
 }
 
+export interface ToolArgumentValidationIssue {
+  path: string;
+  message: string;
+  value?: unknown;
+}
+
 export class ToolArgumentValidationError extends Error {
+  readonly issues: ToolArgumentValidationIssue[];
+  readonly allowedFields: string[];
+
   constructor(
     readonly toolName: string,
     readonly validationMessage: string,
+    options: {
+      issues?: ToolArgumentValidationIssue[];
+      allowedFields?: string[];
+    } = {},
   ) {
     super(`${toolName} args are invalid: ${validationMessage}`);
     this.name = "ToolArgumentValidationError";
+    this.issues = options.issues ?? [];
+    this.allowedFields = options.allowedFields ?? [];
   }
 }
 
@@ -126,12 +141,84 @@ export function parseToolArgs<TInputSchema extends TSchema>(
 ): Static<TInputSchema> {
   const normalizedInput = Default(schema, Clone(input));
   if (!Check(schema, normalizedInput)) {
-    const firstError = Errors(schema, normalizedInput).First();
-    const message = firstError?.message ?? "Input does not match the declared schema";
-    throw new ToolArgumentValidationError(toolName, message);
+    const issues = collectValidationIssues(schema, normalizedInput);
+    const allowedFields = extractAllowedFields(schema);
+    const message = renderValidationMessage(issues, allowedFields);
+    throw new ToolArgumentValidationError(toolName, message, {
+      issues,
+      allowedFields,
+    });
   }
 
   return normalizedInput as Static<TInputSchema>;
+}
+
+function collectValidationIssues(
+  schema: TSchema,
+  normalizedInput: unknown,
+): ToolArgumentValidationIssue[] {
+  const rawIssues = [...Errors(schema, normalizedInput)].map((issue) => ({
+    path: issue.path,
+    message: issue.message,
+    ...(issue.value === undefined ? {} : { value: issue.value }),
+  }));
+
+  const requiredPropertyPaths = new Set(
+    rawIssues
+      .filter((issue) => issue.message === "Expected required property")
+      .map((issue) => issue.path),
+  );
+
+  const deduped: ToolArgumentValidationIssue[] = [];
+  const seen = new Set<string>();
+  for (const issue of rawIssues) {
+    if (issue.message === "Expected string" && requiredPropertyPaths.has(issue.path)) {
+      continue;
+    }
+
+    const key = `${issue.path}\u0000${issue.message}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(issue);
+  }
+
+  return deduped.slice(0, 5);
+}
+
+function extractAllowedFields(schema: TSchema): string[] {
+  const raw = schema as { properties?: Record<string, unknown> };
+  return raw.properties == null ? [] : Object.keys(raw.properties);
+}
+
+function renderValidationMessage(
+  issues: ToolArgumentValidationIssue[],
+  allowedFields: string[],
+): string {
+  const lines: string[] = [];
+  if (issues.length > 0) {
+    lines.push("Fix the following argument issues:");
+    for (const issue of issues) {
+      lines.push(`- ${renderIssuePath(issue.path)}: ${issue.message}.`);
+    }
+  } else {
+    lines.push("Input does not match the declared schema.");
+  }
+
+  if (allowedFields.length > 0) {
+    lines.push(`Allowed fields: ${allowedFields.join(", ")}.`);
+  }
+
+  return lines.join(" ");
+}
+
+function renderIssuePath(path: string): string {
+  if (path.length === 0 || path === "/") {
+    return "(root)";
+  }
+
+  return path;
 }
 
 export function textToolResult<TDetails = unknown>(

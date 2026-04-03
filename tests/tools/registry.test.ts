@@ -118,8 +118,67 @@ describe("tool registry", () => {
       details: {
         code: "invalid_tool_args",
         toolName: "read_file",
+        allowedFields: ["path", "offset"],
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: "/path", message: "Expected string" }),
+          expect.objectContaining({ path: "/unexpected", message: "Unexpected property" }),
+        ]),
       },
     } satisfies Partial<ToolFailure>);
+
+    await expect(
+      registry.execute(
+        "read_file",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        { path: 123, unexpected: true },
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("Fix the following argument issues:"),
+    });
+
+    await expect(
+      registry.execute(
+        "read_file",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        { path: 123, unexpected: true },
+      ),
+    ).rejects.toThrow(/\/path: Expected string\./i);
+
+    await expect(
+      registry.execute(
+        "read_file",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        { path: 123, unexpected: true },
+      ),
+    ).rejects.toThrow(/\/unexpected: Unexpected property\./i);
+
+    await expect(
+      registry.execute(
+        "read_file",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        { path: 123, unexpected: true },
+      ),
+    ).rejects.toThrow(/Allowed fields: path, offset\./i);
   });
 
   test("rejects duplicate registrations and missing tools", async () => {

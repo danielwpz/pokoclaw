@@ -31,6 +31,14 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     expect(envelope.content).toContain("scheduled execution");
     expect(envelope.content).toContain("The final response is the primary user-facing output");
     expect(envelope.content).toContain("You must explicitly call finish_task");
+    expect(envelope.content).toContain("recent_runs and last_run are historical reference only");
+    expect(envelope.content).toContain(
+      "They are not evidence that the current run has already completed its required work",
+    );
+    expect(envelope.content).toContain(
+      "The internal kickoff/reference blocks above are not visible to the user",
+    );
+    expect(envelope.content).toContain("Do not tell the user to look at them");
   });
 
   test("renders only the latest successful run when no failure history is relevant", () => {
@@ -56,6 +64,8 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     });
 
     expect(envelope.content).toContain("<recent_runs>");
+    expect(envelope.content).toContain("<reference_only>");
+    expect(envelope.content).toContain("Historical context only");
     expect(envelope.content).toContain("<last_run>");
     expect(envelope.content).toContain("Reviewed 3 pull requests.");
     expect(envelope.content).not.toContain("<last_successful_run>");
@@ -86,6 +96,7 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     expect(envelope.content).toContain("&lt;daily report&gt;");
     expect(envelope.content).toContain("&amp; key items");
     expect(envelope.content).toContain("<recent_runs>");
+    expect(envelope.content).toContain("<reference_only>");
     expect(envelope.content).toContain("<last_run>");
     expect(envelope.content).toContain("Slack &lt;API&gt; timeout &amp; retry exhausted");
     expect(envelope.content).toContain("<last_successful_run>");

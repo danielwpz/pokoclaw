@@ -5,10 +5,12 @@ import {
   buildApprovalAgentOperatingModelSection,
   buildApprovalReviewSection,
   buildBashFullAccessSection,
+  buildBootstrapSection,
   buildMainAgentIdentitySection,
   buildMainAgentOperatingModelSection,
   buildMainAgentScheduledTasksSection,
   buildMainAgentSubagentSection,
+  buildMemorySection,
   buildPermissionsSection,
   buildProjectContextSection,
   buildSafetySection,
@@ -31,6 +33,7 @@ describe("agent system prompt", () => {
     });
 
     expect(prompt).toContain("You are Pokeclaw Main Agent");
+    expect(prompt).toContain("friendly personal assistant");
     expect(prompt).toContain("## Operating Model");
     expect(prompt).toContain("## Scheduled Tasks");
     expect(prompt).toContain("## SubAgent Creation");
@@ -43,6 +46,71 @@ describe("agent system prompt", () => {
     expect(prompt).not.toContain("## Project Context");
     expect(prompt).not.toContain("## Memory");
     expect(prompt).not.toContain("## Skills");
+  });
+
+  test("adds a dedicated Memory section and appends the memory catalog at the end when provided", () => {
+    const memoryCatalog = [
+      "<memory_files>",
+      "The files below are durable memory for this session. They are injected context, not user-visible output.",
+      "  <memory_file>",
+      "    <layer>soul</layer>",
+      "    <purpose>Identity, tone, boundaries, and stable user profile.</purpose>",
+      "    <path>/tmp/ws/SOUL.md</path>",
+      "    <content>",
+      "      Name: Pokeclaw",
+      "    </content>",
+      "  </memory_file>",
+      "</memory_files>",
+    ].join("\n");
+
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      memoryCatalog,
+    });
+
+    expect(prompt).toContain("## Memory");
+    expect(prompt).toContain("## Memory Updates");
+    expect(prompt).toContain("already-loaded durable memory for this session");
+    expect(prompt).toContain("It is internal context, not user-visible output.");
+    expect(prompt).toContain("SOUL.md: agent identity, tone, boundaries");
+    expect(prompt).toContain("Project atlas-web usually lives at /Users/example/work/atlas-web.");
+    expect(prompt).toContain(
+      'Counterexample: "Today at 14:32 a task failed with EISDIR" should not be written to durable memory.',
+    );
+    expect(prompt).toContain(memoryCatalog);
+    expect(prompt.endsWith(memoryCatalog)).toBe(true);
+    expect(prompt.indexOf("## Memory")).toBeLessThan(prompt.lastIndexOf("<memory_files>"));
+    expect(prompt.indexOf("## Memory Updates")).toBeLessThan(prompt.lastIndexOf("<memory_files>"));
+  });
+
+  test("adds a dedicated Bootstrap section and appends the bootstrap file at the end when provided", () => {
+    const bootstrapPrompt = [
+      "<bootstrap_file>",
+      "The file below defines first-run bootstrap instructions for this session.",
+      "  <path>/tmp/ws/BOOTSTRAP.md</path>",
+      "  <content>",
+      "    Ask what to call the user.",
+      "    Ask what the assistant should be called.",
+      "  </content>",
+      "</bootstrap_file>",
+    ].join("\n");
+
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      bootstrapPrompt,
+    });
+
+    expect(prompt).toContain("## Bootstrap");
+    expect(prompt).toContain("A BOOTSTRAP.md file has been loaded");
+    expect(prompt).toContain("clarifying two names");
+    expect(prompt).toContain("what you should call the user");
+    expect(prompt).toContain("what the user wants to call you");
+    expect(prompt).toContain("delete BOOTSTRAP.md with bash rm");
+    expect(prompt).toContain(bootstrapPrompt);
+    expect(prompt.indexOf("## Bootstrap")).toBeLessThan(prompt.lastIndexOf("<bootstrap_file>"));
+    expect(prompt.endsWith(bootstrapPrompt)).toBe(true);
   });
 
   test("adds a dedicated Skills section and appends the skill catalog at the end when provided", () => {
@@ -180,6 +248,7 @@ describe("agent system prompt", () => {
     expect(approvalPrompt).not.toContain(
       "You are Pokeclaw, an agent that completes the user's request",
     );
+    expect(approvalPrompt).not.toContain("friendly personal assistant");
   });
 
   test("allows approval prompts to include trusted built-in skills when a catalog is provided", () => {
@@ -236,6 +305,9 @@ describe("agent system prompt", () => {
 
     expect(prompt).toContain("the system's long-lived manager");
     expect(prompt).toContain("single entrypoint for new requests, casual conversation");
+    expect(prompt).toContain("Default to concise, mobile-friendly replies.");
+    expect(prompt).toContain("Many users read on phones with limited screen space");
+    expect(prompt).toContain("If the user explicitly asks for a deep explanation");
     expect(prompt).toContain("You can and should handle casual conversation");
     expect(prompt).toContain("Your unique role is to preserve continuity across the whole system");
     expect(prompt).toContain("It is fine to proactively attempt create_subagent");
@@ -323,6 +395,8 @@ describe("agent system prompt", () => {
       }),
     ).toContain("## Workspace & Runtime");
     expect(buildProjectContextSection()).toBe("");
+    expect(buildBootstrapSection()).toBe("");
+    expect(buildMemorySection()).toBe("");
     expect(buildSkillsSection()).toBe("");
   });
 
@@ -337,6 +411,7 @@ describe("agent system prompt", () => {
     });
 
     expect(prompt).toContain("You are Pokeclaw SubAgent");
+    expect(prompt).toContain("light emoji are fine");
     expect(prompt).toContain("## SubAgent Profile");
     expect(prompt).toContain("<title>PR Review</title>");
     expect(prompt).toContain("<description>");
@@ -346,6 +421,9 @@ describe("agent system prompt", () => {
     );
     expect(prompt).not.toContain("<initial_task>");
     expect(prompt).toContain("You own this workstream");
+    expect(prompt).toContain("Keep routine replies concise and mobile-friendly by default.");
+    expect(prompt).toContain("Many users will read this conversation on small screens.");
+    expect(prompt).toContain("If the user asks for technical depth");
     expect(prompt).toContain("You are responsible for moving this workstream forward");
     expect(prompt).toContain("You are not the system-wide coordinator");
     expect(prompt).toContain("Treat the kickoff note as system-generated background");
@@ -381,22 +459,35 @@ describe("agent system prompt", () => {
 
   test("current filled section builders remain non-empty", () => {
     expect(buildMainAgentIdentitySection()).not.toBe("");
+    expect(buildMainAgentIdentitySection()).toContain("friendly personal assistant");
     expect(buildMainAgentOperatingModelSection()).not.toBe("");
     expect(buildMainAgentScheduledTasksSection()).not.toBe("");
     expect(buildMainAgentSubagentSection()).not.toBe("");
     expect(buildSubagentIdentitySection()).not.toBe("");
+    expect(buildSubagentIdentitySection()).toContain("light emoji are fine");
     expect(buildSubagentOperatingModelSection()).not.toBe("");
     expect(buildSubagentScheduledTasksSection()).not.toBe("");
     expect(buildSubagentProfileSection({ title: "PR Review" })).not.toBe("");
     expect(buildTaskAgentIdentitySection()).not.toBe("");
     expect(buildApprovalAgentIdentitySection()).not.toBe("");
     expect(buildTaskAgentOperatingModelSection()).not.toBe("");
+    expect(buildTaskAgentOperatingModelSection()).toContain(
+      "When you produce user-visible output, keep it concise and mobile-friendly by default.",
+    );
+    expect(buildTaskAgentOperatingModelSection()).toContain(
+      "If the task specifically requires a detailed technical explanation",
+    );
     expect(buildApprovalAgentOperatingModelSection()).not.toBe("");
     expect(buildToolUsageSection()).not.toBe("");
     expect(buildPermissionsSection()).not.toBe("");
     expect(buildApprovalReviewSection()).not.toBe("");
     expect(buildBashFullAccessSection()).not.toBe("");
     expect(buildSafetySection()).not.toBe("");
+    expect(
+      buildBootstrapSection({
+        bootstrapPrompt: "<bootstrap_file>\n  <path>/tmp/ws/BOOTSTRAP.md</path>\n</bootstrap_file>",
+      }),
+    ).toContain("clarifying two names");
   });
 
   test("teaches agents that one run may interleave visible replies and tool calls", () => {

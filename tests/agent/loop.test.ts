@@ -6,6 +6,7 @@ import { AgentLlmError } from "@/src/agent/llm/errors.js";
 import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop, type AgentModelRunner } from "@/src/agent/loop.js";
+import { buildMemoryCatalogPrompt } from "@/src/agent/memory.js";
 import { AgentSessionService } from "@/src/agent/session.js";
 import { buildSkillsCatalogPrompt } from "@/src/agent/skills.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
@@ -416,6 +417,277 @@ describe("agent loop", () => {
     expect(seenSystemPrompts[0]).toContain("## Skills");
     expect(seenSystemPrompts[0]).toContain("<available_skills>");
     expect(seenSystemPrompts[0]).toContain("<name>repo-review</name>");
+  });
+
+  test("reuses the same memory snapshot across all turns in one run", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_memory",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_memory",
+      sessionId: "sess_memory",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"who am I?"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const seenSystemPrompts: string[] = [];
+    let turns = 0;
+    let memoryResolverCalls = 0;
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        seenSystemPrompts.push(input.systemPrompt ?? "");
+        turns += 1;
+        if (turns === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "ping",
+                arguments: {},
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry([
+        defineTool({
+          name: "ping",
+          description: "no-op",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("pong");
+          },
+        }),
+      ]),
+      memoryResolver: {
+        resolveForRun() {
+          memoryResolverCalls += 1;
+          const entries = [
+            {
+              layer: "soul" as const,
+              path: "/tmp/ws/SOUL.md",
+              purpose: "Identity, tone, boundaries, and stable user profile.",
+              content: "User is a founder in Shanghai.",
+            },
+          ];
+          return {
+            entries,
+            warnings: [],
+            prompt: buildMemoryCatalogPrompt(entries),
+          };
+        },
+      },
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_memory", scenario: "chat" });
+
+    expect(memoryResolverCalls).toBe(1);
+    expect(seenSystemPrompts).toHaveLength(2);
+    expect(seenSystemPrompts[0]).toBe(seenSystemPrompts[1]);
+    expect(seenSystemPrompts[0]).toContain("## Memory");
+    expect(seenSystemPrompts[0]).toContain("<memory_files>");
+    expect(seenSystemPrompts[0]).toContain("User is a founder in Shanghai.");
+  });
+
+  test("injects bootstrap guidance for main chat runs when BOOTSTRAP.md is present", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    handle.storage.sqlite.exec(`
+      INSERT INTO agents (id, conversation_id, kind, created_at)
+      VALUES ('agent_main', 'conv_1', 'main', '2026-03-22T00:00:00.000Z');
+    `);
+    sessionsRepo.create({
+      id: "sess_bootstrap",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_main",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_bootstrap",
+      sessionId: "sess_bootstrap",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const seenSystemPrompts: string[] = [];
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        seenSystemPrompts.push(input.systemPrompt ?? "");
+        return makeAssistantResult({
+          content: [{ type: "text", text: "hi" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      bootstrapResolver: {
+        resolveForRun() {
+          return {
+            path: "/tmp/ws/BOOTSTRAP.md",
+            content: "Ask what to call the user.\nAsk what the assistant should be called.",
+            prompt: [
+              "<bootstrap_file>",
+              "The file below defines first-run bootstrap instructions for this session.",
+              "  <path>/tmp/ws/BOOTSTRAP.md</path>",
+              "  <content>",
+              "    Ask what to call the user.",
+              "    Ask what the assistant should be called.",
+              "  </content>",
+              "</bootstrap_file>",
+            ].join("\n"),
+          };
+        },
+      },
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_bootstrap", scenario: "chat" });
+
+    expect(seenSystemPrompts).toHaveLength(1);
+    expect(seenSystemPrompts[0]).toContain("## Bootstrap");
+    expect(seenSystemPrompts[0]).toContain("clarifying two names");
+    expect(seenSystemPrompts[0]).toContain("what you should call the user");
+    expect(seenSystemPrompts[0]).toContain("what the user wants to call you");
+    expect(seenSystemPrompts[0]).toContain("<bootstrap_file>");
+  });
+
+  test("loads bootstrap after memory seeding so first run can bootstrap", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    handle.storage.sqlite.exec(`
+      INSERT INTO agents (id, conversation_id, kind, created_at)
+      VALUES ('agent_main', 'conv_1', 'main', '2026-03-22T00:00:00.000Z');
+    `);
+    sessionsRepo.create({
+      id: "sess_bootstrap_first_run",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_main",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_bootstrap_first_run",
+      sessionId: "sess_bootstrap_first_run",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let bootstrapSeeded = false;
+    const seenSystemPrompts: string[] = [];
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        seenSystemPrompts.push(input.systemPrompt ?? "");
+        return makeAssistantResult({
+          content: [{ type: "text", text: "hi" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      memoryResolver: {
+        resolveForRun() {
+          bootstrapSeeded = true;
+          const entries = [
+            {
+              layer: "soul" as const,
+              path: "/tmp/ws/SOUL.md",
+              purpose: "Identity, tone, boundaries, and stable user profile.",
+              content: "User prefers concise updates.",
+            },
+          ];
+          return {
+            entries,
+            warnings: [],
+            prompt: buildMemoryCatalogPrompt(entries),
+          };
+        },
+      },
+      bootstrapResolver: {
+        resolveForRun() {
+          if (!bootstrapSeeded) {
+            return null;
+          }
+          return {
+            path: "/tmp/ws/BOOTSTRAP.md",
+            content: "Ask what to call the user.",
+            prompt: [
+              "<bootstrap_file>",
+              "The file below defines first-run bootstrap instructions for this session.",
+              "  <path>/tmp/ws/BOOTSTRAP.md</path>",
+              "  <content>",
+              "    Ask what to call the user.",
+              "  </content>",
+              "</bootstrap_file>",
+            ].join("\n"),
+          };
+        },
+      },
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_bootstrap_first_run", scenario: "chat" });
+
+    expect(seenSystemPrompts).toHaveLength(1);
+    expect(seenSystemPrompts[0]).toContain("## Bootstrap");
+    expect(seenSystemPrompts[0]).toContain("<bootstrap_file>");
   });
 
   test("passes session purpose into the model runner for session-scoped tool visibility", async () => {

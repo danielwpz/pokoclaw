@@ -593,6 +593,14 @@ describe("TaskExecutionRunner", () => {
           expect(input.content).toContain("Posted the daily report with 5 items.");
           expect(input.content).toContain("You are running in background mode");
           expect(input.content).toContain("The final response is the primary user-facing output");
+          expect(input.content).toContain("recent_runs and last_run are historical reference only");
+          expect(input.content).toContain(
+            "They are not evidence that the current run has already completed its required work",
+          );
+          expect(input.content).toContain(
+            "The internal kickoff/reference blocks above are not visible to the user",
+          );
+          expect(input.content).toContain("Do not tell the user to look at them");
           return makeStartedRun({
             sessionId: created.executionSession.id,
             scenario: "cron",

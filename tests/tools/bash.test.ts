@@ -206,6 +206,79 @@ describe("bash tool", () => {
     );
   });
 
+  test("returns actionable validation guidance for deprecated timeoutMs args", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command: "pwd",
+          timeoutMs: "5000",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "invalid_tool_args",
+        toolName: "bash",
+        allowedFields: ["command", "cwd", "timeoutSec", "sandboxMode", "justification", "prefix"],
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: "/timeoutMs", message: "Unexpected property" }),
+        ]),
+      },
+    });
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command: "pwd",
+          timeoutMs: "5000",
+        },
+      ),
+    ).rejects.toThrow(/\/timeoutMs: Unexpected property\./i);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command: "pwd",
+          timeoutMs: "5000",
+        },
+      ),
+    ).rejects.toThrow(
+      /Allowed fields: command, cwd, timeoutSec, sandboxMode, justification, prefix\./i,
+    );
+  });
+
   test("passes through permission-blocked failures from the sandbox adapter", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);

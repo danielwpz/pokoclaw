@@ -10,6 +10,7 @@ import {
   buildApprovalAgentOperatingModelSection,
   buildApprovalReviewSection,
   buildBashFullAccessSection,
+  buildBootstrapSection,
   buildFutureRuntimeSections,
   buildMainAgentIdentitySection,
   buildMainAgentOperatingModelSection,
@@ -41,6 +42,8 @@ interface BuildAgentSystemPromptInput {
   description?: string | null;
   workdir?: string | null;
   privateWorkspaceDir?: string | null;
+  bootstrapPrompt?: string | null;
+  memoryCatalog?: string | null;
   currentDate?: string | null;
   timezone?: string | null;
   skillsCatalog?: string | null;
@@ -59,11 +62,18 @@ function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
     }),
     buildProjectContextSection(),
-    buildMemorySection(),
+    buildBootstrapSection({
+      ...(input.bootstrapPrompt === undefined ? {} : { bootstrapPrompt: input.bootstrapPrompt }),
+    }),
+    buildMemorySection({
+      ...(input.memoryCatalog === undefined ? {} : { memoryCatalog: input.memoryCatalog }),
+    }),
     buildSkillsSection({
       ...(input.skillsCatalog === undefined ? {} : { skillsCatalog: input.skillsCatalog }),
     }),
     buildFutureRuntimeSections(),
+    input.bootstrapPrompt ?? "",
+    input.memoryCatalog ?? "",
     input.skillsCatalog ?? "",
   ]);
 }
@@ -83,11 +93,18 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
     }),
     buildProjectContextSection(),
-    buildMemorySection(),
+    buildBootstrapSection({
+      ...(input.bootstrapPrompt === undefined ? {} : { bootstrapPrompt: input.bootstrapPrompt }),
+    }),
+    buildMemorySection({
+      ...(input.memoryCatalog === undefined ? {} : { memoryCatalog: input.memoryCatalog }),
+    }),
     buildSkillsSection({
       ...(input.skillsCatalog === undefined ? {} : { skillsCatalog: input.skillsCatalog }),
     }),
     buildFutureRuntimeSections(),
+    input.bootstrapPrompt ?? "",
+    input.memoryCatalog ?? "",
     input.skillsCatalog ?? "",
   ]);
 }
@@ -114,11 +131,18 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
     }),
     buildProjectContextSection(),
-    buildMemorySection(),
+    buildBootstrapSection({
+      ...(input.bootstrapPrompt === undefined ? {} : { bootstrapPrompt: input.bootstrapPrompt }),
+    }),
+    buildMemorySection({
+      ...(input.memoryCatalog === undefined ? {} : { memoryCatalog: input.memoryCatalog }),
+    }),
     buildSkillsSection({
       ...(input.skillsCatalog === undefined ? {} : { skillsCatalog: input.skillsCatalog }),
     }),
     buildFutureRuntimeSections(),
+    input.bootstrapPrompt ?? "",
+    input.memoryCatalog ?? "",
     input.skillsCatalog ?? "",
   ]);
 }
@@ -135,11 +159,18 @@ function buildApprovalAgentSystemPrompt(input: BuildAgentSystemPromptInput): str
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
     }),
     buildProjectContextSection(),
-    buildMemorySection(),
+    buildBootstrapSection({
+      ...(input.bootstrapPrompt === undefined ? {} : { bootstrapPrompt: input.bootstrapPrompt }),
+    }),
+    buildMemorySection({
+      ...(input.memoryCatalog === undefined ? {} : { memoryCatalog: input.memoryCatalog }),
+    }),
     buildSkillsSection({
       ...(input.skillsCatalog === undefined ? {} : { skillsCatalog: input.skillsCatalog }),
     }),
     buildFutureRuntimeSections(),
+    input.bootstrapPrompt ?? "",
+    input.memoryCatalog ?? "",
     input.skillsCatalog ?? "",
   ]);
 }
