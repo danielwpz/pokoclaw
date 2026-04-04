@@ -1,29 +1,64 @@
+import {
+  truncateLarkCardString,
+  truncateLarkCardValueDeep,
+} from "@/src/channels/lark/render/card-truncation.js";
 import type { LarkToolSequenceBlock, LarkToolSequenceTool } from "@/src/channels/lark/run-state.js";
 
 export function renderToolSequenceBlock(
   block: LarkToolSequenceBlock,
 ): Array<Record<string, unknown>> {
-  if (block.tools.length === 0) {
+  return renderToolSequenceSlice({
+    tools: block.tools,
+    finalized: block.finalized,
+    originalToolCount: block.tools.length,
+    latestToolCallId: block.finalized ? null : (block.tools.at(-1)?.toolCallId ?? null),
+  });
+}
+
+export function renderToolSequenceSlice(input: {
+  tools: LarkToolSequenceTool[];
+  finalized: boolean;
+  originalToolCount?: number;
+  latestToolCallId?: string | null;
+}): Array<Record<string, unknown>> {
+  const originalToolCount = input.originalToolCount ?? input.tools.length;
+  if (input.tools.length === 0) {
     return [];
   }
 
-  if (block.tools.length <= 2) {
-    return block.tools.map((tool) => renderToolDetail(tool));
+  if (input.finalized) {
+    if (originalToolCount <= 2) {
+      return input.tools.map((tool) => renderToolDetail(tool));
+    }
+    return [renderCollapsedToolHistoryPanel(input.tools)];
   }
 
-  if (block.finalized) {
-    return [renderCollapsedToolHistoryPanel(block.tools)];
+  if (originalToolCount <= 2) {
+    return input.tools.map((tool) => renderToolDetail(tool));
   }
 
-  const latestTool = block.tools.at(-1);
+  const latestToolCallId = input.latestToolCallId ?? input.tools.at(-1)?.toolCallId ?? null;
+  if (latestToolCallId == null) {
+    return [renderCollapsedToolHistoryPanel(input.tools, "（已结束）")];
+  }
+
+  const latestToolIndex = input.tools.findIndex((tool) => tool.toolCallId === latestToolCallId);
+  if (latestToolIndex < 0) {
+    return [renderCollapsedToolHistoryPanel(input.tools, "（已结束）")];
+  }
+
+  const latestTool = input.tools[latestToolIndex];
   if (latestTool == null) {
     return [];
   }
 
-  return [
-    renderCollapsedToolHistoryPanel(block.tools.slice(0, -1), "（已结束）"),
-    renderToolDetail(latestTool),
-  ];
+  const elements: Array<Record<string, unknown>> = [];
+  const priorTools = input.tools.slice(0, latestToolIndex);
+  if (priorTools.length > 0) {
+    elements.push(renderCollapsedToolHistoryPanel(priorTools, "（已结束）"));
+  }
+  elements.push(renderToolDetail(latestTool));
+  return elements;
 }
 
 function renderCollapsedToolHistoryPanel(
@@ -99,11 +134,17 @@ function renderToolDetailContent(tool: LarkToolSequenceTool): string {
     return renderBashToolDetailContent(tool);
   }
 
+  const truncatedArgs = truncateLarkCardValueDeep(tool.args);
+  const truncatedResult =
+    tool.status === "failed"
+      ? truncateLarkCardString(tool.errorMessage ?? "")
+      : truncateLarkCardValueDeep(tool.result);
+
   return (
-    `**Input**\n\`\`\`json\n${prettyPrint(tool.args)}\n\`\`\`` +
+    `**Input**\n\`\`\`json\n${prettyPrint(truncatedArgs)}\n\`\`\`` +
     `\n\n**${
       tool.status === "failed" ? "Error" : "Output"
-    }**\n\`\`\`\n${tool.status === "failed" ? (tool.errorMessage ?? "") : prettyPrint(tool.result)}\n\`\`\``
+    }**\n\`\`\`\n${prettyPrint(truncatedResult)}\n\`\`\``
   );
 }
 
@@ -112,7 +153,10 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
   const result = isRecord(tool.result) ? tool.result : null;
   const details = isRecord(result?.details) ? result.details : null;
 
-  const command = firstString(args?.command, details?.command) ?? "";
+  const command = truncateLarkCardString(firstString(args?.command, details?.command) ?? "", {
+    maxChars: 240,
+    maxLines: 8,
+  });
   const cwd = firstString(args?.cwd, details?.cwd);
   const timeoutSec = firstNumber(args?.timeoutSec);
   const timeoutMs = firstNumber(args?.timeoutMs, details?.timeoutMs);
@@ -132,7 +176,10 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
   }
 
   if (tool.status === "failed") {
-    content += `\n\n**Error**\n\`\`\`\n${tool.errorMessage ?? ""}\n\`\`\``;
+    content += `\n\n**Error**\n\`\`\`\n${truncateLarkCardString(tool.errorMessage ?? "", {
+      maxChars: 240,
+      maxLines: 8,
+    })}\n\`\`\``;
     return content;
   }
 
@@ -141,10 +188,16 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
   }
 
   if (stdout.length > 0) {
-    content += `\n\n**Stdout**\n\`\`\`\n${truncateText(stdout, 1600)}\n\`\`\``;
+    content += `\n\n**Stdout**\n\`\`\`\n${truncateLarkCardString(stdout, {
+      maxChars: 240,
+      maxLines: 8,
+    })}\n\`\`\``;
   }
   if (stderr.length > 0) {
-    content += `\n\n**Stderr**\n\`\`\`\n${truncateText(stderr, 1600)}\n\`\`\``;
+    content += `\n\n**Stderr**\n\`\`\`\n${truncateLarkCardString(stderr, {
+      maxChars: 240,
+      maxLines: 8,
+    })}\n\`\`\``;
   }
 
   return content;

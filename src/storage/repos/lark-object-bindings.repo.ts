@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
@@ -278,5 +278,29 @@ export class LarkObjectBindingsRepo {
       deleted,
     });
     return deleted;
+  }
+
+  listByInternalObjectPrefix(input: {
+    channelInstallationId: string;
+    internalObjectKind: string;
+    internalObjectIdPrefix: string;
+  }): LarkObjectBinding[] {
+    const prefix = input.internalObjectIdPrefix;
+    return this.db
+      .select()
+      .from(larkObjectBindings)
+      .where(
+        and(
+          eq(larkObjectBindings.channelInstallationId, input.channelInstallationId),
+          eq(larkObjectBindings.internalObjectKind, input.internalObjectKind),
+          like(larkObjectBindings.internalObjectId, `${prefix}%`),
+        ),
+      )
+      .all()
+      .filter(
+        (binding) =>
+          binding.internalObjectId === prefix ||
+          binding.internalObjectId.startsWith(`${prefix}:page:`),
+      );
   }
 }
