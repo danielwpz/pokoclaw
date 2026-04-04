@@ -15,7 +15,7 @@ import {
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
   buildLarkRenderedApprovalCard,
-  buildLarkRenderedRunCard,
+  buildLarkRenderedRunCardPages,
   buildLarkRenderedSubagentCreationRequestCard,
   type LarkSubagentCreationRequestCardState,
 } from "@/src/channels/lark/render.js";
@@ -232,220 +232,292 @@ export function createLarkOutboundRuntime(
       const client = input.clients.getOrCreate(surface.channelInstallationId);
       const cardkit = getCardkitSdk(client);
       const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
-      const existing = bindingsRepo.getByInternalObject({
-        channelInstallationId: surface.channelInstallationId,
-        internalObjectKind: RUN_CARD_OBJECT_KIND,
-        internalObjectId: runCardObjectId,
-      });
-      const snapshotKey = `${surface.channelInstallationId}:run:${runCardObjectId}`;
-
-      const rendered = buildLarkRenderedRunCard(state);
-      const activeAssistantBlockId = rendered.activeAssistant?.elementId ?? null;
-      const activeAssistantText = rendered.activeAssistant?.text ?? "";
-      const snapshot = deliverySnapshots.get(snapshotKey) ?? null;
-      const shouldRenderUpdate =
-        snapshot == null || snapshot.structureSignature !== rendered.structureSignature;
-      const canStreamDelta =
-        existing?.larkCardId != null &&
-        activeAssistantBlockId != null &&
-        snapshot?.activeAssistantElementId === activeAssistantBlockId &&
-        snapshot.activeAssistantText !== activeAssistantText;
-
-      logger.debug("computed lark run card delivery decision", {
-        runId: state.runId,
+      const renderedPages = buildLarkRenderedRunCardPages(state);
+      const existingBindings = listRunCardPageBindings(
+        bindingsRepo,
+        surface.channelInstallationId,
         runCardObjectId,
-        channelInstallationId: surface.channelInstallationId,
-        larkCardId: existing?.larkCardId ?? null,
-        lastSequence: existing?.lastSequence ?? null,
-        structureChanged: shouldRenderUpdate,
-        canStreamDelta,
-        activeAssistantElementId: activeAssistantBlockId,
-        activeAssistantTextPreview: truncateLogText(activeAssistantText, 160),
-        previousAssistantElementId: snapshot?.activeAssistantElementId ?? null,
-        previousAssistantTextPreview: truncateLogText(snapshot?.activeAssistantText ?? "", 160),
-        structureSignaturePreview: truncateLogText(rendered.structureSignature, 160),
-      });
+      );
+      const existingBindingsByObjectId = new Map(
+        existingBindings.map((binding) => [binding.internalObjectId, binding]),
+      );
+      const deliveredPageObjectIds = new Set<string>();
 
-      if (existing?.larkCardId == null) {
-        const createResp = await cardkit.card.create({
-          data: {
-            type: "card_json",
-            data: JSON.stringify(rendered.card),
-          },
+      for (const renderedPage of renderedPages) {
+        const pageObjectId = buildRunCardPageObjectId(runCardObjectId, renderedPage.pageIndex);
+        deliveredPageObjectIds.add(pageObjectId);
+        const existing = existingBindingsByObjectId.get(pageObjectId) ?? null;
+        const snapshotKey = `${surface.channelInstallationId}:run:${pageObjectId}`;
+        const activeAssistantBlockId = renderedPage.activeAssistant?.elementId ?? null;
+        const activeAssistantText = renderedPage.activeAssistant?.text ?? "";
+        const snapshot = deliverySnapshots.get(snapshotKey) ?? null;
+        const shouldRenderUpdate =
+          snapshot == null || snapshot.structureSignature !== renderedPage.structureSignature;
+        const canStreamDelta =
+          existing?.larkCardId != null &&
+          activeAssistantBlockId != null &&
+          snapshot?.activeAssistantElementId === activeAssistantBlockId &&
+          snapshot.activeAssistantText !== activeAssistantText;
+        const pageStatus =
+          state.terminal === "running" && renderedPage.pageIndex === renderedPage.pageCount
+            ? "active"
+            : "finalized";
+        const metadataJson = JSON.stringify({
+          activeAssistantBlockId,
+          pageIndex: renderedPage.pageIndex,
+          pageCount: renderedPage.pageCount,
+          runId: state.runId,
+          sessionId: state.sessionId,
+          taskRunId: state.taskRunId,
+          taskRunType: state.taskRunType,
         });
-        logger.debug("created lark cardkit card response", {
+
+        logger.debug("computed lark run card delivery decision", {
           runId: state.runId,
           runCardObjectId,
+          pageObjectId,
+          pageIndex: renderedPage.pageIndex,
+          pageCount: renderedPage.pageCount,
+          jsonBytes: renderedPage.metrics.jsonBytes,
+          taggedNodes: renderedPage.metrics.taggedNodes,
           channelInstallationId: surface.channelInstallationId,
-          responsePreview: truncateLogText(safeJson(createResp), LARK_CARD_LOG_PREVIEW_MAX_LENGTH),
+          larkCardId: existing?.larkCardId ?? null,
+          lastSequence: existing?.lastSequence ?? null,
+          structureChanged: shouldRenderUpdate,
+          canStreamDelta,
+          activeAssistantElementId: activeAssistantBlockId,
+          activeAssistantTextPreview: truncateLogText(activeAssistantText, 160),
+          previousAssistantElementId: snapshot?.activeAssistantElementId ?? null,
+          previousAssistantTextPreview: truncateLogText(snapshot?.activeAssistantText ?? "", 160),
+          structureSignaturePreview: truncateLogText(renderedPage.structureSignature, 160),
         });
-        const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
-        if (larkCardId == null) {
-          logger.warn("lark run card create returned no card id", {
+
+        if (existing?.larkCardId == null) {
+          const createResp = await cardkit.card.create({
+            data: {
+              type: "card_json",
+              data: JSON.stringify(renderedPage.card),
+            },
+          });
+          logger.debug("created lark cardkit card response", {
             runId: state.runId,
             runCardObjectId,
+            pageObjectId,
+            pageIndex: renderedPage.pageIndex,
             channelInstallationId: surface.channelInstallationId,
             responsePreview: truncateLogText(
               safeJson(createResp),
               LARK_CARD_LOG_PREVIEW_MAX_LENGTH,
             ),
           });
-          continue;
-        }
+          const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
+          if (larkCardId == null) {
+            logger.warn("lark run card create returned no card id", {
+              runId: state.runId,
+              runCardObjectId,
+              pageObjectId,
+              channelInstallationId: surface.channelInstallationId,
+              responsePreview: truncateLogText(
+                safeJson(createResp),
+                LARK_CARD_LOG_PREVIEW_MAX_LENGTH,
+              ),
+            });
+            continue;
+          }
 
-        logger.debug("sending lark card reference message", {
-          runId: state.runId,
-          runCardObjectId,
-          channelInstallationId: surface.channelInstallationId,
-          chatId,
-          larkCardId,
-          cardPreview: truncateLogText(
-            JSON.stringify(rendered.card),
-            LARK_CARD_LOG_PREVIEW_MAX_LENGTH,
-          ),
-        });
-        const response = (await sendLarkInteractiveCardReferenceMessage({
-          client,
-          chatId,
-          surfaceObject,
-          larkCardId,
-        })) as { data?: { message_id?: string; open_message_id?: string } };
-        const larkMessageId = response.data?.message_id ?? null;
-        if (larkMessageId == null) {
-          logger.warn("lark run card create returned no message id", {
+          logger.debug("sending lark card reference message", {
             runId: state.runId,
             runCardObjectId,
+            pageObjectId,
+            pageIndex: renderedPage.pageIndex,
             channelInstallationId: surface.channelInstallationId,
+            chatId,
+            larkCardId,
+            cardPreview: truncateLogText(
+              JSON.stringify(renderedPage.card),
+              LARK_CARD_LOG_PREVIEW_MAX_LENGTH,
+            ),
+          });
+          const response = (await sendLarkInteractiveCardReferenceMessage({
+            client,
+            chatId,
+            surfaceObject,
+            larkCardId,
+          })) as { data?: { message_id?: string; open_message_id?: string } };
+          const larkMessageId = response.data?.message_id ?? null;
+          if (larkMessageId == null) {
+            logger.warn("lark run card create returned no message id", {
+              runId: state.runId,
+              runCardObjectId,
+              pageObjectId,
+              channelInstallationId: surface.channelInstallationId,
+              larkCardId,
+            });
+            continue;
+          }
+
+          bindingsRepo.upsert({
+            id: randomUUID(),
+            channelInstallationId: surface.channelInstallationId,
+            conversationId: state.conversationId,
+            branchId: state.branchId,
+            internalObjectKind: RUN_CARD_OBJECT_KIND,
+            internalObjectId: pageObjectId,
+            larkMessageId,
+            larkOpenMessageId: response.data?.open_message_id ?? null,
+            larkCardId,
+            threadRootMessageId: readStringValue(surfaceObject.thread_id),
+            cardElementId: activeAssistantBlockId,
+            lastSequence: 0,
+            status: pageStatus,
+            metadataJson,
+          });
+
+          deliverySnapshots.set(snapshotKey, {
+            structureSignature: renderedPage.structureSignature,
+            activeAssistantElementId: activeAssistantBlockId,
+            activeAssistantText,
+          });
+
+          logger.info("created lark run card", {
+            runId: state.runId,
+            runCardObjectId,
+            pageObjectId,
+            pageIndex: renderedPage.pageIndex,
+            channelInstallationId: surface.channelInstallationId,
+            larkMessageId,
             larkCardId,
           });
           continue;
         }
 
-        bindingsRepo.upsert({
-          id: randomUUID(),
-          channelInstallationId: surface.channelInstallationId,
-          conversationId: state.conversationId,
-          branchId: state.branchId,
-          internalObjectKind: RUN_CARD_OBJECT_KIND,
-          internalObjectId: runCardObjectId,
-          larkMessageId,
-          larkOpenMessageId: response.data?.open_message_id ?? null,
-          larkCardId,
-          threadRootMessageId: readStringValue(surfaceObject.thread_id),
-          cardElementId: activeAssistantBlockId,
-          lastSequence: 0,
-          status: state.terminal === "running" ? "active" : "finalized",
-          metadataJson: JSON.stringify({
-            activeAssistantBlockId,
+        if (!shouldRenderUpdate && canStreamDelta) {
+          const elementId = activeAssistantBlockId;
+          if (elementId == null || existing.larkCardId == null) {
+            continue;
+          }
+          const sequence = (existing.lastSequence ?? 0) + 1;
+          await cardkit.cardElement.content({
+            path: {
+              card_id: existing.larkCardId,
+              element_id: elementId,
+            },
+            data: {
+              content: activeAssistantText,
+              sequence,
+            },
+          });
+          bindingsRepo.updateDeliveryState({
+            channelInstallationId: surface.channelInstallationId,
+            internalObjectKind: RUN_CARD_OBJECT_KIND,
+            internalObjectId: pageObjectId,
+            lastSequence: sequence,
+            status: pageStatus,
+            metadataJson,
+          });
+          deliverySnapshots.set(snapshotKey, {
+            structureSignature: snapshot?.structureSignature ?? renderedPage.structureSignature,
+            activeAssistantElementId: activeAssistantBlockId,
+            activeAssistantText,
+          });
+          logger.debug("streamed lark run card content", {
             runId: state.runId,
-            sessionId: state.sessionId,
-            taskRunId: state.taskRunId,
-            taskRunType: state.taskRunType,
-          }),
-        });
-
-        deliverySnapshots.set(snapshotKey, {
-          structureSignature: rendered.structureSignature,
-          activeAssistantElementId: activeAssistantBlockId,
-          activeAssistantText,
-        });
-
-        logger.info("created lark run card", {
-          runId: state.runId,
-          runCardObjectId,
-          channelInstallationId: surface.channelInstallationId,
-          larkMessageId,
-          larkCardId,
-        });
-        continue;
-      }
-
-      if (!shouldRenderUpdate && canStreamDelta) {
-        const elementId = activeAssistantBlockId;
-        if (elementId == null || existing.larkCardId == null) {
+            runCardObjectId,
+            pageObjectId,
+            pageIndex: renderedPage.pageIndex,
+            channelInstallationId: surface.channelInstallationId,
+            larkCardId: existing.larkCardId,
+            elementId,
+            sequence,
+          });
           continue;
         }
+
+        if (!shouldRenderUpdate || existing.larkCardId == null) {
+          continue;
+        }
+
         const sequence = (existing.lastSequence ?? 0) + 1;
-        await cardkit.cardElement.content({
-          path: {
-            card_id: existing.larkCardId,
-            element_id: elementId,
-          },
+        await cardkit.card.update({
+          path: { card_id: existing.larkCardId },
           data: {
-            content: activeAssistantText,
+            card: {
+              type: "card_json",
+              data: JSON.stringify(renderedPage.card),
+            },
             sequence,
           },
         });
         bindingsRepo.updateDeliveryState({
           channelInstallationId: surface.channelInstallationId,
           internalObjectKind: RUN_CARD_OBJECT_KIND,
-          internalObjectId: runCardObjectId,
+          internalObjectId: pageObjectId,
           lastSequence: sequence,
-          metadataJson: JSON.stringify({
-            activeAssistantBlockId,
-            runId: state.runId,
-            sessionId: state.sessionId,
-            taskRunId: state.taskRunId,
-            taskRunType: state.taskRunType,
-          }),
+          status: pageStatus,
+          metadataJson,
         });
         deliverySnapshots.set(snapshotKey, {
-          structureSignature: snapshot?.structureSignature ?? rendered.structureSignature,
+          structureSignature: renderedPage.structureSignature,
           activeAssistantElementId: activeAssistantBlockId,
           activeAssistantText,
         });
-        logger.debug("streamed lark run card content", {
+        logger.debug("updated lark run card", {
           runId: state.runId,
           runCardObjectId,
+          pageObjectId,
+          pageIndex: renderedPage.pageIndex,
           channelInstallationId: surface.channelInstallationId,
           larkCardId: existing.larkCardId,
-          elementId,
           sequence,
         });
-        continue;
       }
 
-      if (!shouldRenderUpdate || existing.larkCardId == null) {
-        continue;
-      }
+      for (const binding of existingBindings) {
+        if (
+          deliveredPageObjectIds.has(binding.internalObjectId) ||
+          binding.larkCardId == null ||
+          binding.status === "stale"
+        ) {
+          continue;
+        }
 
-      const sequence = (existing.lastSequence ?? 0) + 1;
-      await cardkit.card.update({
-        path: { card_id: existing.larkCardId },
-        data: {
-          card: {
-            type: "card_json",
-            data: JSON.stringify(rendered.card),
+        const staleCard = buildStaleRunCardCard();
+        const sequence = (binding.lastSequence ?? 0) + 1;
+        await cardkit.card.update({
+          path: { card_id: binding.larkCardId },
+          data: {
+            card: {
+              type: "card_json",
+              data: JSON.stringify(staleCard),
+            },
+            sequence,
           },
-          sequence,
-        },
-      });
-      bindingsRepo.updateDeliveryState({
-        channelInstallationId: surface.channelInstallationId,
-        internalObjectKind: RUN_CARD_OBJECT_KIND,
-        internalObjectId: runCardObjectId,
-        lastSequence: sequence,
-        status: state.terminal === "running" ? "active" : "finalized",
-        metadataJson: JSON.stringify({
-          activeAssistantBlockId,
+        });
+        bindingsRepo.updateDeliveryState({
+          channelInstallationId: surface.channelInstallationId,
+          internalObjectKind: RUN_CARD_OBJECT_KIND,
+          internalObjectId: binding.internalObjectId,
+          lastSequence: sequence,
+          status: "stale",
+          metadataJson: JSON.stringify({
+            pageState: "stale",
+            runId: state.runId,
+          }),
+        });
+        deliverySnapshots.set(`${surface.channelInstallationId}:run:${binding.internalObjectId}`, {
+          structureSignature: JSON.stringify(staleCard),
+          activeAssistantElementId: null,
+          activeAssistantText: "",
+        });
+        logger.debug("marked stale lark run card page", {
           runId: state.runId,
-          sessionId: state.sessionId,
-          taskRunId: state.taskRunId,
-          taskRunType: state.taskRunType,
-        }),
-      });
-      deliverySnapshots.set(snapshotKey, {
-        structureSignature: rendered.structureSignature,
-        activeAssistantElementId: activeAssistantBlockId,
-        activeAssistantText,
-      });
-      logger.debug("updated lark run card", {
-        runId: state.runId,
-        runCardObjectId,
-        channelInstallationId: surface.channelInstallationId,
-        larkCardId: existing.larkCardId,
-        sequence,
-      });
+          runCardObjectId,
+          stalePageObjectId: binding.internalObjectId,
+          channelInstallationId: surface.channelInstallationId,
+          larkCardId: binding.larkCardId,
+          sequence,
+        });
+      }
     }
   };
 
@@ -1253,6 +1325,62 @@ function findResolvedApprovalToolRunCardObjectId(
   )
     ? latestRunCardObjectId
     : null;
+}
+
+function buildRunCardPageObjectId(runCardObjectId: string, pageIndex: number): string {
+  return pageIndex <= 1 ? runCardObjectId : `${runCardObjectId}:page:${pageIndex}`;
+}
+
+function parseRunCardPageIndex(runCardObjectId: string, internalObjectId: string): number {
+  if (internalObjectId === runCardObjectId) {
+    return 1;
+  }
+
+  const prefix = `${runCardObjectId}:page:`;
+  if (!internalObjectId.startsWith(prefix)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const suffix = internalObjectId.slice(prefix.length);
+  const parsed = Number.parseInt(suffix, 10);
+  return Number.isFinite(parsed) && parsed > 1 ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function listRunCardPageBindings(
+  bindingsRepo: LarkObjectBindingsRepo,
+  channelInstallationId: string,
+  runCardObjectId: string,
+) {
+  return bindingsRepo
+    .listByInternalObjectPrefix({
+      channelInstallationId,
+      internalObjectKind: RUN_CARD_OBJECT_KIND,
+      internalObjectIdPrefix: runCardObjectId,
+    })
+    .sort(
+      (left, right) =>
+        parseRunCardPageIndex(runCardObjectId, left.internalObjectId) -
+        parseRunCardPageIndex(runCardObjectId, right.internalObjectId),
+    );
+}
+
+function buildStaleRunCardCard(): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    config: {
+      summary: {
+        content: "已整理",
+      },
+    },
+    body: {
+      elements: [
+        {
+          tag: "markdown",
+          content: "ℹ️ **此页已收起，请查看上方更新后的运行卡片。**",
+        },
+      ],
+    },
+  };
 }
 
 function truncateLogText(text: string, maxLength: number): string {
