@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -56,5 +56,15 @@ export class ConversationsRepo {
         )
         .get() ?? null
     );
+  }
+
+  listByChannelInstanceId(channelInstanceId: string, limit: number = 20): Conversation[] {
+    return this.db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.channelInstanceId, channelInstanceId))
+      .orderBy(asc(conversations.createdAt), asc(conversations.id))
+      .limit(limit)
+      .all();
   }
 }

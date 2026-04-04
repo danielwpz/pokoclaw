@@ -21,6 +21,7 @@ const logger = createSubsystemLogger("cron/service");
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
 const DEFAULT_STALE_RUNNING_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DUE_BATCH_LIMIT = 100;
+const DEFAULT_MISSED_GRACE_MS = 3 * 60 * 1000;
 
 export interface CronServiceDependencies {
   storage: StorageDb;
@@ -31,6 +32,7 @@ export interface CronServiceDependencies {
   scanIntervalMs?: number;
   staleRunningMs?: number;
   dueBatchLimit?: number;
+  missedGraceMs?: number;
 }
 
 export interface CronServiceStatus {
@@ -43,6 +45,7 @@ export interface ScanOnceResult {
   status: "ran" | "skipped";
   dueJobs: number;
   claimedJobs: number;
+  missedJobs: number;
   staleCleared: number;
 }
 
@@ -61,6 +64,7 @@ export class CronService {
   private readonly scanIntervalMs: number;
   private readonly staleRunningMs: number;
   private readonly dueBatchLimit: number;
+  private readonly missedGraceMs: number;
 
   private started = false;
   private scanInFlight = false;
@@ -74,6 +78,7 @@ export class CronService {
     this.scanIntervalMs = deps.scanIntervalMs ?? DEFAULT_SCAN_INTERVAL_MS;
     this.staleRunningMs = deps.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
     this.dueBatchLimit = deps.dueBatchLimit ?? DEFAULT_DUE_BATCH_LIMIT;
+    this.missedGraceMs = deps.missedGraceMs ?? DEFAULT_MISSED_GRACE_MS;
   }
 
   start(): void {
@@ -89,6 +94,7 @@ export class CronService {
       scanIntervalMs: this.scanIntervalMs,
       staleRunningMs: this.staleRunningMs,
       dueBatchLimit: this.dueBatchLimit,
+      missedGraceMs: this.missedGraceMs,
     });
     void this.tick();
   }
@@ -279,6 +285,7 @@ export class CronService {
         status: "skipped",
         dueJobs: 0,
         claimedJobs: 0,
+        missedJobs: 0,
         staleCleared: 0,
       };
     }
@@ -301,8 +308,33 @@ export class CronService {
       });
 
       let claimedJobs = 0;
+      let missedJobs = 0;
       for (const dueJob of dueJobs) {
+        const scheduledAt = dueJob.nextRunAt == null ? null : new Date(dueJob.nextRunAt);
+        const overdueMs =
+          scheduledAt == null || Number.isNaN(scheduledAt.getTime())
+            ? 0
+            : now.getTime() - scheduledAt.getTime();
         const nextRunAt = computeNextRunAt(toScheduleDefinition(dueJob), now);
+        if (overdueMs > this.missedGraceMs) {
+          repo.completeRun({
+            id: dueJob.id,
+            finishedAt: now,
+            status: "missed",
+            lastOutput: "Skipped because this scheduled run was already more than 3 minutes late.",
+            nextRunAt,
+          });
+          missedJobs += 1;
+          logger.info("marked overdue cron job as missed", {
+            cronJobId: dueJob.id,
+            ownerAgentId: dueJob.ownerAgentId,
+            scheduledAt: dueJob.nextRunAt,
+            overdueMs,
+            nextRunAt: nextRunAt?.toISOString() ?? null,
+          });
+          continue;
+        }
+
         logger.debug("attempting to claim due cron job", {
           cronJobId: dueJob.id,
           ownerAgentId: dueJob.ownerAgentId,
@@ -327,25 +359,20 @@ export class CronService {
         this.kickoffClaimedRun(claimed, "scheduled");
       }
 
-      if (claimedJobs > 0 || staleCleared > 0) {
-        logger.info("cron scan processed jobs", {
-          dueJobs: dueJobs.length,
-          claimedJobs,
-          staleCleared,
-          inFlightRuns: this.inFlightRuns.size,
-        });
-      } else {
-        logger.debug("cron scan finished without actionable jobs", {
-          dueJobs: dueJobs.length,
-          claimedJobs,
-          staleCleared,
-        });
-      }
+      logger.info("cron heartbeat", {
+        tickAt: now.toISOString(),
+        dueJobs: dueJobs.length,
+        claimedJobs,
+        missedJobs,
+        staleCleared,
+        inFlightRuns: this.inFlightRuns.size,
+      });
 
       return {
         status: "ran",
         dueJobs: dueJobs.length,
         claimedJobs,
+        missedJobs,
         staleCleared,
       };
     } finally {
