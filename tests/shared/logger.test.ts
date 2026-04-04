@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import {
@@ -16,6 +16,7 @@ describe("runtime log file sink", () => {
   let tempDir: string | null = null;
 
   afterEach(async () => {
+    vi.useRealTimers();
     await resetRuntimeLoggingForTests();
     if (tempDir != null) {
       await rm(tempDir, { recursive: true, force: true });
@@ -23,7 +24,10 @@ describe("runtime log file sink", () => {
     }
   });
 
-  test("writes plain info+ lines to the runtime log file", async () => {
+  test("writes plain info+ lines to the runtime log file with local timestamps", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 3, 4, 8, 9, 10, 123));
+
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-logger-test-"));
     const runtimeLogPath = path.join(tempDir, "runtime.log");
 
@@ -44,8 +48,10 @@ describe("runtime log file sink", () => {
 
     const text = await readFile(runtimeLogPath, "utf8");
     expect(text).not.toContain("\u001B[");
-    expect(text).toContain("[logger-test] info line foo='bar'");
-    expect(text).toContain("[logger-test] warn line");
+    expect(text).toContain("2026-04-04 08:09:10.123 INFO [logger-test] info line foo='bar'");
+    expect(text).toContain("2026-04-04 08:09:10.123 WARN [logger-test] warn line");
     expect(text).not.toContain("debug line");
+    expect(text).not.toContain("T08:09:10.123");
+    expect(text).not.toContain("Z INFO");
   });
 });

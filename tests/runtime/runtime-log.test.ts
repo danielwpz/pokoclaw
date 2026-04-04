@@ -24,21 +24,28 @@ describe("runtime log tail reader", () => {
     ).resolves.toBeNull();
   });
 
-  test("reads the timestamp from the last non-empty runtime log line", async () => {
+  test("reads the timestamp from the last non-empty runtime log line in local time format", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-runtime-log-test-"));
     const runtimeLogPath = path.join(tempDir, "runtime.log");
     await writeFile(
       runtimeLogPath,
       [
-        "2026-04-04T00:00:00.000Z INFO [main] startup complete",
+        "2026-04-04 00:00:00.000 INFO [main] startup complete",
         "not a timestamp line",
-        "2026-04-04T00:12:34.000Z INFO [cron/service] cron heartbeat dueJobs=0 claimedJobs=0",
+        "2026-04-04 00:12:34.000 INFO [cron/service] cron heartbeat dueJobs=0 claimedJobs=0",
         "",
       ].join("\n"),
       "utf8",
     );
 
     const timestamp = await readLastRuntimeLogTimestamp(runtimeLogPath);
-    expect(timestamp?.toISOString()).toBe("2026-04-04T00:12:34.000Z");
+    expect(timestamp).not.toBeNull();
+    expect(timestamp?.getFullYear()).toBe(2026);
+    expect(timestamp?.getMonth()).toBe(3);
+    expect(timestamp?.getDate()).toBe(4);
+    expect(timestamp?.getHours()).toBe(0);
+    expect(timestamp?.getMinutes()).toBe(12);
+    expect(timestamp?.getSeconds()).toBe(34);
+    expect(timestamp?.getMilliseconds()).toBe(0);
   });
 });

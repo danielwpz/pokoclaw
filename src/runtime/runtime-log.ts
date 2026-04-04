@@ -1,7 +1,7 @@
 import { open } from "node:fs/promises";
 
 const DEFAULT_TAIL_BYTES = 64 * 1024;
-const ISO_TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/;
+const LOCAL_TIMESTAMP_PREFIX = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/;
 
 export async function readLastRuntimeLogTimestamp(
   runtimeLogPath: string,
@@ -58,12 +58,22 @@ export async function readLastRuntimeLogTimestamp(
 }
 
 function extractTimestampPrefix(line: string): Date | null {
-  const match = ISO_TIMESTAMP_PREFIX.exec(line);
+  const match = LOCAL_TIMESTAMP_PREFIX.exec(line);
   if (match == null) {
     return null;
   }
 
-  const timestamp = new Date(match[0]);
+  const [_full, yearText, monthText, dayText, hourText, minuteText, secondText, millisecondText] =
+    match;
+  const timestamp = new Date(
+    Number(yearText),
+    Number(monthText) - 1,
+    Number(dayText),
+    Number(hourText),
+    Number(minuteText),
+    Number(secondText),
+    Number((millisecondText ?? "0").padEnd(3, "0")),
+  );
   return Number.isNaN(timestamp.getTime()) ? null : timestamp;
 }
 
