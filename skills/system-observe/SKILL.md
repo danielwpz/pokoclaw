@@ -14,7 +14,6 @@ Use this skill to inspect pokeclaw itself.
 - System database: durable facts such as sessions, messages, task runs, cron jobs, approvals, permission grants, and delegated approval history.
 - Runtime log: host-side operational evidence such as failures, routing decisions, retries, crashes, and subsystem errors.
 - Source code and references: authoritative schema definitions and implementation behavior.
-- Live in-memory state beyond the exposed tool may still be unavailable. If the answer depends on unavailable live state, say so clearly instead of guessing.
 
 Choose one or more channels based on the question. Do not force a fixed order for every task.
 
@@ -40,6 +39,7 @@ Choose one or more channels based on the question. Do not force a fixed order fo
 
 - For a question about a run that may still be active now, start with `get_runtime_status` before querying the DB.
 - If `get_runtime_status` says a run is not present in live memory, treat that as "not currently active here and no retained in-memory snapshot was found" rather than proof of success; then use the DB to determine whether it completed, failed, or was cancelled.
+- If the answer depends on live in-memory state that `get_runtime_status` does not expose, say that clearly and do not guess.
 - Adapt an existing query recipe before inventing a new exploratory query.
 - Delegated approval investigation uses the same DB and log channels; start from the approval recipes and approval log hints in the references.
 - Separate facts from inference.
