@@ -17,9 +17,13 @@ Use it to answer questions like:
 This tool is not a durable history source.
 If the run is absent from live memory, use the database and logs next.
 
+This tool only exposes the live in-memory fields that runtime control currently publishes.
+Other in-memory state may still exist internally but remain unavailable through this tool.
+If your conclusion depends on live state that is not exposed here, say that clearly and use the database, logs, or source inspection instead of guessing.
+
 ## Return shape overview
 
-When inspecting one run, read the payload in three layers.
+When inspecting one run, read the payload in three layers, from broadest to most specific.
 
 ### 1. Run-level state
 
@@ -83,11 +87,11 @@ These two layers are intentionally separate.
 A run may be `tool_running` while `latestRequest.status = 'finished'`.
 That means the latest model request already ended and the run has moved on to tool work.
 
-Cross-check helper fields with `phase`:
+## Cross-check helper fields with `phase`
 
-- `phase = 'tool_running'` usually pairs with non-null `activeToolCallId` and `activeToolName`
-- `phase = 'waiting_approval'` usually pairs with non-null `waitingApprovalId`
-- `phase = 'running'` usually means both `activeToolCallId` and `waitingApprovalId` are null
+- `phase = 'tool_running'` pairs with non-null `activeToolCallId` and `activeToolName`
+- `phase = 'waiting_approval'` pairs with non-null `waitingApprovalId`
+- `phase = 'running'` means both `activeToolCallId` and `waitingApprovalId` are null
 - terminal phases may keep the latest completed request snapshot even when tool and approval fields are null
 
 ## Important interpretation rules
@@ -177,3 +181,8 @@ Correct reading: the run is no longer active, but its retained in-memory snapsho
 ```
 
 Correct reading: the run failed later in orchestration or tool work. Do not restate this as “the latest request failed” unless `latestRequest.status` itself is `failed`.
+
+## Notes
+
+- Snapshots are retained in memory while they remain in runtime control after the run leaves the active list. A completed, failed, or cancelled run may still be accessible by `runId` for immediate diagnosis even though it is no longer active.
+- This tool only exposes the in-memory fields that runtime control currently publishes. Other live state may exist internally but is not accessible here.
