@@ -45,6 +45,7 @@ export async function requestToolApproval(input: {
   approvalTitle?: string;
   signal: AbortSignal;
   recordEvent(event: AgentRuntimeEventInput): void;
+  onRequested?: (input: { approvalId: number; createdAt: Date; expiresAt: Date }) => void;
 }): Promise<ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest }> {
   const createdAt = new Date();
   const expiresAt = new Date(createdAt.getTime() + input.approvalTimeoutMs);
@@ -81,6 +82,11 @@ export async function requestToolApproval(input: {
         ? undefined
         : describePermissionScope(input.request.scopes[0]),
     runId: input.runId,
+  });
+  input.onRequested?.({
+    approvalId,
+    createdAt,
+    expiresAt,
   });
 
   const waitPromise = input.approvalWaits.beginWait({
