@@ -2,6 +2,7 @@ import type { Static, TSchema } from "@sinclair/typebox";
 import { Errors } from "@sinclair/typebox/errors";
 import { Check, Clone, Default } from "@sinclair/typebox/value";
 import type { SecurityConfig } from "@/src/config/schema.js";
+import type { RunLiveObservabilitySnapshot } from "@/src/runtime/run-observability.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 
 export type ToolContentBlock =
@@ -45,6 +46,22 @@ export interface ToolRuntimeControl {
     reasonText?: string | null;
     decidedAt?: Date;
   }): boolean;
+  getRuntimeStatus?(input?: { runId?: string }):
+    | {
+        now: string;
+        runs: RunLiveObservabilitySnapshot[];
+      }
+    | {
+        now: string;
+        found: true;
+        run: RunLiveObservabilitySnapshot;
+      }
+    | {
+        now: string;
+        found: false;
+        runId: string;
+        message: string;
+      };
   requestSubagentCreation?(input: {
     sourceSessionId: string;
     title: string;

@@ -6,6 +6,7 @@ import { createCreateSubagentTool } from "@/src/tools/create-subagent.js";
 import { createScheduleTaskTool } from "@/src/tools/cron.js";
 import { createEditTool } from "@/src/tools/edit.js";
 import { createFinishTaskTool } from "@/src/tools/finish-task.js";
+import { createGetRuntimeStatusTool } from "@/src/tools/get-runtime-status.js";
 import { createGrepTool } from "@/src/tools/grep.js";
 import { createListDirTool } from "@/src/tools/list-dir.js";
 import { createLsTool } from "@/src/tools/ls.js";
@@ -31,6 +32,7 @@ export function createBuiltinToolRegistry(
   registry.register(createListDirTool());
   registry.register(createGrepTool());
   registry.register(createQuerySystemDbTool());
+  registry.register(createGetRuntimeStatusTool());
   registry.register(createFinishTaskTool());
   registry.register(createRequestPermissionsTool());
   registry.register(createReviewPermissionRequestTool());

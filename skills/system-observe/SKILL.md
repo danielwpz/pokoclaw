@@ -10,10 +10,10 @@ Use this skill to inspect pokeclaw itself.
 
 ## Channels
 
+- Live runtime status: in-memory state for active runs plus retained snapshots for specific finished runs that still remain in process memory. Use `get_runtime_status` first when you need to know whether something is actively running right now, whether a just-finished run is still inspectable in memory, or whether the latest LLM request is waiting for first token vs already streaming vs already finished.
 - System database: durable facts such as sessions, messages, task runs, cron jobs, approvals, permission grants, and delegated approval history.
 - Runtime log: host-side operational evidence such as failures, routing decisions, retries, crashes, and subsystem errors.
 - Source code and references: authoritative schema definitions and implementation behavior.
-- Live in-memory state: only partially exposed right now. If the answer depends on live state that is not available, say so clearly instead of guessing.
 
 Choose one or more channels based on the question. Do not force a fixed order for every task.
 
@@ -28,6 +28,8 @@ Choose one or more channels based on the question. Do not force a fixed order fo
     - `../../src/storage/db/init.ts`
     - `../../src/storage/migrate/files/0001_init.sql`
   - Only then use `query_system_db` for live schema discovery.
+- If the task involves live runtime status payload semantics for `get_runtime_status`:
+  - Read `references/runtime-status.md` first.
 - If the task involves runtime logs:
   - Read `references/log-recipes.md` first.
 - If the task is really about implementation behavior:
@@ -35,6 +37,9 @@ Choose one or more channels based on the question. Do not force a fixed order fo
 
 ## Working rules
 
+- For a question about a run that may still be active now, start with `get_runtime_status` before querying the DB.
+- If `get_runtime_status` says a run is not present in live memory, treat that as "not currently active here and no retained in-memory snapshot was found" rather than proof of success; then use the DB to determine whether it completed, failed, or was cancelled.
+- If the answer depends on live in-memory state that `get_runtime_status` does not expose, say that clearly and do not guess.
 - Adapt an existing query recipe before inventing a new exploratory query.
 - Delegated approval investigation uses the same DB and log channels; start from the approval recipes and approval log hints in the references.
 - Separate facts from inference.
@@ -46,6 +51,7 @@ Choose one or more channels based on the question. Do not force a fixed order fo
 - `references/schema-overview.md`
 - `references/query-recipes.md`
 - `references/log-recipes.md`
+- `references/runtime-status.md`
 
 Do not skip the required first reads above when they directly apply.
 
