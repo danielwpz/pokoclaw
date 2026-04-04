@@ -45,6 +45,22 @@ export interface ToolRuntimeControl {
     reasonText?: string | null;
     decidedAt?: Date;
   }): boolean;
+  getRuntimeStatus?(input?: { runId?: string }):
+    | {
+        now: string;
+        runs: object[];
+      }
+    | {
+        now: string;
+        found: true;
+        run: object;
+      }
+    | {
+        now: string;
+        found: false;
+        runId: string;
+        message: string;
+      };
   requestSubagentCreation?(input: {
     sourceSessionId: string;
     title: string;

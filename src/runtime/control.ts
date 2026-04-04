@@ -1,11 +1,25 @@
 /**
  * Runtime control-plane service for active runs.
  *
- * Tracks active run records and provides cancel operations (`stopRun`,
- * `stopConversation`) used by command handlers and channel callbacks.
+ * This service has two responsibilities that intentionally live together:
+ * - active-run registration and cancellation
+ * - lightweight in-memory observability for currently running work
+ *
+ * Keeping these concerns in one runtime-owned service avoids leaking direct
+ * access to execution internals while still giving tools and status surfaces a
+ * single place to query live run state.
  */
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import {
+  createInitialRunLiveObservabilityState,
+  estimateOutputTokensFromChars,
+  type RunLiveLatestRequestState,
+  type RunLiveObservabilitySnapshot,
+  type RunLiveObservabilityState,
+  type RunLiveRequestStatus,
+  toRunLiveObservabilitySnapshot,
+} from "@/src/runtime/run-observability.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 
 const logger = createSubsystemLogger("runtime-control");
@@ -59,11 +73,22 @@ export interface StopSessionResult {
 
 export class RuntimeControlService {
   private readonly runsByRunId = new Map<string, ActiveRunRecord>();
+  private readonly observabilityByRunId = new Map<string, RunLiveObservabilityState>();
 
   constructor(private readonly cancel: SessionRunAbortRegistry) {}
 
   beginRun(input: ActiveRunRecord): void {
     this.runsByRunId.set(input.runId, input);
+    this.observabilityByRunId.set(
+      input.runId,
+      createInitialRunLiveObservabilityState({
+        runId: input.runId,
+        sessionId: input.sessionId,
+        conversationId: input.conversationId,
+        branchId: input.branchId,
+        scenario: input.scenario,
+      }),
+    );
     logger.debug("registered active run", {
       runId: input.runId,
       sessionId: input.sessionId,
@@ -189,4 +214,253 @@ export class RuntimeControlService {
       (run) => run.conversationId === conversationId,
     );
   }
+
+  markLlmRequestStarted(input: { runId: string; assistantMessageId: string; at?: Date }): void {
+    this.updateObservability(input.runId, (state) => {
+      const startedAt = input.at ?? new Date();
+      const nextSequence = state.responseSummary.requestCount + 1;
+      return {
+        ...state,
+        phase: "running",
+        runStartedAt: state.runStartedAt ?? startedAt,
+        latestRequest: {
+          sequence: nextSequence,
+          status: "waiting_first_token",
+          startedAt,
+          finishedAt: null,
+          firstTokenAt: null,
+          lastTokenAt: null,
+          outputChars: 0,
+          estimatedOutputTokens: 0,
+          finalOutputTokens: null,
+          activeAssistantMessageId: input.assistantMessageId,
+        },
+        responseSummary: {
+          ...state.responseSummary,
+          requestCount: nextSequence,
+        },
+        activeToolCallId: null,
+        activeToolName: null,
+        waitingApprovalId: null,
+        completedAt: null,
+        failedAt: null,
+        cancelledAt: null,
+      };
+    });
+  }
+
+  recordStreamDelta(input: {
+    runId: string;
+    kind: "text" | "reasoning";
+    deltaText?: string;
+    at?: Date;
+  }): void {
+    this.updateObservability(input.runId, (state) => {
+      const latestRequest = state.latestRequest;
+      if (latestRequest == null) {
+        return state;
+      }
+
+      const now = input.at ?? new Date();
+      const outputChars =
+        input.kind === "text"
+          ? latestRequest.outputChars + Math.max(0, input.deltaText?.length ?? 0)
+          : latestRequest.outputChars;
+      const firstTokenAt = latestRequest.firstTokenAt ?? now;
+      const becameResponded = latestRequest.firstTokenAt == null;
+      return {
+        ...state,
+        phase: "running",
+        latestRequest: {
+          ...latestRequest,
+          status: "streaming",
+          firstTokenAt,
+          lastTokenAt: now,
+          outputChars,
+          estimatedOutputTokens: estimateOutputTokensFromChars(outputChars),
+        },
+        responseSummary: {
+          requestCount: state.responseSummary.requestCount,
+          respondedRequestCount:
+            state.responseSummary.respondedRequestCount + (becameResponded ? 1 : 0),
+          firstResponseAt: state.responseSummary.firstResponseAt ?? now,
+          lastResponseAt: now,
+          lastRespondedRequestSequence: latestRequest.sequence,
+          lastRespondedRequestTtftMs: Math.max(
+            0,
+            firstTokenAt.getTime() - latestRequest.startedAt.getTime(),
+          ),
+        },
+        waitingApprovalId: null,
+      };
+    });
+  }
+
+  markToolStarted(input: { runId: string; toolCallId: string; toolName: string; at?: Date }): void {
+    this.updateObservability(input.runId, (state) => ({
+      ...state,
+      phase: "tool_running",
+      latestRequest: finalizeLatestRequest(state.latestRequest, "finished", input.at ?? new Date()),
+      activeToolCallId: input.toolCallId,
+      activeToolName: input.toolName,
+      waitingApprovalId: null,
+    }));
+  }
+
+  markToolFinished(input: { runId: string; toolCallId: string }): void {
+    this.updateObservability(input.runId, (state) => {
+      if (state.activeToolCallId !== input.toolCallId) {
+        return state;
+      }
+
+      return {
+        ...state,
+        phase: "running",
+        activeToolCallId: null,
+        activeToolName: null,
+      };
+    });
+  }
+
+  markWaitingApproval(input: { runId: string; approvalId: string }): void {
+    this.updateObservability(input.runId, (state) => ({
+      ...state,
+      phase: "waiting_approval",
+      latestRequest: finalizeLatestRequest(state.latestRequest, "finished", new Date()),
+      waitingApprovalId: input.approvalId,
+    }));
+  }
+
+  clearWaitingApproval(runId: string): void {
+    this.updateObservability(runId, (state) => ({
+      ...state,
+      phase: "running",
+      waitingApprovalId: null,
+    }));
+  }
+
+  setFinalOutputTokens(input: { runId: string; outputTokens: number | null | undefined }): void {
+    const outputTokens = input.outputTokens;
+    if (outputTokens == null || !Number.isFinite(outputTokens) || outputTokens < 0) {
+      return;
+    }
+
+    this.updateObservability(input.runId, (state) => ({
+      ...state,
+      latestRequest:
+        state.latestRequest == null
+          ? null
+          : {
+              ...state.latestRequest,
+              finalOutputTokens: outputTokens,
+            },
+    }));
+  }
+
+  markCompleted(input: { runId: string; at?: Date }): void {
+    this.updateObservability(input.runId, (state) => {
+      const at = input.at ?? new Date();
+      return {
+        ...state,
+        phase: "completed",
+        latestRequest: finalizeLatestRequest(state.latestRequest, "finished", at),
+        completedAt: at,
+        activeToolCallId: null,
+        activeToolName: null,
+        waitingApprovalId: null,
+      };
+    });
+  }
+
+  markFailed(input: { runId: string; at?: Date }): void {
+    this.updateObservability(input.runId, (state) => {
+      const at = input.at ?? new Date();
+      return {
+        ...state,
+        phase: "failed",
+        latestRequest: finalizeLatestRequest(state.latestRequest, "failed", at),
+        failedAt: at,
+        activeToolCallId: null,
+        activeToolName: null,
+        waitingApprovalId: null,
+      };
+    });
+  }
+
+  markCancelled(input: { runId: string; at?: Date }): void {
+    this.updateObservability(input.runId, (state) => {
+      const at = input.at ?? new Date();
+      return {
+        ...state,
+        phase: "cancelled",
+        latestRequest: finalizeLatestRequest(state.latestRequest, "cancelled", at),
+        cancelledAt: at,
+        activeToolCallId: null,
+        activeToolName: null,
+        waitingApprovalId: null,
+      };
+    });
+  }
+
+  getRunObservability(runId: string, now: Date = new Date()): RunLiveObservabilitySnapshot | null {
+    const state = this.observabilityByRunId.get(runId) ?? null;
+    return state == null ? null : toRunLiveObservabilitySnapshot(state, now);
+  }
+
+  listActiveRunObservability(now: Date = new Date()): RunLiveObservabilitySnapshot[] {
+    return Array.from(this.runsByRunId.keys())
+      .map((runId) => this.getRunObservability(runId, now))
+      .filter((snapshot): snapshot is RunLiveObservabilitySnapshot => snapshot != null);
+  }
+
+  listActiveRunObservabilityByConversation(
+    conversationId: string,
+    now: Date = new Date(),
+  ): RunLiveObservabilitySnapshot[] {
+    return this.listActiveRunsByConversation(conversationId)
+      .map((run) => this.getRunObservability(run.runId, now))
+      .filter((snapshot): snapshot is RunLiveObservabilitySnapshot => snapshot != null);
+  }
+
+  private updateObservability(
+    runId: string,
+    updater: (state: RunLiveObservabilityState) => RunLiveObservabilityState,
+  ): void {
+    const existing = this.observabilityByRunId.get(runId);
+    if (existing == null) {
+      logger.debug("skipped observability update for unknown run", { runId });
+      return;
+    }
+
+    this.observabilityByRunId.set(runId, updater(existing));
+  }
+}
+
+function finalizeLatestRequest(
+  latestRequest: RunLiveLatestRequestState | null,
+  status: Extract<RunLiveRequestStatus, "finished" | "failed" | "cancelled">,
+  at: Date,
+): RunLiveLatestRequestState | null {
+  if (latestRequest == null) {
+    return null;
+  }
+
+  if (
+    latestRequest.status === "finished" ||
+    latestRequest.status === "failed" ||
+    latestRequest.status === "cancelled"
+  ) {
+    return latestRequest.finishedAt == null
+      ? {
+          ...latestRequest,
+          finishedAt: at,
+        }
+      : latestRequest;
+  }
+
+  return {
+    ...latestRequest,
+    status,
+    finishedAt: latestRequest.finishedAt ?? at,
+  };
 }
