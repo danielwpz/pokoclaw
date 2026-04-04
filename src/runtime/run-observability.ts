@@ -74,7 +74,7 @@ export interface RunLiveLatestRequestSnapshot {
   outputChars: number;
   estimatedOutputTokens: number;
   finalOutputTokens: number | null;
-  avgTokensPerSecond: number | null;
+  avgCharsPerSecond: number | null;
   activeAssistantMessageId: string | null;
 }
 
@@ -145,23 +145,28 @@ export function estimateOutputTokensFromChars(outputChars: number): number {
   return Math.max(1, Math.ceil(outputChars / 4));
 }
 
-export function computeAverageTokensPerSecond(input: {
+/**
+ * User-facing output stability metric.
+ *
+ * This intentionally uses visible character output instead of model-reported token
+ * counts so the rate stays on one consistent, user-perceivable scale throughout
+ * streaming and after completion.
+ */
+export function computeAverageCharsPerSecond(input: {
   firstTokenAt: Date | null;
   lastTokenAt: Date | null;
-  estimatedOutputTokens: number;
-  finalOutputTokens: number | null;
+  outputChars: number;
 }): number | null {
   if (input.firstTokenAt == null || input.lastTokenAt == null) {
     return null;
   }
 
   const durationMs = input.lastTokenAt.getTime() - input.firstTokenAt.getTime();
-  const tokenCount = input.finalOutputTokens ?? input.estimatedOutputTokens;
-  if (durationMs <= 0 || tokenCount <= 0) {
+  if (durationMs <= 0 || input.outputChars <= 0) {
     return null;
   }
 
-  return tokenCount / (durationMs / 1000);
+  return input.outputChars / (durationMs / 1000);
 }
 
 export function toRunLiveObservabilitySnapshot(
@@ -204,11 +209,10 @@ export function toRunLiveObservabilitySnapshot(
             outputChars: latestRequest.outputChars,
             estimatedOutputTokens: latestRequest.estimatedOutputTokens,
             finalOutputTokens: latestRequest.finalOutputTokens,
-            avgTokensPerSecond: computeAverageTokensPerSecond({
+            avgCharsPerSecond: computeAverageCharsPerSecond({
               firstTokenAt: latestRequest.firstTokenAt,
               lastTokenAt: latestRequest.lastTokenAt,
-              estimatedOutputTokens: latestRequest.estimatedOutputTokens,
-              finalOutputTokens: latestRequest.finalOutputTokens,
+              outputChars: latestRequest.outputChars,
             }),
             activeAssistantMessageId: latestRequest.activeAssistantMessageId,
           },
