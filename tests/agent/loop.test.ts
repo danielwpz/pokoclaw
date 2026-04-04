@@ -12,6 +12,7 @@ import { buildSkillsCatalogPrompt } from "@/src/agent/skills.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import { RuntimeControlService } from "@/src/runtime/control.js";
 import {
   POKECLAW_REPO_DIR,
   POKECLAW_SKILLS_DIR,
@@ -1510,6 +1511,136 @@ describe("agent loop", () => {
     ]);
   });
 
+  test("updates runtime control observability across streaming, tool execution, and completion", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "echo_tool",
+        description: "Echoes its text input.",
+        inputSchema: Type.Object({ text: Type.String() }, { additionalProperties: false }),
+        execute(_context, args) {
+          return textToolResult(args.text);
+        },
+      }),
+    );
+
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        if (input.messages.some((message) => message.role === "tool")) {
+          input.onTextDelta?.({
+            delta: "done",
+            accumulatedText: "done",
+          });
+          return makeAssistantResult({
+            content: [{ type: "text", text: "done" }],
+          });
+        }
+
+        input.onTextDelta?.({
+          delta: "checking",
+          accumulatedText: "checking",
+        });
+        return makeAssistantResult({
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "checking" },
+            {
+              type: "toolCall",
+              id: "tool_1",
+              name: "echo_tool",
+              arguments: { text: "ok" },
+            },
+          ],
+        });
+      },
+    };
+
+    const control = new RuntimeControlService(new SessionRunAbortRegistry());
+    const markLlmRequestStarted = vi.spyOn(control, "markLlmRequestStarted");
+    const recordStreamDelta = vi.spyOn(control, "recordStreamDelta");
+    const setFinalOutputTokens = vi.spyOn(control, "setFinalOutputTokens");
+    const markToolStarted = vi.spyOn(control, "markToolStarted");
+    const markToolFinished = vi.spyOn(control, "markToolFinished");
+    const markCompleted = vi.spyOn(control, "markCompleted");
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      control,
+    });
+
+    await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(markLlmRequestStarted).toHaveBeenCalledTimes(2);
+    expect(recordStreamDelta).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "text", deltaText: "checking" }),
+    );
+    expect(recordStreamDelta).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "text", deltaText: "done" }),
+    );
+    expect(setFinalOutputTokens).toHaveBeenCalledWith(expect.objectContaining({ outputTokens: 5 }));
+    expect(markToolStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: "tool_1", toolName: "echo_tool" }),
+    );
+    expect(markToolFinished).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: "tool_1" }),
+    );
+    expect(markCompleted).toHaveBeenCalledTimes(1);
+
+    const completedRunId = markCompleted.mock.calls[0]?.[0]?.runId;
+    expect(completedRunId).toBeTruthy();
+    expect(control.getRunObservability(completedRunId as string)).toMatchObject({
+      runId: completedRunId,
+      phase: "completed",
+      runStartedAt: expect.any(String),
+      latestRequest: expect.objectContaining({
+        sequence: 2,
+        status: "finished",
+        startedAt: expect.any(String),
+        ttftMs: 0,
+      }),
+      responseSummary: {
+        requestCount: 2,
+        respondedRequestCount: 2,
+        hasAnyResponse: true,
+        firstResponseAt: expect.any(String),
+        lastResponseAt: expect.any(String),
+        lastRespondedRequestSequence: 2,
+        lastRespondedRequestTtftMs: 0,
+      },
+    });
+    expect(control.listActiveRunObservability()).toEqual([]);
+  });
+
   test("emits streamed reasoning deltas and does not duplicate final reasoning text", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
@@ -1955,6 +2086,137 @@ describe("agent loop", () => {
         (event) => event.type === "approval_resolved" && event.decision === "approve",
       ),
     ).toBe(true);
+  });
+
+  test("updates runtime observability while a permission approval is pending", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"request the extra access"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: "/tmp/requested-read.txt",
+                      scope: "exact",
+                      access: "read",
+                    },
+                  ],
+                  justification: "Need to inspect one file.",
+                },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry([createRequestPermissionsTool()]);
+    const control = new RuntimeControlService(new SessionRunAbortRegistry());
+    const markWaitingApproval = vi.spyOn(control, "markWaitingApproval");
+    const clearWaitingApproval = vi.spyOn(control, "clearWaitingApproval");
+    const recordStreamDelta = vi.spyOn(control, "recordStreamDelta");
+    const setFinalOutputTokens = vi.spyOn(control, "setFinalOutputTokens");
+    const emittedEvents: Array<{ type: string; approvalId?: string }> = [];
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      control,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    const approvalId = await waitForApprovalRequested(emittedEvents);
+
+    let waitingRunId: string | null = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      waitingRunId = markWaitingApproval.mock.calls[0]?.[0]?.runId ?? null;
+      if (waitingRunId != null) {
+        break;
+      }
+      await delay(5);
+    }
+    expect(waitingRunId).toBeTruthy();
+    expect(markWaitingApproval).toHaveBeenCalledWith({
+      runId: waitingRunId,
+      approvalId: String(approvalId),
+    });
+    expect(control.getRunObservability(waitingRunId as string)).toMatchObject({
+      runId: waitingRunId,
+      phase: "waiting_approval",
+      waitingApprovalId: String(approvalId),
+      latestRequest: {
+        status: "finished",
+      },
+    });
+    expect(recordStreamDelta).not.toHaveBeenCalled();
+    expect(setFinalOutputTokens).toHaveBeenCalledWith(expect.objectContaining({ outputTokens: 5 }));
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId: Number(approvalId),
+        decision: "approve",
+        actor: "user",
+        rawInput: "approve",
+        grantedBy: "user",
+        expiresAt: null,
+      }),
+    ).toBe(true);
+
+    await runPromise;
+    expect(clearWaitingApproval).toHaveBeenCalledWith(waitingRunId);
+    expect(control.getRunObservability(waitingRunId as string)).toMatchObject({
+      runId: waitingRunId,
+      phase: "completed",
+      waitingApprovalId: null,
+      latestRequest: {
+        status: "finished",
+      },
+    });
   });
 
   test("writes an error request_permissions tool result when approval is denied", async () => {

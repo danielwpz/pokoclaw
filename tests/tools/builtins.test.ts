@@ -15,6 +15,7 @@ describe("builtin tools", () => {
     expect(registry.has("list_dir")).toBe(true);
     expect(registry.has("grep")).toBe(true);
     expect(registry.has("query_system_db")).toBe(true);
+    expect(registry.has("get_runtime_status")).toBe(true);
     expect(registry.has("finish_task")).toBe(true);
     expect(registry.has("request_permissions")).toBe(true);
     expect(registry.has("review_permission_request")).toBe(true);
@@ -31,6 +32,7 @@ describe("builtin tools", () => {
       "list_dir",
       "grep",
       "query_system_db",
+      "get_runtime_status",
       "finish_task",
       "request_permissions",
       "review_permission_request",

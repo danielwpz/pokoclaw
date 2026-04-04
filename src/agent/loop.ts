@@ -262,6 +262,32 @@ export class AgentLoop {
   }): ToolExecutionContext {
     const runtimeControl = {
       submitApprovalDecision: (decision) => this.submitApprovalResponse(decision),
+      getRuntimeStatus: (request) => {
+        const now = new Date();
+        if (request?.runId != null && request.runId.length > 0) {
+          const run = this.deps.control?.getRunObservability(request.runId, now) ?? null;
+          if (run == null) {
+            return {
+              now: now.toISOString(),
+              found: false as const,
+              runId: request.runId,
+              message:
+                "Current live runtime status was not found for that run. It may have already completed, failed, been cancelled, or been lost after process restart.",
+            };
+          }
+
+          return {
+            now: now.toISOString(),
+            found: true as const,
+            run,
+          };
+        }
+
+        return {
+          now: now.toISOString(),
+          runs: this.deps.control?.listActiveRunObservability(now) ?? [],
+        };
+      },
       ...(this.deps.runtimeControl ?? {}),
     } satisfies ToolRuntimeControl;
 
@@ -299,6 +325,47 @@ export class AgentLoop {
 
     this.steerQueue.enqueue(input);
     return true;
+  }
+
+  private markRunWaitingForFirstToken(runId: string, assistantMessageId: string): void {
+    this.deps.control?.markLlmRequestStarted({
+      runId,
+      assistantMessageId,
+    });
+  }
+
+  private recordStreamDelta(input: {
+    runId: string;
+    kind: "text" | "reasoning";
+    deltaText?: string;
+  }): void {
+    this.deps.control?.recordStreamDelta(input);
+  }
+
+  private markToolRunning(runId: string, toolCall: AgentToolCall): void {
+    this.deps.control?.markToolStarted({
+      runId,
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+    });
+  }
+
+  private markToolFinished(runId: string, toolCall: AgentToolCall): void {
+    this.deps.control?.markToolFinished({
+      runId,
+      toolCallId: toolCall.id,
+    });
+  }
+
+  private markWaitingApproval(runId: string, approvalId: number): void {
+    this.deps.control?.markWaitingApproval({
+      runId,
+      approvalId: String(approvalId),
+    });
+  }
+
+  private clearWaitingApproval(runId: string): void {
+    this.deps.control?.clearWaitingApproval(runId);
   }
 
   async run(input: RunAgentLoopInput): Promise<RunAgentLoopResult> {
@@ -445,6 +512,7 @@ export class AgentLoop {
             branchId: context.session.branchId,
             runId,
           });
+          this.markRunWaitingForFirstToken(runId, assistantMessageId);
 
           try {
             response = await this.deps.modelRunner.runTurn({
@@ -461,6 +529,11 @@ export class AgentLoop {
               onTextDelta: (event) => {
                 sawStreamedText = true;
                 streamedAssistantText = event.accumulatedText;
+                this.recordStreamDelta({
+                  runId,
+                  kind: "text",
+                  deltaText: event.delta,
+                });
                 this.recordEvent(events, {
                   type: "assistant_message_delta",
                   turn: turn + 1,
@@ -478,6 +551,10 @@ export class AgentLoop {
                 streamedReasoningText += event.delta;
                 streamedReasoningDeltaCount += 1;
                 streamedReasoningChars += event.delta.length;
+                this.recordStreamDelta({
+                  runId,
+                  kind: "reasoning",
+                });
                 if (streamedReasoningDeltaCount === 1 && event.delta.length > 0) {
                   logger.debug("assistant reasoning started", {
                     sessionId: input.sessionId,
@@ -625,6 +702,11 @@ export class AgentLoop {
         // the final assistant payload. We keep one event shape and only fall back
         // to a single full-text delta if nothing was streamed.
         if (!sawStreamedText && assistantText.length > 0) {
+          this.recordStreamDelta({
+            runId,
+            kind: "text",
+            deltaText: assistantText,
+          });
           this.recordEvent(events, {
             type: "assistant_message_delta",
             turn: turn + 1,
@@ -671,6 +753,10 @@ export class AgentLoop {
           stopReason: response.stopReason,
           toolCalls: toolCalls.length,
           textPreview: truncateLogText(assistantText, ASSISTANT_RESPONSE_LOG_PREVIEW_MAX_LENGTH),
+        });
+        this.deps.control?.setFinalOutputTokens({
+          runId,
+          outputTokens: response.usage.output,
         });
         if (sawStreamedReasoning || reasoningText.length > 0) {
           logger.debug("assistant reasoning completed", {
@@ -758,6 +844,7 @@ export class AgentLoop {
             branchId: context.session.branchId,
             runId,
           });
+          this.markToolRunning(runId, toolCall);
 
           try {
             const executedTool = await this.executeToolCall({
@@ -811,6 +898,7 @@ export class AgentLoop {
               branchId: context.session.branchId,
               runId,
             });
+            this.markToolFinished(runId, toolCall);
 
             if (executedTool.queuedSteer.length > 0) {
               queuedSteerAfterTurn.push(...executedTool.queuedSteer);
@@ -867,6 +955,7 @@ export class AgentLoop {
               branchId: context.session.branchId,
               runId,
             });
+            this.markToolFinished(runId, toolCall);
 
             if (!failure.shouldReturnToLlm) {
               throw failure;
@@ -1016,6 +1105,7 @@ export class AgentLoop {
         branchId: context.session.branchId,
         runId,
       });
+      this.deps.control?.markCompleted({ runId });
       logger.info("session run completed", {
         sessionId: input.sessionId,
         conversationId: context.session.conversationId,
@@ -1056,6 +1146,7 @@ export class AgentLoop {
           branchId: context.session.branchId,
           runId,
         });
+        this.deps.control?.markCancelled({ runId });
         logger.warn("session run cancelled", {
           sessionId: input.sessionId,
           conversationId: context.session.conversationId,
@@ -1081,6 +1172,7 @@ export class AgentLoop {
         branchId: context.session.branchId,
         runId,
       });
+      this.deps.control?.markFailed({ runId });
       logger.error("session run failed", {
         sessionId: input.sessionId,
         conversationId: context.session.conversationId,
@@ -1162,7 +1254,9 @@ export class AgentLoop {
           ...(error.approvalTitle == null ? {} : { approvalTitle: error.approvalTitle }),
           signal: input.signal,
           recordEvent: (event) => this.recordEvent(input.events, event),
+          onRequested: ({ approvalId }) => this.markWaitingApproval(input.runId, approvalId),
         });
+        this.clearWaitingApproval(input.runId);
 
         if (approval.decision === "approve") {
           queuedSteer.push(...approval.queuedSteer);
@@ -1190,6 +1284,7 @@ export class AgentLoop {
           }
 
           approvalState = error.approvalState;
+          this.markToolRunning(input.runId, input.toolCall);
 
           if (input.toolCall.name === "request_permissions") {
             return await this.finishPermissionRequestAfterApproval({
