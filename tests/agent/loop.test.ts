@@ -1580,6 +1580,7 @@ describe("agent loop", () => {
     const control = new RuntimeControlService(new SessionRunAbortRegistry());
     const markLlmRequestStarted = vi.spyOn(control, "markLlmRequestStarted");
     const recordStreamDelta = vi.spyOn(control, "recordStreamDelta");
+    const setFinalOutputTokens = vi.spyOn(control, "setFinalOutputTokens");
     const markToolStarted = vi.spyOn(control, "markToolStarted");
     const markToolFinished = vi.spyOn(control, "markToolFinished");
     const markCompleted = vi.spyOn(control, "markCompleted");
@@ -1606,6 +1607,7 @@ describe("agent loop", () => {
     expect(recordStreamDelta).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "text", deltaText: "done" }),
     );
+    expect(setFinalOutputTokens).toHaveBeenCalledWith(expect.objectContaining({ outputTokens: 5 }));
     expect(markToolStarted).toHaveBeenCalledWith(
       expect.objectContaining({ toolCallId: "tool_1", toolName: "echo_tool" }),
     );
@@ -2084,6 +2086,137 @@ describe("agent loop", () => {
         (event) => event.type === "approval_resolved" && event.decision === "approve",
       ),
     ).toBe(true);
+  });
+
+  test("updates runtime observability while a permission approval is pending", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"request the extra access"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: "/tmp/requested-read.txt",
+                      scope: "exact",
+                      access: "read",
+                    },
+                  ],
+                  justification: "Need to inspect one file.",
+                },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry([createRequestPermissionsTool()]);
+    const control = new RuntimeControlService(new SessionRunAbortRegistry());
+    const markWaitingApproval = vi.spyOn(control, "markWaitingApproval");
+    const clearWaitingApproval = vi.spyOn(control, "clearWaitingApproval");
+    const recordStreamDelta = vi.spyOn(control, "recordStreamDelta");
+    const setFinalOutputTokens = vi.spyOn(control, "setFinalOutputTokens");
+    const emittedEvents: Array<{ type: string; approvalId?: string }> = [];
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      control,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    const approvalId = await waitForApprovalRequested(emittedEvents);
+
+    let waitingRunId: string | null = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      waitingRunId = markWaitingApproval.mock.calls[0]?.[0]?.runId ?? null;
+      if (waitingRunId != null) {
+        break;
+      }
+      await delay(5);
+    }
+    expect(waitingRunId).toBeTruthy();
+    expect(markWaitingApproval).toHaveBeenCalledWith({
+      runId: waitingRunId,
+      approvalId: String(approvalId),
+    });
+    expect(control.getRunObservability(waitingRunId as string)).toMatchObject({
+      runId: waitingRunId,
+      phase: "waiting_approval",
+      waitingApprovalId: String(approvalId),
+      latestRequest: {
+        status: "finished",
+      },
+    });
+    expect(recordStreamDelta).not.toHaveBeenCalled();
+    expect(setFinalOutputTokens).toHaveBeenCalledWith(expect.objectContaining({ outputTokens: 5 }));
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId: Number(approvalId),
+        decision: "approve",
+        actor: "user",
+        rawInput: "approve",
+        grantedBy: "user",
+        expiresAt: null,
+      }),
+    ).toBe(true);
+
+    await runPromise;
+    expect(clearWaitingApproval).toHaveBeenCalledWith(waitingRunId);
+    expect(control.getRunObservability(waitingRunId as string)).toMatchObject({
+      runId: waitingRunId,
+      phase: "completed",
+      waitingApprovalId: null,
+      latestRequest: {
+        status: "finished",
+      },
+    });
   });
 
   test("writes an error request_permissions tool result when approval is denied", async () => {

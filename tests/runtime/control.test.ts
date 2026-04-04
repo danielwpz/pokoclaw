@@ -206,7 +206,7 @@ describe("RuntimeControlService", () => {
         lastResponseAt: "2026-04-04T00:00:03.000Z",
       },
     });
-    expect(snapshot?.latestRequest?.avgTokensPerSecond).toBeCloseTo(6, 5);
+    expect(snapshot?.latestRequest?.avgCharsPerSecond).toBeCloseTo(5.5, 5);
 
     control.markToolStarted({
       runId: "run_1",
@@ -325,6 +325,21 @@ describe("RuntimeControlService", () => {
       },
     });
 
+    control.recordStreamDelta({
+      runId: "run_1",
+      kind: "text",
+      deltaText: "late token",
+      at: new Date("2026-04-04T00:00:01.000Z"),
+    });
+    expect(control.getRunObservability("run_1")).toMatchObject({
+      phase: "waiting_approval",
+      waitingApprovalId: "42",
+      latestRequest: {
+        status: "finished",
+        outputChars: 0,
+      },
+    });
+
     control.clearWaitingApproval("run_1");
     control.markToolStarted({
       runId: "run_1",
@@ -341,6 +356,40 @@ describe("RuntimeControlService", () => {
     expect(snapshot?.waitingApprovalId).toBeNull();
     expect(snapshot?.activeToolName).toBeNull();
     expect(snapshot?.latestRequest?.status).toBe("finished");
+  });
+
+  test("clearWaitingApproval does not overwrite a terminal phase", () => {
+    const control = new RuntimeControlService(new SessionRunAbortRegistry());
+    control.beginRun({
+      runId: "run_1",
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      scenario: "chat",
+    });
+    control.markLlmRequestStarted({
+      runId: "run_1",
+      assistantMessageId: "msg_1",
+      at: new Date("2026-04-04T00:00:00.000Z"),
+    });
+    control.markWaitingApproval({
+      runId: "run_1",
+      approvalId: "42",
+    });
+    control.markCancelled({
+      runId: "run_1",
+      at: new Date("2026-04-04T00:00:01.000Z"),
+    });
+
+    control.clearWaitingApproval("run_1");
+
+    expect(control.getRunObservability("run_1")).toMatchObject({
+      phase: "cancelled",
+      waitingApprovalId: null,
+      latestRequest: {
+        status: "finished",
+      },
+    });
   });
 
   test("preserves a finished latestRequest when the run later fails during tool execution", () => {

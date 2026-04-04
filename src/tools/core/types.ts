@@ -2,6 +2,7 @@ import type { Static, TSchema } from "@sinclair/typebox";
 import { Errors } from "@sinclair/typebox/errors";
 import { Check, Clone, Default } from "@sinclair/typebox/value";
 import type { SecurityConfig } from "@/src/config/schema.js";
+import type { RunLiveObservabilitySnapshot } from "@/src/runtime/run-observability.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 
 export type ToolContentBlock =
@@ -48,12 +49,12 @@ export interface ToolRuntimeControl {
   getRuntimeStatus?(input?: { runId?: string }):
     | {
         now: string;
-        runs: object[];
+        runs: RunLiveObservabilitySnapshot[];
       }
     | {
         now: string;
         found: true;
-        run: object;
+        run: RunLiveObservabilitySnapshot;
       }
     | {
         now: string;

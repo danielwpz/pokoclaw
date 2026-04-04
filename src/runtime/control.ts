@@ -258,6 +258,18 @@ export class RuntimeControlService {
     this.updateObservability(input.runId, (state) => {
       const latestRequest = state.latestRequest;
       if (latestRequest == null) {
+        logger.debug("ignored stream delta because no latest request is active", {
+          runId: input.runId,
+          kind: input.kind,
+        });
+        return state;
+      }
+      if (state.phase !== "running") {
+        logger.debug("ignored stream delta because run phase does not accept streaming updates", {
+          runId: input.runId,
+          phase: state.phase,
+          kind: input.kind,
+        });
         return state;
       }
 
@@ -291,7 +303,6 @@ export class RuntimeControlService {
             firstTokenAt.getTime() - latestRequest.startedAt.getTime(),
           ),
         },
-        waitingApprovalId: null,
       };
     });
   }
@@ -334,7 +345,7 @@ export class RuntimeControlService {
   clearWaitingApproval(runId: string): void {
     this.updateObservability(runId, (state) => ({
       ...state,
-      phase: "running",
+      phase: state.phase === "waiting_approval" ? "running" : state.phase,
       waitingApprovalId: null,
     }));
   }
