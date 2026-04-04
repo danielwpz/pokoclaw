@@ -223,6 +223,43 @@ describe("cron service", () => {
     });
   });
 
+  test("scanOnce marks an overdue recurring job as missed when it is more than 3 minutes late", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    handle.storage.sqlite.exec(`
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id,
+        schedule_kind, schedule_value, payload_json, next_run_at, created_at, updated_at
+      ) VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1',
+        'every', '60000', '{}', '2026-03-27T11:56:00.000Z',
+        '2026-03-27T00:00:00.000Z', '2026-03-27T00:00:00.000Z'
+      );
+    `);
+
+    const runCronTaskExecutionFromJob = vi.fn(async () => createCompletedRunResult("unused"));
+    const service = new CronService({
+      storage: handle.storage.db,
+      agentManager: { runCronTaskExecutionFromJob },
+      now: () => new Date("2026-03-27T12:00:00.000Z"),
+    });
+
+    const result = await service.scanOnce();
+    expect(result).toMatchObject({
+      status: "ran",
+      dueJobs: 1,
+      claimedJobs: 0,
+      missedJobs: 1,
+    });
+    expect(runCronTaskExecutionFromJob).not.toHaveBeenCalled();
+    expect(new CronJobsRepo(handle.storage.db).getById("cron_1")).toMatchObject({
+      runningAt: null,
+      lastStatus: "missed",
+      lastOutput: "Skipped because this scheduled run was already more than 3 minutes late.",
+      nextRunAt: "2026-03-27T12:01:00.000Z",
+    });
+  });
+
   test("runJobNow claims immediately without changing the existing schedule", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);

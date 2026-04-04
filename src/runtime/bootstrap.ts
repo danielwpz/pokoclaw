@@ -18,6 +18,11 @@ import type { AppConfig } from "@/src/config/schema.js";
 import { CronService } from "@/src/cron/service.js";
 import { AgentManager, type AgentManagerDependencies } from "@/src/orchestration/agent-manager.js";
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
+import {
+  dispatchPreparedBackOnlineRecovery,
+  type PreparedBackOnlineRecovery,
+  prepareBackOnlineRecovery,
+} from "@/src/runtime/back-online.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
@@ -52,6 +57,7 @@ export interface CreateRuntimeBootstrapInput {
   config: AppConfig;
   storage: StorageDb;
   subagentProvisioner?: AgentManagerDependencies["subagentProvisioner"];
+  previousLastSeenAt?: Date | null;
 }
 
 export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): RuntimeBootstrap {
@@ -151,14 +157,41 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
         return;
       }
 
-      cron.start();
+      let preparedBackOnline: PreparedBackOnlineRecovery = {
+        status: "skipped",
+        generatedAt: new Date(),
+        notices: [],
+      };
+      try {
+        preparedBackOnline = prepareBackOnlineRecovery({
+          storage: input.storage,
+          clients: larkClients,
+          previousLastSeenAt: input.previousLastSeenAt ?? null,
+        });
+      } catch (error) {
+        logger.warn("failed to prepare back-online recovery", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
       lark.start();
+      cron.start();
       started = true;
       logger.info("runtime bootstrap started", {
         providerCount: Object.keys(input.config.providers).length,
         modelCount: input.config.models.catalog.length,
         toolCount: tools.list().length,
         larkInstallations: lark.status().configuredInstallations,
+      });
+
+      void dispatchPreparedBackOnlineRecovery({
+        storage: input.storage,
+        clients: larkClients,
+        prepared: preparedBackOnline,
+      }).catch((error: unknown) => {
+        logger.warn("back-online recovery failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
     },
     shutdown() {

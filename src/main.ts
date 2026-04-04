@@ -7,11 +7,13 @@
  */
 import { loadConfig } from "@/src/config/load.js";
 import { createRuntimeBootstrap } from "@/src/runtime/bootstrap.js";
+import { readLastRuntimeLogTimestamp } from "@/src/runtime/runtime-log.js";
 import {
   configureRuntimeLogging,
   createBootstrapLogger,
   createSubsystemLogger,
 } from "@/src/shared/logger.js";
+import { POKECLAW_RUNTIME_LOG_PATH } from "@/src/shared/paths.js";
 import type { StorageDatabase } from "@/src/storage/index.js";
 import { initializeStorageOnStartup } from "@/src/storage/index.js";
 
@@ -26,6 +28,7 @@ export async function main(): Promise<void> {
 
   try {
     const config = await loadConfig();
+    const previousLastSeenAt = await readLastRuntimeLogTimestamp(POKECLAW_RUNTIME_LOG_PATH);
     configureRuntimeLogging(config.logging);
     logger.info("application config loaded", {
       providers: Object.keys(config.providers).length,
@@ -36,6 +39,7 @@ export async function main(): Promise<void> {
     runtime = createRuntimeBootstrap({
       config,
       storage: storage.db,
+      previousLastSeenAt,
     });
 
     runtime.start();
