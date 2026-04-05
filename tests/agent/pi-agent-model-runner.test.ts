@@ -1,5 +1,6 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { AgentUserRuntimeImagePayload } from "@/src/agent/llm/messages.js";
 import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { AgentLoop } from "@/src/agent/loop.js";
@@ -121,6 +122,84 @@ describe("pi agent model runner", () => {
       await destroyTestDatabase(handle);
       handle = null;
     }
+  });
+
+  test("forwards resolveRuntimeImages into the pi bridge", async () => {
+    const streamTurn = vi.fn(async () => ({
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5-20250929",
+      modelApi: "anthropic-messages" as const,
+      stopReason: "stop" as const,
+      content: [{ type: "text" as const, text: "ok" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    }));
+    const runner = new PiAgentModelRunner(
+      { streamTurn, completeText: vi.fn() } as unknown as PiBridge,
+      new ToolRegistry(),
+    );
+    const resolveRuntimeImages = vi.fn((): AgentUserRuntimeImagePayload[] => [
+      {
+        type: "image",
+        id: "img_v3_123",
+        messageId: "om_msg_1",
+        data: "ZmFrZS1pbWFnZQ==",
+        mimeType: "image/png",
+      },
+    ]);
+
+    await runner.runTurn({
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      scenario: "chat",
+      sessionPurpose: "chat",
+      agentKind: "main",
+      model: {
+        id: "anthropic_main/claude-sonnet-4-5",
+        providerId: "anthropic_main",
+        upstreamId: "claude-sonnet-4-5-20250929",
+        contextWindow: 200_000,
+        maxOutputTokens: 16_384,
+        supportsTools: true,
+        supportsVision: true,
+        reasoning: { enabled: true },
+        provider: {
+          id: "anthropic_main",
+          api: "anthropic-messages",
+          apiKey: "secret",
+        },
+      },
+      systemPrompt: "system prompt",
+      compactSummary: null,
+      messages: [
+        {
+          ...createStoredUserMessage(),
+          sessionId: "sess_1",
+        },
+      ],
+      resolveRuntimeImages,
+      signal: new AbortController().signal,
+    });
+
+    expect(streamTurn).toHaveBeenCalledOnce();
+    const firstArg = ((streamTurn.mock.calls as unknown as unknown[][])[0]?.[0] ?? null) as {
+      resolveRuntimeImages?: typeof resolveRuntimeImages;
+    } | null;
+    expect(firstArg).toMatchObject({
+      resolveRuntimeImages,
+    });
   });
 
   test("drives the loop through pi streaming and persists the final assistant payload", async () => {
