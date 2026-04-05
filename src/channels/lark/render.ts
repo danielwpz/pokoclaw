@@ -154,8 +154,6 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
               `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
               ...requestedPermissionLines,
               ...requestedBashPrefixLines,
-              "",
-              "**结果**：agent 将继续执行。",
             ].join("\n")
           : [
               `**操作**：${formatApprovalTitleMarkdown(state.title)}`,

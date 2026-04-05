@@ -1250,7 +1250,7 @@ describe("lark run state", () => {
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(resolved).card);
     expect(cardText).not.toContain("### 已授权");
     expect(cardText).toContain("授权请求 — 授权成功");
-    expect(cardText).toContain("**结果**：agent 将继续执行。");
+    expect(cardText).not.toContain("**结果**：agent 将继续执行。");
   });
 
   test("renders stop button while running and removes it after completion", () => {
