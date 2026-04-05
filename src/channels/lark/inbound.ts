@@ -5,8 +5,16 @@
  * translates user actions into runtime ingress/control commands (`submitMessage`,
  * `/status`, `/stop`, approval decisions).
  */
+
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import {
+  type AgentUserImagePayload,
+  type AgentUserPayload,
+  type AgentUserRuntimeImagePayload,
+  normalizeAgentUserImageMessageId,
+} from "@/src/agent/llm/messages.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
@@ -42,6 +50,8 @@ export interface LarkInboundIngress {
     sessionId: string;
     scenario: "chat" | "cron" | "subagent";
     content: string;
+    userPayload?: AgentUserPayload;
+    runtimeImages?: AgentUserRuntimeImagePayload[];
     channelMessageId?: string | null;
     channelParentMessageId?: string | null;
     channelThreadId?: string | null;
@@ -92,6 +102,8 @@ export interface LarkMessageReceiveEvent {
     sender_id?: {
       open_id?: string;
     };
+    id?: string;
+    id_type?: string;
     sender_type?: string;
   };
   message?: {
@@ -102,6 +114,16 @@ export interface LarkMessageReceiveEvent {
     parent_id?: string;
     message_type?: string;
     create_time?: string;
+    content?: string;
+  };
+  message_id?: string;
+  chat_id?: string;
+  chat_type?: string;
+  thread_id?: string;
+  parent_id?: string;
+  msg_type?: string;
+  create_time?: string;
+  body?: {
     content?: string;
   };
 }
@@ -116,7 +138,15 @@ export interface NormalizedLarkTextMessage {
   senderType: string | null;
   chatType: string | null;
   text: string;
+  imageKeys?: string[];
   createdAt?: Date;
+}
+
+interface LarkInboundImageAsset {
+  id: string;
+  messageId: string;
+  data: string;
+  mimeType: string;
 }
 
 interface LarkQuotedMessage {
@@ -165,53 +195,70 @@ export function normalizeLarkTextMessage(
     return { skipReason: "event payload is not an object" };
   }
 
-  const message = isRecord(data.message) ? data.message : null;
+  const nestedMessage = isRecord(data.message) ? data.message : null;
+  const flatMessage = nestedMessage == null ? data : null;
+  const message = nestedMessage ?? flatMessage;
   if (message == null) {
     return { skipReason: "event payload is missing message" };
   }
 
-  const messageType =
-    typeof message.message_type === "string" && message.message_type.trim().length > 0
-      ? message.message_type.trim()
-      : null;
+  const messageType = readString(nestedMessage?.message_type) ?? readString(flatMessage?.msg_type);
   if (messageType == null) {
     return { skipReason: "message is missing message_type" };
   }
 
-  const chatId = typeof message.chat_id === "string" ? message.chat_id.trim() : "";
+  const chatId = readString(message.chat_id) ?? "";
   if (chatId.length === 0) {
     return { skipReason: "text message is missing chat_id" };
   }
 
-  const messageId = typeof message.message_id === "string" ? message.message_id.trim() : "";
+  const messageId = readString(message.message_id) ?? "";
   if (messageId.length === 0) {
     return { skipReason: "text message is missing message_id" };
   }
 
-  const contentRaw = typeof message.content === "string" ? message.content : "";
+  const contentRaw =
+    readString(nestedMessage?.content) ??
+    readString(isRecord(flatMessage?.body) ? flatMessage.body.content : null) ??
+    "";
   const text = parseLarkMessageContent(messageType, contentRaw);
   if (text.length === 0) {
+    logger.debug("normalized lark message produced empty text", {
+      messageShape: nestedMessage == null ? "raw" : "event",
+      chatId,
+      messageId,
+      messageType,
+      hasBodyContent: contentRaw.length > 0,
+    });
     return { skipReason: "text message content is empty" };
   }
+  const imageKeys = extractLarkImageKeys(messageType, contentRaw);
 
-  const parentMessageId =
-    typeof message.parent_id === "string" && message.parent_id.trim().length > 0
-      ? message.parent_id.trim()
-      : null;
-  const threadId =
-    typeof message.thread_id === "string" && message.thread_id.trim().length > 0
-      ? message.thread_id.trim()
-      : null;
+  const parentMessageId = readString(message.parent_id);
+  const threadId = readString(message.thread_id);
   const sender = isRecord(data.sender) ? data.sender : null;
   const senderId = sender != null && isRecord(sender.sender_id) ? sender.sender_id : null;
   const senderOpenId =
-    senderId != null && typeof senderId.open_id === "string" && senderId.open_id.length > 0
-      ? senderId.open_id
-      : null;
-  const senderType =
-    sender != null && typeof sender.sender_type === "string" ? sender.sender_type : null;
-  const chatType = typeof message.chat_type === "string" ? message.chat_type : null;
+    readString(senderId?.open_id) ??
+    (readString(sender?.id_type) === "open_id" ? readString(sender?.id) : null);
+  const senderType = readString(sender?.sender_type);
+  const chatType = readString(message.chat_type);
   const createdAt = parseLarkMessageCreatedAt(message.create_time);
+
+  logger.debug("normalized lark inbound message", {
+    messageShape: nestedMessage == null ? "raw" : "event",
+    chatId,
+    messageId,
+    messageType,
+    parentMessageId,
+    threadId,
+    senderOpenId,
+    senderType,
+    chatType,
+    imageKeyCount: imageKeys.length,
+    imageKeys,
+    contentPreview: truncateLogText(text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
+  });
 
   return {
     chatId,
@@ -223,6 +270,7 @@ export function normalizeLarkTextMessage(
     senderType,
     chatType,
     text,
+    ...(imageKeys.length === 0 ? {} : { imageKeys }),
     ...(createdAt == null ? {} : { createdAt }),
   };
 }
@@ -387,12 +435,46 @@ export function createLarkMessageReceiveHandler(input: {
       route.kind === "ordinary_thread"
         ? hydrated.text
         : await buildInboundMessageContent(hydrated, input);
+    const imageAssets =
+      input.clients == null
+        ? []
+        : await fetchLarkInboundImageAssets({
+            installationId: input.installationId,
+            messageId: hydrated.messageId,
+            imageKeys: hydrated.imageKeys ?? [],
+            clients: input.clients,
+          });
+    const userPayload = buildLarkInboundUserPayload({
+      content,
+      imageAssets,
+    });
+    const runtimeImages = buildLarkInboundRuntimeImages(imageAssets);
+
+    if ((hydrated.imageKeys?.length ?? 0) > 0 || runtimeImages.length > 0) {
+      logger.info("prepared lark inbound image payloads", {
+        installationId: input.installationId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
+        imageKeyCount: hydrated.imageKeys?.length ?? 0,
+        fetchedImageAssetCount: imageAssets.length,
+        fetchedImageAssets: imageAssets.map((image) => ({
+          id: image.id,
+          messageId: image.messageId,
+          mimeType: image.mimeType,
+          byteLength: Buffer.from(image.data, "base64").length,
+        })),
+        userPayloadImageCount: userPayload?.images?.length ?? 0,
+        runtimeImageCount: runtimeImages.length,
+      });
+    }
 
     try {
       await input.ingress.submitMessage({
         sessionId: route.sessionId,
         scenario: route.scenario,
         content,
+        ...(userPayload == null ? {} : { userPayload }),
+        ...(runtimeImages.length === 0 ? {} : { runtimeImages }),
         channelMessageId: hydrated.messageId,
         ...(hydrated.parentMessageId == null
           ? {}
@@ -1560,6 +1642,54 @@ async function buildOrdinaryThreadKickoffContent(input: {
   return lines.join("\n");
 }
 
+function extractLarkImageKeys(messageType: string, content: string): string[] {
+  if (content.length === 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(content);
+    if (!isRecord(parsed)) {
+      return [];
+    }
+
+    switch (messageType) {
+      case "image": {
+        const imageKey = readString(parsed.image_key);
+        return imageKey == null ? [] : [imageKey];
+      }
+      case "post": {
+        const body = unwrapLarkPostContent(parsed);
+        if (body == null) {
+          return [];
+        }
+
+        const keys: string[] = [];
+        const content = Array.isArray(body.content) ? body.content : [];
+        for (const paragraph of content) {
+          if (!Array.isArray(paragraph)) {
+            continue;
+          }
+          for (const element of paragraph) {
+            if (!isRecord(element) || readString(element.tag) !== "img") {
+              continue;
+            }
+            const imageKey = readString(element.image_key);
+            if (imageKey != null) {
+              keys.push(imageKey);
+            }
+          }
+        }
+        return keys;
+      }
+      default:
+        return [];
+    }
+  } catch {
+    return [];
+  }
+}
+
 function parseLarkMessageContent(messageType: string, content: string): string {
   if (content.length === 0) {
     return "";
@@ -2083,6 +2213,165 @@ export function createLarkQuoteMessageFetcher(input: {
       return null;
     }
   };
+}
+
+function buildLarkInboundUserPayload(input: {
+  content: string;
+  imageAssets: LarkInboundImageAsset[];
+}): AgentUserPayload | null {
+  if (input.imageAssets.length === 0) {
+    return null;
+  }
+
+  return {
+    content: input.content,
+    images: input.imageAssets.map(
+      (image): AgentUserImagePayload => ({
+        type: "image",
+        id: image.id,
+        messageId: normalizeAgentUserImageMessageId(image.id, image.messageId),
+        mimeType: image.mimeType,
+      }),
+    ),
+  };
+}
+
+function buildLarkInboundRuntimeImages(
+  imageAssets: LarkInboundImageAsset[],
+): AgentUserRuntimeImagePayload[] {
+  const runtimeImages = imageAssets.map(
+    (image): AgentUserRuntimeImagePayload => ({
+      type: "image",
+      id: image.id,
+      messageId: normalizeAgentUserImageMessageId(image.id, image.messageId),
+      data: image.data,
+      mimeType: image.mimeType,
+    }),
+  );
+  if (runtimeImages.length > 0) {
+    logger.debug("built lark inbound runtime images", {
+      imageCount: runtimeImages.length,
+      images: runtimeImages.map((image) => ({
+        id: image.id,
+        messageId: image.messageId,
+        mimeType: image.mimeType,
+        byteLength: Buffer.from(image.data, "base64").length,
+      })),
+    });
+  }
+  return runtimeImages;
+}
+
+async function fetchLarkInboundImageAssets(input: {
+  installationId: string;
+  messageId: string;
+  imageKeys: string[];
+  clients: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<LarkInboundImageAsset[]> {
+  if (input.imageKeys.length === 0) {
+    logger.debug("no lark inbound images to fetch", {
+      installationId: input.installationId,
+      messageId: input.messageId,
+    });
+    return [];
+  }
+
+  logger.debug("fetching lark inbound image assets", {
+    installationId: input.installationId,
+    messageId: input.messageId,
+    imageKeyCount: input.imageKeys.length,
+    imageKeys: input.imageKeys,
+  });
+
+  const client = input.clients.getOrCreate(input.installationId);
+  const assets: LarkInboundImageAsset[] = [];
+  for (const imageKey of input.imageKeys) {
+    try {
+      logger.debug("requesting lark inbound image resource", {
+        installationId: input.installationId,
+        messageId: input.messageId,
+        imageKey,
+      });
+      const response = await client.sdk.im.messageResource.get({
+        path: {
+          message_id: input.messageId,
+          file_key: imageKey,
+        },
+        params: {
+          type: "image",
+        },
+      });
+      const buffer = await readLarkResourceBuffer(response.getReadableStream());
+      if (buffer.length === 0) {
+        throw new Error("empty lark inbound image resource");
+      }
+      const mimeType = normalizeLarkImageMimeType(response.headers?.["content-type"]);
+      const data = buffer.toString("base64");
+      assets.push({
+        id: imageKey,
+        messageId: input.messageId,
+        data,
+        mimeType,
+      });
+      logger.debug("fetched lark inbound image resource", {
+        installationId: input.installationId,
+        messageId: input.messageId,
+        imageKey,
+        mimeType,
+        byteLength: buffer.length,
+      });
+    } catch (error) {
+      logger.warn("failed to fetch lark inbound image resource", {
+        installationId: input.installationId,
+        messageId: input.messageId,
+        imageKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  logger.debug("finished fetching lark inbound image assets", {
+    installationId: input.installationId,
+    messageId: input.messageId,
+    requestedImageKeyCount: input.imageKeys.length,
+    fetchedAssetCount: assets.length,
+  });
+
+  return assets;
+}
+
+async function readLarkResourceBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+function normalizeLarkImageMimeType(value: unknown): string {
+  if (typeof value === "string") {
+    const normalized = value.split(";")[0]?.trim().toLowerCase();
+    if (normalized?.startsWith("image/")) {
+      return normalized;
+    }
+    return "image/png";
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item !== "string") {
+        continue;
+      }
+      const normalized = item.split(";")[0]?.trim().toLowerCase();
+      if (normalized?.startsWith("image/")) {
+        return normalized;
+      }
+    }
+  }
+
+  return "image/png";
 }
 
 async function fetchQuotedLarkMessage(input: {

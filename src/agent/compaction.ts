@@ -833,7 +833,25 @@ function serializeMessageForSummary(message: Message): string {
 
 function serializeUserMessage(message: Message): string {
   const payload = parsePayload<AgentUserPayload>(message.payloadJson);
-  return typeof payload.content === "string" ? `[User]: ${payload.content}` : "";
+  if (typeof payload.content !== "string") {
+    return "";
+  }
+
+  const imageCount = Array.isArray(payload.images) ? payload.images.length : 0;
+  if (imageCount > 0) {
+    logger.debug("serializing user message with image placeholders for compaction", {
+      storageMessageId: message.id,
+      imageCount,
+      images: payload.images?.map((image) => ({
+        id: image.id,
+        messageId: image.messageId,
+        mimeType: image.mimeType,
+      })),
+    });
+  }
+  return imageCount > 0
+    ? `[User]: ${payload.content}\n[Attached images: ${imageCount}]`
+    : `[User]: ${payload.content}`;
 }
 
 function serializeAssistantMessage(message: Message): string {

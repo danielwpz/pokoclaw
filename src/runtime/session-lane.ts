@@ -6,6 +6,11 @@
  * by external coordination if runtime becomes multi-process.
  */
 import { randomUUID } from "node:crypto";
+import {
+  type AgentUserPayload,
+  type AgentUserRuntimeImagePayload,
+  normalizeAgentUserImageMessageId,
+} from "@/src/agent/llm/messages.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type {
   AgentLoop,
@@ -26,6 +31,8 @@ export interface SubmitSessionMessageInput {
   sessionId: string;
   scenario: ModelScenario;
   content: string;
+  userPayload?: AgentUserPayload;
+  runtimeImages?: AgentUserRuntimeImagePayload[];
   messageType?: string;
   visibility?: string;
   channelMessageId?: string | null;
@@ -64,10 +71,29 @@ export class InMemorySessionLane {
   // loop's steer queue. Otherwise we append it as a new user message and start
   // the session run immediately.
   async submitMessage(input: SubmitSessionMessageInput): Promise<SubmitSessionMessageResult> {
+    const normalized = normalizeSubmittedUserPayload(input.userPayload, input.runtimeImages);
+    logger.debug("session lane received message", {
+      sessionId: input.sessionId,
+      scenario: input.scenario,
+      hasUserPayload: normalized.userPayload != null,
+      persistedImageCount: normalized.userPayload?.images?.length ?? 0,
+      runtimeImageCount: normalized.runtimeImages?.length ?? 0,
+      runtimeImages: normalized.runtimeImages?.map((image) => ({
+        id: image.id,
+        messageId: image.messageId,
+        mimeType: image.mimeType,
+        byteLength: Buffer.from(image.data, "base64").length,
+      })),
+      channelMessageId: input.channelMessageId ?? null,
+      channelParentMessageId: input.channelParentMessageId ?? null,
+      channelThreadId: input.channelThreadId ?? null,
+    });
     if (this.activeRun != null) {
       const steered = this.deps.loop.enqueueSteerInput({
         sessionId: input.sessionId,
         content: input.content,
+        ...(normalized.userPayload == null ? {} : { userPayload: normalized.userPayload }),
+        ...(normalized.runtimeImages == null ? {} : { runtimeImages: normalized.runtimeImages }),
         ...(input.messageType == null ? {} : { messageType: input.messageType }),
         ...(input.visibility == null ? {} : { visibility: input.visibility }),
         ...(input.channelMessageId === undefined
@@ -82,9 +108,11 @@ export class InMemorySessionLane {
         ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
       });
       if (steered) {
-        logger.info("queued inbound message behind active run", {
+        logger.debug("queued inbound message behind active run", {
           sessionId: input.sessionId,
           content: truncateLogValue(input.content),
+          persistedImageCount: normalized.userPayload?.images?.length ?? 0,
+          runtimeImageCount: normalized.runtimeImages?.length ?? 0,
         });
         return {
           status: "steered",
@@ -98,9 +126,11 @@ export class InMemorySessionLane {
       sessionId: input.sessionId,
       seq: this.deps.messages.getNextSeq(input.sessionId),
       role: "user",
-      payloadJson: JSON.stringify({
-        content: input.content,
-      }),
+      payloadJson: JSON.stringify(
+        normalized.userPayload ?? {
+          content: input.content,
+        },
+      ),
       messageType: input.messageType ?? "text",
       visibility: input.visibility ?? "user_visible",
       channelMessageId: input.channelMessageId ?? null,
@@ -113,6 +143,9 @@ export class InMemorySessionLane {
       .run({
         sessionId: input.sessionId,
         scenario: input.scenario,
+        ...(normalized.runtimeImages == null || normalized.runtimeImages.length === 0
+          ? {}
+          : { initialRuntimeImagesByMessageId: { [messageId]: normalized.runtimeImages } }),
         ...(input.maxTurns == null ? {} : { maxTurns: input.maxTurns }),
         ...(input.afterToolResultHook == null
           ? {}
@@ -126,10 +159,13 @@ export class InMemorySessionLane {
       });
 
     this.activeRun = runPromise;
-    logger.info("starting session run", {
+    logger.debug("starting session run", {
       sessionId: input.sessionId,
       messageId,
       scenario: input.scenario,
+      persistedImageCount: normalized.userPayload?.images?.length ?? 0,
+      runtimeImageCount: normalized.runtimeImages?.length ?? 0,
+      runtimeImageMessageIds: normalized.runtimeImages?.map((image) => image.messageId) ?? [],
     });
 
     return {
@@ -142,6 +178,84 @@ export class InMemorySessionLane {
   submitApprovalDecision(input: ApprovalResponseInput): boolean {
     return this.deps.loop.submitApprovalResponse(input);
   }
+}
+
+function normalizeSubmittedUserPayload(
+  userPayload: AgentUserPayload | undefined,
+  runtimeImages: AgentUserRuntimeImagePayload[] | undefined,
+): {
+  userPayload: AgentUserPayload | undefined;
+  runtimeImages: AgentUserRuntimeImagePayload[] | undefined;
+} {
+  if (userPayload == null || !Array.isArray(userPayload.images)) {
+    logger.debug("normalizeSubmittedUserPayload bypassed image normalization", {
+      hasUserPayload: userPayload != null,
+      runtimeImageCount: runtimeImages?.length ?? 0,
+    });
+    return { userPayload, runtimeImages };
+  }
+
+  const existingRuntimeImages = runtimeImages ?? [];
+  const extractedRuntimeImages: AgentUserRuntimeImagePayload[] = [];
+  const normalizedImages = userPayload.images.flatMap((image) => {
+    if (image?.type !== "image" || typeof image.id !== "string" || image.id.length === 0) {
+      return [];
+    }
+    const runtimeCandidate = image as AgentUserRuntimeImagePayload;
+    const messageId = normalizeAgentUserImageMessageId(
+      runtimeCandidate.id,
+      runtimeCandidate.messageId,
+    );
+    if (typeof runtimeCandidate.mimeType !== "string" || runtimeCandidate.mimeType.length === 0) {
+      return [];
+    }
+    if (typeof runtimeCandidate.data === "string" && runtimeCandidate.data.length > 0) {
+      extractedRuntimeImages.push({
+        type: "image",
+        id: runtimeCandidate.id,
+        messageId,
+        data: runtimeCandidate.data,
+        mimeType: runtimeCandidate.mimeType,
+      });
+    }
+    return [
+      {
+        type: "image" as const,
+        id: runtimeCandidate.id,
+        messageId,
+        mimeType: runtimeCandidate.mimeType,
+      },
+    ];
+  });
+
+  const resolvedRuntimeImages =
+    existingRuntimeImages.length > 0
+      ? existingRuntimeImages
+      : extractedRuntimeImages.length > 0
+        ? extractedRuntimeImages
+        : undefined;
+
+  logger.debug("normalized submitted user payload images", {
+    persistedImageCountBefore: userPayload.images.length,
+    persistedImageCountAfter: normalizedImages.length,
+    providedRuntimeImageCount: existingRuntimeImages.length,
+    extractedLegacyRuntimeImageCount: extractedRuntimeImages.length,
+    resolvedRuntimeImageCount: resolvedRuntimeImages?.length ?? 0,
+    resolvedRuntimeImages: resolvedRuntimeImages?.map((image) => ({
+      id: image.id,
+      messageId: image.messageId,
+      mimeType: image.mimeType,
+      byteLength: Buffer.from(image.data, "base64").length,
+    })),
+  });
+
+  return {
+    userPayload: {
+      ...userPayload,
+      images: normalizedImages,
+    },
+    runtimeImages: resolvedRuntimeImages,
+  };
 }
 
 function truncateLogValue(value: string, maxLength: number = 40) {

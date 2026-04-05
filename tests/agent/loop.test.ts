@@ -227,6 +227,155 @@ describe("agent loop", () => {
     ]);
   });
 
+  test("keeps image bytes only for the active user turn across multi-request runs", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: JSON.stringify({
+        content: "[图片 img_v3_123]",
+        images: [
+          {
+            type: "image",
+            id: "img_v3_123",
+            messageId: "om_msg_1",
+            mimeType: "image/png",
+          },
+        ],
+      }),
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const seenRuntimeImageCounts: number[] = [];
+    let turns = 0;
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        const userMessage = input.messages.find((message) => message.id === "msg_user");
+        seenRuntimeImageCounts.push(
+          userMessage == null ? -1 : (input.resolveRuntimeImages?.(userMessage).length ?? 0),
+        );
+        turns += 1;
+        if (turns === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "ping",
+                arguments: {},
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry([
+        defineTool({
+          name: "ping",
+          description: "no-op",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("pong");
+          },
+        }),
+      ]),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({
+      sessionId: "sess_1",
+      scenario: "chat",
+      initialRuntimeImagesByMessageId: {
+        msg_user: [
+          {
+            type: "image",
+            id: "img_v3_123",
+            messageId: "om_msg_1",
+            data: "ZmFrZS1pbWFnZQ==",
+            mimeType: "image/png",
+          },
+        ],
+      },
+    });
+
+    expect(seenRuntimeImageCounts).toEqual([1, 1]);
+    expect(JSON.parse(messagesRepo.listBySession("sess_1")[0]?.payloadJson ?? "{}")).toEqual({
+      content: "[图片 img_v3_123]",
+      images: [
+        {
+          type: "image",
+          id: "img_v3_123",
+          messageId: "om_msg_1",
+          mimeType: "image/png",
+        },
+      ],
+    });
+
+    messagesRepo.append({
+      id: "msg_user_2",
+      sessionId: "sess_1",
+      seq: messagesRepo.getNextSeq("sess_1"),
+      role: "user",
+      payloadJson: JSON.stringify({ content: "follow-up" }),
+      createdAt: new Date("2026-03-22T00:00:02.000Z"),
+    });
+
+    const secondRunSeenCounts: number[] = [];
+    const secondRunRunner: AgentModelRunner = {
+      async runTurn(input) {
+        for (const message of input.messages.filter((entry) => entry.role === "user")) {
+          secondRunSeenCounts.push(input.resolveRuntimeImages?.(message).length ?? 0);
+        }
+        return makeAssistantResult({
+          content: [{ type: "text", text: "follow-up done" }],
+        });
+      },
+    };
+
+    const secondLoop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: secondRunRunner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await secondLoop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(secondRunSeenCounts).toEqual([0, 0]);
+  });
+
   test("captures runtime date context once per run so multi-turn prompts keep a stable prefix", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-30T05:47:00.000Z"));
