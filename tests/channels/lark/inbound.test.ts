@@ -182,6 +182,27 @@ describe("lark inbound message handling", () => {
     });
   });
 
+  test("extracts image keys from post messages", () => {
+    expect(
+      normalizeLarkTextMessage(
+        makeMessageEvent("post", {
+          zh_cn: {
+            content: [
+              [
+                { tag: "md", text: "Here are screenshots" },
+                { tag: "img", image_key: "img_v3_post_1" },
+                { tag: "img", image_key: "img_v3_post_2" },
+              ],
+            ],
+          },
+        }),
+      ),
+    ).toMatchObject({
+      text: "Here are screenshots![image](img_v3_post_1)![image](img_v3_post_2)",
+      imageKeys: ["img_v3_post_1", "img_v3_post_2"],
+    });
+  });
+
   test("routes a text message through surface binding into runtime ingress", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
@@ -355,6 +376,147 @@ describe("lark inbound message handling", () => {
           },
         ],
         channelMessageId: "om_msg_raw_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
+  test("keeps only successfully fetched post images in payload metadata", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const messageResourceGet = vi.fn(async (input: { path: { file_key: string } }) => {
+        if (input.path.file_key === "img_v3_post_ok") {
+          return {
+            headers: { "content-type": "text/html; charset=utf-8" },
+            getReadableStream: () => Readable.from(Buffer.from("post-image-ok")),
+          };
+        }
+        throw new Error("download failed");
+      });
+      const clients = {
+        getOrCreate: vi.fn(() => ({
+          sdk: {
+            im: {
+              messageResource: {
+                get: messageResourceGet,
+              },
+            },
+          },
+        })),
+      } as unknown as { getOrCreate(installationId: string): LarkSdkClient };
+
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        clients,
+      });
+
+      await handler(
+        makeMessageEvent("post", {
+          zh_cn: {
+            content: [
+              [
+                { tag: "md", text: "Two images" },
+                { tag: "img", image_key: "img_v3_post_ok" },
+                { tag: "img", image_key: "img_v3_post_fail" },
+              ],
+            ],
+          },
+        }),
+      );
+
+      expect(messageResourceGet).toHaveBeenCalledTimes(2);
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_chat_1",
+        scenario: "chat",
+        content: "Two images![image](img_v3_post_ok)![image](img_v3_post_fail)",
+        userPayload: {
+          content: "Two images![image](img_v3_post_ok)![image](img_v3_post_fail)",
+          images: [
+            {
+              type: "image",
+              id: "img_v3_post_ok",
+              messageId: "om_msg_1",
+              mimeType: "image/png",
+            },
+          ],
+        },
+        runtimeImages: [
+          {
+            type: "image",
+            id: "img_v3_post_ok",
+            messageId: "om_msg_1",
+            data: Buffer.from("post-image-ok").toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+        channelMessageId: "om_msg_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
+  test("drops empty downloaded image resources from payload metadata", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const messageResourceGet = vi.fn(async () => ({
+        headers: { "content-type": "image/jpeg" },
+        getReadableStream: () => Readable.from(Buffer.alloc(0)),
+      }));
+      const clients = {
+        getOrCreate: vi.fn(() => ({
+          sdk: {
+            im: {
+              messageResource: {
+                get: messageResourceGet,
+              },
+            },
+          },
+        })),
+      } as unknown as { getOrCreate(installationId: string): LarkSdkClient };
+
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        clients,
+      });
+
+      await handler(makeMessageEvent("image", { image_key: "img_v3_empty" }));
+
+      expect(messageResourceGet).toHaveBeenCalledOnce();
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_chat_1",
+        scenario: "chat",
+        content: "[图片 img_v3_empty]",
+        channelMessageId: "om_msg_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
     });

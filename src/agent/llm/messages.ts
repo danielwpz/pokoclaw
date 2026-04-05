@@ -74,6 +74,10 @@ export interface AgentUserPayload {
   images?: AgentUserImagePayload[];
 }
 
+export function normalizeAgentUserImageMessageId(imageId: string, messageId: unknown): string {
+  return typeof messageId === "string" && messageId.length > 0 ? messageId : imageId;
+}
+
 export interface BuildPiMessageOptions {
   supportsVision?: boolean;
   resolveRuntimeImages?: (
@@ -121,7 +125,7 @@ function buildPiUserMessage(message: Message, options?: BuildPiMessageOptions): 
       id: image.id,
       messageId: image.messageId,
       mimeType: image.mimeType,
-      base64Length: image.data.length,
+      byteLength: Buffer.from(image.data, "base64").length,
     })),
     supportsVision,
   });
@@ -152,10 +156,7 @@ function parseUserImages(images: unknown): {
     if (image?.type !== "image" || typeof image.id !== "string" || image.id.length === 0) {
       continue;
     }
-    const messageId =
-      typeof image.messageId === "string" && image.messageId.length > 0
-        ? image.messageId
-        : image.id;
+    const messageId = normalizeAgentUserImageMessageId(image.id, image.messageId);
     if (typeof image.mimeType !== "string" || image.mimeType.length === 0) {
       continue;
     }
