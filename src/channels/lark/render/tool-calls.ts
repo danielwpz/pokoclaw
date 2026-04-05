@@ -237,7 +237,8 @@ function renderPermissionRequestToolDetailContent(tool: LarkToolSequenceTool): s
   }
 
   if (tool.status === "completed") {
-    lines.push("", "**结果**", "授权已通过，agent 将继续执行。");
+    // No extra result footer for approved authorization requests; the approved
+    // state is already clear from the card header/status.
   } else if (tool.status === "failed") {
     lines.push("", "**结果**", tool.errorMessage ?? "授权被拒绝或未完成。");
   } else {
