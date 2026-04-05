@@ -11,6 +11,7 @@ import type {
   Usage,
   UserMessage,
 } from "@mariozechner/pi-ai";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { Message } from "@/src/storage/schema/types.js";
 
 export type AgentAssistantContentBlock =
@@ -55,18 +56,40 @@ export interface AgentToolResultPayload {
   details?: unknown;
 }
 
+const logger = createSubsystemLogger("llm-messages");
+
+export interface AgentUserImagePayload {
+  type: "image";
+  id: string;
+  messageId: string;
+  mimeType: string;
+}
+
+export interface AgentUserRuntimeImagePayload extends AgentUserImagePayload {
+  data: string;
+}
+
 export interface AgentUserPayload {
   content: string;
+  images?: AgentUserImagePayload[];
 }
 
-export function buildPiMessages(messages: Message[]): PiMessage[] {
-  return messages.map((message) => buildPiMessage(message));
+export interface BuildPiMessageOptions {
+  supportsVision?: boolean;
+  resolveRuntimeImages?: (
+    message: Message,
+    images: AgentUserImagePayload[],
+  ) => AgentUserRuntimeImagePayload[];
 }
 
-export function buildPiMessage(message: Message): PiMessage {
+export function buildPiMessages(messages: Message[], options?: BuildPiMessageOptions): PiMessage[] {
+  return messages.map((message) => buildPiMessage(message, options));
+}
+
+export function buildPiMessage(message: Message, options?: BuildPiMessageOptions): PiMessage {
   switch (message.role) {
     case "user":
-      return buildPiUserMessage(message);
+      return buildPiUserMessage(message, options);
     case "assistant":
       return buildPiAssistantMessage(message);
     case "tool":
@@ -76,17 +99,148 @@ export function buildPiMessage(message: Message): PiMessage {
   }
 }
 
-function buildPiUserMessage(message: Message): UserMessage {
+function buildPiUserMessage(message: Message, options?: BuildPiMessageOptions): UserMessage {
   const payload = parsePayload<AgentUserPayload>(message.payloadJson, message.id);
   if (typeof payload.content !== "string") {
     throw new Error(`Stored user message ${message.id} is missing string payload.content`);
   }
 
+  const parsedImages = parseUserImages(payload.images);
+  const supportsVision = options?.supportsVision ?? true;
+  const runtimeImages =
+    options?.resolveRuntimeImages?.(message, parsedImages.images) ??
+    parsedImages.inlineRuntimeImages;
+
+  logger.debug("building pi user message", {
+    storageMessageId: message.id,
+    persistedImageCount: parsedImages.images.length,
+    persistedImageIds: parsedImages.images.map((image) => image.id),
+    inlineRuntimeImageCount: parsedImages.inlineRuntimeImages.length,
+    resolvedRuntimeImageCount: runtimeImages.length,
+    resolvedRuntimeImages: runtimeImages.map((image) => ({
+      id: image.id,
+      messageId: image.messageId,
+      mimeType: image.mimeType,
+      base64Length: image.data.length,
+    })),
+    supportsVision,
+  });
+
   return {
     role: "user",
-    content: payload.content,
+    content: buildPiUserContent({
+      content: payload.content,
+      images: parsedImages.images,
+      runtimeImages,
+      supportsVision,
+    }),
     timestamp: parseMessageTimestamp(message),
   };
+}
+
+function parseUserImages(images: unknown): {
+  images: AgentUserImagePayload[];
+  inlineRuntimeImages: AgentUserRuntimeImagePayload[];
+} {
+  if (!Array.isArray(images)) {
+    return { images: [], inlineRuntimeImages: [] };
+  }
+
+  const parsedImages: AgentUserImagePayload[] = [];
+  const inlineRuntimeImages: AgentUserRuntimeImagePayload[] = [];
+  for (const image of images) {
+    if (image?.type !== "image" || typeof image.id !== "string" || image.id.length === 0) {
+      continue;
+    }
+    const messageId =
+      typeof image.messageId === "string" && image.messageId.length > 0
+        ? image.messageId
+        : image.id;
+    if (typeof image.mimeType !== "string" || image.mimeType.length === 0) {
+      continue;
+    }
+    parsedImages.push({
+      type: "image",
+      id: image.id,
+      messageId,
+      mimeType: image.mimeType,
+    });
+    if (typeof image.data === "string" && image.data.length > 0) {
+      inlineRuntimeImages.push({
+        type: "image",
+        id: image.id,
+        messageId,
+        data: image.data,
+        mimeType: image.mimeType,
+      });
+    }
+  }
+
+  return {
+    images: parsedImages,
+    inlineRuntimeImages,
+  };
+}
+
+function buildPiUserContent(input: {
+  content: string;
+  images: AgentUserImagePayload[];
+  runtimeImages: AgentUserRuntimeImagePayload[];
+  supportsVision: boolean;
+}): UserMessage["content"] {
+  if (input.images.length === 0) {
+    logger.debug("building pi user content without images", {
+      supportsVision: input.supportsVision,
+    });
+    return input.content;
+  }
+
+  if (input.supportsVision && input.runtimeImages.length > 0) {
+    logger.info("building pi user content with vision image blocks", {
+      supportsVision: input.supportsVision,
+      persistedImageCount: input.images.length,
+      runtimeImageCount: input.runtimeImages.length,
+      imageIds: input.images.map((image) => image.id),
+    });
+    return [
+      { type: "text", text: input.content },
+      ...input.runtimeImages.map((image) => ({
+        type: "image" as const,
+        data: image.data,
+        mimeType: image.mimeType,
+      })),
+    ];
+  }
+
+  if (!input.supportsVision) {
+    logger.debug("building pi user content with unsupported-vision notice", {
+      supportsVision: input.supportsVision,
+      persistedImageCount: input.images.length,
+      runtimeImageCount: input.runtimeImages.length,
+      imageIds: input.images.map((image) => image.id),
+    });
+    return appendUnsupportedVisionNotice(input.content, input.images);
+  }
+
+  logger.debug("building pi user content with image metadata only", {
+    supportsVision: input.supportsVision,
+    persistedImageCount: input.images.length,
+    runtimeImageCount: input.runtimeImages.length,
+    imageIds: input.images.map((image) => image.id),
+  });
+  return input.content;
+}
+
+function appendUnsupportedVisionNotice(content: string, images: AgentUserImagePayload[]): string {
+  const lines = [content.trimEnd()];
+  lines.push(
+    `[Note: The user attached ${images.length} image${images.length === 1 ? "" : "s"} (image IDs: ${images
+      .map((image) => image.id)
+      .join(
+        ", ",
+      )}), but the current model is not configured for vision, so the image content is not available to you.]`,
+  );
+  return lines.filter((line) => line.length > 0).join("\n");
 }
 
 function buildPiAssistantMessage(message: Message): AssistantMessage {

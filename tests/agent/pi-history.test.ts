@@ -149,6 +149,92 @@ describe("pi history", () => {
     });
   });
 
+  test("reconstructs multimodal user messages from legacy inline image data too", () => {
+    const message = makeStoredMessage({
+      payloadJson: JSON.stringify({
+        content: "请看这张图",
+        images: [
+          {
+            type: "image",
+            id: "img_v3_legacy",
+            data: "ZmFrZS1pbWFnZQ==",
+            mimeType: "image/png",
+          },
+        ],
+      }),
+    });
+
+    expect(buildPiMessage(message)).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "请看这张图" },
+        { type: "image", data: "ZmFrZS1pbWFnZQ==", mimeType: "image/png" },
+      ],
+      timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+    });
+  });
+
+  test("reconstructs multimodal user messages with attached runtime images", () => {
+    const message = makeStoredMessage({
+      payloadJson: JSON.stringify({
+        content: "请看这张图",
+        images: [{ type: "image", id: "img_v3_123", messageId: "om_msg_1", mimeType: "image/png" }],
+      }),
+    });
+
+    expect(
+      buildPiMessage(message, {
+        resolveRuntimeImages: () => [
+          {
+            type: "image",
+            id: "img_v3_123",
+            messageId: "om_msg_1",
+            data: "ZmFrZS1pbWFnZQ==",
+            mimeType: "image/png",
+          },
+        ],
+      }),
+    ).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "请看这张图" },
+        { type: "image", data: "ZmFrZS1pbWFnZQ==", mimeType: "image/png" },
+      ],
+      timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+    });
+  });
+
+  test("keeps only placeholder text when runtime image bytes are no longer available", () => {
+    const message = makeStoredMessage({
+      payloadJson: JSON.stringify({
+        content: "[图片 img_v3_123]",
+        images: [{ type: "image", id: "img_v3_123", messageId: "om_msg_1", mimeType: "image/png" }],
+      }),
+    });
+
+    expect(buildPiMessage(message)).toEqual({
+      role: "user",
+      content: "[图片 img_v3_123]",
+      timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+    });
+  });
+
+  test("falls back to an English note when the current model does not support vision", () => {
+    const message = makeStoredMessage({
+      payloadJson: JSON.stringify({
+        content: "Please review this",
+        images: [{ type: "image", id: "img_v3_123", messageId: "om_msg_1", mimeType: "image/png" }],
+      }),
+    });
+
+    expect(buildPiMessage(message, { supportsVision: false })).toEqual({
+      role: "user",
+      content:
+        "Please review this\n[Note: The user attached 1 image (image IDs: img_v3_123), but the current model is not configured for vision, so the image content is not available to you.]",
+      timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+    });
+  });
+
   test("fails clearly when stored assistant metadata is incomplete", () => {
     const message = makeStoredMessage({
       role: "assistant",

@@ -57,6 +57,7 @@ export interface PiBridgeRunTurnInput {
   systemPrompt?: string;
   compactSummary: string | null;
   messages: Message[];
+  resolveRuntimeImages?: AgentModelTurnInput["resolveRuntimeImages"];
   tools: ToolRegistry;
   sessionPurpose?: string;
   agentKind?: string | null;
@@ -92,7 +93,12 @@ export class PiBridge {
       : null;
     const context = {
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
-      messages: buildPiContextMessages(input.compactSummary, input.messages),
+      messages: buildPiContextMessages(
+        input.compactSummary,
+        input.messages,
+        input.model.supportsVision,
+        input.resolveRuntimeImages,
+      ),
     };
     if (tools != null) {
       Object.assign(context, { tools });
@@ -104,6 +110,8 @@ export class PiBridge {
       messageCount: input.messages.length,
       tools: tools?.length ?? 0,
       hasCompactSummary: input.compactSummary != null && input.compactSummary.trim().length > 0,
+      hasResolveRuntimeImages: input.resolveRuntimeImages != null,
+      supportsVision: input.model.supportsVision,
     });
 
     try {
@@ -162,7 +170,12 @@ export class PiBridge {
       : null;
     const context = {
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
-      messages: buildPiContextMessages(input.compactSummary, input.messages),
+      messages: buildPiContextMessages(
+        input.compactSummary,
+        input.messages,
+        input.model.supportsVision,
+        input.resolveRuntimeImages,
+      ),
     };
     if (tools != null) {
       Object.assign(context, { tools });
@@ -272,6 +285,9 @@ export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunn
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
       compactSummary: input.compactSummary,
       messages: input.messages,
+      ...(input.resolveRuntimeImages == null
+        ? {}
+        : { resolveRuntimeImages: input.resolveRuntimeImages }),
       ...(input.sessionPurpose == null ? {} : { sessionPurpose: input.sessionPurpose }),
       ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
       tools: this.tools,
@@ -286,8 +302,31 @@ export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunn
   }
 }
 
-function buildPiContextMessages(compactSummary: string | null, messages: Message[]) {
-  const piMessages = buildPiMessages(messages);
+function buildPiContextMessages(
+  compactSummary: string | null,
+  messages: Message[],
+  supportsVision: boolean,
+  resolveRuntimeImages?: AgentModelTurnInput["resolveRuntimeImages"],
+) {
+  logger.debug("building pi context messages", {
+    storedMessageCount: messages.length,
+    supportsVision,
+    hasCompactSummary: compactSummary != null && compactSummary.trim().length > 0,
+    hasResolveRuntimeImagesCallback: resolveRuntimeImages != null,
+  });
+  const piMessages = buildPiMessages(messages, {
+    supportsVision,
+    ...(resolveRuntimeImages == null
+      ? {}
+      : { resolveRuntimeImages: (message, _images) => resolveRuntimeImages(message) }),
+  });
+  logger.debug("built pi context messages", {
+    storedMessageCount: messages.length,
+    piMessageCount: piMessages.length,
+    supportsVision,
+    hasCompactSummary: compactSummary != null && compactSummary.trim().length > 0,
+    hasResolveRuntimeImagesCallback: resolveRuntimeImages != null,
+  });
   if (compactSummary == null || compactSummary.trim().length === 0) {
     return piMessages;
   }
