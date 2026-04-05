@@ -6,7 +6,11 @@
  * by external coordination if runtime becomes multi-process.
  */
 import { randomUUID } from "node:crypto";
-import type { AgentUserPayload, AgentUserRuntimeImagePayload } from "@/src/agent/llm/messages.js";
+import {
+  type AgentUserPayload,
+  type AgentUserRuntimeImagePayload,
+  normalizeAgentUserImageMessageId,
+} from "@/src/agent/llm/messages.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type {
   AgentLoop,
@@ -78,7 +82,7 @@ export class InMemorySessionLane {
         id: image.id,
         messageId: image.messageId,
         mimeType: image.mimeType,
-        base64Length: image.data.length,
+        byteLength: Buffer.from(image.data, "base64").length,
       })),
       channelMessageId: input.channelMessageId ?? null,
       channelParentMessageId: input.channelParentMessageId ?? null,
@@ -198,10 +202,10 @@ function normalizeSubmittedUserPayload(
       return [];
     }
     const runtimeCandidate = image as AgentUserRuntimeImagePayload;
-    const messageId =
-      typeof runtimeCandidate.messageId === "string" && runtimeCandidate.messageId.length > 0
-        ? runtimeCandidate.messageId
-        : runtimeCandidate.id;
+    const messageId = normalizeAgentUserImageMessageId(
+      runtimeCandidate.id,
+      runtimeCandidate.messageId,
+    );
     if (typeof runtimeCandidate.mimeType !== "string" || runtimeCandidate.mimeType.length === 0) {
       return [];
     }
@@ -241,7 +245,7 @@ function normalizeSubmittedUserPayload(
       id: image.id,
       messageId: image.messageId,
       mimeType: image.mimeType,
-      base64Length: image.data.length,
+      byteLength: Buffer.from(image.data, "base64").length,
     })),
   });
 

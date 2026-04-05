@@ -308,12 +308,6 @@ function buildPiContextMessages(
   supportsVision: boolean,
   resolveRuntimeImages?: AgentModelTurnInput["resolveRuntimeImages"],
 ) {
-  logger.debug("building pi context messages", {
-    storedMessageCount: messages.length,
-    supportsVision,
-    hasCompactSummary: compactSummary != null && compactSummary.trim().length > 0,
-    hasResolveRuntimeImagesCallback: resolveRuntimeImages != null,
-  });
   const piMessages = buildPiMessages(messages, {
     supportsVision,
     ...(resolveRuntimeImages == null

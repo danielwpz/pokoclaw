@@ -9,10 +9,11 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import type {
-  AgentUserImagePayload,
-  AgentUserPayload,
-  AgentUserRuntimeImagePayload,
+import {
+  type AgentUserImagePayload,
+  type AgentUserPayload,
+  type AgentUserRuntimeImagePayload,
+  normalizeAgentUserImageMessageId,
 } from "@/src/agent/llm/messages.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
@@ -460,7 +461,7 @@ export function createLarkMessageReceiveHandler(input: {
           id: image.id,
           messageId: image.messageId,
           mimeType: image.mimeType,
-          base64Length: image.data.length,
+          byteLength: Buffer.from(image.data, "base64").length,
         })),
         userPayloadImageCount: userPayload?.images?.length ?? 0,
         runtimeImageCount: runtimeImages.length,
@@ -2228,7 +2229,7 @@ function buildLarkInboundUserPayload(input: {
       (image): AgentUserImagePayload => ({
         type: "image",
         id: image.id,
-        messageId: image.messageId,
+        messageId: normalizeAgentUserImageMessageId(image.id, image.messageId),
         mimeType: image.mimeType,
       }),
     ),
@@ -2242,7 +2243,7 @@ function buildLarkInboundRuntimeImages(
     (image): AgentUserRuntimeImagePayload => ({
       type: "image",
       id: image.id,
-      messageId: image.messageId,
+      messageId: normalizeAgentUserImageMessageId(image.id, image.messageId),
       data: image.data,
       mimeType: image.mimeType,
     }),
@@ -2254,7 +2255,7 @@ function buildLarkInboundRuntimeImages(
         id: image.id,
         messageId: image.messageId,
         mimeType: image.mimeType,
-        base64Length: image.data.length,
+        byteLength: Buffer.from(image.data, "base64").length,
       })),
     });
   }
@@ -2303,6 +2304,9 @@ async function fetchLarkInboundImageAssets(input: {
         },
       });
       const buffer = await readLarkResourceBuffer(response.getReadableStream());
+      if (buffer.length === 0) {
+        throw new Error("empty lark inbound image resource");
+      }
       const mimeType = normalizeLarkImageMimeType(response.headers?.["content-type"]);
       const data = buffer.toString("base64");
       assets.push({
@@ -2317,7 +2321,6 @@ async function fetchLarkInboundImageAssets(input: {
         imageKey,
         mimeType,
         byteLength: buffer.length,
-        base64Length: data.length,
       });
     } catch (error) {
       logger.warn("failed to fetch lark inbound image resource", {
@@ -2353,12 +2356,16 @@ function normalizeLarkImageMimeType(value: unknown): string {
     if (normalized?.startsWith("image/")) {
       return normalized;
     }
+    return "image/png";
   }
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      const normalized = normalizeLarkImageMimeType(item);
-      if (normalized !== "image/png") {
+      if (typeof item !== "string") {
+        continue;
+      }
+      const normalized = item.split(";")[0]?.trim().toLowerCase();
+      if (normalized?.startsWith("image/")) {
         return normalized;
       }
     }

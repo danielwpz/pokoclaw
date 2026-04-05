@@ -396,7 +396,7 @@ export class AgentLoop {
           id: image.id,
           messageId: image.messageId,
           mimeType: image.mimeType,
-          base64Length: image.data.length,
+          byteLength: Buffer.from(image.data, "base64").length,
         })),
       ),
     });
@@ -568,7 +568,7 @@ export class AgentLoop {
                     id: image.id,
                     messageId: image.messageId,
                     mimeType: image.mimeType,
-                    base64Length: image.data.length,
+                    byteLength: Buffer.from(image.data, "base64").length,
                   })),
                 });
                 return mapped;
@@ -1616,7 +1616,7 @@ export class AgentLoop {
             id: image.id,
             messageId: image.messageId,
             mimeType: image.mimeType,
-            base64Length: image.data.length,
+            byteLength: Buffer.from(image.data, "base64").length,
           })),
         });
       }
