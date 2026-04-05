@@ -28,6 +28,7 @@ import type {
   AgentAssistantPayload,
   AgentToolResultPayload,
   AgentUserPayload,
+  AgentUserRuntimeImagePayload,
 } from "@/src/agent/llm/messages.js";
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
@@ -123,6 +124,7 @@ export interface AgentModelTurnInput {
   systemPrompt?: string;
   compactSummary: string | null;
   messages: Message[];
+  resolveRuntimeImages?: (message: Message) => AgentUserRuntimeImagePayload[];
   signal: AbortSignal;
   onTextDelta?: (delta: { delta: string; accumulatedText: string }) => void;
   onThinkingDelta?: (delta: { delta: string }) => void;
@@ -135,6 +137,7 @@ export interface AgentModelRunner {
 export interface RunAgentLoopInput {
   sessionId: string;
   scenario: ModelScenario;
+  initialRuntimeImagesByMessageId?: Record<string, AgentUserRuntimeImagePayload[]>;
   maxTurns?: number;
   afterToolResultHook?: AgentLoopAfterToolResultHook;
 }
@@ -312,6 +315,8 @@ export class AgentLoop {
   enqueueSteerInput(input: {
     sessionId: string;
     content: string;
+    userPayload?: AgentUserPayload;
+    runtimeImages?: AgentUserRuntimeImagePayload[];
     messageType?: string;
     visibility?: string;
     channelMessageId?: string | null;
@@ -372,6 +377,29 @@ export class AgentLoop {
     const handle = this.deps.cancel.begin(input.sessionId);
     const maxTurns = input.maxTurns ?? this.defaultMaxTurns;
     let context = this.deps.sessions.getContext(input.sessionId);
+    const runtimeImagesByMessageId = new Map<string, AgentUserRuntimeImagePayload[]>(
+      Object.entries(input.initialRuntimeImagesByMessageId ?? {}),
+    );
+    const activeTurnImageMessageIds = new Set(
+      Object.keys(input.initialRuntimeImagesByMessageId ?? {}),
+    );
+    logger.debug("initialized run runtime image state", {
+      sessionId: input.sessionId,
+      initialImageMessageIds: [...activeTurnImageMessageIds],
+      initialRuntimeImageCount: [...runtimeImagesByMessageId.values()].reduce(
+        (sum, images) => sum + images.length,
+        0,
+      ),
+      initialRuntimeImages: [...runtimeImagesByMessageId.entries()].flatMap(([messageId, images]) =>
+        images.map((image) => ({
+          storageMessageId: messageId,
+          id: image.id,
+          messageId: image.messageId,
+          mimeType: image.mimeType,
+          base64Length: image.data.length,
+        })),
+      ),
+    });
     const model = this.deps.models.getRequiredScenarioModel(input.scenario);
     assertSessionModelSupportsTools({
       sessionPurpose: context.session.purpose,
@@ -525,6 +553,26 @@ export class AgentLoop {
               systemPrompt,
               compactSummary: context.compactSummary,
               messages,
+              resolveRuntimeImages: (message) => {
+                const mapped = runtimeImagesByMessageId.get(message.id) ?? [];
+                logger.debug("resolved runtime images for model turn message", {
+                  sessionId: input.sessionId,
+                  runId,
+                  storageMessageId: message.id,
+                  activeTurnHasMessageId: activeTurnImageMessageIds.has(message.id),
+                  runtimeImageMapHasMessageId: runtimeImagesByMessageId.has(message.id),
+                  resolvedImageCount: mapped.length,
+                  activeTurnImageMessageIds: [...activeTurnImageMessageIds],
+                  availableRuntimeImageMessageIds: [...runtimeImagesByMessageId.keys()],
+                  images: mapped.map((image) => ({
+                    id: image.id,
+                    messageId: image.messageId,
+                    mimeType: image.mimeType,
+                    base64Length: image.data.length,
+                  })),
+                });
+                return mapped;
+              },
               signal: handle.signal,
               onTextDelta: (event) => {
                 sawStreamedText = true;
@@ -802,12 +850,19 @@ export class AgentLoop {
               count: queuedSteer.length,
               latest: truncateLogText(queuedSteer.at(-1)?.content ?? "", 48),
             });
-            nextSeq = this.appendQueuedSteerMessages({
+            const queuedMessages = this.appendQueuedSteerMessages({
               queuedSteer,
               sessionId: input.sessionId,
               nextSeq,
               messages,
               appendedMessageIds,
+              runtimeImagesByMessageId,
+            });
+            nextSeq = queuedMessages.nextSeq;
+            replaceActiveTurnRuntimeImages({
+              activeTurnImageMessageIds,
+              runtimeImagesByMessageId,
+              nextMessageIds: queuedMessages.messageIds,
             });
           }
 
@@ -1001,12 +1056,19 @@ export class AgentLoop {
             latest: truncateLogText(queuedSteer.at(-1)?.content ?? "", 48),
             tail: summarizeTranscriptTail(messages),
           });
-          nextSeq = this.appendQueuedSteerMessages({
+          const queuedMessages = this.appendQueuedSteerMessages({
             queuedSteer,
             sessionId: input.sessionId,
             nextSeq,
             messages,
             appendedMessageIds,
+            runtimeImagesByMessageId,
+          });
+          nextSeq = queuedMessages.nextSeq;
+          replaceActiveTurnRuntimeImages({
+            activeTurnImageMessageIds,
+            runtimeImagesByMessageId,
+            nextMessageIds: queuedMessages.messageIds,
           });
         }
 
@@ -1519,8 +1581,10 @@ export class AgentLoop {
     nextSeq: number;
     messages: Message[];
     appendedMessageIds: string[];
-  }): number {
+    runtimeImagesByMessageId: Map<string, AgentUserRuntimeImagePayload[]>;
+  }): { nextSeq: number; messageIds: string[] } {
     let nextSeq = input.nextSeq;
+    const messageIds: string[] = [];
 
     for (const queued of input.queuedSteer) {
       const messageId = randomUUID();
@@ -1530,9 +1594,11 @@ export class AgentLoop {
         messageId,
         seq: nextSeq,
         role: "user",
-        payload: {
-          content: queued.content,
-        } satisfies AgentUserPayload,
+        payload:
+          queued.userPayload ??
+          ({
+            content: queued.content,
+          } satisfies AgentUserPayload),
         messageType: queued.messageType ?? "text",
         visibility: queued.visibility ?? "user_visible",
         channelMessageId: queued.channelMessageId ?? null,
@@ -1540,12 +1606,27 @@ export class AgentLoop {
         channelThreadId: queued.channelThreadId ?? null,
         createdAt: queued.createdAt ?? new Date(),
       });
+      if (queued.runtimeImages && queued.runtimeImages.length > 0) {
+        input.runtimeImagesByMessageId.set(messageId, queued.runtimeImages);
+        logger.debug("attached runtime images to queued steer message", {
+          sessionId: input.sessionId,
+          storageMessageId: messageId,
+          runtimeImageCount: queued.runtimeImages.length,
+          images: queued.runtimeImages.map((image) => ({
+            id: image.id,
+            messageId: image.messageId,
+            mimeType: image.mimeType,
+            base64Length: image.data.length,
+          })),
+        });
+      }
       nextSeq += 1;
+      messageIds.push(messageId);
       input.messages.push(message);
       input.appendedMessageIds.push(messageId);
     }
 
-    return nextSeq;
+    return { nextSeq, messageIds };
   }
 
   private recordEvent(events: AgentRuntimeEvent[], event: AgentRuntimeEventInput): void {
@@ -1558,6 +1639,30 @@ export class AgentLoop {
     events.push(hydrated);
     this.deps.emitEvent?.(hydrated);
   }
+}
+
+function replaceActiveTurnRuntimeImages(input: {
+  activeTurnImageMessageIds: Set<string>;
+  runtimeImagesByMessageId: Map<string, AgentUserRuntimeImagePayload[]>;
+  nextMessageIds: string[];
+}): void {
+  const previousActiveMessageIds = [...input.activeTurnImageMessageIds];
+  for (const messageId of input.activeTurnImageMessageIds) {
+    input.runtimeImagesByMessageId.delete(messageId);
+  }
+  input.activeTurnImageMessageIds.clear();
+  for (const messageId of input.nextMessageIds) {
+    if (!input.runtimeImagesByMessageId.has(messageId)) {
+      continue;
+    }
+    input.activeTurnImageMessageIds.add(messageId);
+  }
+  logger.debug("replaced active turn runtime images", {
+    previousActiveMessageIds,
+    nextMessageIds: input.nextMessageIds,
+    newActiveMessageIds: [...input.activeTurnImageMessageIds],
+    remainingRuntimeImageMessageIds: [...input.runtimeImagesByMessageId.keys()],
+  });
 }
 
 function appendMessageAndHydrate(input: {
