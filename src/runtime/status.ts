@@ -10,6 +10,7 @@ import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import { resolveSessionLiveState } from "@/src/runtime/live-state.js";
+import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
@@ -17,10 +18,13 @@ import {
   extractStoredMessageUsage,
   MessagesRepo,
   type MessageUsage,
-  parseStoredUsageJson,
 } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import type { Message, Session } from "@/src/storage/schema/types.js";
+
+const STATUS_USAGE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+const RECENT_SESSION_USAGE_LABEL = "最近 3 天 session";
+const NO_RECENT_SESSION_USAGE_TEXT = "- 最近 3 天还没有可用 usage。";
 
 export interface ConversationStatusInput {
   conversationId: string;
@@ -185,9 +189,9 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
   lines.push("");
   lines.push("Usage");
   if (snapshot.sessionUsage == null) {
-    lines.push("- 当前 session 还没有可用 usage。");
+    lines.push(NO_RECENT_SESSION_USAGE_TEXT);
   } else {
-    lines.push(...formatUsageTextBlock("当前 session 累计", snapshot.sessionUsage));
+    lines.push(...formatUsageTextBlock(RECENT_SESSION_USAGE_LABEL, snapshot.sessionUsage));
   }
   if (snapshot.latestTurnUsage == null) {
     lines.push(formatLatestTurnFallbackLine(snapshot));
@@ -246,8 +250,8 @@ export function buildConversationStatusPresentation(
       [
         "### Usage",
         snapshot.sessionUsage == null
-          ? "- 当前 session 还没有可用 usage。"
-          : formatUsageMarkdownBlock("当前 session 累计", snapshot.sessionUsage),
+          ? NO_RECENT_SESSION_USAGE_TEXT
+          : formatUsageMarkdownBlock(RECENT_SESSION_USAGE_LABEL, snapshot.sessionUsage),
         "",
         snapshot.latestTurnUsage == null
           ? formatLatestTurnFallbackLine(snapshot)
@@ -376,19 +380,12 @@ function aggregateSessionUsage(input: {
 }): StatusUsageSnapshot | null {
   const total = emptyUsage();
   let sawAny = false;
+  const afterCreatedAt = toCanonicalUtcIsoTimestamp(new Date(Date.now() - STATUS_USAGE_WINDOW_MS));
 
-  const compactSummaryUsage = toStatusUsageSnapshot(
-    parseStoredUsageJson(input.session.compactSummaryUsageJson),
-  );
-  if (compactSummaryUsage != null) {
-    addUsage(total, compactSummaryUsage);
-    sawAny = true;
-  }
-
-  const suffixMessages = input.messagesRepo.listBySession(input.session.id, {
-    afterSeq: input.session.compactCursor,
+  const recentMessages = input.messagesRepo.listBySession(input.session.id, {
+    afterCreatedAt,
   });
-  for (const message of suffixMessages) {
+  for (const message of recentMessages) {
     if (message.role !== "assistant") {
       continue;
     }

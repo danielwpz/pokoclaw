@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
@@ -22,6 +22,18 @@ async function withHandle(fn: (handle: TestDatabaseHandle) => Promise<void>): Pr
     await destroyTestDatabase(handle);
   }
 }
+
+const FIXED_NOW = new Date("2026-04-05T12:00:00.000Z");
+
+function isoNowMinusDays(days: number, extraHours = 0): string {
+  return new Date(
+    FIXED_NOW.getTime() - days * 24 * 60 * 60 * 1000 + extraHours * 60 * 60 * 1000,
+  ).toISOString();
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createConfig(): AppConfig {
   return {
@@ -99,7 +111,10 @@ function createConfig(): AppConfig {
 }
 
 describe("runtime status service", () => {
-  test("aggregates current session usage, active runs, and pending approvals", async () => {
+  test("aggregates recent 3-day session usage, active runs, and pending approvals", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+
     await withHandle(async (handle) => {
       handle.storage.sqlite.exec(`
         INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
@@ -134,13 +149,21 @@ describe("runtime status service", () => {
         INSERT INTO messages (
           id, session_id, seq, role, message_type, visibility, provider, model, model_api, stop_reason,
           payload_json, token_input, token_output, token_cache_read, token_cache_write, token_total, usage_json, created_at
-        ) VALUES (
-          'msg_a_1', 'sess_chat', 11, 'assistant', 'text', 'user_visible', 'openrouter', 'openai/gpt-5.4', 'openai-responses', 'stop',
-          '{"content":[{"type":"text","text":"hello"}]}',
-          50, 10, 5, 0, 65,
-          '{"input":50,"output":10,"cacheRead":5,"cacheWrite":0,"totalTokens":65,"cost":{"input":0.001,"output":0.002,"cacheRead":0.0001,"cacheWrite":0,"total":0.0031}}',
-          '2026-03-28T00:02:00.000Z'
-        );
+        ) VALUES
+          (
+            'msg_old', 'sess_chat', 11, 'assistant', 'text', 'user_visible', 'openrouter', 'openai/gpt-5.4', 'openai-responses', 'stop',
+            '{"content":[{"type":"text","text":"old"}]}',
+            40, 8, 4, 0, 52,
+            '{"input":40,"output":8,"cacheRead":4,"cacheWrite":0,"totalTokens":52,"cost":{"input":0.0008,"output":0.0016,"cacheRead":0.00008,"cacheWrite":0,"total":0.00248}}',
+            '${isoNowMinusDays(4)}'
+          ),
+          (
+            'msg_recent', 'sess_chat', 12, 'assistant', 'text', 'user_visible', 'openrouter', 'openai/gpt-5.4', 'openai-responses', 'stop',
+            '{"content":[{"type":"text","text":"hello"}]}',
+            50, 10, 5, 0, 65,
+            '{"input":50,"output":10,"cacheRead":5,"cacheWrite":0,"totalTokens":65,"cost":{"input":0.001,"output":0.002,"cacheRead":0.0001,"cacheWrite":0,"total":0.0031}}',
+            '${isoNowMinusDays(1)}'
+          );
 
         INSERT INTO approval_ledger (
           owner_agent_id, requested_by_session_id, requested_scope_json, approval_target, status, reason_text, created_at
@@ -198,12 +221,12 @@ describe("runtime status service", () => {
         },
       });
       expect(snapshot.sessionUsage).toMatchObject({
-        totalTokens: 4265,
-        input: 1050,
-        output: 210,
-        cacheRead: 3005,
+        totalTokens: 65,
+        input: 50,
+        output: 10,
+        cacheRead: 5,
         cost: {
-          total: 0.0331,
+          total: 0.0031,
         },
       });
       expect(snapshot.activeRuns).toEqual([
@@ -230,10 +253,11 @@ describe("runtime status service", () => {
       const text = formatConversationStatusText(snapshot);
       expect(text).toContain("当前状态");
       expect(text).toContain("openrouter-gpt5.4 / openai/gpt-5.4 / openrouter / openai-responses");
-      expect(text).toContain("- 当前 session 累计");
-      expect(text).toContain("  总 4,265 / 输入 1,050 / 输出 210");
-      expect(text).toContain("  缓存读 3,005 / 缓存写 0");
-      expect(text).toContain("Cost $0.033100");
+      expect(text).toContain("- 最近 3 天 session");
+      expect(text).not.toContain("- 当前 session 累计");
+      expect(text).toContain("  总 65 / 输入 50 / 输出 10");
+      expect(text).toContain("  缓存读 5 / 缓存写 0");
+      expect(text).toContain("Cost $0.003100");
       expect(text).toContain("待处理授权");
       expect(text).toContain("#1 (user) Approval required: Write /tmp/demo.js");
 
@@ -242,12 +266,11 @@ describe("runtime status service", () => {
       expect(presentation.summary).toBe("存在活跃 run");
       expect(presentation.markdownSections.join("\n")).toContain("**版本**");
       expect(presentation.markdownSections.join("\n")).toContain("openrouter-gpt5.4");
-      expect(presentation.markdownSections.join("\n")).toContain("**当前 session 累计**");
-      expect(presentation.markdownSections.join("\n")).toContain(
-        "- 总 4,265 / 输入 1,050 / 输出 210",
-      );
-      expect(presentation.markdownSections.join("\n")).toContain("- 缓存读 3,005 / 缓存写 0");
-      expect(presentation.markdownSections.join("\n")).toContain("- Cost $0.033100");
+      expect(presentation.markdownSections.join("\n")).toContain("**最近 3 天 session**");
+      expect(presentation.markdownSections.join("\n")).not.toContain("**当前 session 累计**");
+      expect(presentation.markdownSections.join("\n")).toContain("- 总 65 / 输入 50 / 输出 10");
+      expect(presentation.markdownSections.join("\n")).toContain("- 缓存读 5 / 缓存写 0");
+      expect(presentation.markdownSections.join("\n")).toContain("- Cost $0.003100");
     });
   });
 
@@ -299,6 +322,9 @@ describe("runtime status service", () => {
   });
 
   test("falls back to token columns when assistant usageJson is missing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+
     await withHandle(async (handle) => {
       handle.storage.sqlite.exec(`
         INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
@@ -328,7 +354,7 @@ describe("runtime status service", () => {
           '{"content":[{"type":"text","text":"hello"}]}',
           50, 10, 5, 0, 65,
           NULL,
-          '2026-03-28T00:02:00.000Z'
+          '${isoNowMinusDays(1)}'
         );
       `);
 
@@ -366,6 +392,7 @@ describe("runtime status service", () => {
       });
 
       const text = formatConversationStatusText(snapshot);
+      expect(text).toContain("- 最近 3 天 session");
       expect(text).toContain("- 最近一次回复");
       expect(text).toContain("  总 65 / 输入 50 / 输出 10");
       expect(text).toContain("Cost $0.000000");
