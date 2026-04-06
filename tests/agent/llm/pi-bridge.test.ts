@@ -254,6 +254,65 @@ describe("pi bridge", () => {
     expect(options.reasoning).toBe("medium");
   });
 
+  test("passes configured max output tokens into stream options", async () => {
+    const finalMessage = {
+      role: "assistant" as const,
+      api: "openai-completions" as const,
+      provider: "volces",
+      model: "doubao-seed-2.0-pro",
+      stopReason: "stop" as const,
+      content: [{ type: "text" as const, text: "ok" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream(
+        [{ type: "done", reason: "stop", message: finalMessage }],
+        finalMessage,
+      ),
+    );
+
+    const bridge = new PiBridge();
+    await bridge.streamTurn({
+      model: createResolvedModel({
+        id: "volces-doubao-seed-2.0-pro",
+        providerId: "volces",
+        upstreamId: "doubao-seed-2.0-pro",
+        maxOutputTokens: 128_000,
+        provider: {
+          id: "volces",
+          api: "openai-completions",
+          apiKey: "secret",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+        },
+      }),
+      compactSummary: null,
+      messages: [createStoredUserMessage()],
+      tools: new ToolRegistry(),
+      signal: new AbortController().signal,
+    });
+
+    const [, , options] = streamSimpleMock.mock.calls.at(-1) as [
+      ResolvedModel,
+      { systemPrompt?: string; messages: unknown[]; tools?: unknown[] },
+      { maxTokens?: number },
+    ];
+    expect(options.maxTokens).toBe(128_000);
+  });
+
   test("derives a default baseUrl for anthropic providers", async () => {
     const finalMessage = {
       role: "assistant" as const,
