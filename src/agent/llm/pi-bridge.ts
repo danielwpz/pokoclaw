@@ -370,11 +370,13 @@ async function buildPiStreamOptions(
   const options: {
     signal: AbortSignal;
     sessionId: string;
+    maxTokens: number;
     apiKey?: string;
     reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
   } = {
     signal,
     sessionId: model.id,
+    maxTokens: model.maxOutputTokens,
   };
   const apiKey =
     (await providerApiKeyResolver?.resolveApiKey(model.provider)) ??
