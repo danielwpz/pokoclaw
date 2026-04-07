@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS lark_object_bindings (
   branch_id TEXT NOT NULL REFERENCES conversation_branches(id) ON DELETE CASCADE,
   internal_object_kind TEXT NOT NULL,
   internal_object_id TEXT NOT NULL,
+  lark_message_uuid TEXT,
   lark_message_id TEXT,
   lark_open_message_id TEXT,
   lark_card_id TEXT,
@@ -256,6 +257,7 @@ CREATE TABLE IF NOT EXISTS lark_object_bindings (
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
   UNIQUE(channel_installation_id, internal_object_kind, internal_object_id),
+  UNIQUE(channel_installation_id, lark_message_uuid),
   UNIQUE(channel_installation_id, lark_message_id),
   UNIQUE(channel_installation_id, lark_open_message_id),
   UNIQUE(channel_installation_id, lark_card_id)

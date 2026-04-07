@@ -20,6 +20,7 @@ export function initSchemaIfNeeded(
   sqlite.exec(initSql);
   upgradeCronJobsSchema(sqlite);
   upgradeMessagesSchema(sqlite);
+  upgradeLarkObjectBindingsSchema(sqlite);
 }
 
 function upgradeCronJobsSchema(sqlite: Database.Database): void {
@@ -57,5 +58,24 @@ function upgradeMessagesSchema(sqlite: Database.Database): void {
       ON messages(channel_parent_message_id);
     CREATE INDEX IF NOT EXISTS idx_messages_channel_thread
       ON messages(channel_thread_id);
+  `);
+}
+
+function upgradeLarkObjectBindingsSchema(sqlite: Database.Database): void {
+  const larkObjectBindingColumns = new Set(
+    (
+      sqlite.prepare("PRAGMA table_info(lark_object_bindings)").all() as Array<{
+        name: string;
+      }>
+    ).map((column) => column.name),
+  );
+
+  if (!larkObjectBindingColumns.has("lark_message_uuid")) {
+    sqlite.exec("ALTER TABLE lark_object_bindings ADD COLUMN lark_message_uuid TEXT");
+  }
+
+  sqlite.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uidx_lark_object_bindings_message_uuid
+      ON lark_object_bindings(channel_installation_id, lark_message_uuid);
   `);
 }
