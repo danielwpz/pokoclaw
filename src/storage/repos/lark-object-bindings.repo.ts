@@ -8,6 +8,8 @@ import type { LarkObjectBinding, NewLarkObjectBinding } from "@/src/storage/sche
 
 const logger = createSubsystemLogger("storage/lark-object-bindings");
 
+type LarkObjectBindingStatus = "active" | "finalized" | "stale";
+
 export interface UpsertLarkObjectBindingInput {
   id: string;
   channelInstallationId: string;
@@ -15,16 +17,52 @@ export interface UpsertLarkObjectBindingInput {
   branchId: string;
   internalObjectKind: string;
   internalObjectId: string;
-  larkMessageId?: string | null;
-  larkOpenMessageId?: string | null;
-  larkCardId?: string | null;
-  threadRootMessageId?: string | null;
-  cardElementId?: string | null;
-  lastSequence?: number | null;
-  status?: "active" | "finalized" | "stale";
-  metadataJson?: string | null;
-  createdAt?: Date;
-  updatedAt?: Date;
+  larkMessageUuid?: string | null | undefined;
+  larkMessageId?: string | null | undefined;
+  larkOpenMessageId?: string | null | undefined;
+  larkCardId?: string | null | undefined;
+  threadRootMessageId?: string | null | undefined;
+  cardElementId?: string | null | undefined;
+  lastSequence?: number | null | undefined;
+  status?: LarkObjectBindingStatus | undefined;
+  metadataJson?: string | null | undefined;
+  createdAt?: Date | undefined;
+  updatedAt?: Date | undefined;
+}
+
+export interface ReserveLarkObjectBindingInput {
+  id: string;
+  channelInstallationId: string;
+  conversationId: string;
+  branchId: string;
+  internalObjectKind: string;
+  internalObjectId: string;
+  larkMessageUuid?: string | null | undefined;
+  threadRootMessageId?: string | null | undefined;
+  cardElementId?: string | null | undefined;
+  lastSequence?: number | null | undefined;
+  status?: LarkObjectBindingStatus | undefined;
+  metadataJson?: string | null | undefined;
+  createdAt?: Date | undefined;
+  updatedAt?: Date | undefined;
+}
+
+export interface PatchLarkObjectBindingInput {
+  channelInstallationId: string;
+  internalObjectKind: string;
+  internalObjectId: string;
+  conversationId?: string | undefined;
+  branchId?: string | undefined;
+  larkMessageUuid?: string | null | undefined;
+  larkMessageId?: string | null | undefined;
+  larkOpenMessageId?: string | null | undefined;
+  larkCardId?: string | null | undefined;
+  threadRootMessageId?: string | null | undefined;
+  cardElementId?: string | null | undefined;
+  lastSequence?: number | null | undefined;
+  status?: LarkObjectBindingStatus | undefined;
+  metadataJson?: string | null | undefined;
+  updatedAt?: Date | undefined;
 }
 
 export class LarkObjectBindingsRepo {
@@ -40,6 +78,7 @@ export class LarkObjectBindingsRepo {
       branchId: input.branchId,
       internalObjectKind: input.internalObjectKind,
       internalObjectId: input.internalObjectId,
+      larkMessageUuid: input.larkMessageUuid ?? null,
       larkMessageId: input.larkMessageId ?? null,
       larkOpenMessageId: input.larkOpenMessageId ?? null,
       larkCardId: input.larkCardId ?? null,
@@ -57,6 +96,7 @@ export class LarkObjectBindingsRepo {
       channelInstallationId: input.channelInstallationId,
       internalObjectKind: input.internalObjectKind,
       internalObjectId: input.internalObjectId,
+      larkMessageUuid: input.larkMessageUuid,
       larkMessageId: input.larkMessageId,
       larkCardId: input.larkCardId,
     });
@@ -73,6 +113,7 @@ export class LarkObjectBindingsRepo {
         set: {
           conversationId: row.conversationId,
           branchId: row.branchId,
+          ...(input.larkMessageUuid === undefined ? {} : { larkMessageUuid: row.larkMessageUuid }),
           larkMessageId: row.larkMessageId,
           larkOpenMessageId: row.larkOpenMessageId,
           larkCardId: row.larkCardId,
@@ -99,12 +140,173 @@ export class LarkObjectBindingsRepo {
       channelInstallationId: binding.channelInstallationId,
       internalObjectKind: binding.internalObjectKind,
       internalObjectId: binding.internalObjectId,
+      larkMessageUuid: binding.larkMessageUuid,
       larkMessageId: binding.larkMessageId,
       larkCardId: binding.larkCardId,
       status: binding.status,
     });
 
     return binding;
+  }
+
+  reserveBinding(input: ReserveLarkObjectBindingInput): LarkObjectBinding {
+    const existing = this.getByInternalObject({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+    });
+
+    if (existing == null) {
+      return this.upsert({
+        id: input.id,
+        channelInstallationId: input.channelInstallationId,
+        conversationId: input.conversationId,
+        branchId: input.branchId,
+        internalObjectKind: input.internalObjectKind,
+        internalObjectId: input.internalObjectId,
+        larkMessageUuid: input.larkMessageUuid ?? null,
+        threadRootMessageId: input.threadRootMessageId,
+        cardElementId: input.cardElementId,
+        lastSequence: input.lastSequence,
+        status: input.status,
+        metadataJson: input.metadataJson,
+        createdAt: input.createdAt,
+        updatedAt: input.updatedAt,
+      });
+    }
+
+    return (
+      this.patchByInternalObject({
+        channelInstallationId: input.channelInstallationId,
+        internalObjectKind: input.internalObjectKind,
+        internalObjectId: input.internalObjectId,
+        conversationId: input.conversationId,
+        branchId: input.branchId,
+        larkMessageUuid: existing.larkMessageUuid ?? input.larkMessageUuid ?? null,
+        threadRootMessageId: input.threadRootMessageId,
+        cardElementId: input.cardElementId,
+        lastSequence: input.lastSequence,
+        status: input.status,
+        metadataJson: input.metadataJson,
+        updatedAt: input.updatedAt,
+      }) ?? existing
+    );
+  }
+
+  attachCardAnchor(
+    input: PatchLarkObjectBindingInput & {
+      larkCardId: string;
+    },
+  ): LarkObjectBinding | null {
+    const existing = this.getByInternalObject({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+    });
+    if (existing == null) {
+      return null;
+    }
+
+    return this.patchByInternalObject({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+      conversationId: input.conversationId,
+      branchId: input.branchId,
+      larkMessageUuid: existing.larkMessageUuid ?? input.larkMessageUuid,
+      larkCardId: existing.larkCardId ?? input.larkCardId,
+      threadRootMessageId: existing.threadRootMessageId ?? input.threadRootMessageId,
+      cardElementId: input.cardElementId,
+      lastSequence: input.lastSequence,
+      status: input.status,
+      metadataJson: input.metadataJson,
+      updatedAt: input.updatedAt,
+    });
+  }
+
+  attachMessageAnchor(
+    input: PatchLarkObjectBindingInput & {
+      larkMessageId: string;
+    },
+  ): LarkObjectBinding | null {
+    const existing = this.getByInternalObject({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+    });
+    if (existing == null) {
+      return null;
+    }
+
+    return this.patchByInternalObject({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+      conversationId: input.conversationId,
+      branchId: input.branchId,
+      larkMessageUuid: existing.larkMessageUuid ?? input.larkMessageUuid,
+      larkMessageId: existing.larkMessageId ?? input.larkMessageId,
+      larkOpenMessageId: existing.larkOpenMessageId ?? input.larkOpenMessageId,
+      larkCardId: existing.larkCardId ?? input.larkCardId,
+      threadRootMessageId: existing.threadRootMessageId ?? input.threadRootMessageId,
+      cardElementId: input.cardElementId,
+      lastSequence: input.lastSequence,
+      status: input.status,
+      metadataJson: input.metadataJson,
+      updatedAt: input.updatedAt,
+    });
+  }
+
+  patchByInternalObject(input: PatchLarkObjectBindingInput): LarkObjectBinding | null {
+    const updatedAt = input.updatedAt ?? new Date();
+    const result = this.db
+      .update(larkObjectBindings)
+      .set({
+        ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+        ...(input.branchId === undefined ? {} : { branchId: input.branchId }),
+        ...(input.larkMessageUuid === undefined ? {} : { larkMessageUuid: input.larkMessageUuid }),
+        ...(input.larkMessageId === undefined ? {} : { larkMessageId: input.larkMessageId }),
+        ...(input.larkOpenMessageId === undefined
+          ? {}
+          : { larkOpenMessageId: input.larkOpenMessageId }),
+        ...(input.larkCardId === undefined ? {} : { larkCardId: input.larkCardId }),
+        ...(input.threadRootMessageId === undefined
+          ? {}
+          : { threadRootMessageId: input.threadRootMessageId }),
+        ...(input.cardElementId === undefined ? {} : { cardElementId: input.cardElementId }),
+        ...(input.lastSequence === undefined ? {} : { lastSequence: input.lastSequence }),
+        ...(input.status === undefined ? {} : { status: input.status }),
+        ...(input.metadataJson === undefined ? {} : { metadataJson: input.metadataJson }),
+        updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
+      })
+      .where(
+        and(
+          eq(larkObjectBindings.channelInstallationId, input.channelInstallationId),
+          eq(larkObjectBindings.internalObjectKind, input.internalObjectKind),
+          eq(larkObjectBindings.internalObjectId, input.internalObjectId),
+        ),
+      )
+      .run();
+
+    if ((result.changes ?? 0) < 1) {
+      return null;
+    }
+
+    logger.debug("patched lark object binding", {
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+      larkMessageUuid: input.larkMessageUuid,
+      larkMessageId: input.larkMessageId,
+      larkCardId: input.larkCardId,
+      status: input.status,
+    });
+
+    return this.getByInternalObject({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+    });
   }
 
   getByInternalObject(input: {
@@ -213,7 +415,7 @@ export class LarkObjectBindingsRepo {
     internalObjectKind: string;
     internalObjectId: string;
     lastSequence?: number | null;
-    status?: "active" | "finalized" | "stale";
+    status?: LarkObjectBindingStatus;
     metadataJson?: string | null;
     updatedAt?: Date;
   }): LarkObjectBinding | null {

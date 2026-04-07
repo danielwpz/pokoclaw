@@ -330,6 +330,7 @@ describe("lark outbound runtime", () => {
       internalObjectKind: "run_card",
       internalObjectId: "run_1:seg:1",
     });
+    expect(binding?.larkMessageUuid).toBeTruthy();
     expect(binding?.larkMessageId).toBe("om_card_1");
     expect(binding?.larkCardId).toBe("card_1");
 
@@ -393,6 +394,154 @@ describe("lark outbound runtime", () => {
       path: { card_id: "card_1" },
     });
 
+    await runtime.shutdown();
+  });
+
+  test("retries run-card visible message send with the same uuid after local finalize failure", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async () => ({ data: { card_id: "card_retry_1" } }));
+    let sendCount = 0;
+    const createMessage = vi.fn(async (_input: unknown) => {
+      sendCount += 1;
+      return {
+        data: {
+          message_id: "om_retry_1",
+          open_message_id: "open_retry_1",
+        },
+      };
+    });
+    const updateCard = vi.fn(async () => ({}));
+    const streamContent = vi.fn(async () => ({}));
+    const originalAttachMessageAnchor = LarkObjectBindingsRepo.prototype.attachMessageAnchor;
+    const attachMessageAnchor = vi
+      .spyOn(LarkObjectBindingsRepo.prototype, "attachMessageAnchor")
+      .mockImplementation(function (this: LarkObjectBindingsRepo, input) {
+        if (sendCount === 1) {
+          return null;
+        }
+        return originalAttachMessageAnchor.call(this, input);
+      });
+
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: updateCard,
+                  },
+                  cardElement: {
+                    content: streamContent,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_retry_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_retry_1",
+        turn: 1,
+        messageId: "msg_retry_1",
+        text: "retry me",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(createMessage).toHaveBeenCalledOnce();
+
+    const firstUuid = (createMessage.mock.calls[0]?.[0] as { data?: { uuid?: string } } | undefined)
+      ?.data?.uuid;
+    expect(firstUuid).toBeTruthy();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_retry_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_retry_1",
+        turn: 2,
+        messageId: "msg_retry_2",
+        text: "retry me again",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    const secondUuid = (
+      createMessage.mock.calls[1]?.[0] as { data?: { uuid?: string } } | undefined
+    )?.data?.uuid;
+    expect(secondUuid).toBe(firstUuid);
+
+    const binding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_1:seg:1",
+    });
+    expect(binding).toMatchObject({
+      larkMessageUuid: firstUuid,
+      larkMessageId: "om_retry_1",
+      larkCardId: "card_retry_1",
+    });
+
+    attachMessageAnchor.mockRestore();
     await runtime.shutdown();
   });
 
@@ -509,6 +658,7 @@ describe("lark outbound runtime", () => {
         data: {
           msg_type: "interactive",
           reply_in_thread: true,
+          uuid: expect.any(String),
         },
       },
     );

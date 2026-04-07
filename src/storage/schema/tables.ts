@@ -418,6 +418,7 @@ export const larkObjectBindings = sqliteTable(
       .references(() => conversationBranches.id, { onDelete: "cascade" }),
     internalObjectKind: text("internal_object_kind").notNull(),
     internalObjectId: text("internal_object_id").notNull(),
+    larkMessageUuid: text("lark_message_uuid"),
     larkMessageId: text("lark_message_id"),
     larkOpenMessageId: text("lark_open_message_id"),
     larkCardId: text("lark_card_id"),
@@ -434,6 +435,10 @@ export const larkObjectBindings = sqliteTable(
       table.channelInstallationId,
       table.internalObjectKind,
       table.internalObjectId,
+    ),
+    uniqueIndex("uidx_lark_object_bindings_message_uuid").on(
+      table.channelInstallationId,
+      table.larkMessageUuid,
     ),
     uniqueIndex("uidx_lark_object_bindings_message").on(
       table.channelInstallationId,

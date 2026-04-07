@@ -256,6 +256,9 @@ describe("lark outbound pagination", () => {
 
     expect(createCard.mock.calls.length).toBeGreaterThan(1);
     expect(createMessage).toHaveBeenCalledTimes(createCard.mock.calls.length);
+    for (const call of createMessage.mock.calls as unknown[][]) {
+      expect((call[0] as { data?: { uuid?: string } }).data?.uuid).toEqual(expect.any(String));
+    }
 
     const createdCards = (createCard.mock.calls as unknown[][]).map((call) =>
       parseCardPayload(call[0]),
