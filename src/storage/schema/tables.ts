@@ -405,6 +405,82 @@ export const authEvents = sqliteTable(
   (table) => [index("idx_auth_events_time").on(table.createdAt)],
 );
 
+/**
+ * Durable, append-only harness facts used for later runtime analysis.
+ *
+ * Current v1 meaning for `event_type = "user_stop"`:
+ * - one row means the user expressed explicit stop intent
+ * - and that intent was resolved to one concrete active run
+ * - and that concrete run was successfully accepted for cancellation
+ *
+ * This table is intentionally about the interrupted run itself, not about the
+ * next user turn that may arrive after the stop. In practice those are often
+ * adjacent but they are semantically different:
+ * - `run_id` = the run that was actually being stopped
+ * - later user messages = follow-up explanation / correction / retry intent
+ *
+ * Analysts must not infer from `run_id` that it points at the next user turn.
+ * If you need the follow-up intent, correlate separately using `session_id`
+ * and `created_at` against the `messages` table.
+ *
+ * Practical SQL pattern:
+ * ```sql
+ * -- 1) Start from the explicit stop fact.
+ * SELECT *
+ * FROM harness_events
+ * WHERE event_type = 'user_stop'
+ * ORDER BY created_at DESC;
+ *
+ * -- 2) Inspect the transcript around the stop moment.
+ * SELECT seq, role, created_at, stop_reason, error_message, payload_json
+ * FROM messages
+ * WHERE session_id = :session_id
+ *   AND datetime(created_at) BETWEEN datetime(:stop_created_at, '-3 minutes')
+ *                               AND datetime(:stop_created_at, '+2 minutes')
+ * ORDER BY created_at ASC, seq ASC;
+ *
+ * -- 3) If needed, find the next user follow-up after the stop.
+ * SELECT seq, role, created_at, payload_json
+ * FROM messages
+ * WHERE session_id = :session_id
+ *   AND role = 'user'
+ *   AND datetime(created_at) > datetime(:stop_created_at)
+ * ORDER BY created_at ASC, seq ASC
+ * LIMIT 1;
+ * ```
+ */
+export const harnessEvents = sqliteTable(
+  "harness_events",
+  {
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    runId: text("run_id").notNull(),
+    sessionId: text("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    conversationId: text("conversation_id").references(() => conversations.id, {
+      onDelete: "set null",
+    }),
+    branchId: text("branch_id").references(() => conversationBranches.id, {
+      onDelete: "set null",
+    }),
+    agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    taskRunId: text("task_run_id").references(() => taskRuns.id, { onDelete: "set null" }),
+    cronJobId: text("cron_job_id").references(() => cronJobs.id, { onDelete: "set null" }),
+    actor: text("actor").notNull(),
+    sourceKind: text("source_kind").notNull(),
+    requestScope: text("request_scope").notNull(),
+    reasonText: text("reason_text"),
+    detailsJson: text("details_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_harness_events_run_time").on(table.runId, table.createdAt),
+    index("idx_harness_events_session_time").on(table.sessionId, table.createdAt),
+    index("idx_harness_events_conversation_time").on(table.conversationId, table.createdAt),
+    index("idx_harness_events_task_run_time").on(table.taskRunId, table.createdAt),
+    index("idx_harness_events_type_time").on(table.eventType, table.createdAt),
+  ],
+);
+
 export const larkObjectBindings = sqliteTable(
   "lark_object_bindings",
   {

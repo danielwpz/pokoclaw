@@ -361,6 +361,8 @@ export function createLarkMessageReceiveHandler(input: {
                 hydrated.senderOpenId == null
                   ? `lark:${input.installationId}:unknown`
                   : `lark:${input.installationId}:${hydrated.senderOpenId}`,
+              sourceKind: "command",
+              requestScope: "conversation",
               reasonText: "stop requested from lark command",
             })
           : input.control.stopSession({
@@ -369,6 +371,8 @@ export function createLarkMessageReceiveHandler(input: {
                 hydrated.senderOpenId == null
                   ? `lark:${input.installationId}:unknown`
                   : `lark:${input.installationId}:${hydrated.senderOpenId}`,
+              sourceKind: "command",
+              requestScope: "session",
               reasonText: "stop requested from lark command",
             });
       logger.info("processed lark stop command", {
@@ -656,6 +660,8 @@ export function createLarkCardActionHandler(input: {
           normalized.actorOpenId == null
             ? `lark:${input.installationId}:unknown`
             : `lark:${input.installationId}:${normalized.actorOpenId}`,
+        sourceKind: "button",
+        requestScope: "run",
         reasonText: "stop requested from lark card action",
       });
 

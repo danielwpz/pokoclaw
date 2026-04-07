@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 /**
  * Runtime control-plane service for active runs.
  *
@@ -21,8 +23,20 @@ import {
   toRunLiveObservabilitySnapshot,
 } from "@/src/runtime/run-observability.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
+import type { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
+import type { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import type { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 
 const logger = createSubsystemLogger("runtime-control");
+
+export type HarnessStopSourceKind = "command" | "button";
+export type HarnessStopRequestScope = "run" | "session" | "conversation";
+
+export interface RuntimeControlPersistence {
+  harnessEvents: HarnessEventsRepo;
+  sessions: SessionsRepo;
+  taskRuns: TaskRunsRepo;
+}
 
 export interface ActiveRunRecord {
   runId: string;
@@ -35,18 +49,24 @@ export interface ActiveRunRecord {
 export interface StopRunInput {
   runId: string;
   actor: string;
+  sourceKind: HarnessStopSourceKind;
+  requestScope: HarnessStopRequestScope;
   reasonText?: string;
 }
 
 export interface StopConversationInput {
   conversationId: string;
   actor: string;
+  sourceKind: HarnessStopSourceKind;
+  requestScope: HarnessStopRequestScope;
   reasonText?: string;
 }
 
 export interface StopSessionInput {
   sessionId: string;
   actor: string;
+  sourceKind: HarnessStopSourceKind;
+  requestScope: HarnessStopRequestScope;
   reasonText?: string;
 }
 
@@ -75,7 +95,10 @@ export class RuntimeControlService {
   private readonly runsByRunId = new Map<string, ActiveRunRecord>();
   private readonly observabilityByRunId = new Map<string, RunLiveObservabilityState>();
 
-  constructor(private readonly cancel: SessionRunAbortRegistry) {}
+  constructor(
+    private readonly cancel: SessionRunAbortRegistry,
+    private readonly persistence?: RuntimeControlPersistence,
+  ) {}
 
   beginRun(input: ActiveRunRecord): void {
     this.runsByRunId.set(input.runId, input);
@@ -131,6 +154,9 @@ export class RuntimeControlService {
       run.sessionId,
       input.reasonText ?? `stop requested by ${input.actor}`,
     );
+    if (accepted) {
+      this.recordHarnessStopEvent(run, input);
+    }
     logger.info("processed stop run request", {
       runId: input.runId,
       sessionId: run.sessionId,
@@ -160,6 +186,7 @@ export class RuntimeControlService {
       );
       if (accepted) {
         stopped.push(run);
+        this.recordHarnessStopEvent(run, input);
       }
     }
 
@@ -191,6 +218,7 @@ export class RuntimeControlService {
       );
       if (accepted) {
         stopped.push(run);
+        this.recordHarnessStopEvent(run, input);
       }
     }
 
@@ -444,6 +472,37 @@ export class RuntimeControlService {
     }
 
     this.observabilityByRunId.set(runId, updater(existing));
+  }
+
+  /**
+   * Persist the explicit stop fact for the concrete active run that was
+   * actually cancelled. Canonical semantics live with the harness_events schema.
+   */
+  private recordHarnessStopEvent(
+    run: ActiveRunRecord,
+    input: StopRunInput | StopSessionInput | StopConversationInput,
+  ): void {
+    if (this.persistence == null) {
+      return;
+    }
+
+    const taskRun = this.persistence.taskRuns.getByExecutionSessionId(run.sessionId);
+    const session = this.persistence.sessions.getById(run.sessionId);
+    this.persistence.harnessEvents.create({
+      id: randomUUID(),
+      eventType: "user_stop",
+      runId: run.runId,
+      sessionId: run.sessionId,
+      conversationId: run.conversationId,
+      branchId: run.branchId,
+      agentId: session?.ownerAgentId ?? taskRun?.ownerAgentId ?? null,
+      taskRunId: taskRun?.id ?? null,
+      cronJobId: taskRun?.cronJobId ?? null,
+      actor: input.actor,
+      sourceKind: input.sourceKind,
+      requestScope: input.requestScope,
+      reasonText: input.reasonText ?? null,
+    });
   }
 }
 

@@ -3221,6 +3221,130 @@ describe("agent loop", () => {
     });
   });
 
+  test("retries a successful empty assistant output once when nothing visible was streamed", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let runTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        runTurnCount += 1;
+        if (runTurnCount === 1) {
+          return makeAssistantResult({
+            content: [],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "recovered reply" }],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(runTurnCount).toBe(2);
+    expect(
+      result.events.filter((event) => event.type === "assistant_message_started"),
+    ).toHaveLength(2);
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(2);
+    expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({
+      content: [{ type: "text", text: "recovered reply" }],
+    });
+  });
+
+  test("does not retry a successful empty final response when thinking was already streamed", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let runTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        runTurnCount += 1;
+        input.onThinkingDelta?.({
+          delta: "Let me think...",
+        });
+        return makeAssistantResult({
+          content: [],
+        });
+      },
+    };
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(runTurnCount).toBe(1);
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(2);
+    expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({ content: [] });
+    expect(result.events.find((event) => event.type === "assistant_reasoning_delta")).toMatchObject(
+      {
+        type: "assistant_reasoning_delta",
+        delta: "Let me think...",
+      },
+    );
+  });
+
   test("persists partial streamed output and does not retry when visible output already exists", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
