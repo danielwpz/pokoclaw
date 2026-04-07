@@ -10,6 +10,7 @@ import {
   conversationBranches,
   conversations,
   cronJobs,
+  harnessEvents,
   larkObjectBindings,
   messages,
   sessions,
@@ -32,6 +33,7 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   larkObjectBindings: many(larkObjectBindings),
   sessions: many(sessions),
   taskRuns: many(taskRuns),
+  harnessEvents: many(harnessEvents),
   subagentCreationRequests: many(subagentCreationRequests),
 }));
 
@@ -44,6 +46,7 @@ export const conversationBranchesRelations = relations(conversationBranches, ({ 
   larkObjectBindings: many(larkObjectBindings),
   sessions: many(sessions),
   taskRuns: many(taskRuns),
+  harnessEvents: many(harnessEvents),
 }));
 
 export const channelSurfacesRelations = relations(channelSurfaces, ({ one }) => ({
@@ -75,6 +78,7 @@ export const agentsRelations = relations(agents, ({ one, many }) => ({
   approvals: many(approvalLedger),
   permissionGrants: many(agentPermissionGrants),
   authEvents: many(authEvents),
+  harnessEvents: many(harnessEvents),
   subagentCreationRequests: many(subagentCreationRequests, {
     relationName: "subagent_creation_request_source_agent",
   }),
@@ -99,6 +103,7 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   messages: many(messages),
   approvals: many(approvalLedger),
   subagentCreationRequests: many(subagentCreationRequests),
+  harnessEvents: many(harnessEvents),
 }));
 
 export const messagesRelations = relations(messages, ({ one }) => ({
@@ -122,6 +127,7 @@ export const cronJobsRelations = relations(cronJobs, ({ one, many }) => ({
     references: [conversationBranches.id],
   }),
   taskRuns: many(taskRuns),
+  harnessEvents: many(harnessEvents),
 }));
 
 export const taskRunsRelations = relations(taskRuns, ({ one }) => ({
@@ -173,6 +179,33 @@ export const authEventsRelations = relations(authEvents, ({ one }) => ({
   agent: one(agents, {
     fields: [authEvents.agentId],
     references: [agents.id],
+  }),
+}));
+
+export const harnessEventsRelations = relations(harnessEvents, ({ one }) => ({
+  session: one(sessions, {
+    fields: [harnessEvents.sessionId],
+    references: [sessions.id],
+  }),
+  conversation: one(conversations, {
+    fields: [harnessEvents.conversationId],
+    references: [conversations.id],
+  }),
+  branch: one(conversationBranches, {
+    fields: [harnessEvents.branchId],
+    references: [conversationBranches.id],
+  }),
+  agent: one(agents, {
+    fields: [harnessEvents.agentId],
+    references: [agents.id],
+  }),
+  taskRun: one(taskRuns, {
+    fields: [harnessEvents.taskRunId],
+    references: [taskRuns.id],
+  }),
+  cronJob: one(cronJobs, {
+    fields: [harnessEvents.cronJobId],
+    references: [cronJobs.id],
   }),
 }));
 

@@ -20,6 +20,7 @@ export function initSchemaIfNeeded(
   sqlite.exec(initSql);
   upgradeCronJobsSchema(sqlite);
   upgradeMessagesSchema(sqlite);
+  upgradeHarnessEventsSchema(sqlite);
   upgradeLarkObjectBindingsSchema(sqlite);
 }
 
@@ -58,6 +59,39 @@ function upgradeMessagesSchema(sqlite: Database.Database): void {
       ON messages(channel_parent_message_id);
     CREATE INDEX IF NOT EXISTS idx_messages_channel_thread
       ON messages(channel_thread_id);
+  `);
+}
+
+function upgradeHarnessEventsSchema(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS harness_events (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
+      branch_id TEXT REFERENCES conversation_branches(id) ON DELETE SET NULL,
+      agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      task_run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
+      cron_job_id TEXT REFERENCES cron_jobs(id) ON DELETE SET NULL,
+      actor TEXT NOT NULL,
+      source_kind TEXT NOT NULL,
+      request_scope TEXT NOT NULL,
+      reason_text TEXT,
+      details_json TEXT,
+      created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_harness_events_run_time
+      ON harness_events(run_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_harness_events_session_time
+      ON harness_events(session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_harness_events_conversation_time
+      ON harness_events(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_harness_events_task_run_time
+      ON harness_events(task_run_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_harness_events_type_time
+      ON harness_events(event_type, created_at);
   `);
 }
 

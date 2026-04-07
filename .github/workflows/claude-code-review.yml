@@ -43,60 +43,51 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
             LANGUAGE: TypeScript
-            REPO STAGE: Early implementation, design-doc-driven architecture
             </pr_context>
 
             <project_context>
-            Consult the repository guidance before reviewing:
+            Consult repository guidance before reviewing:
             - .claude/CLAUDE.md
-            - design-docs/dev-plan.md
-            - design-docs/tech-decisions.md
-            - design-docs/product-principles.md
+            - any touched docs, design docs, or README files that are directly relevant to the changed code
 
-            Important repository constraints:
-            - The system must preserve the dependency order: Foundation -> Persistence -> Agent runtime -> Security/execution -> Orchestration -> Messaging adaptation -> Feishu channel -> Built-in capabilities -> End-to-end hardening.
-            - Feishu/Lark-specific behavior must not leak into lower runtime or persistence abstractions unless the boundary is explicitly channel-specific.
-            - Runtime state belongs in SQLite; global defaults belong in config; secrets belong in secrets handling.
-            - TypeScript is intentionally strict and explicit any should be treated as a real issue.
-            - Avoid unnecessary abstractions and avoid adding service seams like logger/time injection unless there is a concrete production need.
+            Respect repo-specific constraints and conventions, but keep the review general and practical rather than overfitting to any single architecture document.
             </project_context>
 
             <review_instructions>
-            Review this pull request and report only merge-relevant issues and meaningful architectural risks.
+            Review this pull request and report only merge-relevant issues.
 
-            Prioritize findings in this order:
-            1. Architecture layering violations
-               - changes that skip the intended build order from design-docs/dev-plan.md
-               - Feishu/Lark-specific logic leaking into runtime, orchestration, storage, or other lower layers
-               - messaging adaptation boundaries being bypassed
+            Focus on these areas, in this order:
+            1. Functional correctness
+               - whether the intended behavior is implemented correctly
+               - whether the end-to-end flow can actually work, not just isolated pieces
+               - whether there are missing edge cases, broken integrations, or incorrect state transitions
 
-            2. Config, secrets, and storage boundary violations
-               - runtime or instance state incorrectly moved into config files
-               - secrets handled in the wrong layer
-               - violations of the repo's config/secrets/SQLite split
+            2. Engineering and design quality
+               - whether the design is sufficiently complete and robust for the scope of the change
+               - whether there are meaningful security, reliability, or performance risks
+               - whether important failure modes, data consistency issues, or operational concerns were missed
 
-            3. Agent/runtime model correctness
-               - Main Agent, SubAgent, and TaskAgent responsibilities getting mixed together
-               - regressions to observability, interruptibility, or permission control
-               - changes that break task/thread/context isolation expectations
+            3. Code quality and maintainability
+               - whether the structure is clear and appropriately modular
+               - whether the change introduces unnecessary coupling, fragile logic, or obvious technical debt
+               - whether abstractions are appropriate for current needs without being over-engineered
 
-            4. TypeScript safety and maintainability
-               - explicit any or weakly typed boundaries
-               - unsafe assumptions hidden behind casts
-               - premature abstractions or over-engineering that conflict with current repo guidance
-               - test-only seams leaking into production interfaces
+            4. Tests, docs, and change clarity
+               - whether important behavior changes have adequate test coverage
+               - whether necessary comments, documentation, or migration/change notes were added where needed
+               - whether the change is understandable enough for future maintainers to debug and extend
 
-            5. Security, correctness, and tests
-               - unsafe trust boundaries, injection risks, or secret exposure
-               - missing or incorrect handling for meaningful edge cases
-               - missing regression coverage for non-trivial behavior changes
-               - changes that weaken the repo's stated real-LLM integration test discipline
+            Output format:
+            - Write the final review as a numbered list ordered by priority.
+            - Each numbered item should contain one review conclusion or issue.
+            - If there are multiple issues, put the highest-priority items first.
+            - If there are no meaningful issues, say so briefly.
 
             Review style:
-            - Use concise bullet points.
-            - Explain what is wrong, why it matters in this repo, and the concrete fix direction.
-            - Do not report style nits or speculative improvements.
-            - If no meaningful issues are found, say so briefly.
+            - Use concise, practical review comments.
+            - For each finding, explain what is wrong, why it matters, and the concrete fix direction.
+            - Do not report minor style nits or speculative nice-to-haves.
+            - Keep the review practical and decision-oriented.
 
             Use gh pr comment to post the review.
             </review_instructions>

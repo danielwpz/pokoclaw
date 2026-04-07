@@ -10,6 +10,7 @@ import type {
   conversationBranches,
   conversations,
   cronJobs,
+  harnessEvents,
   larkObjectBindings,
   messages,
   sessions,
@@ -55,6 +56,9 @@ export type NewSubagentCreationRequest = InferInsertModel<typeof subagentCreatio
 
 export type AuthEvent = InferSelectModel<typeof authEvents>;
 export type NewAuthEvent = InferInsertModel<typeof authEvents>;
+
+export type HarnessEvent = InferSelectModel<typeof harnessEvents>;
+export type NewHarnessEvent = InferInsertModel<typeof harnessEvents>;
 
 export type LarkObjectBinding = InferSelectModel<typeof larkObjectBindings>;
 export type NewLarkObjectBinding = InferInsertModel<typeof larkObjectBindings>;
