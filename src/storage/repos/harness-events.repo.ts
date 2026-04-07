@@ -26,6 +26,10 @@ export interface CreateHarnessEventInput {
 export class HarnessEventsRepo {
   constructor(private readonly db: StorageDb) {}
 
+  /**
+   * Insert one append-only harness event. Canonical user_stop semantics live
+   * with the harness_events schema/table definition.
+   */
   create(input: CreateHarnessEventInput): void {
     const row: NewHarnessEvent = {
       id: input.id,

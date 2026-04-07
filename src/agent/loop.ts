@@ -746,6 +746,30 @@ export class AgentLoop {
         const assistantText = collectAssistantText(response.content);
         const reasoningText = collectAssistantThinking(response.content);
         const toolCalls = collectAgentToolCalls(response.content);
+        const successfulEmptyOutputRetry = shouldRetrySuccessfulEmptyAssistantOutput({
+          assistantText,
+          reasoningText,
+          toolCallsRequested: toolCalls.length,
+          sawStreamedText,
+          sawStreamedReasoning,
+          retryCount: emptyOutputRetryCount,
+        });
+        if (successfulEmptyOutputRetry) {
+          emptyOutputRetryCount += 1;
+          logger.warn("retrying assistant response after successful empty output", {
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            scenario: input.scenario,
+            turn: turn + 1,
+            runId,
+            assistantMessageId,
+            modelId: model.id,
+            retryAttempt: emptyOutputRetryCount,
+            retryLimit: EMPTY_OUTPUT_LLM_RETRY_LIMIT,
+          });
+          continue;
+        }
         // Some runners will stream deltas incrementally, others may only return
         // the final assistant payload. We keep one event shape and only fall back
         // to a single full-text delta if nothing was streamed.
@@ -1730,6 +1754,29 @@ function appendMessageAndHydrate(input: {
     usageJson: input.usage == null ? null : JSON.stringify(input.usage),
     createdAt: input.createdAt.toISOString(),
   };
+}
+
+function shouldRetrySuccessfulEmptyAssistantOutput(input: {
+  assistantText: string;
+  reasoningText: string;
+  toolCallsRequested: number;
+  sawStreamedText: boolean;
+  sawStreamedReasoning: boolean;
+  retryCount: number;
+}): boolean {
+  if (
+    input.retryCount >= EMPTY_OUTPUT_LLM_RETRY_LIMIT ||
+    input.sawStreamedText ||
+    input.sawStreamedReasoning
+  ) {
+    return false;
+  }
+
+  return (
+    input.assistantText.length === 0 &&
+    input.reasoningText.length === 0 &&
+    input.toolCallsRequested === 0
+  );
 }
 
 function getRetryableLlmFailureWithoutVisibleOutput(input: {

@@ -237,6 +237,34 @@ CREATE TABLE IF NOT EXISTS auth_events (
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL)
 );
 
+-- Durable, append-only harness facts used for later runtime analysis.
+--
+-- Current v1 meaning for event_type = 'user_stop':
+--   one row = one explicit user stop intent that was resolved to one concrete
+--   active run and accepted for cancellation.
+--
+-- Important semantic guardrail:
+--   run_id points to the run that was actually being stopped.
+--   It does NOT point to the next user follow-up message sent after stop.
+--   If a user presses stop and then immediately explains/corrects intent, that
+--   later message belongs to the next turn and must be correlated separately
+--   via session_id + created_at against the messages table.
+--
+-- Practical SQL pattern:
+--   1) SELECT * FROM harness_events WHERE event_type = 'user_stop'
+--      ORDER BY created_at DESC;
+--   2) SELECT seq, role, created_at, stop_reason, error_message, payload_json
+--      FROM messages
+--      WHERE session_id = :session_id
+--        AND datetime(created_at) BETWEEN datetime(:stop_created_at, '-3 minutes')
+--                                    AND datetime(:stop_created_at, '+2 minutes')
+--      ORDER BY created_at ASC, seq ASC;
+--   3) SELECT seq, role, created_at, payload_json
+--      FROM messages
+--      WHERE session_id = :session_id AND role = 'user'
+--        AND datetime(created_at) > datetime(:stop_created_at)
+--      ORDER BY created_at ASC, seq ASC
+--      LIMIT 1;
 CREATE TABLE IF NOT EXISTS harness_events (
   id TEXT PRIMARY KEY,
   event_type TEXT NOT NULL,

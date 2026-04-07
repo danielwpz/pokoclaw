@@ -474,6 +474,10 @@ export class RuntimeControlService {
     this.observabilityByRunId.set(runId, updater(existing));
   }
 
+  /**
+   * Persist the explicit stop fact for the concrete active run that was
+   * actually cancelled. Canonical semantics live with the harness_events schema.
+   */
   private recordHarnessStopEvent(
     run: ActiveRunRecord,
     input: StopRunInput | StopSessionInput | StopConversationInput,
