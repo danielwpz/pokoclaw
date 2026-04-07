@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { afterEach, describe, expect, test } from "vitest";
 
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
@@ -55,6 +57,7 @@ describe("lark object bindings repo", () => {
       channelInstallationId: "lark_install_1",
       internalObjectKind: "task_run",
       internalObjectId: "run_1",
+      larkMessageUuid: null,
       larkMessageId: "om_message_1",
       larkCardId: "card_1",
       threadRootMessageId: "om_root_1",
@@ -90,6 +93,94 @@ describe("lark object bindings repo", () => {
     ).toMatchObject({
       id: "lark_binding_1",
       internalObjectId: "run_1",
+    });
+  });
+
+  test("reserves a stable message uuid and preserves anchors across partial delivery updates", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+
+    const repo = new LarkObjectBindingsRepo(handle.storage.db);
+    const reserved = repo.reserveBinding({
+      id: "lark_binding_reserved_1",
+      channelInstallationId: "lark_install_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_retry_1",
+      larkMessageUuid: randomUUID(),
+      status: "active",
+      metadataJson: '{"phase":"reserved"}',
+    });
+
+    expect(reserved.larkMessageUuid).toBeTruthy();
+    expect(reserved.larkCardId).toBeNull();
+    expect(reserved.larkMessageId).toBeNull();
+
+    const reservedAgain = repo.reserveBinding({
+      id: "lark_binding_reserved_2",
+      channelInstallationId: "lark_install_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_retry_1",
+      larkMessageUuid: randomUUID(),
+      status: "active",
+      metadataJson: '{"phase":"reserved-again"}',
+    });
+
+    expect(reservedAgain.id).toBe(reserved.id);
+    expect(reservedAgain.larkMessageUuid).toBe(reserved.larkMessageUuid);
+
+    const withCard = repo.attachCardAnchor({
+      channelInstallationId: "lark_install_1",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_retry_1",
+      larkCardId: "card_retry_1",
+      status: "active",
+      metadataJson: '{"phase":"card"}',
+    });
+    expect(withCard).toMatchObject({
+      id: reserved.id,
+      larkMessageUuid: reserved.larkMessageUuid,
+      larkCardId: "card_retry_1",
+      larkMessageId: null,
+    });
+
+    const withMessage = repo.attachMessageAnchor({
+      channelInstallationId: "lark_install_1",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_retry_1",
+      larkMessageId: "om_retry_1",
+      larkOpenMessageId: "open_retry_1",
+      larkCardId: "card_retry_2",
+      status: "finalized",
+      metadataJson: '{"phase":"message"}',
+    });
+    expect(withMessage).toMatchObject({
+      id: reserved.id,
+      larkMessageUuid: reserved.larkMessageUuid,
+      larkCardId: "card_retry_1",
+      larkMessageId: "om_retry_1",
+      larkOpenMessageId: "open_retry_1",
+      status: "finalized",
+    });
+
+    const repeatedMessageAttach = repo.attachMessageAnchor({
+      channelInstallationId: "lark_install_1",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_retry_1",
+      larkMessageId: "om_retry_2",
+      larkOpenMessageId: "open_retry_2",
+      status: "finalized",
+      metadataJson: '{"phase":"message-repeat"}',
+    });
+    expect(repeatedMessageAttach).toMatchObject({
+      id: reserved.id,
+      larkMessageUuid: reserved.larkMessageUuid,
+      larkCardId: "card_retry_1",
+      larkMessageId: "om_retry_1",
+      larkOpenMessageId: "open_retry_1",
     });
   });
 

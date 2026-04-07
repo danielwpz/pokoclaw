@@ -36,6 +36,7 @@ import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
+import type { LarkObjectBinding } from "@/src/storage/schema/types.js";
 
 const logger = createSubsystemLogger("channels/lark-outbound");
 const LARK_CHANNEL_TYPE = "lark";
@@ -73,6 +74,13 @@ interface LarkCardUpdateInput {
       data: string;
     };
     sequence: number;
+  };
+}
+
+interface LarkInteractiveMessageResponse {
+  data?: {
+    message_id?: string;
+    open_message_id?: string;
   };
 }
 
@@ -193,6 +201,141 @@ export function createLarkOutboundRuntime(
     }
   };
 
+  const ensureInteractiveCardReferenceBinding = async (bindingInput: {
+    bindingsRepo: LarkObjectBindingsRepo;
+    client: LarkSdkClient;
+    cardkit: ReturnType<typeof getCardkitSdk>;
+    channelInstallationId: string;
+    conversationId: string;
+    branchId: string;
+    internalObjectKind: string;
+    internalObjectId: string;
+    chatId: string;
+    surfaceObject: Record<string, unknown>;
+    cardJson: string;
+    cardElementId?: string | null;
+    lastSequence?: number | null;
+    status: "active" | "finalized" | "stale";
+    metadataJson: string;
+    logContext: Record<string, unknown>;
+  }): Promise<LarkObjectBinding | null> => {
+    const threadRootMessageId = readStringValue(bindingInput.surfaceObject.thread_id);
+    let binding = bindingInput.bindingsRepo.reserveBinding({
+      id: randomUUID(),
+      channelInstallationId: bindingInput.channelInstallationId,
+      conversationId: bindingInput.conversationId,
+      branchId: bindingInput.branchId,
+      internalObjectKind: bindingInput.internalObjectKind,
+      internalObjectId: bindingInput.internalObjectId,
+      larkMessageUuid: randomUUID(),
+      threadRootMessageId,
+      cardElementId: bindingInput.cardElementId,
+      lastSequence: bindingInput.lastSequence,
+      status: bindingInput.status,
+      metadataJson: bindingInput.metadataJson,
+    });
+
+    if (binding.larkMessageUuid == null) {
+      throw new Error(
+        `Missing lark message uuid for ${bindingInput.internalObjectKind}:${bindingInput.internalObjectId}`,
+      );
+    }
+
+    if (binding.larkCardId == null) {
+      const createResp = await bindingInput.cardkit.card.create({
+        data: {
+          type: "card_json",
+          data: bindingInput.cardJson,
+        },
+      });
+      const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
+      logger.debug("created lark cardkit card response", {
+        ...bindingInput.logContext,
+        channelInstallationId: bindingInput.channelInstallationId,
+        responsePreview: truncateLogText(safeJson(createResp), LARK_CARD_LOG_PREVIEW_MAX_LENGTH),
+      });
+      if (larkCardId == null) {
+        logger.warn("lark card create returned no card id", {
+          ...bindingInput.logContext,
+          channelInstallationId: bindingInput.channelInstallationId,
+          responsePreview: truncateLogText(safeJson(createResp), LARK_CARD_LOG_PREVIEW_MAX_LENGTH),
+        });
+        return null;
+      }
+
+      const attachedBinding = bindingInput.bindingsRepo.attachCardAnchor({
+        channelInstallationId: bindingInput.channelInstallationId,
+        internalObjectKind: bindingInput.internalObjectKind,
+        internalObjectId: bindingInput.internalObjectId,
+        conversationId: bindingInput.conversationId,
+        branchId: bindingInput.branchId,
+        larkCardId,
+        threadRootMessageId,
+        cardElementId: bindingInput.cardElementId,
+        lastSequence: bindingInput.lastSequence,
+        status: bindingInput.status,
+        metadataJson: bindingInput.metadataJson,
+      });
+      if (attachedBinding == null) {
+        return null;
+      }
+      binding = attachedBinding;
+    }
+
+    if (binding.larkMessageId == null) {
+      const larkCardId = binding.larkCardId;
+      if (larkCardId == null) {
+        return null;
+      }
+      logger.debug("sending lark card reference message", {
+        ...bindingInput.logContext,
+        channelInstallationId: bindingInput.channelInstallationId,
+        chatId: bindingInput.chatId,
+        larkCardId,
+        larkMessageUuid: binding.larkMessageUuid,
+      });
+      const response = await sendLarkInteractiveCardReferenceMessage({
+        client: bindingInput.client,
+        chatId: bindingInput.chatId,
+        surfaceObject: bindingInput.surfaceObject,
+        larkCardId,
+        larkMessageUuid: binding.larkMessageUuid,
+      });
+      const larkMessageId = response.data?.message_id ?? null;
+      if (larkMessageId == null) {
+        logger.warn("lark card reference send returned no message id", {
+          ...bindingInput.logContext,
+          channelInstallationId: bindingInput.channelInstallationId,
+          larkCardId: binding.larkCardId,
+          larkMessageUuid: binding.larkMessageUuid,
+        });
+        return null;
+      }
+
+      const attachedBinding = bindingInput.bindingsRepo.attachMessageAnchor({
+        channelInstallationId: bindingInput.channelInstallationId,
+        internalObjectKind: bindingInput.internalObjectKind,
+        internalObjectId: bindingInput.internalObjectId,
+        conversationId: bindingInput.conversationId,
+        branchId: bindingInput.branchId,
+        larkMessageId,
+        larkOpenMessageId: response.data?.open_message_id ?? null,
+        larkCardId: binding.larkCardId,
+        threadRootMessageId,
+        cardElementId: bindingInput.cardElementId,
+        lastSequence: bindingInput.lastSequence,
+        status: bindingInput.status,
+        metadataJson: bindingInput.metadataJson,
+      });
+      if (attachedBinding == null) {
+        return null;
+      }
+      binding = attachedBinding;
+    }
+
+    return binding;
+  };
+
   const flushRunCard = async (runCardObjectId: string) => {
     const state = runStates.get(runCardObjectId);
     if (state == null) {
@@ -292,87 +435,35 @@ export function createLarkOutboundRuntime(
           structureSignaturePreview: truncateLogText(renderedPage.structureSignature, 160),
         });
 
-        if (existing?.larkCardId == null) {
-          const createResp = await cardkit.card.create({
-            data: {
-              type: "card_json",
-              data: JSON.stringify(renderedPage.card),
-            },
-          });
-          logger.debug("created lark cardkit card response", {
-            runId: state.runId,
-            runCardObjectId,
-            pageObjectId,
-            pageIndex: renderedPage.pageIndex,
-            channelInstallationId: surface.channelInstallationId,
-            responsePreview: truncateLogText(
-              safeJson(createResp),
-              LARK_CARD_LOG_PREVIEW_MAX_LENGTH,
-            ),
-          });
-          const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
-          if (larkCardId == null) {
-            logger.warn("lark run card create returned no card id", {
-              runId: state.runId,
-              runCardObjectId,
-              pageObjectId,
-              channelInstallationId: surface.channelInstallationId,
-              responsePreview: truncateLogText(
-                safeJson(createResp),
-                LARK_CARD_LOG_PREVIEW_MAX_LENGTH,
-              ),
-            });
-            continue;
-          }
-
-          logger.debug("sending lark card reference message", {
-            runId: state.runId,
-            runCardObjectId,
-            pageObjectId,
-            pageIndex: renderedPage.pageIndex,
-            channelInstallationId: surface.channelInstallationId,
-            chatId,
-            larkCardId,
-            cardPreview: truncateLogText(
-              JSON.stringify(renderedPage.card),
-              LARK_CARD_LOG_PREVIEW_MAX_LENGTH,
-            ),
-          });
-          const response = (await sendLarkInteractiveCardReferenceMessage({
+        if (existing?.larkCardId == null || existing.larkMessageId == null) {
+          const binding = await ensureInteractiveCardReferenceBinding({
+            bindingsRepo,
             client,
-            chatId,
-            surfaceObject,
-            larkCardId,
-          })) as { data?: { message_id?: string; open_message_id?: string } };
-          const larkMessageId = response.data?.message_id ?? null;
-          if (larkMessageId == null) {
-            logger.warn("lark run card create returned no message id", {
-              runId: state.runId,
-              runCardObjectId,
-              pageObjectId,
-              channelInstallationId: surface.channelInstallationId,
-              larkCardId,
-            });
-            continue;
-          }
-
-          bindingsRepo.upsert({
-            id: randomUUID(),
+            cardkit,
             channelInstallationId: surface.channelInstallationId,
             conversationId: state.conversationId,
             branchId: state.branchId,
             internalObjectKind: RUN_CARD_OBJECT_KIND,
             internalObjectId: pageObjectId,
-            larkMessageId,
-            larkOpenMessageId: response.data?.open_message_id ?? null,
-            larkCardId,
-            threadRootMessageId: readStringValue(surfaceObject.thread_id),
+            chatId,
+            surfaceObject,
+            cardJson: JSON.stringify(renderedPage.card),
             cardElementId: activeAssistantBlockId,
             lastSequence: 0,
             status: pageStatus,
             metadataJson,
+            logContext: {
+              runId: state.runId,
+              runCardObjectId,
+              pageObjectId,
+              pageIndex: renderedPage.pageIndex,
+            },
           });
+          if (binding == null) {
+            continue;
+          }
 
+          existingBindingsByObjectId.set(pageObjectId, binding);
           deliverySnapshots.set(snapshotKey, {
             structureSignature: renderedPage.structureSignature,
             activeAssistantElementId: activeAssistantBlockId,
@@ -385,8 +476,9 @@ export function createLarkOutboundRuntime(
             pageObjectId,
             pageIndex: renderedPage.pageIndex,
             channelInstallationId: surface.channelInstallationId,
-            larkMessageId,
-            larkCardId,
+            larkMessageId: binding.larkMessageId,
+            larkCardId: binding.larkCardId,
+            larkMessageUuid: binding.larkMessageUuid,
           });
           continue;
         }
@@ -566,59 +658,41 @@ export function createLarkOutboundRuntime(
       });
       const rendered = buildLarkRenderedApprovalCard(state);
 
-      if (existing?.larkCardId == null) {
-        const createResp = await cardkit.card.create({
-          data: {
-            type: "card_json",
-            data: JSON.stringify(rendered.card),
-          },
-        });
-        logger.debug("created lark approval cardkit response", {
-          approvalId,
-          runId: state.runId,
-          channelInstallationId: surface.channelInstallationId,
-          responsePreview: truncateLogText(safeJson(createResp), LARK_CARD_LOG_PREVIEW_MAX_LENGTH),
-        });
-        const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
-        if (larkCardId == null) {
-          continue;
-        }
-
-        const response = (await sendLarkInteractiveCardReferenceMessage({
+      if (existing?.larkCardId == null || existing.larkMessageId == null) {
+        const binding = await ensureInteractiveCardReferenceBinding({
+          bindingsRepo,
           client,
-          chatId,
-          surfaceObject,
-          larkCardId,
-        })) as { data?: { message_id?: string; open_message_id?: string } };
-        const larkMessageId = response.data?.message_id ?? null;
-        if (larkMessageId == null) {
-          continue;
-        }
-
-        bindingsRepo.upsert({
-          id: randomUUID(),
+          cardkit,
           channelInstallationId: surface.channelInstallationId,
           conversationId: state.conversationId,
           branchId: state.branchId,
           internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
           internalObjectId: approvalId,
-          larkMessageId,
-          larkOpenMessageId: response.data?.open_message_id ?? null,
-          larkCardId,
+          chatId,
+          surfaceObject,
+          cardJson: JSON.stringify(rendered.card),
           lastSequence: 0,
           status: state.resolved ? "finalized" : "active",
           metadataJson: JSON.stringify({
             approvalId,
             runId: state.runId,
           }),
+          logContext: {
+            approvalId,
+            runId: state.runId,
+          },
         });
+        if (binding == null) {
+          continue;
+        }
 
         logger.info("created standalone lark approval card", {
           approvalId,
           runId: state.runId,
           channelInstallationId: surface.channelInstallationId,
-          larkMessageId,
-          larkCardId,
+          larkMessageId: binding.larkMessageId,
+          larkCardId: binding.larkCardId,
+          larkMessageUuid: binding.larkMessageUuid,
         });
         continue;
       }
@@ -688,46 +762,33 @@ export function createLarkOutboundRuntime(
       });
       const rendered = buildLarkRenderedSubagentCreationRequestCard(entry.state);
 
-      if (existing?.larkCardId == null) {
-        const createResp = await cardkit.card.create({
-          data: {
-            type: "card_json",
-            data: JSON.stringify(rendered.card),
-          },
-        });
-        const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
-        if (larkCardId == null) {
-          continue;
-        }
-
-        const response = (await sendLarkInteractiveCardReferenceMessage({
+      if (existing?.larkCardId == null || existing.larkMessageId == null) {
+        const binding = await ensureInteractiveCardReferenceBinding({
+          bindingsRepo,
           client,
-          chatId,
-          surfaceObject,
-          larkCardId,
-        })) as { data?: { message_id?: string; open_message_id?: string } };
-        const larkMessageId = response.data?.message_id ?? null;
-        if (larkMessageId == null) {
-          continue;
-        }
-
-        bindingsRepo.upsert({
-          id: randomUUID(),
+          cardkit,
           channelInstallationId: surface.channelInstallationId,
           conversationId: entry.conversationId,
           branchId: entry.branchId,
           internalObjectKind: SUBAGENT_REQUEST_CARD_OBJECT_KIND,
           internalObjectId: requestId,
-          larkMessageId,
-          larkOpenMessageId: response.data?.open_message_id ?? null,
-          larkCardId,
+          chatId,
+          surfaceObject,
+          cardJson: JSON.stringify(rendered.card),
           lastSequence: 0,
           status: entry.state.status === "pending" ? "active" : "finalized",
           metadataJson: JSON.stringify({
             requestId,
             status: entry.state.status,
           }),
+          logContext: {
+            requestId,
+            status: entry.state.status,
+          },
         });
+        if (binding == null) {
+          continue;
+        }
         continue;
       }
 
@@ -1158,7 +1219,8 @@ async function sendLarkInteractiveCardReferenceMessage(input: {
   chatId: string;
   surfaceObject: Record<string, unknown>;
   larkCardId: string;
-}): Promise<unknown> {
+  larkMessageUuid?: string | null;
+}): Promise<LarkInteractiveMessageResponse> {
   const threadReplyMessageId = readStringValue(input.surfaceObject.reply_to_message_id);
   const content = JSON.stringify({
     type: "card",
@@ -1174,8 +1236,9 @@ async function sendLarkInteractiveCardReferenceMessage(input: {
         msg_type: "interactive",
         content,
         reply_in_thread: true,
+        ...(input.larkMessageUuid == null ? {} : { uuid: input.larkMessageUuid }),
       },
-    });
+    }) as Promise<LarkInteractiveMessageResponse>;
   }
 
   return input.client.sdk.im.message.create({
@@ -1184,8 +1247,9 @@ async function sendLarkInteractiveCardReferenceMessage(input: {
       receive_id: input.chatId,
       msg_type: "interactive",
       content,
+      ...(input.larkMessageUuid == null ? {} : { uuid: input.larkMessageUuid }),
     },
-  });
+  }) as Promise<LarkInteractiveMessageResponse>;
 }
 
 function readStringValue(value: unknown): string | null {
