@@ -1525,6 +1525,8 @@ describe("lark inbound message handling", () => {
       expect(control.stopConversation).toHaveBeenCalledExactlyOnceWith({
         conversationId: "conv_main",
         actor: "lark:default:ou_sender",
+        sourceKind: "command",
+        requestScope: "conversation",
         reasonText: "stop requested from lark command",
       });
     });
@@ -1592,6 +1594,8 @@ describe("lark inbound message handling", () => {
       expect(control.stopSession).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_thread_1",
         actor: "lark:default:ou_sender",
+        sourceKind: "command",
+        requestScope: "session",
         reasonText: "stop requested from lark command",
       });
       expect(control.stopConversation).not.toHaveBeenCalled();
@@ -1660,6 +1664,8 @@ describe("lark inbound message handling", () => {
       expect(control.stopSession).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
         actor: "lark:default:ou_sender",
+        sourceKind: "command",
+        requestScope: "session",
         reasonText: "stop requested from lark command",
       });
       expect(control.stopConversation).not.toHaveBeenCalled();
@@ -1940,6 +1946,8 @@ describe("lark card actions", () => {
     expect(control.stopRun).toHaveBeenCalledExactlyOnceWith({
       runId: "run_123",
       actor: "lark:default:ou_sender",
+      sourceKind: "button",
+      requestScope: "run",
       reasonText: "stop requested from lark card action",
     });
     expect(result).toEqual({

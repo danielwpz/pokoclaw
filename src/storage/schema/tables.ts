@@ -405,6 +405,38 @@ export const authEvents = sqliteTable(
   (table) => [index("idx_auth_events_time").on(table.createdAt)],
 );
 
+export const harnessEvents = sqliteTable(
+  "harness_events",
+  {
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    runId: text("run_id").notNull(),
+    sessionId: text("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    conversationId: text("conversation_id").references(() => conversations.id, {
+      onDelete: "set null",
+    }),
+    branchId: text("branch_id").references(() => conversationBranches.id, {
+      onDelete: "set null",
+    }),
+    agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    taskRunId: text("task_run_id").references(() => taskRuns.id, { onDelete: "set null" }),
+    cronJobId: text("cron_job_id").references(() => cronJobs.id, { onDelete: "set null" }),
+    actor: text("actor").notNull(),
+    sourceKind: text("source_kind").notNull(),
+    requestScope: text("request_scope").notNull(),
+    reasonText: text("reason_text"),
+    detailsJson: text("details_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_harness_events_run_time").on(table.runId, table.createdAt),
+    index("idx_harness_events_session_time").on(table.sessionId, table.createdAt),
+    index("idx_harness_events_conversation_time").on(table.conversationId, table.createdAt),
+    index("idx_harness_events_task_run_time").on(table.taskRunId, table.createdAt),
+    index("idx_harness_events_type_time").on(table.eventType, table.createdAt),
+  ],
+);
+
 export const larkObjectBindings = sqliteTable(
   "lark_object_bindings",
   {

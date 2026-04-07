@@ -34,8 +34,10 @@ import {
 import { RuntimeStatusService } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import { createBuiltinToolRegistry } from "@/src/tools/builtins.js";
 
 const logger = createSubsystemLogger("runtime-bootstrap");
@@ -70,7 +72,11 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const bridge = createRuntimeOrchestrationBridge();
   const outboundEventBus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
   const cancel = new SessionRunAbortRegistry();
-  const control = new RuntimeControlService(cancel);
+  const control = new RuntimeControlService(cancel, {
+    harnessEvents: new HarnessEventsRepo(input.storage),
+    sessions,
+    taskRuns: new TaskRunsRepo(input.storage),
+  });
   const models = new ProviderRegistry(input.config);
   const providerApiKeyResolver = new CodexProviderApiKeyResolver();
   const status = new RuntimeStatusService({

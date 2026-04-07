@@ -1,150 +1,281 @@
 import { describe, expect, test } from "vitest";
-
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
+import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
+import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
+import { createTestDatabase, destroyTestDatabase } from "@/tests/storage/helpers/test-db.js";
+
+async function withStorageFixture<T>(
+  run: (deps: {
+    cancel: SessionRunAbortRegistry;
+    control: RuntimeControlService;
+    harnessEvents: HarnessEventsRepo;
+    taskRuns: TaskRunsRepo;
+  }) => T | Promise<T>,
+): Promise<T> {
+  const handle = await createTestDatabase(import.meta.url);
+  try {
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_1', 'lark', 'acct_a', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_1', 'chat_1', 'dm', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', 'main', '2026-04-05T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_1', 'conv_1', 'branch_1', 'agent_1', 'chat', 'active', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_2', 'conv_1', 'dm_thread', 'thread:2', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_2', 'ci_1', 'chat_2', 'dm', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_3', 'conv_2', 'dm_main', 'main', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_2', 'conv_1', 'branch_2', 'agent_1', 'chat', 'active', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_3', 'conv_2', 'branch_3', 'agent_1', 'chat', 'active', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (id, owner_agent_id, target_conversation_id, target_branch_id, schedule_kind, schedule_value, payload_json, created_at, updated_at)
+      VALUES ('cron_1', 'agent_1', 'conv_1', 'branch_1', 'cron', '0 * * * *', '{}', '2026-04-05T00:00:00.000Z', '2026-04-05T00:00:00.000Z');
+    `);
+
+    const cancel = new SessionRunAbortRegistry();
+    const harnessEvents = new HarnessEventsRepo(handle.storage.db);
+    const taskRuns = new TaskRunsRepo(handle.storage.db);
+    const control = new RuntimeControlService(cancel, {
+      harnessEvents,
+      sessions: new SessionsRepo(handle.storage.db),
+      taskRuns,
+    });
+    return await run({ cancel, control, harnessEvents, taskRuns });
+  } finally {
+    await destroyTestDatabase(handle);
+  }
+}
 
 describe("RuntimeControlService", () => {
-  test("stops a specific active run", () => {
-    const cancel = new SessionRunAbortRegistry();
-    const control = new RuntimeControlService(cancel);
-    const handle = cancel.begin("sess_1");
+  test("stops a specific active run", async () => {
+    await withStorageFixture(async ({ cancel, control, harnessEvents }) => {
+      const handle = cancel.begin("sess_1");
 
-    control.beginRun({
-      runId: "run_1",
-      sessionId: "sess_1",
-      conversationId: "conv_1",
-      branchId: "branch_1",
-      scenario: "chat",
-    });
+      control.beginRun({
+        runId: "run_1",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
 
-    const result = control.stopRun({
-      runId: "run_1",
-      actor: "test",
-    });
+      const result = control.stopRun({
+        runId: "run_1",
+        actor: "test",
+        sourceKind: "button",
+        requestScope: "run",
+      });
 
-    expect(result).toEqual({
-      accepted: true,
-      runId: "run_1",
-      sessionId: "sess_1",
-      conversationId: "conv_1",
-    });
-    expect(handle.signal.aborted).toBe(true);
-    expect(cancel.isActive("sess_1")).toBe(false);
-  });
-
-  test("stops all active runs for a conversation", () => {
-    const cancel = new SessionRunAbortRegistry();
-    const control = new RuntimeControlService(cancel);
-    const handle1 = cancel.begin("sess_1");
-    const handle2 = cancel.begin("sess_2");
-    const handle3 = cancel.begin("sess_3");
-
-    control.beginRun({
-      runId: "run_1",
-      sessionId: "sess_1",
-      conversationId: "conv_1",
-      branchId: "branch_1",
-      scenario: "chat",
-    });
-    control.beginRun({
-      runId: "run_2",
-      sessionId: "sess_2",
-      conversationId: "conv_1",
-      branchId: "branch_1",
-      scenario: "chat",
-    });
-    control.beginRun({
-      runId: "run_3",
-      sessionId: "sess_3",
-      conversationId: "conv_2",
-      branchId: "branch_2",
-      scenario: "chat",
-    });
-
-    const result = control.stopConversation({
-      conversationId: "conv_1",
-      actor: "test",
-    });
-
-    expect(result).toEqual({
-      acceptedCount: 2,
-      conversationId: "conv_1",
-      runIds: ["run_1", "run_2"],
-      sessionIds: ["sess_1", "sess_2"],
-    });
-    expect(handle1.signal.aborted).toBe(true);
-    expect(handle2.signal.aborted).toBe(true);
-    expect(handle3.signal.aborted).toBe(false);
-    expect(cancel.isActive("sess_1")).toBe(false);
-    expect(cancel.isActive("sess_2")).toBe(false);
-    expect(cancel.isActive("sess_3")).toBe(true);
-  });
-
-  test("releases finished runs so stop ignores them", () => {
-    const cancel = new SessionRunAbortRegistry();
-    const control = new RuntimeControlService(cancel);
-    cancel.begin("sess_1");
-
-    control.beginRun({
-      runId: "run_1",
-      sessionId: "sess_1",
-      conversationId: "conv_1",
-      branchId: "branch_1",
-      scenario: "chat",
-    });
-    control.finishRun("run_1");
-
-    const result = control.stopRun({
-      runId: "run_1",
-      actor: "test",
-    });
-
-    expect(result).toEqual({
-      accepted: false,
-      runId: "run_1",
-      sessionId: null,
-      conversationId: null,
+      expect(result).toEqual({
+        accepted: true,
+        runId: "run_1",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+      });
+      expect(handle.signal.aborted).toBe(true);
+      expect(cancel.isActive("sess_1")).toBe(false);
+      expect(harnessEvents.listByRunId("run_1")).toMatchObject([
+        {
+          eventType: "user_stop",
+          runId: "run_1",
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          branchId: "branch_1",
+          actor: "test",
+          sourceKind: "button",
+          requestScope: "run",
+        },
+      ]);
     });
   });
 
-  test("stops only runs for the requested session", () => {
-    const cancel = new SessionRunAbortRegistry();
-    const control = new RuntimeControlService(cancel);
-    const handle1 = cancel.begin("sess_1");
-    const handle2 = cancel.begin("sess_2");
+  test("stops all active runs for a conversation", async () => {
+    await withStorageFixture(async ({ cancel, control, harnessEvents }) => {
+      const handle1 = cancel.begin("sess_1");
+      const handle2 = cancel.begin("sess_2");
+      const handle3 = cancel.begin("sess_3");
 
-    control.beginRun({
-      runId: "run_1",
-      sessionId: "sess_1",
-      conversationId: "conv_1",
-      branchId: "branch_1",
-      scenario: "chat",
-    });
-    control.beginRun({
-      runId: "run_2",
-      sessionId: "sess_2",
-      conversationId: "conv_1",
-      branchId: "branch_2",
-      scenario: "chat",
-    });
+      control.beginRun({
+        runId: "run_1",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+      control.beginRun({
+        runId: "run_2",
+        sessionId: "sess_2",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+      control.beginRun({
+        runId: "run_3",
+        sessionId: "sess_3",
+        conversationId: "conv_2",
+        branchId: "branch_2",
+        scenario: "chat",
+      });
 
-    const result = control.stopSession({
-      sessionId: "sess_2",
-      actor: "test",
-    });
+      const result = control.stopConversation({
+        conversationId: "conv_1",
+        actor: "test",
+        sourceKind: "command",
+        requestScope: "conversation",
+      });
 
-    expect(result).toEqual({
-      accepted: true,
-      sessionId: "sess_2",
-      runIds: ["run_2"],
-      conversationId: "conv_1",
+      expect(result).toEqual({
+        acceptedCount: 2,
+        conversationId: "conv_1",
+        runIds: ["run_1", "run_2"],
+        sessionIds: ["sess_1", "sess_2"],
+      });
+      expect(handle1.signal.aborted).toBe(true);
+      expect(handle2.signal.aborted).toBe(true);
+      expect(handle3.signal.aborted).toBe(false);
+      expect(cancel.isActive("sess_1")).toBe(false);
+      expect(cancel.isActive("sess_2")).toBe(false);
+      expect(cancel.isActive("sess_3")).toBe(true);
+      expect(harnessEvents.listByRunId("run_1")[0]).toMatchObject({
+        sourceKind: "command",
+        requestScope: "conversation",
+      });
+      expect(harnessEvents.listByRunId("run_2")[0]).toMatchObject({
+        sourceKind: "command",
+        requestScope: "conversation",
+      });
+      expect(harnessEvents.listByRunId("run_3")).toEqual([]);
     });
-    expect(handle1.signal.aborted).toBe(false);
-    expect(handle2.signal.aborted).toBe(true);
-    expect(cancel.isActive("sess_1")).toBe(true);
-    expect(cancel.isActive("sess_2")).toBe(false);
   });
 
+  test("releases finished runs so stop ignores them", async () => {
+    await withStorageFixture(async ({ cancel, control, harnessEvents }) => {
+      cancel.begin("sess_1");
+
+      control.beginRun({
+        runId: "run_1",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+      control.finishRun("run_1");
+
+      const result = control.stopRun({
+        runId: "run_1",
+        actor: "test",
+        sourceKind: "button",
+        requestScope: "run",
+      });
+
+      expect(result).toEqual({
+        accepted: false,
+        runId: "run_1",
+        sessionId: null,
+        conversationId: null,
+      });
+      expect(harnessEvents.listByRunId("run_1")).toEqual([]);
+    });
+  });
+
+  test("stops only runs for the requested session", async () => {
+    await withStorageFixture(async ({ cancel, control, harnessEvents }) => {
+      const handle1 = cancel.begin("sess_1");
+      const handle2 = cancel.begin("sess_2");
+
+      control.beginRun({
+        runId: "run_1",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+      control.beginRun({
+        runId: "run_2",
+        sessionId: "sess_2",
+        conversationId: "conv_1",
+        branchId: "branch_2",
+        scenario: "chat",
+      });
+
+      const result = control.stopSession({
+        sessionId: "sess_2",
+        actor: "test",
+        sourceKind: "command",
+        requestScope: "session",
+      });
+
+      expect(result).toEqual({
+        accepted: true,
+        sessionId: "sess_2",
+        runIds: ["run_2"],
+        conversationId: "conv_1",
+      });
+      expect(handle1.signal.aborted).toBe(false);
+      expect(handle2.signal.aborted).toBe(true);
+      expect(cancel.isActive("sess_1")).toBe(true);
+      expect(cancel.isActive("sess_2")).toBe(false);
+      expect(harnessEvents.listByRunId("run_1")).toEqual([]);
+      expect(harnessEvents.listByRunId("run_2")[0]).toMatchObject({
+        sourceKind: "command",
+        requestScope: "session",
+      });
+    });
+  });
+
+  test("records task and cron context on explicit stop events", async () => {
+    await withStorageFixture(async ({ cancel, control, harnessEvents, taskRuns }) => {
+      taskRuns.create({
+        id: "task_1",
+        runType: "cron",
+        ownerAgentId: "agent_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        cronJobId: "cron_1",
+        executionSessionId: "sess_1",
+        status: "running",
+        startedAt: new Date("2026-04-05T00:00:01.000Z"),
+      });
+
+      const handle = cancel.begin("sess_1");
+      control.beginRun({
+        runId: "run_1",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "cron",
+      });
+
+      control.stopRun({
+        runId: "run_1",
+        actor: "test",
+        sourceKind: "button",
+        requestScope: "run",
+      });
+
+      expect(handle.signal.aborted).toBe(true);
+      expect(harnessEvents.listByRunId("run_1")[0]).toMatchObject({
+        agentId: "agent_1",
+        taskRunId: "task_1",
+        cronJobId: "cron_1",
+      });
+    });
+  });
   test("tracks request-level TTFT without resetting run-level timing", () => {
     const control = new RuntimeControlService(new SessionRunAbortRegistry());
     control.beginRun({
