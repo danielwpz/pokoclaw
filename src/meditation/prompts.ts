@@ -10,7 +10,7 @@ export interface MeditationBucketPromptInput {
 
 export interface MeditationConsolidationAgentContext {
   agentId: string;
-  agentKind: string;
+  agentKind: "main" | "sub";
   displayName: string | null;
   description: string | null;
   workdir: string | null;
