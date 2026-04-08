@@ -117,4 +117,32 @@ describe("meditation consolidation context", () => {
       }),
     ]);
   });
+
+  test("skips buckets whose agent profile cannot be resolved", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-consolidation-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    await mkdir(workspaceDir, { recursive: true });
+
+    await writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      "# Preferences\n\n- Prefer concise updates.\n",
+      "utf8",
+    );
+
+    const promptInput = await loadMeditationConsolidationPromptInput({
+      currentDate: "2026-04-08",
+      timezone: "UTC",
+      workspaceDir,
+      buckets: [
+        {
+          agentId: "agent_unknown_1",
+          profile: null,
+          note: "Repeated friction with missing agent profile.",
+          memoryCandidates: ["Do not repeat the same denied permission request."],
+        },
+      ],
+    });
+
+    expect(promptInput.agentContexts).toEqual([]);
+  });
 });

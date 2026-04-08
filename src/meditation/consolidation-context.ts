@@ -15,10 +15,12 @@ import {
   buildWorkspaceSharedMemoryPath,
   ensureAgentMemoryFiles,
 } from "@/src/memory/files.js";
+import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { buildSubagentWorkspaceDir, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 
 const DEFAULT_EXCERPT_LOOKBACK_DAYS = 7;
 const MAX_EXCERPT_CHARS = 2_000;
+const logger = createSubsystemLogger("meditation/consolidation-context");
 
 export interface MeditationConsolidationBucketResult {
   agentId: string | null;
@@ -78,7 +80,16 @@ async function loadAgentContexts(input: {
 
   const agentContexts: MeditationConsolidationPromptInput["agentContexts"] = [];
   for (const [agentId, bucket] of deduped) {
-    const isSubAgent = bucket.profile?.kind !== "main";
+    if (bucket.profile == null) {
+      logger.warn("skipping meditation consolidation bucket because agent profile is missing", {
+        agentId,
+      });
+      continue;
+    }
+
+    const agentKind: MeditationConsolidationPromptInput["agentContexts"][number]["agentKind"] =
+      bucket.profile.kind === "main" ? "main" : "sub";
+    const isSubAgent = agentKind === "sub";
     const privateMemoryCurrent = isSubAgent
       ? await loadPrivateMemoryCurrent({
           workspaceDir: input.workspaceDir,
@@ -87,11 +98,11 @@ async function loadAgentContexts(input: {
       : null;
     agentContexts.push({
       agentId,
-      agentKind: bucket.profile?.kind ?? "sub",
-      displayName: bucket.profile?.displayName ?? null,
-      description: bucket.profile?.description ?? null,
-      workdir: bucket.profile?.workdir ?? null,
-      compactSummary: bucket.profile?.compactSummary ?? null,
+      agentKind,
+      displayName: bucket.profile.displayName,
+      description: bucket.profile.description,
+      workdir: bucket.profile.workdir,
+      compactSummary: bucket.profile.compactSummary,
       privateMemoryCurrent,
       bucketNote: bucket.note,
       memoryCandidates: [...bucket.memoryCandidates],
