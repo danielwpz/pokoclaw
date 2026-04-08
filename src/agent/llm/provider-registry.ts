@@ -33,6 +33,8 @@ export class ProviderRegistry {
       compaction: [...config.models.scenarios.compaction],
       subagent: [...config.models.scenarios.subagent],
       cron: [...config.models.scenarios.cron],
+      meditationBucket: [...config.models.scenarios.meditationBucket],
+      meditationConsolidation: [...config.models.scenarios.meditationConsolidation],
     };
 
     for (const scenario of getScenarioKeys()) {
@@ -134,5 +136,5 @@ export class ProviderRegistry {
 }
 
 function getScenarioKeys(): ModelScenario[] {
-  return ["chat", "compaction", "subagent", "cron"];
+  return ["chat", "compaction", "subagent", "cron", "meditationBucket", "meditationConsolidation"];
 }

@@ -298,6 +298,16 @@ export const taskRuns = sqliteTable(
   ],
 );
 
+export const meditationState = sqliteTable("meditation_state", {
+  id: text("id").primaryKey(),
+  running: integer("running", { mode: "boolean" }).notNull().default(false),
+  lastStartedAt: text("last_started_at"),
+  lastFinishedAt: text("last_finished_at"),
+  lastSuccessAt: text("last_success_at"),
+  lastStatus: text("last_status"),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const approvalLedger = sqliteTable(
   "approval_ledger",
   {

@@ -66,6 +66,7 @@ describe("storage db bootstrap", () => {
       expect(tableNames).toContain("auth_events");
       expect(tableNames).toContain("harness_events");
       expect(tableNames).toContain("lark_object_bindings");
+      expect(tableNames).toContain("meditation_state");
     } finally {
       await destroyTestDatabase(handle);
     }
@@ -425,6 +426,45 @@ describe("storage db bootstrap", () => {
       expect(columnNames).toContain("run_id");
       expect(columnNames).toContain("source_kind");
       expect(columnNames).toContain("request_scope");
+    } finally {
+      upgraded.close();
+      await rm(dbPath, { force: true });
+    }
+  });
+
+  test("adds meditation_state table during schema upgrade", async () => {
+    const dbPath = getTestDatabasePath(import.meta.url);
+    await mkdir(path.dirname(dbPath), { recursive: true });
+
+    const legacy = openStorageDatabase({ databasePath: dbPath, initializeSchema: false });
+    try {
+      legacy.sqlite.exec(`
+        CREATE TABLE channel_instances (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          account_key TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    const upgraded = openStorageDatabase({ databasePath: dbPath, initializeSchema: true });
+    try {
+      const rows = upgraded.sqlite.prepare("PRAGMA table_info(meditation_state)").all() as Array<{
+        name: string;
+      }>;
+      const columnNames = rows.map((row) => row.name);
+
+      expect(columnNames).toContain("id");
+      expect(columnNames).toContain("running");
+      expect(columnNames).toContain("last_started_at");
+      expect(columnNames).toContain("last_finished_at");
+      expect(columnNames).toContain("last_success_at");
+      expect(columnNames).toContain("last_status");
+      expect(columnNames).toContain("updated_at");
     } finally {
       upgraded.close();
       await rm(dbPath, { force: true });

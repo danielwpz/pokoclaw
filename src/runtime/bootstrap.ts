@@ -16,6 +16,8 @@ import { createLarkSubagentConversationSurfaceProvisioner } from "@/src/channels
 import { listConfiguredLarkInstallations } from "@/src/channels/lark/types.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { CronService } from "@/src/cron/service.js";
+import { MeditationPipelineRunner } from "@/src/meditation/runner.js";
+import { MeditationScheduler } from "@/src/meditation/scheduler.js";
 import { AgentManager, type AgentManagerDependencies } from "@/src/orchestration/agent-manager.js";
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import {
@@ -27,6 +29,7 @@ import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
+import { MinuteHeartbeat } from "@/src/runtime/minute-heartbeat.js";
 import {
   createRuntimeOrchestrationBridge,
   type RuntimeOrchestrationBridge,
@@ -35,6 +38,7 @@ import { RuntimeStatusService } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
+import { MeditationStateRepo } from "@/src/storage/repos/meditation-state.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
@@ -46,7 +50,9 @@ export interface RuntimeBootstrap {
   readonly bridge: RuntimeOrchestrationBridge;
   readonly ingress: SessionRuntimeIngress;
   readonly manager: AgentManager;
+  readonly heartbeat: MinuteHeartbeat;
   readonly cron: CronService;
+  readonly meditation: MeditationScheduler;
   readonly lark: LarkChannelRuntime;
   readonly control: RuntimeControlService;
   readonly status: RuntimeStatusService;
@@ -79,6 +85,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   });
   const models = new ProviderRegistry(input.config);
   const providerApiKeyResolver = new CodexProviderApiKeyResolver();
+  const llmBridge = new PiBridge(providerApiKeyResolver);
   const status = new RuntimeStatusService({
     storage: input.storage,
     control,
@@ -90,7 +97,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     models,
     tools,
     cancel,
-    modelRunner: new PiAgentModelRunner(new PiBridge(providerApiKeyResolver), tools),
+    modelRunner: new PiAgentModelRunner(llmBridge, tools),
     storage: input.storage,
     securityConfig: input.config.security,
     compaction: input.config.compaction,
@@ -124,6 +131,22 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     storage: input.storage,
     agentManager: manager,
   });
+  const heartbeat = new MinuteHeartbeat();
+  const meditationState = new MeditationStateRepo(input.storage);
+  const meditation = new MeditationScheduler({
+    config: input.config.selfHarness,
+    state: meditationState,
+    runner: new MeditationPipelineRunner({
+      storage: input.storage,
+      state: meditationState,
+      config: input.config.selfHarness,
+      models,
+      bridge: llmBridge,
+      securityConfig: input.config.security,
+    }),
+  });
+  heartbeat.subscribe("cron", (tickAt) => cron.onHeartbeatTick(tickAt));
+  heartbeat.subscribe("meditation", (tickAt) => meditation.onHeartbeatTick(tickAt));
   const lark = createLarkChannelRuntime({
     config: input.config.channels.lark,
     storage: input.storage,
@@ -152,7 +175,9 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     bridge,
     ingress,
     manager,
+    heartbeat,
     cron,
+    meditation,
     lark,
     control,
     status,
@@ -182,6 +207,8 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
 
       lark.start();
       cron.start();
+      meditation.start();
+      heartbeat.start();
       started = true;
       logger.info("runtime bootstrap started", {
         providerCount: Object.keys(input.config.providers).length,
@@ -212,10 +239,15 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
         }
 
         logger.info("runtime bootstrap shutting down", {
+          heartbeatStarted: heartbeat.status().started,
           inFlightCronRuns: cron.status().inFlightRuns,
+          inFlightMeditationRuns: meditation.status().inFlightRuns,
         });
+        heartbeat.stop();
         await lark.shutdown();
+        meditation.stop();
         cron.stop();
+        await meditation.drain();
         await cron.drain();
         started = false;
         logger.info("runtime bootstrap shutdown complete");

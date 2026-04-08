@@ -12,6 +12,7 @@ import type {
   cronJobs,
   harnessEvents,
   larkObjectBindings,
+  meditationState,
   messages,
   sessions,
   subagentCreationRequests,
@@ -44,6 +45,9 @@ export type NewCronJob = InferInsertModel<typeof cronJobs>;
 
 export type TaskRun = InferSelectModel<typeof taskRuns>;
 export type NewTaskRun = InferInsertModel<typeof taskRuns>;
+
+export type MeditationState = InferSelectModel<typeof meditationState>;
+export type NewMeditationState = InferInsertModel<typeof meditationState>;
 
 export type ApprovalRecord = InferSelectModel<typeof approvalLedger>;
 export type NewApprovalRecord = InferInsertModel<typeof approvalLedger>;

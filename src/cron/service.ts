@@ -18,7 +18,6 @@ import type { CronJob } from "@/src/storage/schema/types.js";
 
 const logger = createSubsystemLogger("cron/service");
 
-const DEFAULT_SCAN_INTERVAL_MS = 60_000;
 const DEFAULT_STALE_RUNNING_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_DUE_BATCH_LIMIT = 100;
 const DEFAULT_MISSED_GRACE_MS = 3 * 60 * 1000;
@@ -27,9 +26,6 @@ export interface CronServiceDependencies {
   storage: StorageDb;
   agentManager: Pick<AgentManager, "runCronTaskExecutionFromJob">;
   now?: () => Date;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
-  scanIntervalMs?: number;
   staleRunningMs?: number;
   dueBatchLimit?: number;
   missedGraceMs?: number;
@@ -59,23 +55,16 @@ export interface RunCronJobNowResult {
 
 export class CronService {
   private readonly now: () => Date;
-  private readonly setTimeoutFn: typeof setTimeout;
-  private readonly clearTimeoutFn: typeof clearTimeout;
-  private readonly scanIntervalMs: number;
   private readonly staleRunningMs: number;
   private readonly dueBatchLimit: number;
   private readonly missedGraceMs: number;
 
   private started = false;
   private scanInFlight = false;
-  private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly inFlightRuns = new Set<Promise<void>>();
 
   constructor(private readonly deps: CronServiceDependencies) {
     this.now = deps.now ?? (() => new Date());
-    this.setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
-    this.clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
-    this.scanIntervalMs = deps.scanIntervalMs ?? DEFAULT_SCAN_INTERVAL_MS;
     this.staleRunningMs = deps.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
     this.dueBatchLimit = deps.dueBatchLimit ?? DEFAULT_DUE_BATCH_LIMIT;
     this.missedGraceMs = deps.missedGraceMs ?? DEFAULT_MISSED_GRACE_MS;
@@ -83,34 +72,25 @@ export class CronService {
 
   start(): void {
     if (this.started) {
-      logger.debug("cron service start skipped because it is already running", {
-        scanIntervalMs: this.scanIntervalMs,
-      });
+      logger.debug("cron service start skipped because it is already running");
       return;
     }
 
     this.started = true;
     logger.info("cron service started", {
-      scanIntervalMs: this.scanIntervalMs,
       staleRunningMs: this.staleRunningMs,
       dueBatchLimit: this.dueBatchLimit,
       missedGraceMs: this.missedGraceMs,
     });
-    void this.tick();
   }
 
   stop(): void {
-    if (!this.started && this.timer == null) {
+    if (!this.started) {
       logger.debug("cron service stop skipped because it is already idle");
       return;
     }
 
     this.started = false;
-    if (this.timer != null) {
-      this.clearTimeoutFn?.(this.timer);
-      this.timer = null;
-    }
-
     logger.info("cron service stopped", {
       inFlightRuns: this.inFlightRuns.size,
     });
@@ -380,45 +360,21 @@ export class CronService {
     }
   }
 
-  private async tick(): Promise<void> {
+  async onHeartbeatTick(tickAt: Date = this.now()): Promise<void> {
     if (!this.started) {
       return;
     }
 
     try {
+      logger.debug("cron service received minute heartbeat", {
+        tickAt: tickAt.toISOString(),
+      });
       await this.scanOnce();
     } catch (error) {
       logger.error("cron scan failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      if (this.started) {
-        this.scheduleNextTick();
-      }
     }
-  }
-
-  private scheduleNextTick(): void {
-    if (!this.started) {
-      return;
-    }
-
-    const nowMs = this.now().getTime();
-    const remainder = nowMs % this.scanIntervalMs;
-    const delayMs = remainder === 0 ? this.scanIntervalMs : this.scanIntervalMs - remainder;
-
-    if (this.timer != null) {
-      this.clearTimeoutFn?.(this.timer);
-      this.timer = null;
-    }
-
-    logger.debug("scheduled next cron scan tick", {
-      delayMs,
-    });
-    this.timer = this.setTimeoutFn?.(() => {
-      this.timer = null;
-      void this.tick();
-    }, delayMs);
   }
 
   private kickoffClaimedRun(job: CronJob, triggerKind: "scheduled" | "manual"): void {

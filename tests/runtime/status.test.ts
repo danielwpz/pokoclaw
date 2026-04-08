@@ -66,6 +66,8 @@ function createConfig(): AppConfig {
         compaction: ["openrouter-gpt5.4"],
         subagent: ["openrouter-gpt5.4"],
         cron: ["openrouter-gpt5.4"],
+        meditationBucket: [],
+        meditationConsolidation: [],
       },
     },
     compaction: {
@@ -78,6 +80,12 @@ function createConfig(): AppConfig {
       maxTurns: 60,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
+    },
+    selfHarness: {
+      meditation: {
+        enabled: true,
+        cron: "0 0 * * *",
+      },
     },
     tools: {
       web: {
