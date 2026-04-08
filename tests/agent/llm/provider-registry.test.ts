@@ -48,6 +48,8 @@ function createConfig(): Pick<AppConfig, "providers" | "models"> {
         compaction: ["openai_main/gpt-5-mini"],
         subagent: ["anthropic_main/claude-sonnet-4-5"],
         cron: ["anthropic_main/claude-sonnet-4-5"],
+        meditationBucket: ["openai_main/gpt-5-mini"],
+        meditationConsolidation: ["anthropic_main/claude-sonnet-4-5"],
       },
     },
   };

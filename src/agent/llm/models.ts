@@ -46,7 +46,14 @@ export interface ResolvedModel {
   provider: ResolvedProvider;
 }
 
-const MODEL_SCENARIOS = ["chat", "compaction", "subagent", "cron"] as const;
+const MODEL_SCENARIOS = [
+  "chat",
+  "compaction",
+  "subagent",
+  "cron",
+  "meditationBucket",
+  "meditationConsolidation",
+] as const;
 
 export function isModelScenario(value: string): value is ModelScenario {
   return MODEL_SCENARIOS.includes(value as ModelScenario);

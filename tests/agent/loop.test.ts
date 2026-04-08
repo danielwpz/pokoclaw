@@ -71,6 +71,8 @@ function createModelConfig(
         compaction: ["anthropic_main/claude-sonnet-4-5"],
         subagent: ["anthropic_main/claude-sonnet-4-5"],
         cron: ["anthropic_main/claude-sonnet-4-5"],
+        meditationBucket: [],
+        meditationConsolidation: [],
       },
     },
   };

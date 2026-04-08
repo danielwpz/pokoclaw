@@ -21,6 +21,7 @@ export function initSchemaIfNeeded(
   upgradeCronJobsSchema(sqlite);
   upgradeMessagesSchema(sqlite);
   upgradeHarnessEventsSchema(sqlite);
+  upgradeMeditationStateSchema(sqlite);
   upgradeLarkObjectBindingsSchema(sqlite);
 }
 
@@ -92,6 +93,20 @@ function upgradeHarnessEventsSchema(sqlite: Database.Database): void {
       ON harness_events(task_run_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_harness_events_type_time
       ON harness_events(event_type, created_at);
+  `);
+}
+
+function upgradeMeditationStateSchema(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS meditation_state (
+      id TEXT PRIMARY KEY,
+      running INTEGER NOT NULL DEFAULT 0,
+      last_started_at TEXT,
+      last_finished_at TEXT,
+      last_success_at TEXT,
+      last_status TEXT,
+      updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL)
+    );
   `);
 }
 

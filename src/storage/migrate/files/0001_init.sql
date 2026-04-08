@@ -309,6 +309,16 @@ CREATE TABLE IF NOT EXISTS lark_object_bindings (
   UNIQUE(channel_installation_id, lark_card_id)
 );
 
+CREATE TABLE IF NOT EXISTS meditation_state (
+  id TEXT PRIMARY KEY,
+  running INTEGER NOT NULL DEFAULT 0,
+  last_started_at TEXT,
+  last_finished_at TEXT,
+  last_success_at TEXT,
+  last_status TEXT,
+  updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL)
+);
+
 CREATE INDEX IF NOT EXISTS idx_conversations_channel_chat
   ON conversations(channel_instance_id, external_chat_id);
 CREATE INDEX IF NOT EXISTS idx_branches_root_key

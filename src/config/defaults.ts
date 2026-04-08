@@ -17,6 +17,8 @@ export const DEFAULT_CONFIG: RawConfig = {
       compaction: [],
       subagent: [],
       cron: [],
+      meditationBucket: [],
+      meditationConsolidation: [],
     },
   },
   compaction: {
@@ -29,6 +31,12 @@ export const DEFAULT_CONFIG: RawConfig = {
     maxTurns: DEFAULT_RUNTIME_MAX_TURNS,
     approvalTimeoutMs: DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
     approvalGrantTtlMs: DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
+  },
+  selfHarness: {
+    meditation: {
+      enabled: true,
+      cron: "0 0 * * *",
+    },
   },
   tools: {
     web: {

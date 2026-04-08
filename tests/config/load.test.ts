@@ -132,6 +132,8 @@ describe("config loader", () => {
       compaction: [],
       subagent: [],
       cron: [],
+      meditationBucket: [],
+      meditationConsolidation: [],
     });
     expect(config.compaction).toEqual({
       reserveTokens: 60_000,
@@ -143,6 +145,12 @@ describe("config loader", () => {
       maxTurns: 60,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
+    });
+    expect(config.selfHarness).toEqual({
+      meditation: {
+        enabled: true,
+        cron: "0 0 * * *",
+      },
     });
     expect(config.tools).toEqual({
       web: {
@@ -238,6 +246,12 @@ describe("config loader", () => {
         'compaction = ["openai_main/gpt-5-mini"]',
         'subagent = ["anthropic_main/claude-sonnet-4-5"]',
         'cron = ["anthropic_main/claude-sonnet-4-5"]',
+        'meditationBucket = ["openai_main/gpt-5-mini"]',
+        'meditationConsolidation = ["anthropic_main/claude-sonnet-4-5"]',
+        "",
+        "[self-harness.meditation]",
+        "enabled = true",
+        'cron = "5 0 * * *"',
         "",
         "[tools.web.search]",
         "enabled = true",
@@ -291,6 +305,16 @@ describe("config loader", () => {
       "openai_main/gpt-5-mini",
     ]);
     expect(config.models.scenarios.compaction).toEqual(["openai_main/gpt-5-mini"]);
+    expect(config.models.scenarios.meditationBucket).toEqual(["openai_main/gpt-5-mini"]);
+    expect(config.models.scenarios.meditationConsolidation).toEqual([
+      "anthropic_main/claude-sonnet-4-5",
+    ]);
+    expect(config.selfHarness).toEqual({
+      meditation: {
+        enabled: true,
+        cron: "5 0 * * *",
+      },
+    });
     expect(config.compaction.keepRecentTokens).toBe(40_000);
     expect(config.tools).toEqual({
       web: {

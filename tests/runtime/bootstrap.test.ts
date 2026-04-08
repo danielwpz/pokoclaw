@@ -21,6 +21,8 @@ function createConfig(): AppConfig {
         compaction: [],
         subagent: [],
         cron: [],
+        meditationBucket: [],
+        meditationConsolidation: [],
       },
     },
     compaction: {
@@ -33,6 +35,12 @@ function createConfig(): AppConfig {
       maxTurns: 60,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
+    },
+    selfHarness: {
+      meditation: {
+        enabled: true,
+        cron: "0 0 * * *",
+      },
     },
     tools: {
       web: {
@@ -89,6 +97,13 @@ describe("runtime bootstrap", () => {
     expect(bootstrap.cron.status()).toMatchObject({
       started: true,
     });
+    expect(bootstrap.meditation.status()).toMatchObject({
+      started: true,
+    });
+    expect(bootstrap.heartbeat.status()).toMatchObject({
+      started: true,
+      subscriberCount: 2,
+    });
     expect(bootstrap.lark.status()).toMatchObject({
       started: true,
       enabledInstallations: 0,
@@ -107,6 +122,14 @@ describe("runtime bootstrap", () => {
     expect(bootstrap.cron.status()).toMatchObject({
       started: false,
       inFlightRuns: 0,
+    });
+    expect(bootstrap.meditation.status()).toMatchObject({
+      started: false,
+      inFlightRuns: 0,
+    });
+    expect(bootstrap.heartbeat.status()).toMatchObject({
+      started: false,
+      subscriberCount: 2,
     });
     expect(bootstrap.lark.status()).toMatchObject({
       started: false,

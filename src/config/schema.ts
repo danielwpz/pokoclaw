@@ -1,3 +1,5 @@
+import { computeNextRunAt } from "@/src/cron/schedule.js";
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface LoggingConfig {
@@ -44,6 +46,8 @@ export interface ModelScenarioConfig {
   compaction: string[];
   subagent: string[];
   cron: string[];
+  meditationBucket: string[];
+  meditationConsolidation: string[];
 }
 
 export interface ModelsConfig {
@@ -62,6 +66,15 @@ export interface RuntimeConfig {
   maxTurns: number;
   approvalTimeoutMs: number;
   approvalGrantTtlMs: number;
+}
+
+export interface MeditationConfig {
+  enabled: boolean;
+  cron: string;
+}
+
+export interface SelfHarnessConfig {
+  meditation: MeditationConfig;
 }
 
 export interface WebToolConfig {
@@ -118,6 +131,7 @@ export interface RawConfig {
   models: ModelsConfig;
   compaction: CompactionConfig;
   runtime: RuntimeConfig;
+  selfHarness: SelfHarnessConfig;
   tools: ToolsConfig;
   security: SecurityConfig;
   channels: ChannelsConfig;
@@ -176,6 +190,8 @@ interface ModelScenarioConfigInput {
   compaction?: unknown;
   subagent?: unknown;
   cron?: unknown;
+  meditationBucket?: unknown;
+  meditationConsolidation?: unknown;
 }
 
 interface ModelsConfigInput {
@@ -194,6 +210,15 @@ interface RuntimeConfigInput {
   maxTurns?: unknown;
   approvalTimeoutMs?: unknown;
   approvalGrantTtlMs?: unknown;
+}
+
+interface MeditationConfigInput {
+  enabled?: unknown;
+  cron?: unknown;
+}
+
+interface SelfHarnessConfigInput {
+  meditation?: unknown;
 }
 
 interface WebToolConfigInput {
@@ -248,6 +273,7 @@ interface FileConfigInput {
   models?: unknown;
   compaction?: unknown;
   runtime?: unknown;
+  "self-harness"?: unknown;
   tools?: unknown;
   security?: unknown;
   channels?: unknown;
@@ -256,7 +282,14 @@ interface FileConfigInput {
 export type SecretsFileInput = Record<string, unknown>;
 
 const LOG_LEVELS: readonly LogLevel[] = ["debug", "info", "warn", "error"];
-const MODEL_SCENARIOS = ["chat", "compaction", "subagent", "cron"] as const;
+const MODEL_SCENARIOS = [
+  "chat",
+  "compaction",
+  "subagent",
+  "cron",
+  "meditationBucket",
+  "meditationConsolidation",
+] as const;
 const LARK_CONNECTION_MODES: readonly LarkConnectionMode[] = ["websocket", "webhook"];
 const PROVIDER_AUTH_SOURCES: readonly ProviderAuthSource[] = ["config", "codex-local"];
 const REASONING_EFFORTS: readonly ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
@@ -281,6 +314,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     "models",
     "compaction",
     "runtime",
+    "self-harness",
     "tools",
     "security",
     "channels",
@@ -296,6 +330,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   const models = validateModelsConfig(config.models, defaults.models, providers);
   const compaction = validateCompactionConfig(config.compaction, defaults.compaction);
   const runtime = validateRuntimeConfig(config.runtime, defaults.runtime);
+  const selfHarness = validateSelfHarnessConfig(config["self-harness"], defaults.selfHarness);
   const tools = validateToolsConfig(config.tools, defaults.tools, providers);
   const security = validateSecurityConfig(config.security, defaults.security);
   const channels = validateChannelsConfig(config.channels, defaults.channels);
@@ -310,6 +345,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     models,
     compaction,
     runtime,
+    selfHarness,
     tools,
     security,
     channels,
@@ -332,10 +368,15 @@ function cloneRawConfig(config: RawConfig): RawConfig {
         compaction: [...config.models.scenarios.compaction],
         subagent: [...config.models.scenarios.subagent],
         cron: [...config.models.scenarios.cron],
+        meditationBucket: [...config.models.scenarios.meditationBucket],
+        meditationConsolidation: [...config.models.scenarios.meditationConsolidation],
       },
     },
     compaction: { ...config.compaction },
     runtime: { ...config.runtime },
+    selfHarness: {
+      meditation: cloneMeditationConfig(config.selfHarness.meditation),
+    },
     tools: {
       web: {
         search: cloneWebToolConfig(config.tools.web.search),
@@ -492,6 +533,8 @@ function validateModelsConfig(
         compaction: [...defaults.scenarios.compaction],
         subagent: [...defaults.scenarios.subagent],
         cron: [...defaults.scenarios.cron],
+        meditationBucket: [...defaults.scenarios.meditationBucket],
+        meditationConsolidation: [...defaults.scenarios.meditationConsolidation],
       },
     };
   }
@@ -642,6 +685,8 @@ function validateModelScenarios(
       compaction: [...defaults.compaction],
       subagent: [...defaults.subagent],
       cron: [...defaults.cron],
+      meditationBucket: [...defaults.meditationBucket],
+      meditationConsolidation: [...defaults.meditationConsolidation],
     };
   }
 
@@ -662,6 +707,18 @@ function validateModelScenarios(
     ),
     subagent: validateScenarioList(scenarios.subagent, defaults.subagent, catalogIds, "subagent"),
     cron: validateScenarioList(scenarios.cron, defaults.cron, catalogIds, "cron"),
+    meditationBucket: validateScenarioList(
+      scenarios.meditationBucket,
+      defaults.meditationBucket,
+      catalogIds,
+      "meditationBucket",
+    ),
+    meditationConsolidation: validateScenarioList(
+      scenarios.meditationConsolidation,
+      defaults.meditationConsolidation,
+      catalogIds,
+      "meditationConsolidation",
+    ),
   };
 }
 
@@ -763,6 +820,54 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
       config.approvalGrantTtlMs ?? defaults.approvalGrantTtlMs,
       "config.toml runtime.approvalGrantTtlMs",
     ),
+  };
+}
+
+function validateSelfHarnessConfig(input: unknown, defaults: SelfHarnessConfig): SelfHarnessConfig {
+  if (input == null) {
+    return {
+      meditation: cloneMeditationConfig(defaults.meditation),
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml self-harness must be a table/object");
+  }
+
+  const config = input as SelfHarnessConfigInput;
+  assertAllowedKeys(config, new Set(["meditation"]), "config.toml self-harness");
+
+  return {
+    meditation: validateMeditationConfig(
+      config.meditation,
+      defaults.meditation,
+      "config.toml self-harness.meditation",
+    ),
+  };
+}
+
+function validateMeditationConfig(
+  input: unknown,
+  defaults: MeditationConfig,
+  path: string,
+): MeditationConfig {
+  if (input == null) {
+    return cloneMeditationConfig(defaults);
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error(`${path} must be a table/object`);
+  }
+
+  const config = input as MeditationConfigInput;
+  assertAllowedKeys(config, new Set(["enabled", "cron"]), path);
+
+  return {
+    enabled:
+      config.enabled == null
+        ? defaults.enabled
+        : validateBoolean(config.enabled, `${path}.enabled`),
+    cron: validateMeditationCron(config.cron ?? defaults.cron, `${path}.cron`),
   };
 }
 
@@ -1155,6 +1260,13 @@ function cloneWebToolConfig(config: WebToolConfig): WebToolConfig {
     : { enabled: config.enabled, provider: config.provider };
 }
 
+function cloneMeditationConfig(config: MeditationConfig): MeditationConfig {
+  return {
+    enabled: config.enabled,
+    cron: config.cron,
+  };
+}
+
 function cloneModelCatalogEntry(entry: ModelCatalogEntry): ModelCatalogEntry {
   const cloned: ModelCatalogEntry = {
     id: entry.id,
@@ -1253,6 +1365,25 @@ function validateBoolean(value: unknown, path: string): boolean {
   }
 
   return value;
+}
+
+function validateMeditationCron(value: unknown, path: string): string {
+  const cron = validateNonEmptyString(value, path);
+  try {
+    computeNextRunAt(
+      {
+        scheduleKind: "cron",
+        scheduleValue: cron,
+      },
+      new Date(),
+    );
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? `${path} is invalid: ${error.message}` : `${path} is invalid`,
+    );
+  }
+
+  return cron;
 }
 
 function validatePositiveInteger(value: unknown, path: string): number {

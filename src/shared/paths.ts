@@ -16,7 +16,10 @@ export const DEFAULT_CONFIG_TOML_PATH = path.join(POKECLAW_SYSTEM_DIR, "config.t
 export const DEFAULT_SECRETS_TOML_PATH = path.join(POKECLAW_SYSTEM_DIR, "secrets.toml");
 export const CODEX_CREDENTIALS_PATH = path.join(POKECLAW_SYSTEM_DIR, "codex-credentials.json");
 
-export function buildSubagentWorkspaceDir(agentId: string): string {
+export function buildSubagentWorkspaceDir(
+  agentId: string,
+  subagentWorkspacesDir = POKECLAW_SUBAGENT_WORKSPACES_DIR,
+): string {
   const normalized = agentId
     .trim()
     .toLowerCase()
@@ -26,5 +29,5 @@ export function buildSubagentWorkspaceDir(agentId: string): string {
     throw new Error(`Cannot derive SubAgent workspace directory from empty agent id: ${agentId}`);
   }
 
-  return path.join(POKECLAW_SUBAGENT_WORKSPACES_DIR, prefix);
+  return path.join(subagentWorkspacesDir, prefix);
 }
