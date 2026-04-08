@@ -10,9 +10,30 @@ export interface ResolvedMeditationModels {
   consolidation: ResolvedModel;
 }
 
+export function maybeResolveMeditationModels(
+  input: ResolveMeditationModelsInput,
+): ResolvedMeditationModels | null {
+  const bucket = input.registry.getScenarioModel("meditationBucket");
+  const consolidation = input.registry.getScenarioModel("meditationConsolidation");
+
+  if (bucket == null || consolidation == null) {
+    return null;
+  }
+
+  return {
+    bucket,
+    consolidation,
+  };
+}
+
 export function resolveMeditationModels(
   input: ResolveMeditationModelsInput,
 ): ResolvedMeditationModels {
+  const resolved = maybeResolveMeditationModels(input);
+  if (resolved != null) {
+    return resolved;
+  }
+
   const bucket = input.registry.getRequiredScenarioModel("meditationBucket");
   const consolidation = input.registry.getRequiredScenarioModel("meditationConsolidation");
 

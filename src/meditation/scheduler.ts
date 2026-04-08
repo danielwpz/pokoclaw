@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MeditationStateRepo } from "@/src/storage/repos/meditation-state.repo.js";
 
 const logger = createSubsystemLogger("meditation/scheduler");
+const DEFAULT_STALE_RUNNING_MS = 2 * 60 * 60 * 1000;
 
 export interface MeditationRunRequest {
   tickAt: Date;
@@ -11,7 +12,7 @@ export interface MeditationRunRequest {
 
 export interface MeditationRunResult {
   skipped: boolean;
-  reason?: "no_buckets";
+  reason?: "no_buckets" | "no_models";
   bucketsExecuted: number;
 }
 
@@ -24,6 +25,7 @@ export interface MeditationSchedulerDependencies {
   state: MeditationStateRepo;
   runner: MeditationRunner;
   now?: () => Date;
+  staleRunningMs?: number;
 }
 
 export interface MeditationSchedulerStatus {
@@ -33,11 +35,13 @@ export interface MeditationSchedulerStatus {
 
 export class MeditationScheduler {
   private readonly now: () => Date;
+  private readonly staleRunningMs: number;
   private started = false;
   private readonly inFlightRuns = new Set<Promise<void>>();
 
   constructor(private readonly deps: MeditationSchedulerDependencies) {
     this.now = deps.now ?? (() => new Date());
+    this.staleRunningMs = deps.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
   }
 
   start(): void {
@@ -90,7 +94,21 @@ export class MeditationScheduler {
       return;
     }
 
-    const state = this.deps.state.getOrCreateDefault(this.now());
+    const now = this.now();
+    const staleBefore = new Date(now.getTime() - this.staleRunningMs);
+    const staleCleared = this.deps.state.clearStaleRunning({
+      now,
+      staleBefore,
+    });
+    if (staleCleared > 0) {
+      logger.warn("cleared stale meditation running state", {
+        tickAt: tickAt.toISOString(),
+        staleCleared,
+        staleBefore: staleBefore.toISOString(),
+      });
+    }
+
+    const state = this.deps.state.getOrCreateDefault(now);
     if (state.running) {
       logger.debug("meditation heartbeat skipped because a previous run is still active", {
         tickAt: tickAt.toISOString(),
@@ -110,7 +128,7 @@ export class MeditationScheduler {
       return;
     }
 
-    const startedAt = this.now();
+    const startedAt = now;
     this.deps.state.markStarted({
       startedAt,
     });

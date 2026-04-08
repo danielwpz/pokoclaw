@@ -108,4 +108,40 @@ describe("meditation scheduler", () => {
     expect(runner.runOnce).not.toHaveBeenCalled();
     expect(new MeditationStateRepo(handle.storage.db).get()).toBeNull();
   });
+
+  test("clears stale running state and starts a fresh run", async () => {
+    handle = await createTestDatabase(import.meta.url);
+
+    const state = new MeditationStateRepo(handle.storage.db);
+    state.markStarted({
+      startedAt: new Date("2026-04-08T00:00:00.000Z"),
+    });
+
+    const runner = {
+      runOnce: vi.fn(async () => ({ skipped: false, bucketsExecuted: 1 })),
+    };
+    const scheduler = new MeditationScheduler({
+      config: {
+        meditation: {
+          enabled: true,
+          cron: "* * * * *",
+        },
+      },
+      state,
+      runner,
+      now: () => new Date("2026-04-08T03:00:00.000Z"),
+      staleRunningMs: 60 * 60 * 1000,
+    });
+
+    scheduler.start();
+    scheduler.onHeartbeatTick(new Date("2026-04-08T03:00:00.000Z"));
+    await flushMicrotasks();
+
+    expect(runner.runOnce).toHaveBeenCalledOnce();
+    expect(state.get()).toMatchObject({
+      running: false,
+      lastStatus: "completed",
+      lastFinishedAt: "2026-04-08T03:00:00.000Z",
+    });
+  });
 });

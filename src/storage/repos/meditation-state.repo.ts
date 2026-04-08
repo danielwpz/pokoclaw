@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, lt } from "drizzle-orm";
 
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -17,6 +17,12 @@ export interface MarkMeditationFinishedInput {
   status: string;
   finishedAt?: Date;
   markSuccess?: boolean;
+}
+
+export interface ClearStaleMeditationRunningInput {
+  id?: string;
+  now: Date;
+  staleBefore: Date;
 }
 
 export class MeditationStateRepo {
@@ -77,6 +83,29 @@ export class MeditationStateRepo {
       .where(eq(meditationState.id, id))
       .run();
     return this.requireState(id);
+  }
+
+  clearStaleRunning(input: ClearStaleMeditationRunningInput): number {
+    const id = input.id ?? DEFAULT_MEDITATION_STATE_ID;
+    this.getOrCreateDefault(input.now);
+    const updated = this.db
+      .update(meditationState)
+      .set({
+        running: false,
+        lastFinishedAt: toCanonicalUtcIsoTimestamp(input.now),
+        lastStatus: "stale",
+        updatedAt: toCanonicalUtcIsoTimestamp(input.now),
+      })
+      .where(
+        and(
+          eq(meditationState.id, id),
+          eq(meditationState.running, true),
+          isNotNull(meditationState.lastStartedAt),
+          lt(meditationState.lastStartedAt, toCanonicalUtcIsoTimestamp(input.staleBefore)),
+        ),
+      )
+      .run();
+    return updated.changes;
   }
 
   private requireState(id: string): MeditationState {

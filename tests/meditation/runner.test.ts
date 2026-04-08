@@ -352,6 +352,150 @@ describe("MeditationPipelineRunner", () => {
     );
   });
 
+  test("skips safely when meditation models are not configured", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-no-models-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+
+    const state = new MeditationStateRepo(handle.storage.db);
+    state.markFinished({
+      status: "completed",
+      finishedAt: new Date("2026-03-20T00:00:00.000Z"),
+      markSuccess: true,
+    });
+
+    const config: Pick<AppConfig, "providers" | "models"> = {
+      providers: {
+        anthropic_main: {
+          api: "anthropic-messages",
+          apiKey: "anthropic-secret",
+        },
+      },
+      models: {
+        catalog: [
+          {
+            id: "anthropic_main/claude-sonnet-4-5",
+            provider: "anthropic_main",
+            upstreamId: "claude-sonnet-4-5-20250929",
+            contextWindow: 200_000,
+            maxOutputTokens: 16_384,
+            supportsTools: true,
+            supportsVision: true,
+            reasoning: { enabled: true },
+          },
+        ],
+        scenarios: {
+          chat: ["anthropic_main/claude-sonnet-4-5"],
+          compaction: ["anthropic_main/claude-sonnet-4-5"],
+          subagent: ["anthropic_main/claude-sonnet-4-5"],
+          cron: ["anthropic_main/claude-sonnet-4-5"],
+          meditationBucket: [],
+          meditationConsolidation: [],
+        },
+      },
+    };
+
+    const runner = new MeditationPipelineRunner({
+      storage: handle.storage.db,
+      state,
+      config: {
+        meditation: {
+          enabled: true,
+          cron: "0 0 * * *",
+        },
+      },
+      models: new ProviderRegistry(config),
+      bridge: {
+        async completeTurn() {
+          throw new Error("bridge should not be called when meditation models are missing");
+        },
+      },
+      securityConfig: DEFAULT_CONFIG.security,
+      workspaceDir,
+      logsDir: tempDir,
+      createRunId: () => "run_no_models",
+      resolveCalendarContext: () => ({
+        currentDate: "2026-04-08",
+        timezone: "UTC",
+      }),
+    });
+
+    const result = await runner.runOnce({
+      tickAt: new Date("2026-04-08T00:00:00.000Z"),
+    });
+
+    const artifactDir = path.join(tempDir, "meditation", "2026-04-08--run_no_models");
+    const meta = JSON.parse(await readFile(path.join(artifactDir, "meta.json"), "utf8"));
+
+    expect(result).toEqual({
+      skipped: true,
+      reason: "no_models",
+      bucketsExecuted: 0,
+    });
+    expect(meta).toMatchObject({
+      runId: "run_no_models",
+      localDate: "2026-04-08",
+      models: {
+        bucketModelId: null,
+        consolidationModelId: null,
+      },
+      counts: {
+        buckets: 1,
+        executedBuckets: 0,
+      },
+    });
+    await expect(
+      readFile(path.join(workspaceDir, "meditation", "2026-04-08.md"), "utf8"),
+    ).rejects.toThrow();
+  });
+
+  test("persists early artifacts even when a bucket phase fails later", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-runner-fail-"));
+
+    const runner = new MeditationPipelineRunner({
+      storage: handle.storage.db,
+      state: new MeditationStateRepo(handle.storage.db),
+      config: {
+        meditation: {
+          enabled: true,
+          cron: "0 0 * * *",
+        },
+      },
+      models: createRegistry(),
+      bridge: {
+        async completeTurn() {
+          throw new Error("bucket llm failed");
+        },
+      },
+      securityConfig: DEFAULT_CONFIG.security,
+      workspaceDir: path.join(tempDir, "workspace"),
+      logsDir: tempDir,
+      createRunId: () => "run_fail",
+      resolveCalendarContext: () => ({
+        currentDate: "2026-04-08",
+        timezone: "UTC",
+      }),
+    });
+
+    await expect(
+      runner.runOnce({
+        tickAt: new Date("2026-04-08T00:00:00.000Z"),
+      }),
+    ).rejects.toThrow("bucket llm failed");
+
+    const artifactDir = path.join(tempDir, "meditation", "2026-04-08--run_fail");
+    const meta = JSON.parse(await readFile(path.join(artifactDir, "meta.json"), "utf8"));
+    const harvest = JSON.parse(await readFile(path.join(artifactDir, "harvest.json"), "utf8"));
+    const clusters = JSON.parse(await readFile(path.join(artifactDir, "clusters.json"), "utf8"));
+
+    expect(meta.runId).toBe("run_fail");
+    expect(harvest.stops).toHaveLength(1);
+    expect(clusters).toHaveLength(1);
+  });
+
   test("drops private rewrites for non-sub agents at the host layer", () => {
     const filtered = filterEligiblePrivateMemoryRewrites({
       agentContexts: [

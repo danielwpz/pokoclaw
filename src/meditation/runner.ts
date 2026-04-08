@@ -28,7 +28,7 @@ import {
   writeMeditationTextFileAtomic,
 } from "@/src/meditation/files.js";
 import type { MeditationTurnBridge } from "@/src/meditation/llm-executor.js";
-import { resolveMeditationModels } from "@/src/meditation/models.js";
+import { maybeResolveMeditationModels, resolveMeditationModels } from "@/src/meditation/models.js";
 import type { MeditationConsolidationAgentContext } from "@/src/meditation/prompts.js";
 import {
   type MeditationBucketProfile,
@@ -138,10 +138,11 @@ export class MeditationPipelineRunner implements MeditationRunner {
         readModel: this.readModel,
       }),
     );
-    const executedBucketInputs = bucketInputs.slice(0, MAX_BUCKETS_PER_RUN);
-    const resolvedModels = resolveMeditationModels({
+    const configuredModels = maybeResolveMeditationModels({
       registry: this.deps.models,
     });
+    const executedBucketInputs =
+      configuredModels == null ? [] : bucketInputs.slice(0, MAX_BUCKETS_PER_RUN);
     const workspaceDir = this.deps.workspaceDir ?? POKECLAW_WORKSPACE_DIR;
     const startedAtMs = Date.now();
 
@@ -153,8 +154,8 @@ export class MeditationPipelineRunner implements MeditationRunner {
         timezone: window.timezone,
         window,
         models: {
-          bucketModelId: resolvedModels.bucket.id,
-          consolidationModelId: resolvedModels.consolidation.id,
+          bucketModelId: configuredModels?.bucket.id ?? null,
+          consolidationModelId: configuredModels?.consolidation.id ?? null,
         },
         counts: {
           stops: harvest.stops.length,
@@ -172,15 +173,31 @@ export class MeditationPipelineRunner implements MeditationRunner {
         writeJsonArtifact(path.join(artifactDir, "buckets.json"), bucketArtifacts),
         writeJsonArtifact(path.join(artifactDir, "bucket-inputs.json"), bucketInputs),
       ];
+      await Promise.all(writes);
+
+      if (configuredModels == null) {
+        logger.warn("meditation run skipped because no meditation models are configured", {
+          runId,
+          tickAt: input.tickAt.toISOString(),
+        });
+        return {
+          skipped: true,
+          reason: "no_models",
+          bucketsExecuted: 0,
+        };
+      }
 
       if (executedBucketInputs.length === 0) {
-        await Promise.all(writes);
         return {
           skipped: true,
           reason: "no_buckets",
           bucketsExecuted: 0,
         };
       }
+
+      const resolvedModels = resolveMeditationModels({
+        registry: this.deps.models,
+      });
 
       logger.info("meditation pipeline run started", {
         runId,
@@ -236,7 +253,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
           memoryCandidates: execution.submission.memory_candidates.length,
           turnCount: execution.turns.length,
         });
-        writes.push(
+        await Promise.all([
           writeMeditationTextFileAtomic(
             path.join(artifactDir, `bucket-${bucketInput.bucketId}.prompt.md`),
             formatPromptArtifact({
@@ -244,25 +261,19 @@ export class MeditationPipelineRunner implements MeditationRunner {
               userPrompt: execution.prompt,
             }),
           ),
-        );
-        writes.push(
           writeJsonArtifact(
             path.join(artifactDir, `bucket-${bucketInput.bucketId}.submit.json`),
             execution.submission,
           ),
-        );
-        writes.push(
           writeJsonArtifact(
             path.join(artifactDir, `bucket-${bucketInput.bucketId}.turns.json`),
             execution.turns,
           ),
-        );
-        writes.push(
           writeJsonArtifact(
             path.join(artifactDir, `bucket-${bucketInput.bucketId}.messages.json`),
             execution.messages,
           ),
-        );
+        ]);
       }
 
       let consolidationSummary = {
@@ -291,7 +302,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
           securityConfig: this.deps.securityConfig,
           promptInput: consolidationPromptInput,
         });
-        writes.push(
+        await Promise.all([
           writeMeditationTextFileAtomic(
             path.join(artifactDir, "consolidation.prompt.md"),
             formatPromptArtifact({
@@ -299,40 +310,32 @@ export class MeditationPipelineRunner implements MeditationRunner {
               userPrompt: consolidation.prompt,
             }),
           ),
-        );
-        writes.push(
           writeJsonArtifact(
             path.join(artifactDir, "consolidation.submit.json"),
             consolidation.submission,
           ),
-        );
-        writes.push(
           writeJsonArtifact(
             path.join(artifactDir, "consolidation.turns.json"),
             consolidation.turns,
           ),
-        );
-        writes.push(
           writeJsonArtifact(
             path.join(artifactDir, "consolidation.messages.json"),
             consolidation.messages,
           ),
-        );
+        ]);
 
         if (consolidation.submission.shared_memory_rewrite != null) {
           const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
-          writes.push(
+          await Promise.all([
             writeMeditationTextFileAtomic(
               path.join(artifactDir, "rewrite-preview", "shared.md"),
               consolidation.submission.shared_memory_rewrite,
             ),
-          );
-          writes.push(
             writeMeditationTextFileAtomic(
               sharedPath,
               consolidation.submission.shared_memory_rewrite,
             ),
-          );
+          ]);
           consolidationSummary = {
             ...consolidationSummary,
             sharedRewritten: true,
@@ -360,18 +363,16 @@ export class MeditationPipelineRunner implements MeditationRunner {
             rewrite.agent_id,
             path.join(workspaceDir, "subagents"),
           );
-          writes.push(
+          await Promise.all([
             writeMeditationTextFileAtomic(
               path.join(artifactDir, "rewrite-preview", `private-${rewrite.agent_id}.md`),
               rewrite.content,
             ),
-          );
-          writes.push(
             writeMeditationTextFileAtomic(
               buildPrivateWorkspaceMemoryPath(privateWorkspaceDir),
               rewrite.content,
             ),
-          );
+          ]);
         }
         consolidationSummary = {
           ...consolidationSummary,
@@ -408,11 +409,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
         })),
         consolidationSummary,
       });
-      writes.push(
-        writeMeditationTextFileAtomic(path.join(artifactDir, "daily-note.md"), dailyRunBlock),
-      );
-
-      await Promise.all(writes);
+      await writeMeditationTextFileAtomic(path.join(artifactDir, "daily-note.md"), dailyRunBlock);
       await appendMeditationDailyRunBlock({
         localDate: window.localDate,
         workspaceDir,
