@@ -69,4 +69,37 @@ describe("meditation state repo", () => {
       updatedAt: "2026-04-08T00:00:20.000Z",
     });
   });
+
+  test("clears stale running state without touching last success", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const repo = new MeditationStateRepo(handle.storage.db);
+
+    repo.markStarted({
+      startedAt: new Date("2026-04-08T00:00:10.000Z"),
+    });
+    repo.markFinished({
+      status: "completed",
+      finishedAt: new Date("2026-04-08T00:00:20.000Z"),
+      markSuccess: true,
+    });
+    repo.markStarted({
+      startedAt: new Date("2026-04-08T02:00:00.000Z"),
+    });
+
+    const cleared = repo.clearStaleRunning({
+      now: new Date("2026-04-08T05:00:00.000Z"),
+      staleBefore: new Date("2026-04-08T03:00:00.000Z"),
+    });
+
+    expect(cleared).toBe(1);
+    expect(repo.get()).toMatchObject({
+      id: DEFAULT_MEDITATION_STATE_ID,
+      running: false,
+      lastStartedAt: "2026-04-08T02:00:00.000Z",
+      lastFinishedAt: "2026-04-08T05:00:00.000Z",
+      lastSuccessAt: "2026-04-08T00:00:20.000Z",
+      lastStatus: "stale",
+      updatedAt: "2026-04-08T05:00:00.000Z",
+    });
+  });
 });
