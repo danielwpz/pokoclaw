@@ -789,6 +789,84 @@ describe("AgentManager", () => {
     });
   });
 
+  test("creates isolated cron task executions without forking chat context", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
+      handle.storage.sqlite.exec(`
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id,
+          schedule_kind, schedule_value, context_mode, payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_isolated', 'agent_sub', 'conv_sub', 'branch_sub',
+          'cron', '*/5 * * * *', 'isolated', '{"job":"reconcile"}',
+          '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
+        );
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, context_mode, status,
+          compact_cursor, compact_summary, compact_summary_token_total, compact_summary_usage_json,
+          created_at, updated_at
+        ) VALUES (
+          'sess_sub_chat', 'conv_sub', 'branch_sub', 'agent_sub', 'chat', 'group', 'active',
+          1, 'subagent summary', 9, '{"input":5,"output":4,"cacheRead":0,"cacheWrite":0,"totalTokens":9}',
+          '2026-03-25T00:00:02.000Z', '2026-03-25T00:00:03.000Z'
+        );
+      `);
+      messagesRepo.append({
+        id: "msg_sub_1",
+        sessionId: "sess_sub_chat",
+        seq: 1,
+        role: "user",
+        payloadJson: '{"content":"older"}',
+        createdAt: new Date("2026-03-25T00:00:02.100Z"),
+      });
+      messagesRepo.append({
+        id: "msg_sub_2",
+        sessionId: "sess_sub_chat",
+        seq: 2,
+        role: "assistant",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        modelApi: "anthropic-messages",
+        stopReason: "stop",
+        payloadJson: '{"content":[{"type":"text","text":"latest branch context"}]}',
+        createdAt: new Date("2026-03-25T00:00:02.200Z"),
+      });
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const created = manager.createCronTaskExecutionFromJob({
+        cronJobId: "cron_isolated",
+        attempt: 1,
+        createdAt: new Date("2026-03-25T00:00:10.000Z"),
+      });
+
+      expect(created.executionSession).toMatchObject({
+        purpose: "task",
+        contextMode: "isolated",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        ownerAgentId: "agent_sub",
+        forkedFromSessionId: null,
+        forkSourceSeq: null,
+        compactSummary: null,
+      });
+
+      const context = new AgentSessionService(
+        new SessionsRepo(handle.storage.db),
+        messagesRepo,
+      ).getContext(created.executionSession.id);
+      expect(context.compactSummary).toBeNull();
+      expect(context.messages).toHaveLength(0);
+    });
+  });
+
   test("runs cron task executions from cron job definitions", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
@@ -811,6 +889,10 @@ describe("AgentManager", () => {
             visibility: "hidden_system",
           });
           expect(input.content).toContain("<run_type>cron</run_type>");
+          expect(input.content).toContain("If inherited transcript is present");
+          expect(input.content).toContain(
+            "Do not treat inherited transcript as a request to continue the broader conversation",
+          );
 
           expect(input.afterToolResultHook).toBeDefined();
           return createStartedTaskRunResult({

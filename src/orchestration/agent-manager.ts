@@ -383,13 +383,16 @@ export class AgentManager {
           lastSuccessfulRun == null ? null : summarizeCronTaskRunForKickoff(lastSuccessfulRun),
       },
     });
-    const forkSourceSession = sessionsRepo.findLatestByConversationBranch(
-      cronJob.targetConversationId,
-      cronJob.targetBranchId,
-      {
-        purpose: "chat",
-      },
-    );
+    const forkSourceSession =
+      cronJob.contextMode === "group"
+        ? sessionsRepo.findLatestByConversationBranch(
+            cronJob.targetConversationId,
+            cronJob.targetBranchId,
+            {
+              purpose: "chat",
+            },
+          )
+        : null;
 
     const created = this.createTaskExecution({
       runType: "cron",

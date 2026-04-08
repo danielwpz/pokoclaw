@@ -208,9 +208,18 @@ export class TaskExecutionRunner {
     | Extract<SubmitMessageResult, { status: "started" }>
     | Extract<TaskExecutionRunResult, { status: "failed" }>
   > {
+    const normalizedContextMode =
+      input.created.executionSession.contextMode === "group"
+        ? "group"
+        : input.created.executionSession.contextMode === "isolated"
+          ? "isolated"
+          : null;
+
     const envelope =
       input.pass === 1
-        ? buildTaskExecutionKickoffEnvelope(input.created.taskRun)
+        ? buildTaskExecutionKickoffEnvelope(input.created.taskRun, {
+            contextMode: normalizedContextMode,
+          })
         : buildTaskExecutionSupervisorReminderEnvelope({
             runType: input.created.taskRun.runType,
             nextPass: input.pass,
