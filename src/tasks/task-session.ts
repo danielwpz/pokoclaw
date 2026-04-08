@@ -9,6 +9,11 @@ export interface TaskExecutionKickoffEnvelope {
   visibility: "hidden_system";
 }
 
+export interface TaskExecutionKickoffOptions {
+  cronContext?: CronKickoffContext;
+  contextMode?: "group" | "isolated" | null;
+}
+
 export interface CronKickoffRunReference {
   startedAt: string;
   status: string;
@@ -62,15 +67,20 @@ const CRON_EXECUTION_GUIDANCE_LINES = [
   "If the previous run failed, avoid blindly repeating the same failing path.",
 ];
 
+const GROUP_CRON_TRANSCRIPT_GUIDANCE_LINES = [
+  "If inherited transcript is present, use it only for task-relevant background, standing instructions, constraints, and user preferences.",
+  "Do not resume unrelated unfinished discussion just because it appears in inherited transcript.",
+  "Do not treat inherited transcript as a request to continue the broader conversation.",
+  "Complete the scheduled objective for this run, then end the task instead of continuing broader conversation.",
+];
+
 export function resolveTaskExecutionScenario(runType: string): ModelScenario {
   return runType === "cron" ? "cron" : "subagent";
 }
 
 export function buildTaskExecutionKickoffEnvelope(
   taskRun: Pick<TaskRun, "runType" | "description" | "inputJson">,
-  options: {
-    cronContext?: CronKickoffContext;
-  } = {},
+  options: TaskExecutionKickoffOptions = {},
 ): TaskExecutionKickoffEnvelope {
   return {
     scenario: resolveTaskExecutionScenario(taskRun.runType),
@@ -100,14 +110,12 @@ export function buildTaskExecutionSupervisorReminderEnvelope(input: {
 
 function renderTaskKickoffMessage(
   taskRun: Pick<TaskRun, "runType" | "description" | "inputJson">,
-  options: {
-    cronContext?: CronKickoffContext;
-  },
+  options: TaskExecutionKickoffOptions,
 ) {
   const cronContext = options.cronContext ?? extractCronContextFromInput(taskRun);
   const guidanceLines =
     taskRun.runType === "cron"
-      ? [...TASK_EXECUTION_GUIDANCE_LINES, ...CRON_EXECUTION_GUIDANCE_LINES]
+      ? buildCronExecutionGuidanceLines(options.contextMode)
       : TASK_EXECUTION_GUIDANCE_LINES;
 
   return renderXmlEnvelope("task_execution", [
@@ -116,6 +124,14 @@ function renderTaskKickoffMessage(
     ...renderKickoffInput(taskRun, cronContext),
     ...renderLineBlock("guidance", guidanceLines),
   ]);
+}
+
+function buildCronExecutionGuidanceLines(contextMode?: string | null): string[] {
+  return [
+    ...TASK_EXECUTION_GUIDANCE_LINES,
+    ...CRON_EXECUTION_GUIDANCE_LINES,
+    ...(contextMode === "group" ? GROUP_CRON_TRANSCRIPT_GUIDANCE_LINES : []),
+  ];
 }
 
 function formatTaskInput(inputJson: string): string {

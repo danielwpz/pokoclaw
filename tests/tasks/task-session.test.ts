@@ -42,26 +42,31 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
   });
 
   test("renders only the latest successful run when no failure history is relevant", () => {
-    const envelope = buildTaskExecutionKickoffEnvelope({
-      runType: "cron",
-      description: null,
-      inputJson: JSON.stringify({
-        taskDefinition:
-          "Seeing this message means you should check today's PR queue and give the user a complete update.",
-        recentRuns: {
-          lastRun: {
-            startedAt: "2026-03-27T08:00:00.000Z",
-            status: "completed",
-            summary: "Reviewed 3 pull requests.",
+    const envelope = buildTaskExecutionKickoffEnvelope(
+      {
+        runType: "cron",
+        description: null,
+        inputJson: JSON.stringify({
+          taskDefinition:
+            "Seeing this message means you should check today's PR queue and give the user a complete update.",
+          recentRuns: {
+            lastRun: {
+              startedAt: "2026-03-27T08:00:00.000Z",
+              status: "completed",
+              summary: "Reviewed 3 pull requests.",
+            },
+            lastSuccessfulRun: {
+              startedAt: "2026-03-27T08:00:00.000Z",
+              status: "completed",
+              summary: "Reviewed 3 pull requests.",
+            },
           },
-          lastSuccessfulRun: {
-            startedAt: "2026-03-27T08:00:00.000Z",
-            status: "completed",
-            summary: "Reviewed 3 pull requests.",
-          },
-        },
-      }),
-    });
+        }),
+      },
+      {
+        contextMode: "group",
+      },
+    );
 
     expect(envelope.content).toContain("<recent_runs>");
     expect(envelope.content).toContain("<reference_only>");
@@ -69,6 +74,11 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     expect(envelope.content).toContain("<last_run>");
     expect(envelope.content).toContain("Reviewed 3 pull requests.");
     expect(envelope.content).not.toContain("<last_successful_run>");
+    expect(envelope.content).toContain("If inherited transcript is present");
+    expect(envelope.content).toContain("Do not resume unrelated unfinished discussion");
+    expect(envelope.content).toContain(
+      "Complete the scheduled objective for this run, then end the task instead of continuing broader conversation",
+    );
   });
 
   test("renders failed last run plus last successful run and escapes xml content", () => {
@@ -101,6 +111,7 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
     expect(envelope.content).toContain("Slack &lt;API&gt; timeout &amp; retry exhausted");
     expect(envelope.content).toContain("<last_successful_run>");
     expect(envelope.content).toContain("Posted report with 5 &lt;items&gt; &amp; links.");
+    expect(envelope.content).not.toContain("If inherited transcript is present");
   });
 
   test("renders a supervisor reminder for task runs that ended without finish_task", () => {
