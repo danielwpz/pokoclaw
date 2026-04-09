@@ -329,17 +329,17 @@ export class MeditationPipelineRunner implements MeditationRunner {
           ),
         ]);
 
-        if (consolidation.submission.shared_memory_rewrite != null) {
+        const sharedMemoryRewrite = normalizeNonEmptyMeditationRewrite(
+          consolidation.submission.shared_memory_rewrite,
+        );
+        if (sharedMemoryRewrite != null) {
           const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
           await Promise.all([
             writeMeditationTextFileAtomic(
               path.join(artifactDir, "rewrite-preview", "shared.md"),
-              consolidation.submission.shared_memory_rewrite,
+              sharedMemoryRewrite,
             ),
-            writeMeditationTextFileAtomic(
-              sharedPath,
-              consolidation.submission.shared_memory_rewrite,
-            ),
+            writeMeditationTextFileAtomic(sharedPath, sharedMemoryRewrite),
           ]);
           consolidationSummary = {
             ...consolidationSummary,
@@ -449,6 +449,14 @@ export class MeditationPipelineRunner implements MeditationRunner {
       throw error;
     }
   }
+}
+
+function normalizeNonEmptyMeditationRewrite(content: string | null): string | null {
+  if (content == null) {
+    return null;
+  }
+
+  return content.trim().length === 0 ? null : content;
 }
 
 async function writeJsonArtifact(filePath: string, payload: unknown): Promise<void> {
