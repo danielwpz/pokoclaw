@@ -6,6 +6,7 @@ import {
   buildLarkChatSurfaceKey,
   buildLarkThreadSurfaceKey,
   createLarkCardActionHandler,
+  createLarkInboundRuntime,
   createLarkMessageReceiveHandler,
   createLarkQuoteMessageFetcher,
   normalizeLarkTextMessage,
@@ -2427,6 +2428,104 @@ describe("lark card actions", () => {
         type: "info",
         content: "该授权请求已结束或无法处理",
       },
+    });
+  });
+
+  test("forwards modelSwitch through lark inbound runtime so /model works end-to-end", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      type InboundDispatcher = {
+        invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown>;
+      };
+      const dispatchers: InboundDispatcher[] = [];
+      const wsClose = vi.fn();
+      const messageCreate = vi.fn(async () => ({}));
+      const modelSwitch = {
+        getOverview: vi.fn(() => ({
+          models: [
+            {
+              index: 1,
+              modelId: "gpt5",
+              providerId: "main",
+              upstreamModelId: "openai/gpt-5",
+              supportsTools: true,
+              supportsVision: false,
+              supportsReasoning: true,
+            },
+          ],
+          scenarios: [
+            {
+              scenario: "chat",
+              currentModelId: "gpt5",
+              configuredModelIds: ["gpt5"],
+            },
+          ],
+        })),
+      };
+      const runtime = createLarkInboundRuntime({
+        installations: [
+          {
+            installationId: "default",
+            appId: "cli_123",
+            appSecret: "secret_123",
+            config: {
+              enabled: true,
+              appId: "cli_123",
+              appSecret: "secret_123",
+              connectionMode: "websocket",
+            },
+          },
+        ],
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "started" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        modelSwitch: modelSwitch as never,
+        clients: {
+          getOrCreate: () =>
+            ({
+              sdk: {
+                im: {
+                  message: {
+                    create: messageCreate,
+                    reply: vi.fn(async () => ({})),
+                  },
+                },
+              },
+            }) as unknown as LarkSdkClient,
+        },
+        wsClientFactory: () =>
+          ({
+            start: ({ eventDispatcher }: { eventDispatcher: InboundDispatcher }) => {
+              dispatchers.push(eventDispatcher);
+            },
+            close: wsClose,
+          }) as never,
+      });
+
+      runtime.start();
+      const activeDispatcher = dispatchers.at(0);
+      if (activeDispatcher == null) {
+        throw new Error("expected lark inbound runtime to install an event dispatcher");
+      }
+      await activeDispatcher.invoke(
+        {
+          schema: "2.0",
+          header: {
+            event_type: "im.message.receive_v1",
+          },
+          event: makeTextEvent("/model"),
+        },
+        { needCheck: false },
+      );
+
+      expect(modelSwitch.getOverview).toHaveBeenCalledTimes(1);
+      expect(messageCreate).toHaveBeenCalledTimes(1);
+
+      await runtime.shutdown();
+      expect(wsClose).toHaveBeenCalledOnce();
     });
   });
 

@@ -11,6 +11,10 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import {
+  type ProviderRegistrySource,
+  resolveProviderRegistry,
+} from "@/src/agent/llm/provider-registry-source.js";
 import type { SecurityConfig, SelfHarnessConfig } from "@/src/config/schema.js";
 import {
   runMeditationBucketAgent,
@@ -61,7 +65,7 @@ interface MeditationPipelineRunnerDependencies {
   storage: StorageDb;
   state: MeditationStateRepo;
   config: SelfHarnessConfig;
-  models: ProviderRegistry;
+  models: ProviderRegistry | ProviderRegistrySource;
   bridge: MeditationTurnBridge;
   securityConfig: SecurityConfig;
   workspaceDir?: string;
@@ -138,8 +142,9 @@ export class MeditationPipelineRunner implements MeditationRunner {
         readModel: this.readModel,
       }),
     );
+    const registry = resolveProviderRegistry(this.deps.models);
     const configuredModels = maybeResolveMeditationModels({
-      registry: this.deps.models,
+      registry,
     });
     const executedBucketInputs =
       configuredModels == null ? [] : bucketInputs.slice(0, MAX_BUCKETS_PER_RUN);
@@ -196,7 +201,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
       }
 
       const resolvedModels = resolveMeditationModels({
-        registry: this.deps.models,
+        registry,
       });
 
       logger.info("meditation pipeline run started", {

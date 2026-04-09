@@ -6,7 +6,6 @@
  * module to keep process entry thin and business assembly centralized.
  */
 import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
-import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { LiveProviderRegistrySource } from "@/src/agent/llm/provider-registry-source.js";
 import { CodexProviderApiKeyResolver } from "@/src/agent/llm/providers/codex/resolver.js";
 import { AgentLoop } from "@/src/agent/loop.js";
@@ -94,7 +93,6 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     sessions,
     taskRuns: new TaskRunsRepo(input.storage),
   });
-  const models = new ProviderRegistry(input.config);
   const scenarioModelSwitch = new ScenarioModelSwitchService(liveConfig);
   const providerApiKeyResolver = new CodexProviderApiKeyResolver();
   const llmBridge = new PiBridge(providerApiKeyResolver);
@@ -152,7 +150,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       storage: input.storage,
       state: meditationState,
       config: input.config.selfHarness,
-      models,
+      models: liveModels,
       bridge: llmBridge,
       securityConfig: input.config.security,
     }),
