@@ -8,6 +8,10 @@
 import { readFileSync } from "node:fs";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import {
+  type ProviderRegistrySource,
+  resolveProviderRegistry,
+} from "@/src/agent/llm/provider-registry-source.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import { resolveSessionLiveState } from "@/src/runtime/live-state.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
@@ -84,7 +88,7 @@ export class RuntimeStatusService {
     private readonly deps: {
       storage: StorageDb;
       control: RuntimeControlService;
-      models: ProviderRegistry;
+      models: ProviderRegistry | ProviderRegistrySource;
     },
   ) {}
 
@@ -100,11 +104,12 @@ export class RuntimeStatusService {
     }
 
     const latestAssistant = messagesRepo.getLatestAssistantBySession(session.id);
+    const currentModels = resolveProviderRegistry(this.deps.models);
     const model = resolveStatusModel({
       latestAssistant,
       session,
       agentsRepo,
-      models: this.deps.models,
+      models: currentModels,
       scenario: input.scenario,
     });
 

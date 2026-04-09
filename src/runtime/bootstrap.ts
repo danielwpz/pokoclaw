@@ -7,6 +7,7 @@
  */
 import { PiAgentModelRunner, PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import { LiveProviderRegistrySource } from "@/src/agent/llm/provider-registry-source.js";
 import { CodexProviderApiKeyResolver } from "@/src/agent/llm/providers/codex/resolver.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
@@ -14,6 +15,9 @@ import { createLarkChannelRuntime, type LarkChannelRuntime } from "@/src/channel
 import { LarkClientRegistry } from "@/src/channels/lark/client.js";
 import { createLarkSubagentConversationSurfaceProvisioner } from "@/src/channels/lark/subagent-provisioner.js";
 import { listConfiguredLarkInstallations } from "@/src/channels/lark/types.js";
+import { LiveConfigManager } from "@/src/config/live-manager.js";
+import type { LoadConfigOptions } from "@/src/config/load.js";
+import { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { CronService } from "@/src/cron/service.js";
 import { MeditationPipelineRunner } from "@/src/meditation/runner.js";
@@ -50,6 +54,7 @@ export interface RuntimeBootstrap {
   readonly bridge: RuntimeOrchestrationBridge;
   readonly ingress: SessionRuntimeIngress;
   readonly manager: AgentManager;
+  readonly liveConfig: LiveConfigManager;
   readonly heartbeat: MinuteHeartbeat;
   readonly cron: CronService;
   readonly meditation: MeditationScheduler;
@@ -66,9 +71,15 @@ export interface CreateRuntimeBootstrapInput {
   storage: StorageDb;
   subagentProvisioner?: AgentManagerDependencies["subagentProvisioner"];
   previousLastSeenAt?: Date | null;
+  configPaths?: Required<LoadConfigOptions>;
 }
 
 export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): RuntimeBootstrap {
+  const liveConfig = new LiveConfigManager({
+    initialSnapshot: input.config,
+    ...(input.configPaths == null ? {} : { filePaths: input.configPaths }),
+  });
+  const liveModels = new LiveProviderRegistrySource(liveConfig);
   const messages = new MessagesRepo(input.storage);
   const sessions = new SessionsRepo(input.storage);
   const tools = createBuiltinToolRegistry({
@@ -84,17 +95,18 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     taskRuns: new TaskRunsRepo(input.storage),
   });
   const models = new ProviderRegistry(input.config);
+  const scenarioModelSwitch = new ScenarioModelSwitchService(liveConfig);
   const providerApiKeyResolver = new CodexProviderApiKeyResolver();
   const llmBridge = new PiBridge(providerApiKeyResolver);
   const status = new RuntimeStatusService({
     storage: input.storage,
     control,
-    models,
+    models: liveModels,
   });
   const loop = new AgentLoop({
     sessions: new AgentSessionService(sessions, messages),
     messages,
-    models,
+    models: liveModels,
     tools,
     cancel,
     modelRunner: new PiAgentModelRunner(llmBridge, tools),
@@ -153,6 +165,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     ingress,
     control,
     status,
+    modelSwitch: scenarioModelSwitch,
     outboundEventBus,
     clients: larkClients,
     subagentRequests: {
@@ -175,6 +188,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     bridge,
     ingress,
     manager,
+    liveConfig,
     heartbeat,
     cron,
     meditation,
@@ -205,6 +219,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
         });
       }
 
+      liveConfig.startWatching();
       lark.start();
       cron.start();
       meditation.start();
@@ -249,6 +264,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
         cron.stop();
         await meditation.drain();
         await cron.drain();
+        await liveConfig.shutdown();
         started = false;
         logger.info("runtime bootstrap shutdown complete");
       })().finally(() => {

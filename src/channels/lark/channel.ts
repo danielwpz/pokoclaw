@@ -22,6 +22,7 @@ import {
   listConfiguredLarkInstallations,
   listEnabledLarkInstallations,
 } from "@/src/channels/lark/types.js";
+import type { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { LarkChannelConfig } from "@/src/config/schema.js";
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
@@ -56,6 +57,7 @@ export interface CreateLarkChannelRuntimeInput {
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
   status?: RuntimeStatusService;
+  modelSwitch?: ScenarioModelSwitchService;
   outboundEventBus: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
   wsClientFactory?: (installation: ConfiguredLarkInstallation) => Lark.WSClient;
   clients?: LarkClientRegistry;
@@ -77,6 +79,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     ingress: input.ingress,
     control: input.control,
     ...(input.status == null ? {} : { status: input.status }),
+    ...(input.modelSwitch == null ? {} : { modelSwitch: input.modelSwitch }),
     clients,
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
     ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
