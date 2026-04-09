@@ -573,6 +573,66 @@ describe("config loader", () => {
     );
   });
 
+  test("rejects legacy subagent model scenario keys", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.main]",
+        'api = "openai-responses"',
+        "",
+        "[[models.catalog]]",
+        'id = "gpt5"',
+        'provider = "main"',
+        'upstreamId = "openai/gpt-5"',
+        "contextWindow = 200000",
+        "maxOutputTokens = 16384",
+        "supportsTools = true",
+        "supportsVision = true",
+        "",
+        "[models.scenarios]",
+        'task = ["gpt5"]',
+        'subagent = ["gpt5"]',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml models.scenarios contains unknown key: subagent",
+    );
+  });
+
+  test("rejects legacy cron model scenario keys", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.main]",
+        'api = "openai-responses"',
+        "",
+        "[[models.catalog]]",
+        'id = "gpt5"',
+        'provider = "main"',
+        'upstreamId = "openai/gpt-5"',
+        "contextWindow = 200000",
+        "maxOutputTokens = 16384",
+        "supportsTools = true",
+        "supportsVision = true",
+        "",
+        "[models.scenarios]",
+        'task = ["gpt5"]',
+        'cron = ["gpt5"]',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml models.scenarios contains unknown key: cron",
+    );
+  });
+
   test("rejects model scenarios that reference unknown catalog ids", async () => {
     const configPath = path.join(tempDir, "config.toml");
     await writeFile(

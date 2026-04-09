@@ -190,8 +190,6 @@ interface ModelScenarioConfigInput {
   task?: unknown;
   meditationBucket?: unknown;
   meditationConsolidation?: unknown;
-  subagent?: unknown;
-  cron?: unknown;
 }
 
 interface ModelsConfigInput {
@@ -289,7 +287,6 @@ const MODEL_SCENARIOS = [
   "meditationBucket",
   "meditationConsolidation",
 ] as const;
-const LEGACY_MODEL_SCENARIOS = ["subagent", "cron"] as const;
 const LARK_CONNECTION_MODES: readonly LarkConnectionMode[] = ["websocket", "webhook"];
 const PROVIDER_AUTH_SOURCES: readonly ProviderAuthSource[] = ["config", "codex-local"];
 const REASONING_EFFORTS: readonly ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
@@ -692,16 +689,7 @@ function validateModelScenarios(
   }
 
   const scenarios = input as ModelScenarioConfigInput;
-  assertAllowedKeys(
-    scenarios,
-    new Set([...MODEL_SCENARIOS, ...LEGACY_MODEL_SCENARIOS]),
-    "config.toml models.scenarios",
-  );
-
-  const legacyTaskDefaults = mergeLegacyTaskScenarioLists({
-    subagent: validateScenarioList(scenarios.subagent, [], catalogIds, "subagent"),
-    cron: validateScenarioList(scenarios.cron, [], catalogIds, "cron"),
-  });
+  assertAllowedKeys(scenarios, new Set(MODEL_SCENARIOS), "config.toml models.scenarios");
 
   return {
     chat: validateScenarioList(scenarios.chat, defaults.chat, catalogIds, "chat"),
@@ -711,12 +699,7 @@ function validateModelScenarios(
       catalogIds,
       "compaction",
     ),
-    task: validateScenarioList(
-      scenarios.task,
-      legacyTaskDefaults.length > 0 ? legacyTaskDefaults : defaults.task,
-      catalogIds,
-      "task",
-    ),
+    task: validateScenarioList(scenarios.task, defaults.task, catalogIds, "task"),
     meditationBucket: validateScenarioList(
       scenarios.meditationBucket,
       defaults.meditationBucket,
@@ -730,10 +713,6 @@ function validateModelScenarios(
       "meditationConsolidation",
     ),
   };
-}
-
-function mergeLegacyTaskScenarioLists(input: { subagent: string[]; cron: string[] }): string[] {
-  return Array.from(new Set([...input.subagent, ...input.cron]));
 }
 
 function validateScenarioList(

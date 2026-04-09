@@ -36,6 +36,44 @@ function buildConfigToml(chatModelId: string): string {
     "[models.scenarios]",
     `chat = ["${chatModelId}"]`,
     'compaction = ["gpt5"]',
+    'task = ["gpt5"]',
+    'meditationBucket = ["gpt5"]',
+    'meditationConsolidation = ["gpt5"]',
+    "",
+  ].join("\n");
+}
+
+function buildLegacyConfigToml(): string {
+  return [
+    "[logging]",
+    'level = "info"',
+    "useColors = false",
+    "",
+    "[providers.main]",
+    'api = "openai-responses"',
+    'apiKey = "test-key"',
+    "",
+    "[[models.catalog]]",
+    'id = "gpt5"',
+    'provider = "main"',
+    'upstreamId = "openai/gpt-5"',
+    "contextWindow = 200000",
+    "maxOutputTokens = 8192",
+    "supportsTools = true",
+    "supportsVision = false",
+    "",
+    "[[models.catalog]]",
+    'id = "deepseek"',
+    'provider = "main"',
+    'upstreamId = "deepseek/chat"',
+    "contextWindow = 128000",
+    "maxOutputTokens = 8192",
+    "supportsTools = true",
+    "supportsVision = false",
+    "",
+    "[models.scenarios]",
+    'chat = ["deepseek"]',
+    'compaction = ["gpt5"]',
     'subagent = ["gpt5"]',
     'cron = ["deepseek"]',
     'meditationBucket = ["gpt5"]',
@@ -92,7 +130,7 @@ describe("LiveConfigManager", () => {
     });
   });
 
-  test("reloadFromDisk keeps the previous version when the snapshot is unchanged", async () => {
+  test("reloadFromDisk keeps the previous snapshot when the updated file uses legacy scenario keys", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-live-config-"));
     tempDirs.push(dir);
     const configTomlPath = path.join(dir, "config.toml");
@@ -112,13 +150,13 @@ describe("LiveConfigManager", () => {
       },
     });
 
-    const result = await manager.reloadFromDisk("no_change");
+    await writeFile(configTomlPath, buildLegacyConfigToml(), "utf8");
 
-    expect(result).toEqual({
-      reloaded: false,
-      version: 1,
-      reason: "no_change",
-    });
+    await expect(manager.reloadFromDisk("legacy_schema")).rejects.toThrow(
+      "config.toml models.scenarios contains unknown key: subagent",
+    );
     expect(manager.getVersion()).toBe(1);
+    expect(manager.getSnapshot().models.scenarios.chat).toEqual(["deepseek"]);
+    expect(manager.getSnapshot().models.scenarios.task).toEqual(["gpt5"]);
   });
 });
