@@ -50,7 +50,7 @@ function createCompletedRunResult(taskRunId: string): TaskExecutionRunResult {
       run: {
         runId: "loop_run_1",
         sessionId: "sess_task_1",
-        scenario: "cron",
+        scenario: "task",
         modelId: "test-model",
         appendedMessageIds: [],
         toolExecutions: 0,
@@ -101,7 +101,7 @@ function createCompletedRunResult(taskRunId: string): TaskExecutionRunResult {
     run: {
       runId: "loop_run_1",
       sessionId: "sess_task_1",
-      scenario: "cron",
+      scenario: "task",
       modelId: "test-model",
       appendedMessageIds: [],
       toolExecutions: 0,
@@ -138,7 +138,7 @@ function createStartedIngressResult(sessionId: string): SubmitMessageResult {
     run: {
       runId: "loop_run_1",
       sessionId,
-      scenario: "cron",
+      scenario: "task",
       modelId: "test-model",
       appendedMessageIds: [],
       toolExecutions: 0,

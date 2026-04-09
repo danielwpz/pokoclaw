@@ -55,8 +55,7 @@ function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
       scenarios: {
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
-        subagent: ["anthropic_main/claude-sonnet-4-5"],
-        cron: ["anthropic_main/claude-sonnet-4-5"],
+        task: ["anthropic_main/claude-sonnet-4-5"],
         meditationBucket: [],
         meditationConsolidation: [],
       },
@@ -367,7 +366,7 @@ describe("delegated approval end-to-end", () => {
 
     const result = await ingress.submitMessage({
       sessionId: created.executionSession.id,
-      scenario: "subagent",
+      scenario: "task",
       content: "Run the unattended task.",
     });
 
@@ -502,7 +501,7 @@ describe("delegated approval end-to-end", () => {
 
     const result = await ingress.submitMessage({
       sessionId: created.executionSession.id,
-      scenario: "subagent",
+      scenario: "task",
       content: "Run the unattended task.",
     });
 
@@ -615,7 +614,7 @@ describe("delegated approval end-to-end", () => {
 
     const result = await ingress.submitMessage({
       sessionId: created.executionSession.id,
-      scenario: "subagent",
+      scenario: "task",
       content: "Run the unattended task.",
     });
 

@@ -90,6 +90,7 @@ describe("llm models helpers", () => {
   test("recognizes configured model scenarios", () => {
     expect(isModelScenario("chat")).toBe(true);
     expect(isModelScenario("compaction")).toBe(true);
+    expect(isModelScenario("task")).toBe(true);
     expect(isModelScenario("meditationBucket")).toBe(true);
     expect(isModelScenario("agent")).toBe(false);
   });

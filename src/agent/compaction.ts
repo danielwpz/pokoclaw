@@ -16,6 +16,10 @@ import type {
 } from "@/src/agent/llm/messages.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import {
+  type ProviderRegistrySource,
+  resolveProviderRegistry,
+} from "@/src/agent/llm/provider-registry-source.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
 import type { CompactionConfig } from "@/src/config/schema.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
@@ -169,7 +173,7 @@ export type CompactionLifecycleEventInput =
 
 export interface AgentCompactionServiceDependencies {
   sessions: AgentSessionService;
-  models: ProviderRegistry;
+  models: ProviderRegistry | ProviderRegistrySource;
   runner: CompactionModelRunner;
   config: CompactionConfig;
 }
@@ -374,7 +378,7 @@ export class AgentCompactionService {
   }
 
   private async execute(input: AgentCompactionInput): Promise<AgentCompactionResult> {
-    const model = this.deps.models.getRequiredScenarioModel("compaction");
+    const model = resolveProviderRegistry(this.deps.models).getRequiredScenarioModel("compaction");
     logger.info("starting compaction pass", {
       sessionId: input.sessionId,
       reason: input.reason,

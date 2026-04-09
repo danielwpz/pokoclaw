@@ -19,7 +19,10 @@ import {
   type TestDatabaseHandle,
 } from "@/tests/storage/helpers/test-db.js";
 
-function createRegistry(): ProviderRegistry {
+function createRegistry(options?: {
+  meditationBucket?: string[];
+  meditationConsolidation?: string[];
+}): ProviderRegistry {
   const config: Pick<AppConfig, "providers" | "models"> = {
     providers: {
       anthropic_main: {
@@ -57,10 +60,9 @@ function createRegistry(): ProviderRegistry {
       scenarios: {
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
-        subagent: ["anthropic_main/claude-sonnet-4-5"],
-        cron: ["openai_main/gpt-5-mini"],
-        meditationBucket: ["anthropic_main/claude-sonnet-4-5"],
-        meditationConsolidation: ["openai_main/gpt-5-mini"],
+        task: ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"],
+        meditationBucket: options?.meditationBucket ?? ["anthropic_main/claude-sonnet-4-5"],
+        meditationConsolidation: options?.meditationConsolidation ?? ["openai_main/gpt-5-mini"],
       },
     },
   };
@@ -352,6 +354,83 @@ describe("MeditationPipelineRunner", () => {
     );
   });
 
+  test("re-resolves meditation models from a provider registry source on each run", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-live-models-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    const state = new MeditationStateRepo(handle.storage.db);
+    state.markFinished({
+      status: "completed",
+      finishedAt: new Date("2026-03-20T00:00:00.000Z"),
+      markSuccess: true,
+    });
+
+    let currentRegistry = createRegistry();
+    const registrySource = {
+      current: () => currentRegistry,
+    };
+    const seenModels: string[] = [];
+    let bridgeCall = 0;
+    let runIdCounter = 0;
+    const runner = new MeditationPipelineRunner({
+      storage: handle.storage.db,
+      state,
+      config: {
+        meditation: {
+          enabled: true,
+          cron: "0 0 * * *",
+        },
+      },
+      models: registrySource as never,
+      bridge: {
+        async completeTurn(input) {
+          bridgeCall += 1;
+          seenModels.push(input.model.id);
+          if (bridgeCall % 2 === 1) {
+            return createSubmitTurnResult({
+              note: `bucket note ${bridgeCall}`,
+              memory_candidates: [],
+            });
+          }
+
+          return createSubmitTurnResult({
+            shared_memory_rewrite: "# Shared\n",
+            private_memory_rewrites: [],
+          });
+        },
+      },
+      securityConfig: DEFAULT_CONFIG.security,
+      workspaceDir,
+      logsDir: tempDir,
+      createRunId: () => `run_${++runIdCounter}`,
+      resolveCalendarContext: () => ({
+        currentDate: "2026-04-08",
+        timezone: "UTC",
+      }),
+    });
+
+    await runner.runOnce({
+      tickAt: new Date("2026-04-08T00:00:00.000Z"),
+    });
+
+    currentRegistry = createRegistry({
+      meditationBucket: ["openai_main/gpt-5-mini"],
+      meditationConsolidation: ["anthropic_main/claude-sonnet-4-5"],
+    });
+
+    await runner.runOnce({
+      tickAt: new Date("2026-04-09T00:00:00.000Z"),
+    });
+
+    expect(seenModels).toEqual([
+      "anthropic_main/claude-sonnet-4-5",
+      "openai_main/gpt-5-mini",
+      "openai_main/gpt-5-mini",
+      "anthropic_main/claude-sonnet-4-5",
+    ]);
+  });
+
   test("skips safely when meditation models are not configured", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
@@ -388,8 +467,7 @@ describe("MeditationPipelineRunner", () => {
         scenarios: {
           chat: ["anthropic_main/claude-sonnet-4-5"],
           compaction: ["anthropic_main/claude-sonnet-4-5"],
-          subagent: ["anthropic_main/claude-sonnet-4-5"],
-          cron: ["anthropic_main/claude-sonnet-4-5"],
+          task: ["anthropic_main/claude-sonnet-4-5"],
           meditationBucket: [],
           meditationConsolidation: [],
         },

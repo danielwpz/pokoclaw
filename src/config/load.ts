@@ -5,12 +5,12 @@ import { resolveConfigRefs } from "@/src/config/refs.js";
 import { type AppConfig, validateFileConfig, validateSecretsFile } from "@/src/config/schema.js";
 import { DEFAULT_CONFIG_TOML_PATH, DEFAULT_SECRETS_TOML_PATH } from "@/src/shared/paths.js";
 
-interface LoadConfigOptions {
+export interface LoadConfigOptions {
   configTomlPath?: string;
   secretsTomlPath?: string;
 }
 
-async function readOptionalTomlFile(filePath: string): Promise<unknown | undefined> {
+export async function readOptionalTomlFile(filePath: string): Promise<unknown | undefined> {
   try {
     const content = await readFile(filePath, "utf8");
     return parse(content);
@@ -28,7 +28,7 @@ function isMissingFileError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function getDefaultConfigPaths(): Required<LoadConfigOptions> {
+export function getDefaultConfigPaths(): Required<LoadConfigOptions> {
   return {
     configTomlPath: DEFAULT_CONFIG_TOML_PATH,
     secretsTomlPath: DEFAULT_SECRETS_TOML_PATH,
@@ -43,16 +43,10 @@ async function loadSecretsToml(secretsTomlPath: string): Promise<unknown | undef
   return readOptionalTomlFile(secretsTomlPath);
 }
 
-export async function loadConfig(options?: LoadConfigOptions): Promise<AppConfig> {
-  const defaultPaths = getDefaultConfigPaths();
-  const configTomlPath = options?.configTomlPath ?? defaultPaths.configTomlPath;
-  const secretsTomlPath = options?.secretsTomlPath ?? defaultPaths.secretsTomlPath;
-
-  const [rawConfigInput, rawSecretsInput] = await Promise.all([
-    loadConfigToml(configTomlPath),
-    loadSecretsToml(secretsTomlPath),
-  ]);
-
+export function buildAppConfigFromInputs(
+  rawConfigInput: unknown | undefined,
+  rawSecretsInput: unknown | undefined,
+): AppConfig {
   const secrets = validateSecretsFile(rawSecretsInput).root;
   const resolvedConfigInput = resolveConfigRefs(rawConfigInput, secrets);
   const resolvedConfig = validateFileConfig(resolvedConfigInput, DEFAULT_CONFIG);
@@ -69,4 +63,17 @@ export async function loadConfig(options?: LoadConfigOptions): Promise<AppConfig
     channels: resolvedConfig.channels,
     secrets,
   };
+}
+
+export async function loadConfig(options?: LoadConfigOptions): Promise<AppConfig> {
+  const defaultPaths = getDefaultConfigPaths();
+  const configTomlPath = options?.configTomlPath ?? defaultPaths.configTomlPath;
+  const secretsTomlPath = options?.secretsTomlPath ?? defaultPaths.secretsTomlPath;
+
+  const [rawConfigInput, rawSecretsInput] = await Promise.all([
+    loadConfigToml(configTomlPath),
+    loadSecretsToml(secretsTomlPath),
+  ]);
+
+  return buildAppConfigFromInputs(rawConfigInput, rawSecretsInput);
 }

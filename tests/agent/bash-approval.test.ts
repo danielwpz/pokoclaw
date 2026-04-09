@@ -58,8 +58,7 @@ function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
       scenarios: {
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
-        subagent: ["anthropic_main/claude-sonnet-4-5"],
-        cron: ["anthropic_main/claude-sonnet-4-5"],
+        task: ["anthropic_main/claude-sonnet-4-5"],
         meditationBucket: [],
         meditationConsolidation: [],
       },

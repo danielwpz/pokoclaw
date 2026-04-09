@@ -15,8 +15,14 @@ import {
   type AgentUserRuntimeImagePayload,
   normalizeAgentUserImageMessageId,
 } from "@/src/agent/llm/messages.js";
+import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
+import {
+  buildLarkRenderedModelSwitchCard,
+  type LarkModelSwitchCardState,
+} from "@/src/channels/lark/render.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
+import type { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
 import { materializeForkedSessionSnapshotInStorage } from "@/src/orchestration/session-fork.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
@@ -48,7 +54,7 @@ const LARK_INTERACTIVE_TEXT_TRUNCATED_NOTICE = "[卡片内容过长，引用文�
 export interface LarkInboundIngress {
   submitMessage(input: {
     sessionId: string;
-    scenario: "chat" | "cron" | "subagent";
+    scenario: "chat" | "task";
     content: string;
     userPayload?: AgentUserPayload;
     runtimeImages?: AgentUserRuntimeImagePayload[];
@@ -74,6 +80,7 @@ export interface CreateLarkInboundRuntimeInput {
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
   status?: RuntimeStatusService;
+  modelSwitch?: ScenarioModelSwitchService;
   clients?: {
     getOrCreate(installationId: string): LarkSdkClient;
   };
@@ -167,6 +174,8 @@ export interface NormalizedLarkCardAction {
   requestId: string | null;
   grantTtl: "one_day" | "permanent" | null;
   actorOpenId: string | null;
+  scenario: ModelScenario | null;
+  modelId: string | null;
 }
 
 export function buildLarkChatSurfaceKey(chatId: string): string {
@@ -182,7 +191,7 @@ interface LarkInboundRoute {
   conversationId: string;
   branchId: string;
   sessionId: string;
-  scenario: "chat" | "cron" | "subagent";
+  scenario: "chat" | "task";
   stopScope: "conversation" | "session";
   chatId: string;
   replyToMessageId: string | null;
@@ -281,6 +290,7 @@ export function createLarkMessageReceiveHandler(input: {
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
   status?: RuntimeStatusService;
+  modelSwitch?: ScenarioModelSwitchService;
   clients?: {
     getOrCreate(installationId: string): LarkSdkClient;
   };
@@ -415,6 +425,36 @@ export function createLarkMessageReceiveHandler(input: {
         conversationId: route.conversationId,
         sessionId: route.sessionId,
         scenario: route.scenario,
+        routeKind: route.kind,
+      });
+      return;
+    }
+
+    if (hydrated.text === "/model") {
+      if (input.modelSwitch == null) {
+        logger.warn("ignoring lark model command because no model switch service is configured", {
+          installationId: input.installationId,
+          chatId: hydrated.chatId,
+          messageId: hydrated.messageId,
+        });
+        return;
+      }
+      await sendLarkModelSwitchCard({
+        installationId: input.installationId,
+        chatId: route.chatId,
+        replyToMessageId: route.replyToMessageId,
+        state: {
+          overview: input.modelSwitch.getOverview(),
+          selectedScenario: null,
+        },
+        ...(input.clients == null ? {} : { clients: input.clients }),
+      });
+      logger.info("processed lark model command", {
+        installationId: input.installationId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
+        conversationId: route.conversationId,
+        sessionId: route.sessionId,
         routeKind: route.kind,
       });
       return;
@@ -572,6 +612,11 @@ export function normalizeLarkCardAction(
     operator != null && typeof operator.open_id === "string" && operator.open_id.length > 0
       ? operator.open_id
       : null;
+  const scenario = normalizeModelScenario(value?.scenario);
+  const modelId =
+    typeof value?.modelId === "string" && value.modelId.trim().length > 0
+      ? value.modelId.trim()
+      : null;
 
   return {
     action: actionName,
@@ -583,6 +628,8 @@ export function normalizeLarkCardAction(
     requestId,
     grantTtl,
     actorOpenId,
+    scenario,
+    modelId,
   };
 }
 
@@ -590,6 +637,7 @@ export function createLarkCardActionHandler(input: {
   installationId: string;
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
+  modelSwitch?: ScenarioModelSwitchService;
   subagentRequests?: {
     approve(requestId: string): Promise<ResolveSubagentCreationRequestResult>;
     deny(
@@ -631,7 +679,9 @@ export function createLarkCardActionHandler(input: {
       normalized.action !== "approve_permission" &&
       normalized.action !== "deny_permission" &&
       normalized.action !== "approve_subagent_creation" &&
-      normalized.action !== "deny_subagent_creation"
+      normalized.action !== "deny_subagent_creation" &&
+      normalized.action !== "model_switch_select_scenario" &&
+      normalized.action !== "model_switch_apply"
     ) {
       logger.debug("ignoring unsupported lark card action", {
         installationId: input.installationId,
@@ -678,6 +728,75 @@ export function createLarkCardActionHandler(input: {
           content: result.accepted ? "正在停止..." : "该运行已结束或无法停止",
         },
       };
+    }
+
+    if (
+      normalized.action === "model_switch_select_scenario" ||
+      normalized.action === "model_switch_apply"
+    ) {
+      if (input.modelSwitch == null) {
+        return {
+          toast: {
+            type: "error",
+            content: "当前环境未启用模型切换",
+          },
+        };
+      }
+      if (normalized.scenario == null) {
+        return {
+          toast: {
+            type: "error",
+            content: "无法识别目标场景",
+          },
+        };
+      }
+
+      try {
+        if (normalized.action === "model_switch_select_scenario") {
+          return buildLarkModelSwitchCardCallbackResponse({
+            overview: input.modelSwitch.getOverview(),
+            selectedScenario: normalized.scenario,
+          });
+        }
+
+        if (normalized.modelId == null) {
+          return {
+            toast: {
+              type: "error",
+              content: "无法识别目标模型",
+            },
+          };
+        }
+
+        const result = await input.modelSwitch.switchScenarioModel({
+          scenario: normalized.scenario,
+          modelId: normalized.modelId,
+        });
+        return buildLarkModelSwitchCardCallbackResponse({
+          overview: input.modelSwitch.getOverview(),
+          selectedScenario: result.scenario,
+          message: `已将 ${result.scenario} 切换到 ${result.nextModelId}。新配置会从下一次新的输入开始生效。`,
+          warnings: result.warnings,
+          toast: {
+            type: "success",
+            content: `已切换 ${result.scenario} → ${result.nextModelId}`,
+          },
+        });
+      } catch (error: unknown) {
+        logger.error("failed to process lark model switch card action", {
+          installationId: input.installationId,
+          action: normalized.action,
+          scenario: normalized.scenario,
+          modelId: normalized.modelId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          toast: {
+            type: "error",
+            content: error instanceof Error ? error.message : "模型切换失败",
+          },
+        };
+      }
     }
 
     if (
@@ -889,6 +1008,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           control: input.control,
           ...(input.clients == null ? {} : { clients: input.clients }),
           ...(input.status == null ? {} : { status: input.status }),
+          ...(input.modelSwitch == null ? {} : { modelSwitch: input.modelSwitch }),
           ...(input.clients == null
             ? {}
             : {
@@ -902,6 +1022,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           installationId: installation.installationId,
           ingress: input.ingress,
           control: input.control,
+          ...(input.modelSwitch == null ? {} : { modelSwitch: input.modelSwitch }),
           ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
         });
 
@@ -1459,7 +1580,6 @@ function buildTaskThreadRouteFromBinding(input: {
   }
   const metadata = parseBindingMetadata(input.binding.metadataJson);
   const sessionId = readString(metadata.sessionId);
-  const taskRunType = readString(metadata.taskRunType);
   const taskRunId = readString(metadata.taskRunId);
   if (sessionId == null || taskRunId == null) {
     return null;
@@ -1494,7 +1614,7 @@ function buildTaskThreadRouteFromBinding(input: {
     conversationId: session.conversationId,
     branchId: session.branchId,
     sessionId: session.id,
-    scenario: taskRunType === "cron" ? "cron" : "subagent",
+    scenario: "task",
     stopScope: "session",
     chatId: input.chatId,
     replyToMessageId: input.replyToMessageId,
@@ -2411,6 +2531,100 @@ async function fetchQuotedLarkMessage(input: {
   });
 }
 
+function buildLarkModelSwitchCardCallbackResponse(input: {
+  overview: ReturnType<ScenarioModelSwitchService["getOverview"]>;
+  selectedScenario: ModelScenario | null;
+  message?: string;
+  warnings?: string[];
+  toast?: {
+    type: "success" | "info" | "error" | "warning";
+    content: string;
+  };
+}): {
+  card: {
+    type: "raw";
+    data: Record<string, unknown>;
+  };
+  toast?: {
+    type: "success" | "info" | "error" | "warning";
+    content: string;
+  };
+} {
+  const state: LarkModelSwitchCardState = {
+    overview: input.overview,
+    selectedScenario: input.selectedScenario,
+    ...(input.message == null ? {} : { message: input.message }),
+    ...(input.warnings == null ? {} : { warnings: input.warnings }),
+  };
+  const rendered = buildLarkRenderedModelSwitchCard(state);
+  return {
+    card: {
+      type: "raw",
+      data: rendered.card,
+    },
+    ...(input.toast == null ? {} : { toast: input.toast }),
+  };
+}
+
+async function sendLarkModelSwitchCard(input: {
+  installationId: string;
+  chatId: string;
+  replyToMessageId?: string | null;
+  state: LarkModelSwitchCardState;
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<void> {
+  const rendered = buildLarkRenderedModelSwitchCard(input.state);
+  await sendLarkInteractiveCard({
+    installationId: input.installationId,
+    chatId: input.chatId,
+    ...(input.replyToMessageId === undefined ? {} : { replyToMessageId: input.replyToMessageId }),
+    card: rendered.card,
+    ...(input.clients == null ? {} : { clients: input.clients }),
+  });
+}
+
+async function sendLarkInteractiveCard(input: {
+  installationId: string;
+  chatId: string;
+  replyToMessageId?: string | null;
+  card: Record<string, unknown>;
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<void> {
+  if (input.clients == null) {
+    logger.warn("cannot send lark interactive card because no sdk clients are configured", {
+      installationId: input.installationId,
+      chatId: input.chatId,
+    });
+    return;
+  }
+
+  const client = input.clients.getOrCreate(input.installationId);
+  if (input.replyToMessageId != null && input.replyToMessageId.length > 0) {
+    await client.sdk.im.message.reply({
+      path: { message_id: input.replyToMessageId },
+      data: {
+        msg_type: "interactive",
+        content: JSON.stringify(input.card),
+        reply_in_thread: true,
+      },
+    });
+    return;
+  }
+
+  await client.sdk.im.message.create({
+    params: { receive_id_type: "chat_id" },
+    data: {
+      receive_id: input.chatId,
+      msg_type: "interactive",
+      content: JSON.stringify(input.card),
+    },
+  });
+}
+
 async function sendLarkStatusCard(input: {
   installationId: string;
   chatId: string;
@@ -2425,15 +2639,6 @@ async function sendLarkStatusCard(input: {
     getOrCreate(installationId: string): LarkSdkClient;
   };
 }): Promise<void> {
-  if (input.clients == null) {
-    logger.warn("cannot send lark status card because no sdk clients are configured", {
-      installationId: input.installationId,
-      chatId: input.chatId,
-    });
-    return;
-  }
-
-  const client = input.clients.getOrCreate(input.installationId);
   const card = {
     schema: "2.0",
     config: {
@@ -2460,25 +2665,12 @@ async function sendLarkStatusCard(input: {
       ]),
     },
   };
-  if (input.replyToMessageId != null && input.replyToMessageId.length > 0) {
-    await client.sdk.im.message.reply({
-      path: { message_id: input.replyToMessageId },
-      data: {
-        msg_type: "interactive",
-        content: JSON.stringify(card),
-        reply_in_thread: true,
-      },
-    });
-    return;
-  }
-
-  await client.sdk.im.message.create({
-    params: { receive_id_type: "chat_id" },
-    data: {
-      receive_id: input.chatId,
-      msg_type: "interactive",
-      content: JSON.stringify(card),
-    },
+  await sendLarkInteractiveCard({
+    installationId: input.installationId,
+    chatId: input.chatId,
+    ...(input.replyToMessageId === undefined ? {} : { replyToMessageId: input.replyToMessageId }),
+    card,
+    ...(input.clients == null ? {} : { clients: input.clients }),
   });
 }
 
@@ -2521,6 +2713,16 @@ function parseBindingMetadata(raw: string | null): Record<string, unknown> {
   } catch {}
 
   return {};
+}
+
+function normalizeModelScenario(value: unknown): ModelScenario | null {
+  return value === "chat" ||
+    value === "compaction" ||
+    value === "task" ||
+    value === "meditationBucket" ||
+    value === "meditationConsolidation"
+    ? value
+    : null;
 }
 
 function readString(value: unknown): string | null {

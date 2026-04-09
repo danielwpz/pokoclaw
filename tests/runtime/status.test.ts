@@ -64,8 +64,7 @@ function createConfig(): AppConfig {
       scenarios: {
         chat: ["openrouter-gpt5.4"],
         compaction: ["openrouter-gpt5.4"],
-        subagent: ["openrouter-gpt5.4"],
-        cron: ["openrouter-gpt5.4"],
+        task: ["openrouter-gpt5.4"],
         meditationBucket: [],
         meditationConsolidation: [],
       },

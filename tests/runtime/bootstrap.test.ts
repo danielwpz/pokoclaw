@@ -19,8 +19,7 @@ function createConfig(): AppConfig {
       scenarios: {
         chat: [],
         compaction: [],
-        subagent: [],
-        cron: [],
+        task: [],
         meditationBucket: [],
         meditationConsolidation: [],
       },

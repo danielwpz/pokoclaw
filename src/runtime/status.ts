@@ -8,6 +8,10 @@
 import { readFileSync } from "node:fs";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import {
+  type ProviderRegistrySource,
+  resolveProviderRegistry,
+} from "@/src/agent/llm/provider-registry-source.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import { resolveSessionLiveState } from "@/src/runtime/live-state.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
@@ -29,7 +33,7 @@ const NO_RECENT_SESSION_USAGE_TEXT = "- 最近 3 天还没有可用 usage。";
 export interface ConversationStatusInput {
   conversationId: string;
   sessionId: string;
-  scenario: "chat" | "cron" | "subagent";
+  scenario: "chat" | "task";
 }
 
 export interface StatusModelSnapshot {
@@ -84,7 +88,7 @@ export class RuntimeStatusService {
     private readonly deps: {
       storage: StorageDb;
       control: RuntimeControlService;
-      models: ProviderRegistry;
+      models: ProviderRegistry | ProviderRegistrySource;
     },
   ) {}
 
@@ -100,11 +104,12 @@ export class RuntimeStatusService {
     }
 
     const latestAssistant = messagesRepo.getLatestAssistantBySession(session.id);
+    const currentModels = resolveProviderRegistry(this.deps.models);
     const model = resolveStatusModel({
       latestAssistant,
       session,
       agentsRepo,
-      models: this.deps.models,
+      models: currentModels,
       scenario: input.scenario,
     });
 
@@ -298,7 +303,7 @@ function resolveStatusModel(input: {
   session: Session;
   agentsRepo: AgentsRepo;
   models: ProviderRegistry;
-  scenario: "chat" | "cron" | "subagent";
+  scenario: "chat" | "task";
 }): StatusModelSnapshot {
   const latestAssistantModel = resolveCatalogModelFromStoredAssistant({
     latestAssistant: input.latestAssistant,
