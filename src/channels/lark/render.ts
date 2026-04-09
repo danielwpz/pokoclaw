@@ -14,6 +14,16 @@ export {
   type LarkRenderedRunCardPage,
   renderLarkRunCard,
 } from "@/src/channels/lark/render/run-card.js";
+export {
+  buildLarkRenderedTaskCard,
+  describeTaskRunIcon,
+  describeTaskRunKind,
+  describeTaskRunTemplate,
+  describeTaskRunTerminal,
+  getLarkTaskTerminalMessagePresentation,
+  type LarkRenderedTaskCard,
+  type LarkTaskTerminalMessagePresentation,
+} from "@/src/channels/lark/render/task-card.js";
 
 export interface LarkRenderedApprovalCard {
   card: Record<string, unknown>;

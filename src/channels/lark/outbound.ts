@@ -17,6 +17,10 @@ import {
   buildLarkRenderedApprovalCard,
   buildLarkRenderedRunCardPages,
   buildLarkRenderedSubagentCreationRequestCard,
+  buildLarkRenderedTaskCard,
+  describeTaskRunKind,
+  describeTaskRunTerminal,
+  getLarkTaskTerminalMessagePresentation,
   type LarkSubagentCreationRequestCardState,
 } from "@/src/channels/lark/render.js";
 import {
@@ -35,7 +39,9 @@ import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
+import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import type { LarkObjectBinding } from "@/src/storage/schema/types.js";
 
 const logger = createSubsystemLogger("channels/lark-outbound");
@@ -45,6 +51,7 @@ const RUN_CARD_OBJECT_KIND = "run_card";
 const APPROVAL_CARD_OBJECT_KIND = "approval_card";
 const SUBAGENT_REQUEST_CARD_OBJECT_KIND = "subagent_creation_request_card";
 const LARK_CARD_LOG_PREVIEW_MAX_LENGTH = 600;
+const TASK_STATUS_DELIVERY_PREFIX = "task_status:";
 
 interface LarkCardCreateResponse {
   data?: {
@@ -114,6 +121,7 @@ export function createLarkOutboundRuntime(
   input: CreateLarkOutboundRuntimeInput,
 ): LarkOutboundRuntime {
   const runStates = new Map<string, LarkRunState>();
+  const taskStates = new Map<string, LarkRunState>();
   const approvalStates = new Map<string, LarkApprovalState>();
   const activeRunSegmentByRunId = new Map<string, string>();
   const latestRunSegmentByRunId = new Map<string, string>();
@@ -182,6 +190,8 @@ export function createLarkOutboundRuntime(
     try {
       if (deliveryId.startsWith("run:")) {
         await flushRunCard(deliveryId.slice(4));
+      } else if (deliveryId.startsWith(TASK_STATUS_DELIVERY_PREFIX)) {
+        await flushTaskCard(deliveryId.slice(TASK_STATUS_DELIVERY_PREFIX.length));
       } else if (deliveryId.startsWith("approval:")) {
         await flushApprovalCard(deliveryId.slice("approval:".length));
       } else if (deliveryId.startsWith("subagent:")) {
@@ -375,7 +385,30 @@ export function createLarkOutboundRuntime(
       const client = input.clients.getOrCreate(surface.channelInstallationId);
       const cardkit = getCardkitSdk(client);
       const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
-      const renderedPages = buildLarkRenderedRunCardPages(state);
+      const taskRootBinding =
+        state.taskRunId == null
+          ? null
+          : bindingsRepo.getByInternalObject({
+              channelInstallationId: surface.channelInstallationId,
+              internalObjectKind: RUN_CARD_OBJECT_KIND,
+              internalObjectId: buildTaskRunCardObjectId(state.taskRunId),
+            });
+      if (state.taskRunId != null && taskRootBinding?.larkMessageId == null) {
+        logger.debug("deferring task transcript flush until task status card exists", {
+          runId: state.runId,
+          runCardObjectId,
+          taskRunId: state.taskRunId,
+          channelInstallationId: surface.channelInstallationId,
+        });
+        bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`, {
+          immediate: true,
+        });
+        bumpVersionAndSchedule(`run:${runCardObjectId}`);
+        continue;
+      }
+      const renderedPages = buildLarkRenderedRunCardPages(state, {
+        suppressTaskHeader: state.taskRunId != null,
+      });
       const existingBindings = listRunCardPageBindings(
         bindingsRepo,
         surface.channelInstallationId,
@@ -446,7 +479,13 @@ export function createLarkOutboundRuntime(
             internalObjectKind: RUN_CARD_OBJECT_KIND,
             internalObjectId: pageObjectId,
             chatId,
-            surfaceObject,
+            surfaceObject:
+              state.taskRunId != null && taskRootBinding?.larkMessageId != null
+                ? {
+                    chat_id: chatId,
+                    reply_to_message_id: taskRootBinding.larkMessageId,
+                  }
+                : surfaceObject,
             cardJson: JSON.stringify(renderedPage.card),
             cardElementId: activeAssistantBlockId,
             lastSequence: 0,
@@ -610,6 +649,161 @@ export function createLarkOutboundRuntime(
           sequence,
         });
       }
+    }
+  };
+
+  const flushTaskCard = async (taskRunId: string) => {
+    const state = taskStates.get(taskRunId);
+    if (state == null) {
+      return;
+    }
+    const taskTitle = resolveTaskCardTitle(input.storage, taskRunId);
+
+    const surfaces = new ChannelSurfacesRepo(input.storage).listByConversationBranch({
+      channelType: LARK_CHANNEL_TYPE,
+      conversationId: state.conversationId,
+      branchId: state.branchId,
+    });
+
+    for (const surface of surfaces) {
+      const surfaceObject = parseSurfaceObject(surface.surfaceObjectJson);
+      const chatId = typeof surfaceObject.chat_id === "string" ? surfaceObject.chat_id : null;
+      if (chatId == null || chatId.length === 0) {
+        continue;
+      }
+
+      const client = input.clients.getOrCreate(surface.channelInstallationId);
+      const cardkit = getCardkitSdk(client);
+      const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
+      const internalObjectId = buildTaskRunCardObjectId(taskRunId);
+      const existing = bindingsRepo.getByInternalObject({
+        channelInstallationId: surface.channelInstallationId,
+        internalObjectKind: RUN_CARD_OBJECT_KIND,
+        internalObjectId,
+      });
+      const existingMetadata = parseBindingMetadata(existing?.metadataJson ?? null);
+      const rendered = buildLarkRenderedTaskCard(state, {
+        ...(taskTitle == null ? {} : { title: taskTitle }),
+      });
+      const terminalMessage = getLarkTaskTerminalMessagePresentation(state.terminalMessage);
+      const snapshotKey = `${surface.channelInstallationId}:${TASK_STATUS_DELIVERY_PREFIX}${taskRunId}`;
+      const snapshot = deliverySnapshots.get(snapshotKey) ?? null;
+      const shouldRenderUpdate =
+        snapshot == null || snapshot.structureSignature !== rendered.structureSignature;
+      let metadataJson = JSON.stringify({
+        sessionId: state.sessionId,
+        taskRunId: state.taskRunId,
+        taskRunType: state.taskRunType,
+        role: "task_status",
+        ...(taskTitle == null ? {} : { taskTitle }),
+        ...(readStringValue(existingMetadata.fullTerminalMessageSignature) == null
+          ? {}
+          : {
+              fullTerminalMessageSignature: readStringValue(
+                existingMetadata.fullTerminalMessageSignature,
+              ),
+            }),
+      });
+      const status = state.terminal === "running" ? "active" : "finalized";
+
+      if (existing?.larkCardId == null || existing.larkMessageId == null) {
+        const binding = await ensureInteractiveCardReferenceBinding({
+          bindingsRepo,
+          client,
+          cardkit,
+          channelInstallationId: surface.channelInstallationId,
+          conversationId: state.conversationId,
+          branchId: state.branchId,
+          internalObjectKind: RUN_CARD_OBJECT_KIND,
+          internalObjectId,
+          chatId,
+          surfaceObject,
+          cardJson: JSON.stringify(rendered.card),
+          lastSequence: 0,
+          status,
+          metadataJson,
+          logContext: {
+            taskRunId,
+            cardRole: "task_status",
+          },
+        });
+        if (binding == null) {
+          continue;
+        }
+
+        deliverySnapshots.set(snapshotKey, {
+          structureSignature: rendered.structureSignature,
+          activeAssistantElementId: null,
+          activeAssistantText: "",
+        });
+        metadataJson = await maybeSendFullTaskTerminalMessageToThread({
+          bindingsRepo,
+          channelInstallationId: surface.channelInstallationId,
+          binding,
+          client,
+          internalObjectId,
+          metadataJson,
+          state,
+          taskTitle,
+          terminalMessage,
+        });
+        continue;
+      }
+
+      if (!shouldRenderUpdate || existing.larkCardId == null) {
+        await maybeSendFullTaskTerminalMessageToThread({
+          bindingsRepo,
+          channelInstallationId: surface.channelInstallationId,
+          binding: existing,
+          client,
+          internalObjectId,
+          metadataJson,
+          state,
+          taskTitle,
+          terminalMessage,
+        });
+        continue;
+      }
+
+      const sequence = (existing.lastSequence ?? 0) + 1;
+      await cardkit.card.update({
+        path: { card_id: existing.larkCardId },
+        data: {
+          card: {
+            type: "card_json",
+            data: JSON.stringify(rendered.card),
+          },
+          sequence,
+        },
+      });
+      bindingsRepo.updateDeliveryState({
+        channelInstallationId: surface.channelInstallationId,
+        internalObjectKind: RUN_CARD_OBJECT_KIND,
+        internalObjectId,
+        lastSequence: sequence,
+        status,
+        metadataJson,
+      });
+      deliverySnapshots.set(snapshotKey, {
+        structureSignature: rendered.structureSignature,
+        activeAssistantElementId: null,
+        activeAssistantText: "",
+      });
+      await maybeSendFullTaskTerminalMessageToThread({
+        bindingsRepo,
+        channelInstallationId: surface.channelInstallationId,
+        binding: {
+          ...existing,
+          lastSequence: sequence,
+          metadataJson,
+        },
+        client,
+        internalObjectId,
+        metadataJson,
+        state,
+        taskTitle,
+        terminalMessage,
+      });
     }
   };
 
@@ -846,15 +1040,8 @@ export function createLarkOutboundRuntime(
     }
 
     if (event.type === "approval_requested") {
-      const taskRunCardObjectId =
-        isTaskRunCardRuntimeEnvelope(envelope) && envelope.taskRun.taskRunId != null
-          ? buildTaskRunCardObjectId(envelope.taskRun.taskRunId)
-          : null;
       const sourceRunCardObjectId =
-        taskRunCardObjectId ??
-        activeRunSegmentByRunId.get(runId) ??
-        latestRunSegmentByRunId.get(runId) ??
-        null;
+        activeRunSegmentByRunId.get(runId) ?? latestRunSegmentByRunId.get(runId) ?? null;
 
       if (sourceRunCardObjectId != null) {
         const existingRunState = runStates.get(sourceRunCardObjectId);
@@ -868,6 +1055,16 @@ export function createLarkOutboundRuntime(
             sourceRunCardObjectId,
           });
           bumpVersionAndSchedule(`run:${sourceRunCardObjectId}`);
+        }
+      }
+      if (isTaskRunCardRuntimeEnvelope(envelope) && envelope.taskRun.taskRunId != null) {
+        const existingTaskState = taskStates.get(envelope.taskRun.taskRunId);
+        if (existingTaskState != null) {
+          taskStates.set(
+            envelope.taskRun.taskRunId,
+            markLarkRunAwaitingApproval(existingTaskState),
+          );
+          bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${envelope.taskRun.taskRunId}`);
         }
       }
 
@@ -923,6 +1120,16 @@ export function createLarkOutboundRuntime(
           decision: event.decision,
         });
         bumpVersionAndSchedule(`run:${previousApprovalState.sourceRunCardObjectId}`);
+      }
+    }
+    if (isTaskRunCardRuntimeEnvelope(envelope) && envelope.taskRun.taskRunId != null) {
+      const existingTaskState = taskStates.get(envelope.taskRun.taskRunId);
+      if (existingTaskState != null) {
+        taskStates.set(
+          envelope.taskRun.taskRunId,
+          markLarkRunApprovalResolved(existingTaskState, event.decision),
+        );
+        bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${envelope.taskRun.taskRunId}`);
       }
     }
   };
@@ -988,16 +1195,17 @@ export function createLarkOutboundRuntime(
           if (!shouldHandleLarkTaskRunEvent(envelope)) {
             return;
           }
-          const runCardObjectId = buildTaskRunCardObjectId(envelope.event.taskRunId);
-          const next = reduceLarkRunState(runStates.get(runCardObjectId) ?? null, envelope);
-          runStates.set(runCardObjectId, next);
+          const next = reduceLarkRunState(
+            taskStates.get(envelope.event.taskRunId) ?? null,
+            envelope,
+          );
+          taskStates.set(envelope.event.taskRunId, next);
           logger.debug("accepted lark task run lifecycle event", {
             taskRunId: envelope.event.taskRunId,
-            runCardObjectId,
             eventType: envelope.event.type,
             terminal: next.terminal,
           });
-          bumpVersionAndSchedule(`run:${runCardObjectId}`, {
+          bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${envelope.event.taskRunId}`, {
             immediate: isTaskLifecycleTerminalEvent(envelope),
           });
           return;
@@ -1059,42 +1267,15 @@ export function createLarkOutboundRuntime(
           return;
         }
 
-        if (isTaskRunCardRuntimeEnvelope(envelope)) {
-          if (isTaskRuntimeTerminalEvent(envelope)) {
-            logger.debug(
-              "ignoring task runtime terminal event because task lifecycle owns final state",
-              {
-                runId,
-                taskRunId: envelope.taskRun.taskRunId,
-                eventType: envelope.event.type,
-              },
-            );
-            return;
-          }
-
-          const taskRunId = envelope.taskRun.taskRunId;
-          if (taskRunId == null) {
-            return;
-          }
-          const runCardObjectId = buildTaskRunCardObjectId(taskRunId);
-          const next = reduceLarkRunState(runStates.get(runCardObjectId) ?? null, envelope);
-          runStates.set(runCardObjectId, next);
-
-          logger.debug("accepted lark task transcript runtime event", {
-            runId,
-            taskRunId,
-            runCardObjectId,
-            eventType: envelope.event.type,
-            turn: "turn" in envelope.event ? envelope.event.turn : null,
-            activeAssistantMessageId: next.activeAssistantMessageId,
-            activeToolSequenceBlockId: next.activeToolSequenceBlockId,
-            blockCount: next.blocks.length,
-            footerStatus: next.footerStatus,
-            terminal: next.terminal,
-          });
-          bumpVersionAndSchedule(`run:${runCardObjectId}`, {
-            immediate: isTaskRuntimeTerminalEvent(envelope),
-          });
+        if (isTaskRunCardRuntimeEnvelope(envelope) && isTaskRuntimeTerminalEvent(envelope)) {
+          logger.debug(
+            "ignoring task runtime terminal event because task lifecycle owns final state",
+            {
+              runId,
+              taskRunId: envelope.taskRun.taskRunId,
+              eventType: envelope.event.type,
+            },
+          );
           return;
         }
 
@@ -1185,6 +1366,7 @@ export function createLarkOutboundRuntime(
       deliveryVersions.clear();
       flushing.clear();
       runStates.clear();
+      taskStates.clear();
       approvalStates.clear();
       activeRunSegmentByRunId.clear();
       latestRunSegmentByRunId.clear();
@@ -1197,7 +1379,7 @@ export function createLarkOutboundRuntime(
       return {
         started: unsubscribe != null,
         subscribed: unsubscribe != null,
-        activeRuns: runStates.size,
+        activeRuns: runStates.size + taskStates.size,
       };
     },
   };
@@ -1211,6 +1393,19 @@ function parseSurfaceObject(raw: string): Record<string, unknown> {
     }
   } catch {}
 
+  return {};
+}
+
+function parseBindingMetadata(raw: string | null): Record<string, unknown> {
+  if (raw == null || raw.trim().length === 0) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed != null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
   return {};
 }
 
@@ -1252,12 +1447,144 @@ async function sendLarkInteractiveCardReferenceMessage(input: {
   }) as Promise<LarkInteractiveMessageResponse>;
 }
 
+async function sendLarkThreadMarkdownCard(input: {
+  client: LarkSdkClient;
+  replyToMessageId: string;
+  title: string;
+  summary: string;
+  markdownSections: string[];
+}): Promise<LarkInteractiveMessageResponse> {
+  const card = {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      wide_screen_mode: false,
+      summary: {
+        content: input.summary,
+      },
+    },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: input.title,
+      },
+      template: "turquoise",
+    },
+    body: {
+      elements: input.markdownSections.flatMap((section, index) => [
+        ...(index === 0 ? [] : [{ tag: "hr" as const }]),
+        {
+          tag: "markdown",
+          content: section,
+        },
+      ]),
+    },
+  };
+
+  return input.client.sdk.im.message.reply({
+    path: { message_id: input.replyToMessageId },
+    data: {
+      msg_type: "interactive",
+      content: JSON.stringify(card),
+      reply_in_thread: true,
+    },
+  }) as Promise<LarkInteractiveMessageResponse>;
+}
+
+async function maybeSendFullTaskTerminalMessageToThread(input: {
+  bindingsRepo: LarkObjectBindingsRepo;
+  channelInstallationId: string;
+  binding: LarkObjectBinding;
+  client: LarkSdkClient;
+  internalObjectId: string;
+  metadataJson: string;
+  state: LarkRunState;
+  taskTitle: string | null;
+  terminalMessage: ReturnType<typeof getLarkTaskTerminalMessagePresentation>;
+}): Promise<string> {
+  if (
+    input.binding.larkMessageId == null ||
+    input.state.terminal === "running" ||
+    input.terminalMessage.truncated !== true ||
+    input.terminalMessage.fullText == null
+  ) {
+    return input.metadataJson;
+  }
+
+  const parsedMetadata = parseBindingMetadata(input.metadataJson);
+  const signature = safeJson({
+    terminal: input.state.terminal,
+    fullText: input.terminalMessage.fullText,
+  });
+  if (readStringValue(parsedMetadata.fullTerminalMessageSignature) === signature) {
+    return input.metadataJson;
+  }
+
+  const title = input.taskTitle ?? describeTaskTitleFallback(input.state);
+  const statusLabel = `${describeTaskRunKind(input.state.taskRunType)}${describeTaskRunTerminal(input.state.terminal)}`;
+  await sendLarkThreadMarkdownCard({
+    client: input.client,
+    replyToMessageId: input.binding.larkMessageId,
+    title: `${title} · 完整结果`,
+    summary: `${title}${statusLabel}完整结果`,
+    markdownSections: [`**状态**：${statusLabel}`, input.terminalMessage.fullText],
+  });
+
+  const nextMetadataJson = JSON.stringify({
+    ...parsedMetadata,
+    fullTerminalMessageSignature: signature,
+  });
+  input.bindingsRepo.updateDeliveryState({
+    channelInstallationId: input.channelInstallationId,
+    internalObjectKind: RUN_CARD_OBJECT_KIND,
+    internalObjectId: input.internalObjectId,
+    metadataJson: nextMetadataJson,
+  });
+  return nextMetadataJson;
+}
+
+function describeTaskTitleFallback(state: LarkRunState): string {
+  return describeTaskRunKind(state.taskRunType);
+}
+
 function readStringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 function buildTaskRunCardObjectId(taskRunId: string): string {
   return `task:${taskRunId}`;
+}
+
+function resolveTaskCardTitle(storage: StorageDb, taskRunId: string): string | null {
+  const taskRun = new TaskRunsRepo(storage).getById(taskRunId);
+  if (taskRun == null) {
+    return null;
+  }
+
+  if (taskRun.runType === "cron" && taskRun.cronJobId != null) {
+    const cronName = new CronJobsRepo(storage).getById(taskRun.cronJobId)?.name ?? null;
+    const normalizedCronName = normalizeTaskCardTitleValue(cronName);
+    if (normalizedCronName != null) {
+      return normalizedCronName;
+    }
+  }
+
+  return normalizeTaskCardTitleValue(taskRun.description);
+}
+
+function normalizeTaskCardTitleValue(value: string | null | undefined): string | null {
+  if (value == null) {
+    return null;
+  }
+  const singleLine = value
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (singleLine == null) {
+    return null;
+  }
+  return singleLine.length <= 120 ? singleLine : `${singleLine.slice(0, 117)}...`;
 }
 
 function isTaskRunCardRuntimeEnvelope(envelope: OrchestratedRuntimeEventEnvelope): boolean {
