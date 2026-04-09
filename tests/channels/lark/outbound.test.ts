@@ -225,6 +225,7 @@ describe("lark outbound runtime", () => {
 
       INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
       VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
     `);
 
     new ChannelSurfacesRepo(handle.storage.db).upsert({
@@ -409,6 +410,30 @@ describe("lark outbound runtime", () => {
 
       INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
       VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
     `);
 
     new ChannelSurfacesRepo(handle.storage.db).upsert({
@@ -675,7 +700,7 @@ describe("lark outbound runtime", () => {
     });
   });
 
-  test("creates a task card on task_run_started and keeps updating the same card through transcript and settle", async () => {
+  test("creates a task status card in main chat and sends transcript cards into its thread", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`
@@ -687,6 +712,30 @@ describe("lark outbound runtime", () => {
 
       INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
       VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
     `);
 
     new ChannelSurfacesRepo(handle.storage.db).upsert({
@@ -699,15 +748,28 @@ describe("lark outbound runtime", () => {
       surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
     });
 
-    const createCard = vi.fn(async (_input: unknown) => ({
-      data: {
-        card_id: "card_task_1",
-      },
-    }));
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: {
+          card_id: "card_task_status_1",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          card_id: "card_task_thread_1",
+        },
+      });
     const createMessage = vi.fn(async (_input: unknown) => ({
       data: {
         message_id: "om_task_card_1",
         open_message_id: "om_task_open_1",
+      },
+    }));
+    const reply = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_task_thread_card_1",
+        open_message_id: "om_task_thread_open_1",
       },
     }));
     const updateCard = vi.fn(async (_input: unknown) => ({}));
@@ -734,6 +796,7 @@ describe("lark outbound runtime", () => {
               im: {
                 message: {
                   create: createMessage,
+                  reply,
                 },
               },
             },
@@ -762,11 +825,15 @@ describe("lark outbound runtime", () => {
 
     expect(createCard).toHaveBeenCalledOnce();
     expect(createMessage).toHaveBeenCalledOnce();
+    expect(reply).not.toHaveBeenCalled();
     const createdTaskCard = JSON.parse(
       (createCard.mock.calls.at(0)?.[0] as { data?: { data?: string } } | undefined)?.data?.data ??
         "{}",
-    ) as { header?: { title?: { content?: string }; template?: string } };
-    expect(createdTaskCard.header?.title?.content).toBe("定时任务运行中");
+    ) as {
+      header?: { title?: { content?: string }; subtitle?: { content?: string }; template?: string };
+    };
+    expect(createdTaskCard.header?.title?.content).toBe("日报汇总");
+    expect(createdTaskCard.header?.subtitle?.content).toBe("定时任务运行中");
     expect(createdTaskCard.header?.template).toBe("blue");
 
     bus.publish(
@@ -801,8 +868,14 @@ describe("lark outbound runtime", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(250);
 
-    expect(createCard).toHaveBeenCalledOnce();
+    expect(createCard).toHaveBeenCalledTimes(2);
     expect(createMessage).toHaveBeenCalledOnce();
+    expect(reply).toHaveBeenCalledOnce();
+    expect(
+      (reply.mock.calls.at(0)?.[0] as { path?: { message_id?: string } } | undefined)?.path,
+    ).toMatchObject({
+      message_id: "om_task_card_1",
+    });
 
     bus.publish(
       makeTaskEnvelope({
@@ -827,13 +900,26 @@ describe("lark outbound runtime", () => {
       internalObjectId: "task:task_1",
     });
     expect(binding?.larkMessageId).toBe("om_task_card_1");
-    expect(binding?.larkCardId).toBe("card_task_1");
+    expect(binding?.larkCardId).toBe("card_task_status_1");
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_task_1:seg:1",
+      }),
+    ).toMatchObject({
+      larkMessageId: "om_task_thread_card_1",
+      larkCardId: "card_task_thread_1",
+    });
     expect(updateCard).toHaveBeenCalled();
     const updatedTaskCard = JSON.parse(
       (updateCard.mock.calls.at(-1)?.[0] as { data?: { card?: { data?: string } } } | undefined)
         ?.data?.card?.data ?? "{}",
-    ) as { header?: { title?: { content?: string }; template?: string } };
-    expect(updatedTaskCard.header?.title?.content).toBe("定时任务已完成");
+    ) as {
+      header?: { title?: { content?: string }; subtitle?: { content?: string }; template?: string };
+    };
+    expect(updatedTaskCard.header?.title?.content).toBe("日报汇总");
+    expect(updatedTaskCard.header?.subtitle?.content).toBe("定时任务已完成");
     expect(updatedTaskCard.header?.template).toBe("green");
   });
 
@@ -849,6 +935,7 @@ describe("lark outbound runtime", () => {
 
       INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
       VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
     `);
 
     new ChannelSurfacesRepo(handle.storage.db).upsert({
@@ -984,6 +1071,30 @@ describe("lark outbound runtime", () => {
 
       INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
       VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
     `);
 
     new ChannelSurfacesRepo(handle.storage.db).upsert({
@@ -1128,6 +1239,154 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("replies with a full markdown card in the task thread when the final summary is truncated", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async () => ({
+      data: {
+        card_id: "card_task_status_1",
+      },
+    }));
+    const createMessage = vi.fn(async () => ({
+      data: {
+        message_id: "om_task_card_1",
+        open_message_id: "om_task_open_1",
+      },
+    }));
+    const reply = vi.fn(async () => ({
+      data: {
+        message_id: "om_task_thread_full_1",
+        open_message_id: "om_task_thread_full_open_1",
+      },
+    }));
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: vi.fn(async () => ({})) },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    const longSummary = `${"完整结果".repeat(450)} tail-end-marker`;
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_completed",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "completed",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        finishedAt: "2026-03-28T00:01:00.000Z",
+        durationMs: 60_000,
+        resultSummary: longSummary,
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(createMessage).toHaveBeenCalledOnce();
+    expect(updateCard).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledOnce();
+
+    const createCardCalls = createCard.mock.calls as unknown[][];
+    const replyCalls = reply.mock.calls as unknown[][];
+
+    const taskCardCreate = JSON.stringify(createCardCalls.at(0)?.[0] ?? {});
+    expect(taskCardCreate).toContain("...");
+    expect(taskCardCreate).not.toContain("tail-end-marker");
+
+    const fullReplyPayload = replyCalls.at(0)?.[0] as
+      | { data?: { msg_type?: string; content?: string }; path?: { message_id?: string } }
+      | undefined;
+    expect(fullReplyPayload?.path?.message_id).toBe("om_task_card_1");
+    expect(fullReplyPayload?.data?.msg_type).toBe("interactive");
+    expect(fullReplyPayload?.data?.content ?? "").toContain("日报汇总 · 完整结果");
+    expect(fullReplyPayload?.data?.content ?? "").toContain("tail-end-marker");
+
+    await runtime.shutdown();
+  });
+
   test("does not render approval-session runtime transcript into the visible lark chat", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);
@@ -1140,6 +1399,30 @@ describe("lark outbound runtime", () => {
 
       INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
       VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
     `);
 
     new ChannelSurfacesRepo(handle.storage.db).upsert({
@@ -1243,6 +1526,30 @@ describe("lark outbound runtime", () => {
 
       INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
       VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
     `);
 
     new ChannelSurfacesRepo(handle.storage.db).upsert({
@@ -1714,6 +2021,30 @@ describe("lark outbound runtime", () => {
 
       INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
       VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
     `);
 
     new ChannelSurfacesRepo(handle.storage.db).upsert({
@@ -1726,9 +2057,15 @@ describe("lark outbound runtime", () => {
       surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
     });
 
-    const createCard = vi.fn(async () => ({ data: { card_id: "card_task_1" } }));
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { card_id: "card_task_status_1" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_task_thread_1" } });
     const createMessage = vi.fn(async () => ({
       data: { message_id: "om_task_1", open_message_id: "oom_task_1" },
+    }));
+    const reply = vi.fn(async () => ({
+      data: { message_id: "om_task_thread_1", open_message_id: "oom_task_thread_1" },
     }));
     const updateCard = vi.fn(async () => ({}));
     const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
@@ -1748,6 +2085,7 @@ describe("lark outbound runtime", () => {
               im: {
                 message: {
                   create: createMessage,
+                  reply,
                 },
               },
             },
@@ -1821,8 +2159,9 @@ describe("lark outbound runtime", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(250);
 
-    expect(createCard).toHaveBeenCalledOnce();
+    expect(createCard).toHaveBeenCalledTimes(2);
     expect(createMessage).toHaveBeenCalledOnce();
+    expect(reply).toHaveBeenCalledOnce();
     expect(updateCard).toHaveBeenCalled();
     expect(
       new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
@@ -1832,11 +2171,19 @@ describe("lark outbound runtime", () => {
       }),
     ).toBeNull();
 
-    const lastTaskCardUpdate = (updateCard.mock.calls.at(-1) as [unknown] | undefined)?.[0] ?? null;
-    const taskCardUpdateText = JSON.stringify(lastTaskCardUpdate);
-    expect(taskCardUpdateText).toContain("等待授权");
-    expect(taskCardUpdateText).toContain("等待授权处理");
-    expect(taskCardUpdateText).toContain("request_permissions");
+    const updateCalls = updateCard.mock.calls as unknown[][];
+    const createCalls = createCard.mock.calls as unknown[][];
+
+    const taskStatusUpdate = updateCalls.find(
+      (call) =>
+        ((call[0] as { path?: { card_id?: string } } | undefined)?.path?.card_id ?? null) ===
+        "card_task_status_1",
+    )?.[0];
+    expect(JSON.stringify(taskStatusUpdate)).toContain("等待授权");
+    expect(JSON.stringify(taskStatusUpdate)).toContain("日报汇总");
+
+    const taskThreadCreate = createCalls.at(1)?.[0];
+    expect(JSON.stringify(taskThreadCreate)).toContain("request_permissions");
 
     await runtime.shutdown();
   });

@@ -1,4 +1,10 @@
 import { capLarkCardReasoningTail } from "@/src/channels/lark/render/card-truncation.js";
+import {
+  describeTaskRunIcon,
+  describeTaskRunKind,
+  describeTaskRunTemplate,
+  describeTaskRunTerminal,
+} from "@/src/channels/lark/render/task-card.js";
 import { renderToolSequenceSlice } from "@/src/channels/lark/render/tool-calls.js";
 import {
   buildLarkAssistantElementId,
@@ -52,6 +58,10 @@ interface ToolRunCardAtom {
 
 type RunCardAtom = AssistantRunCardAtom | ToolRunCardAtom;
 
+interface RunCardRenderOptions {
+  suppressTaskHeader?: boolean;
+}
+
 export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> {
   return buildLarkRenderedRunCard(state).card;
 }
@@ -61,15 +71,21 @@ export function buildLarkRenderedRunCard(state: LarkRunState): LarkRenderedRunCa
   return pages.at(-1) ?? buildRenderedRunCardPage(state, [], { pageIndex: 1, pageCount: 1 });
 }
 
-export function buildLarkRenderedRunCardPages(state: LarkRunState): LarkRenderedRunCardPage[] {
+export function buildLarkRenderedRunCardPages(
+  state: LarkRunState,
+  options?: RunCardRenderOptions,
+): LarkRenderedRunCardPage[] {
   const atoms = buildRunCardAtoms(state);
-  const pages = paginateRunCardAtoms(state, atoms);
+  const pages = paginateRunCardAtoms(state, atoms, options);
   const pageCount = Math.max(1, pages.length);
 
   return pages.map((atomsForPage, index) =>
     buildRenderedRunCardPage(state, atomsForPage, {
       pageIndex: index + 1,
       pageCount,
+      ...(options?.suppressTaskHeader === undefined
+        ? {}
+        : { suppressTaskHeader: options.suppressTaskHeader }),
     }),
   );
 }
@@ -105,7 +121,11 @@ function buildRunCardAtoms(state: LarkRunState): RunCardAtom[] {
   return atoms;
 }
 
-function paginateRunCardAtoms(state: LarkRunState, atoms: RunCardAtom[]): RunCardAtom[][] {
+function paginateRunCardAtoms(
+  state: LarkRunState,
+  atoms: RunCardAtom[],
+  options?: RunCardRenderOptions,
+): RunCardAtom[][] {
   if (atoms.length === 0) {
     return [[]];
   }
@@ -125,7 +145,14 @@ function paginateRunCardAtoms(state: LarkRunState, atoms: RunCardAtom[]): RunCar
     }
 
     const candidate = [...currentPage, atom];
-    if (candidateFitsWithinBudget(state, candidate, { isFirstPage: pages.length === 1 })) {
+    if (
+      candidateFitsWithinBudget(state, candidate, {
+        isFirstPage: pages.length === 1,
+        ...(options?.suppressTaskHeader === undefined
+          ? {}
+          : { suppressTaskHeader: options.suppressTaskHeader }),
+      })
+    ) {
       currentPage.push(atom);
       queue.shift();
       continue;
@@ -148,11 +175,15 @@ function paginateRunCardAtoms(state: LarkRunState, atoms: RunCardAtom[]): RunCar
     pages.push([]);
   }
 
-  ensureLastPageFitsWithinBudget(state, pages);
+  ensureLastPageFitsWithinBudget(state, pages, options);
   return pages;
 }
 
-function ensureLastPageFitsWithinBudget(state: LarkRunState, pages: RunCardAtom[][]): void {
+function ensureLastPageFitsWithinBudget(
+  state: LarkRunState,
+  pages: RunCardAtom[][],
+  options?: RunCardRenderOptions,
+): void {
   while (pages.length > 0) {
     const lastPageIndex = pages.length - 1;
     const lastPage = pages[lastPageIndex];
@@ -163,6 +194,9 @@ function ensureLastPageFitsWithinBudget(state: LarkRunState, pages: RunCardAtom[
     const rendered = buildRenderedRunCardPage(state, lastPage, {
       pageIndex: lastPageIndex + 1,
       pageCount: pages.length,
+      ...(options?.suppressTaskHeader === undefined
+        ? {}
+        : { suppressTaskHeader: options.suppressTaskHeader }),
     });
     if (
       rendered.metrics.jsonBytes <= LARK_RUN_CARD_BYTE_BUDGET &&
@@ -183,6 +217,9 @@ function ensureLastPageFitsWithinBudget(state: LarkRunState, pages: RunCardAtom[
       const nextRendered = buildRenderedRunCardPage(state, lastPage, {
         pageIndex: lastPageIndex + 2,
         pageCount: pages.length + 1,
+        ...(options?.suppressTaskHeader === undefined
+          ? {}
+          : { suppressTaskHeader: options.suppressTaskHeader }),
       });
       if (
         nextRendered.metrics.jsonBytes <= LARK_RUN_CARD_BYTE_BUDGET &&
@@ -203,7 +240,7 @@ function ensureLastPageFitsWithinBudget(state: LarkRunState, pages: RunCardAtom[
 function candidateFitsWithinBudget(
   state: LarkRunState,
   atoms: RunCardAtom[],
-  options: { isFirstPage: boolean },
+  options: { isFirstPage: boolean; suppressTaskHeader?: boolean },
 ): boolean {
   const rendered = buildRenderedRunCardPage(state, atoms, {
     pageIndex: options.isFirstPage ? 1 : 2,
@@ -211,6 +248,9 @@ function candidateFitsWithinBudget(
     includeFooter: false,
     includeTerminalSummary: false,
     allowEmptyPlaceholder: false,
+    ...(options.suppressTaskHeader === undefined
+      ? {}
+      : { suppressTaskHeader: options.suppressTaskHeader }),
   });
 
   return (
@@ -293,6 +333,7 @@ function buildRenderedRunCardPage(
     includeFooter?: boolean;
     includeTerminalSummary?: boolean;
     allowEmptyPlaceholder?: boolean;
+    suppressTaskHeader?: boolean;
   },
 ): LarkRenderedRunCardPage {
   const full = buildRunCardPage(state, atoms, {
@@ -328,6 +369,7 @@ function buildRunCardPage(
     includeFooter?: boolean;
     includeTerminalSummary?: boolean;
     allowEmptyPlaceholder?: boolean;
+    suppressTaskHeader?: boolean;
   },
 ): {
   card: Record<string, unknown>;
@@ -434,7 +476,14 @@ function buildRunCardPage(
           content: summarizeRunState(state),
         },
       },
-      ...(buildTaskRunHeader(state) == null ? {} : { header: buildTaskRunHeader(state) }),
+      ...(() => {
+        const taskHeaderOptions =
+          options.suppressTaskHeader === undefined
+            ? undefined
+            : { suppressTaskHeader: options.suppressTaskHeader };
+        const taskHeader = buildTaskRunHeader(state, taskHeaderOptions);
+        return taskHeader == null ? {} : { header: taskHeader };
+      })(),
       body: {
         elements,
       },
@@ -768,8 +817,11 @@ function summarizeRunState(state: LarkRunState): string {
   return "运行中";
 }
 
-function buildTaskRunHeader(state: LarkRunState): Record<string, unknown> | null {
-  if (state.taskRunId == null) {
+function buildTaskRunHeader(
+  state: LarkRunState,
+  options?: { suppressTaskHeader?: boolean },
+): Record<string, unknown> | null {
+  if (state.taskRunId == null || options?.suppressTaskHeader === true) {
     return null;
   }
 
@@ -785,70 +837,6 @@ function buildTaskRunHeader(state: LarkRunState): Record<string, unknown> | null
       token: describeTaskRunIcon(state.terminal),
     },
   };
-}
-
-function describeTaskRunKind(runType: string | null): string {
-  if (runType === "cron") {
-    return "定时任务";
-  }
-  if (runType === "system") {
-    return "系统任务";
-  }
-  return "后台任务";
-}
-
-function describeTaskRunTerminal(terminal: LarkRunState["terminal"]): string {
-  if (terminal === "completed") {
-    return "已完成";
-  }
-  if (terminal === "blocked") {
-    return "已阻塞";
-  }
-  if (terminal === "failed") {
-    return "失败";
-  }
-  if (terminal === "cancelled") {
-    return "已停止";
-  }
-  if (terminal === "awaiting_approval") {
-    return "等待授权";
-  }
-  if (terminal === "continued") {
-    return "已获授权";
-  }
-  if (terminal === "denied") {
-    return "已拒绝";
-  }
-  return "运行中";
-}
-
-function describeTaskRunTemplate(terminal: LarkRunState["terminal"]): string {
-  if (terminal === "completed" || terminal === "continued") {
-    return "green";
-  }
-  if (terminal === "failed" || terminal === "cancelled" || terminal === "denied") {
-    return "red";
-  }
-  if (terminal === "blocked") {
-    return "grey";
-  }
-  return "blue";
-}
-
-function describeTaskRunIcon(terminal: LarkRunState["terminal"]): string {
-  if (terminal === "completed" || terminal === "continued") {
-    return "yes_filled";
-  }
-  if (terminal === "cancelled" || terminal === "denied") {
-    return "close_filled";
-  }
-  if (terminal === "failed" || terminal === "blocked") {
-    return "warning_outlined";
-  }
-  if (terminal === "awaiting_approval") {
-    return "lock_chat_filled";
-  }
-  return "robot_outlined";
 }
 
 function findActiveAssistantBlock(state: LarkRunState): LarkAssistantTextBlock | null {

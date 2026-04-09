@@ -898,6 +898,92 @@ describe("lark inbound message handling", () => {
     });
   });
 
+  test("routes task thread replies to a transcript child message via the child binding", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+        VALUES ('sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+      `);
+      const bindingsRepo = new LarkObjectBindingsRepo(handle.storage.db);
+      bindingsRepo.upsert({
+        id: "binding_task_card",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        internalObjectKind: "run_card",
+        internalObjectId: "task:task_1",
+        larkMessageId: "om_task_card_1",
+        larkCardId: "card_task_status_1",
+        metadataJson: JSON.stringify({
+          sessionId: "sess_task_1",
+          taskRunId: "task_1",
+          taskRunType: "cron",
+          role: "task_status",
+        }),
+      });
+      bindingsRepo.upsert({
+        id: "binding_task_thread_card",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_task_1:seg:1",
+        larkMessageId: "om_task_thread_card_1",
+        larkCardId: "card_task_thread_1",
+        metadataJson: JSON.stringify({
+          sessionId: "sess_task_1",
+          taskRunId: "task_1",
+          taskRunType: "cron",
+        }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "steered" as const }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_task_thread_msg_child_1",
+          parent_id: "om_task_thread_card_1",
+          thread_id: "omt_task_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "Use the stack trace above and fix the failing step." }),
+        },
+      });
+
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "sess_task_1",
+        scenario: "cron",
+        content: "Use the stack trace above and fix the failing step.",
+        channelMessageId: "om_task_thread_msg_child_1",
+        channelParentMessageId: "om_task_thread_card_1",
+        channelThreadId: "omt_task_thread_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+
+      expect(
+        bindingsRepo.getByThreadRootMessageId({
+          channelInstallationId: "default",
+          threadRootMessageId: "omt_task_thread_1",
+        }),
+      ).toMatchObject({
+        internalObjectId: "run_task_1:seg:1",
+      });
+    });
+  });
+
   test("falls back to an ordinary thread when a stored task thread binding points to a missing task session", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
