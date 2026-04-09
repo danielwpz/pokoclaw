@@ -15,8 +15,7 @@ export const DEFAULT_CONFIG: RawConfig = {
     scenarios: {
       chat: [],
       compaction: [],
-      subagent: [],
-      cron: [],
+      task: [],
       meditationBucket: [],
       meditationConsolidation: [],
     },

@@ -33,7 +33,7 @@ const NO_RECENT_SESSION_USAGE_TEXT = "- 最近 3 天还没有可用 usage。";
 export interface ConversationStatusInput {
   conversationId: string;
   sessionId: string;
-  scenario: "chat" | "cron" | "subagent";
+  scenario: "chat" | "task";
 }
 
 export interface StatusModelSnapshot {
@@ -303,7 +303,7 @@ function resolveStatusModel(input: {
   session: Session;
   agentsRepo: AgentsRepo;
   models: ProviderRegistry;
-  scenario: "chat" | "cron" | "subagent";
+  scenario: "chat" | "task";
 }): StatusModelSnapshot {
   const latestAssistantModel = resolveCatalogModelFromStoredAssistant({
     latestAssistant: input.latestAssistant,

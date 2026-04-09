@@ -65,8 +65,7 @@ function buildConfigToml(): string {
     "# keep this section comment",
     'chat = ["deepseek"] # keep this inline comment',
     'compaction = ["gpt5"]',
-    'subagent = ["gpt5"]',
-    'cron = ["deepseek"]',
+    'task = ["deepseek"]',
     'meditationBucket = ["gpt5"]',
     'meditationConsolidation = ["gpt5"]',
     "",
@@ -123,15 +122,15 @@ describe("ScenarioModelSwitchService", () => {
     const service = new ScenarioModelSwitchService(liveConfig);
 
     const result = await service.switchScenarioModel({
-      scenario: "cron",
+      scenario: "task",
       modelId: "minimax",
     });
 
     expect(result.configuredModelIds).toEqual(["minimax", "deepseek"]);
     expect(result.warnings).toEqual(["该模型不支持 tools，某些依赖工具调用的场景可能受影响。"]);
-    expect(liveConfig.getSnapshot().models.scenarios.cron).toEqual(["minimax", "deepseek"]);
+    expect(liveConfig.getSnapshot().models.scenarios.task).toEqual(["minimax", "deepseek"]);
 
     const nextToml = await readFile(workspace.configTomlPath, "utf8");
-    expect(nextToml).toContain('cron = ["minimax", "deepseek"]');
+    expect(nextToml).toContain('task = ["minimax", "deepseek"]');
   });
 });

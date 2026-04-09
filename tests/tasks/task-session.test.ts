@@ -14,7 +14,7 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
         "Seeing this message means the daily report task should run now. Organize what was completed yesterday and produce a complete daily report.",
     });
 
-    expect(envelope.scenario).toBe("cron");
+    expect(envelope.scenario).toBe("task");
     expect(envelope.messageType).toBe("cron_kickoff");
     expect(envelope.content).toContain("<task_definition>");
     expect(envelope.content).toContain(
@@ -121,7 +121,7 @@ describe("buildTaskExecutionKickoffEnvelope", () => {
       maxPasses: 3,
     });
 
-    expect(envelope.scenario).toBe("cron");
+    expect(envelope.scenario).toBe("task");
     expect(envelope.messageType).toBe("task_supervisor_followup");
     expect(envelope.visibility).toBe("hidden_system");
     expect(envelope.content).toContain("<task_supervisor_followup>");

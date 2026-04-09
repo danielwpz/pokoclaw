@@ -31,8 +31,7 @@ export class ProviderRegistry {
     this.scenarioModelIds = {
       chat: [...config.models.scenarios.chat],
       compaction: [...config.models.scenarios.compaction],
-      subagent: [...config.models.scenarios.subagent],
-      cron: [...config.models.scenarios.cron],
+      task: [...config.models.scenarios.task],
       meditationBucket: [...config.models.scenarios.meditationBucket],
       meditationConsolidation: [...config.models.scenarios.meditationConsolidation],
     };
@@ -136,5 +135,5 @@ export class ProviderRegistry {
 }
 
 function getScenarioKeys(): ModelScenario[] {
-  return ["chat", "compaction", "subagent", "cron", "meditationBucket", "meditationConsolidation"];
+  return ["chat", "compaction", "task", "meditationBucket", "meditationConsolidation"];
 }

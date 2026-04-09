@@ -54,7 +54,7 @@ const LARK_INTERACTIVE_TEXT_TRUNCATED_NOTICE = "[卡片内容过长，引用文�
 export interface LarkInboundIngress {
   submitMessage(input: {
     sessionId: string;
-    scenario: "chat" | "cron" | "subagent";
+    scenario: "chat" | "task";
     content: string;
     userPayload?: AgentUserPayload;
     runtimeImages?: AgentUserRuntimeImagePayload[];
@@ -191,7 +191,7 @@ interface LarkInboundRoute {
   conversationId: string;
   branchId: string;
   sessionId: string;
-  scenario: "chat" | "cron" | "subagent";
+  scenario: "chat" | "task";
   stopScope: "conversation" | "session";
   chatId: string;
   replyToMessageId: string | null;
@@ -1008,6 +1008,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           control: input.control,
           ...(input.clients == null ? {} : { clients: input.clients }),
           ...(input.status == null ? {} : { status: input.status }),
+          ...(input.modelSwitch == null ? {} : { modelSwitch: input.modelSwitch }),
           ...(input.clients == null
             ? {}
             : {
@@ -1579,7 +1580,6 @@ function buildTaskThreadRouteFromBinding(input: {
   }
   const metadata = parseBindingMetadata(input.binding.metadataJson);
   const sessionId = readString(metadata.sessionId);
-  const taskRunType = readString(metadata.taskRunType);
   const taskRunId = readString(metadata.taskRunId);
   if (sessionId == null || taskRunId == null) {
     return null;
@@ -1614,7 +1614,7 @@ function buildTaskThreadRouteFromBinding(input: {
     conversationId: session.conversationId,
     branchId: session.branchId,
     sessionId: session.id,
-    scenario: taskRunType === "cron" ? "cron" : "subagent",
+    scenario: "task",
     stopScope: "session",
     chatId: input.chatId,
     replyToMessageId: input.replyToMessageId,
@@ -2541,7 +2541,10 @@ function buildLarkModelSwitchCardCallbackResponse(input: {
     content: string;
   };
 }): {
-  card: Record<string, unknown>;
+  card: {
+    type: "raw";
+    data: Record<string, unknown>;
+  };
   toast?: {
     type: "success" | "info" | "error" | "warning";
     content: string;
@@ -2555,7 +2558,10 @@ function buildLarkModelSwitchCardCallbackResponse(input: {
   };
   const rendered = buildLarkRenderedModelSwitchCard(state);
   return {
-    card: rendered.card,
+    card: {
+      type: "raw",
+      data: rendered.card,
+    },
     ...(input.toast == null ? {} : { toast: input.toast }),
   };
 }
@@ -2712,8 +2718,7 @@ function parseBindingMetadata(raw: string | null): Record<string, unknown> {
 function normalizeModelScenario(value: unknown): ModelScenario | null {
   return value === "chat" ||
     value === "compaction" ||
-    value === "subagent" ||
-    value === "cron" ||
+    value === "task" ||
     value === "meditationBucket" ||
     value === "meditationConsolidation"
     ? value

@@ -11,7 +11,7 @@ describe("patchScenarioModelListInToml", () => {
       "",
       "[models.scenarios]",
       'chat = ["deepseek"] # current chat model',
-      'cron = ["deepseek"]',
+      'task = ["deepseek"]',
       "",
       "[runtime]",
       "maxTurns = 60",
@@ -26,7 +26,7 @@ describe("patchScenarioModelListInToml", () => {
 
     expect(patched).toContain("# keep me");
     expect(patched).toContain('chat = ["gpt5", "deepseek"] # current chat model');
-    expect(patched).toContain('cron = ["deepseek"]');
+    expect(patched).toContain('task = ["deepseek"]');
     expect(patched).toContain("[runtime]");
   });
 
@@ -37,7 +37,7 @@ describe("patchScenarioModelListInToml", () => {
       '  "deepseek",',
       '  "gpt5",',
       "]",
-      'cron = ["deepseek"]',
+      'task = ["deepseek"]',
       "",
     ].join("\n");
 
@@ -50,7 +50,7 @@ describe("patchScenarioModelListInToml", () => {
     expect(patched).toContain('  "minimax",');
     expect(patched).toContain('  "gpt5",');
     expect(patched).toContain('  "deepseek",');
-    expect(patched).toContain('cron = ["deepseek"]');
+    expect(patched).toContain('task = ["deepseek"]');
   });
 
   test("inserts a new scenario key into an existing models.scenarios section", () => {
@@ -65,13 +65,13 @@ describe("patchScenarioModelListInToml", () => {
 
     const patched = patchScenarioModelListInToml({
       tomlText: original,
-      scenario: "cron",
+      scenario: "task",
       modelIds: ["gpt5"],
     });
 
     expect(patched).toContain('chat = ["deepseek"]');
-    expect(patched).toContain('cron = ["gpt5"]');
-    expect(patched.indexOf("[runtime]")).toBeGreaterThan(patched.indexOf('cron = ["gpt5"]'));
+    expect(patched).toContain('task = ["gpt5"]');
+    expect(patched.indexOf("[runtime]")).toBeGreaterThan(patched.indexOf('task = ["gpt5"]'));
   });
 
   test("appends a models.scenarios section when the file does not define one", () => {

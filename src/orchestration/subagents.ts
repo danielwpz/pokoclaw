@@ -118,7 +118,7 @@ export interface SubagentConversationSurfaceProvisioner {
 export interface SubagentManagerIngress {
   submitMessage(input: {
     sessionId: string;
-    scenario: "subagent";
+    scenario: "chat";
     content: string;
     messageType: string;
     visibility: string;
@@ -391,7 +391,7 @@ export class SubagentManager {
     void this.deps.ingress
       .submitMessage({
         sessionId: created.session.id,
-        scenario: "subagent",
+        scenario: "chat",
         content: kickoffMessage,
         messageType: "subagent_kickoff",
         visibility: "hidden_system",

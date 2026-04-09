@@ -280,7 +280,7 @@ describe("real llm delegated approval integration", () => {
 
     const result = await harness.ingress.submitMessage({
       sessionId: harness.created.executionSession.id,
-      scenario: "subagent",
+      scenario: "task",
       content: [
         "This is a permission-flow integration test. If the tool returns a requestable <permission_block>, you should request that permission instead of refusing on your own.",
         "Follow these steps exactly:",
@@ -390,7 +390,7 @@ describe("real llm delegated approval integration", () => {
 
     const result = await harness.ingress.submitMessage({
       sessionId: harness.created.executionSession.id,
-      scenario: "subagent",
+      scenario: "task",
       content: [
         "This is a permission-flow integration test. The path is intentionally sensitive so the approval layer can deny it. If the tool returns a requestable <permission_block>, you should still request it instead of refusing on your own.",
         "Follow these steps exactly:",

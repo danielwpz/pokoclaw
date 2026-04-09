@@ -17,7 +17,7 @@ import {
 
 function createStartedTaskRunResult(input: {
   sessionId: string;
-  scenario: "subagent" | "cron";
+  scenario: "task";
   completionStatus?: "completed" | "blocked" | "failed";
   summary?: string;
   finalMessage?: string;
@@ -27,7 +27,7 @@ function createStartedTaskRunResult(input: {
     status: "started",
     messageId: "msg_task_1",
     run: {
-      runId: input.scenario === "cron" ? "run_loop_cron_1" : "run_loop_1",
+      runId: "run_loop_task_1",
       sessionId: input.sessionId,
       scenario: input.scenario,
       modelId: "test-model",
@@ -586,7 +586,7 @@ describe("AgentManager", () => {
       const submitMessage = vi.fn(
         async (input: SubmitMessageInput): Promise<SubmitMessageResult> => {
           expect(input).toMatchObject({
-            scenario: "subagent",
+            scenario: "task",
             messageType: "task_kickoff",
             visibility: "hidden_system",
           });
@@ -595,7 +595,7 @@ describe("AgentManager", () => {
           expect(input.afterToolResultHook).toBeDefined();
           return createStartedTaskRunResult({
             sessionId: input.sessionId,
-            scenario: "subagent",
+            scenario: "task",
             summary: "Reviewed the repository changes.",
             finalMessage: "Reviewed the repository changes.",
           });
@@ -884,7 +884,7 @@ describe("AgentManager", () => {
       const submitMessage = vi.fn(
         async (input: SubmitMessageInput): Promise<SubmitMessageResult> => {
           expect(input).toMatchObject({
-            scenario: "cron",
+            scenario: "task",
             messageType: "cron_kickoff",
             visibility: "hidden_system",
           });
@@ -897,7 +897,7 @@ describe("AgentManager", () => {
           expect(input.afterToolResultHook).toBeDefined();
           return createStartedTaskRunResult({
             sessionId: input.sessionId,
-            scenario: "cron",
+            scenario: "task",
             summary: "Cron reconciliation finished.",
             finalMessage: "Cron reconciliation finished.",
           });
@@ -1034,7 +1034,7 @@ describe("AgentManager", () => {
           expect(input.afterToolResultHook).toBeDefined();
           return createStartedTaskRunResult({
             sessionId: input.sessionId,
-            scenario: "cron",
+            scenario: "task",
             summary: "Manual cron run finished.",
             finalMessage: "Manual cron run finished.",
           });

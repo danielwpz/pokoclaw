@@ -817,7 +817,7 @@ describe("lark inbound message handling", () => {
 
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
-        scenario: "cron",
+        scenario: "task",
         content: "Please prioritize this error.",
         channelMessageId: "om_task_thread_msg_1",
         channelParentMessageId: "om_task_card_1",
@@ -888,7 +888,7 @@ describe("lark inbound message handling", () => {
 
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
-        scenario: "cron",
+        scenario: "task",
         content: "Continue, but prioritize fixing the previous error.",
         channelMessageId: "om_task_thread_msg_2",
         channelParentMessageId: "om_user_reply_1",
@@ -965,7 +965,7 @@ describe("lark inbound message handling", () => {
 
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
-        scenario: "cron",
+        scenario: "task",
         content: "Use the stack trace above and fix the failing step.",
         channelMessageId: "om_task_thread_msg_child_1",
         channelParentMessageId: "om_task_thread_card_1",
@@ -2551,9 +2551,12 @@ describe("lark card actions", () => {
     expect(modelSwitch.getOverview).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       card: {
-        header: {
-          title: {
-            content: "模型切换",
+        type: "raw",
+        data: {
+          header: {
+            title: {
+              content: "模型切换",
+            },
           },
         },
       },
@@ -2625,9 +2628,12 @@ describe("lark card actions", () => {
         content: "已切换 chat → gpt5",
       },
       card: {
-        header: {
-          title: {
-            content: "模型切换",
+        type: "raw",
+        data: {
+          header: {
+            title: {
+              content: "模型切换",
+            },
           },
         },
       },

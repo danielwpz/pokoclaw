@@ -57,8 +57,7 @@ function createRegistry(): ProviderRegistry {
       scenarios: {
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
-        subagent: ["anthropic_main/claude-sonnet-4-5"],
-        cron: ["openai_main/gpt-5-mini"],
+        task: ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"],
         meditationBucket: ["anthropic_main/claude-sonnet-4-5"],
         meditationConsolidation: ["openai_main/gpt-5-mini"],
       },
@@ -388,8 +387,7 @@ describe("MeditationPipelineRunner", () => {
         scenarios: {
           chat: ["anthropic_main/claude-sonnet-4-5"],
           compaction: ["anthropic_main/claude-sonnet-4-5"],
-          subagent: ["anthropic_main/claude-sonnet-4-5"],
-          cron: ["anthropic_main/claude-sonnet-4-5"],
+          task: ["anthropic_main/claude-sonnet-4-5"],
           meditationBucket: [],
           meditationConsolidation: [],
         },
