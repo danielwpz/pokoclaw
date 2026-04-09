@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -572,6 +572,88 @@ describe("MeditationPipelineRunner", () => {
     expect(meta.runId).toBe("run_fail");
     expect(harvest.stops).toHaveLength(1);
     expect(clusters).toHaveLength(1);
+  });
+
+  test("ignores empty shared memory rewrites during consolidation", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-empty-shared-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    let bridgeCall = 0;
+
+    const state = new MeditationStateRepo(handle.storage.db);
+    state.markFinished({
+      status: "completed",
+      finishedAt: new Date("2026-03-20T00:00:00.000Z"),
+      markSuccess: true,
+    });
+
+    const initialSharedMemory = "# Existing Shared Memory\n\n- Keep this content.\n";
+    await mkdir(workspaceDir, { recursive: true });
+    await writeFile(path.join(workspaceDir, "MEMORY.md"), initialSharedMemory, "utf8");
+    const runner = new MeditationPipelineRunner({
+      storage: handle.storage.db,
+      state,
+      config: {
+        meditation: {
+          enabled: true,
+          cron: "0 0 * * *",
+        },
+      },
+      models: createRegistry(),
+      bridge: {
+        async completeTurn() {
+          bridgeCall += 1;
+          if (bridgeCall === 1) {
+            return createSubmitTurnResult({
+              note: "A permission burst happened.",
+              memory_candidates: ["Pause after burst permission failures."],
+            });
+          }
+
+          return createSubmitTurnResult({
+            shared_memory_rewrite: "   \n\t  ",
+            private_memory_rewrites: [
+              {
+                agent_id: "agent_sub_1",
+                content: "# Scope\n\n- atlas-web frontend.\n",
+              },
+            ],
+          });
+        },
+      },
+      securityConfig: DEFAULT_CONFIG.security,
+      workspaceDir,
+      logsDir: tempDir,
+      createRunId: () => "run_empty_shared",
+      resolveCalendarContext: () => ({
+        currentDate: "2026-04-08",
+        timezone: "UTC",
+      }),
+    });
+
+    await runner.runOnce({
+      tickAt: new Date("2026-04-08T00:00:00.000Z"),
+    });
+
+    const artifactDir = path.join(tempDir, "meditation", "2026-04-08--run_empty_shared");
+    const dailyNote = await readFile(
+      path.join(workspaceDir, "meditation", "2026-04-08.md"),
+      "utf8",
+    );
+    const sharedMemory = await readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    const consolidationSubmit = JSON.parse(
+      await readFile(path.join(artifactDir, "consolidation.submit.json"), "utf8"),
+    );
+
+    expect(consolidationSubmit).toMatchObject({
+      shared_memory_rewrite: "   \n\t  ",
+    });
+    expect(dailyNote).toContain("Shared memory rewritten: no");
+    expect(sharedMemory).toBe(initialSharedMemory);
+    await expect(
+      readFile(path.join(artifactDir, "rewrite-preview", "shared.md"), "utf8"),
+    ).rejects.toThrow();
   });
 
   test("drops private rewrites for non-sub agents at the host layer", () => {
