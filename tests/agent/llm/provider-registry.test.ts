@@ -46,8 +46,7 @@ function createConfig(): Pick<AppConfig, "providers" | "models"> {
       scenarios: {
         chat: ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"],
         compaction: ["openai_main/gpt-5-mini"],
-        subagent: ["anthropic_main/claude-sonnet-4-5"],
-        cron: ["anthropic_main/claude-sonnet-4-5"],
+        task: ["anthropic_main/claude-sonnet-4-5"],
         meditationBucket: ["openai_main/gpt-5-mini"],
         meditationConsolidation: ["anthropic_main/claude-sonnet-4-5"],
       },
@@ -78,12 +77,12 @@ describe("provider registry", () => {
 
   test("returns null for missing scenario selection when the list is empty", () => {
     const config = createConfig();
-    config.models.scenarios.cron = [];
+    config.models.scenarios.task = [];
 
     const registry = new ProviderRegistry(config);
-    expect(registry.getScenarioModel("cron")).toBeNull();
-    expect(() => registry.getRequiredScenarioModel("cron")).toThrow(
-      "No model configured for scenario: cron",
+    expect(registry.getScenarioModel("task")).toBeNull();
+    expect(() => registry.getRequiredScenarioModel("task")).toThrow(
+      "No model configured for scenario: task",
     );
   });
 

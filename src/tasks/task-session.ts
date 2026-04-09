@@ -74,8 +74,8 @@ const GROUP_CRON_TRANSCRIPT_GUIDANCE_LINES = [
   "Complete the scheduled objective for this run, then end the task instead of continuing broader conversation.",
 ];
 
-export function resolveTaskExecutionScenario(runType: string): ModelScenario {
-  return runType === "cron" ? "cron" : "subagent";
+export function resolveTaskExecutionScenario(_runType: string): ModelScenario {
+  return "task";
 }
 
 export function buildTaskExecutionKickoffEnvelope(

@@ -226,7 +226,7 @@ describe("subagent orchestration", () => {
 
     expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
       sessionId: created.session.id,
-      scenario: "subagent",
+      scenario: "chat",
       content: buildSubagentKickoffMessage(
         "Review the current PR and report concrete issues to the user.",
       ),

@@ -130,8 +130,7 @@ describe("config loader", () => {
     expect(config.models.scenarios).toEqual({
       chat: [],
       compaction: [],
-      subagent: [],
-      cron: [],
+      task: [],
       meditationBucket: [],
       meditationConsolidation: [],
     });
@@ -244,8 +243,7 @@ describe("config loader", () => {
         "[models.scenarios]",
         'chat = ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"]',
         'compaction = ["openai_main/gpt-5-mini"]',
-        'subagent = ["anthropic_main/claude-sonnet-4-5"]',
-        'cron = ["anthropic_main/claude-sonnet-4-5"]',
+        'task = ["anthropic_main/claude-sonnet-4-5"]',
         'meditationBucket = ["openai_main/gpt-5-mini"]',
         'meditationConsolidation = ["anthropic_main/claude-sonnet-4-5"]',
         "",
@@ -305,6 +303,7 @@ describe("config loader", () => {
       "openai_main/gpt-5-mini",
     ]);
     expect(config.models.scenarios.compaction).toEqual(["openai_main/gpt-5-mini"]);
+    expect(config.models.scenarios.task).toEqual(["anthropic_main/claude-sonnet-4-5"]);
     expect(config.models.scenarios.meditationBucket).toEqual(["openai_main/gpt-5-mini"]);
     expect(config.models.scenarios.meditationConsolidation).toEqual([
       "anthropic_main/claude-sonnet-4-5",

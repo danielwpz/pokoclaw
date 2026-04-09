@@ -58,7 +58,7 @@ function requireHandle(handle: TestDatabaseHandle | null): TestDatabaseHandle {
 
 function makeStartedRun(input: {
   sessionId: string;
-  scenario: "subagent" | "cron";
+  scenario: "task";
   stopSignal?: { reason: string; payload?: unknown } | null;
 }) {
   return {
@@ -106,8 +106,7 @@ function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
       scenarios: {
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
-        subagent: ["anthropic_main/claude-sonnet-4-5"],
-        cron: ["anthropic_main/claude-sonnet-4-5"],
+        task: ["anthropic_main/claude-sonnet-4-5"],
         meditationBucket: [],
         meditationConsolidation: [],
       },
@@ -191,7 +190,7 @@ describe("TaskExecutionRunner", () => {
         submitMessage: vi.fn(async (input) => {
           expect(input).toMatchObject({
             sessionId: created.executionSession.id,
-            scenario: "subagent",
+            scenario: "task",
             messageType: "task_kickoff",
             visibility: "hidden_system",
           });
@@ -199,7 +198,7 @@ describe("TaskExecutionRunner", () => {
           expect(input.content).toContain("<task_execution>");
           return makeStartedRun({
             sessionId: created.executionSession.id,
-            scenario: "subagent",
+            scenario: "task",
             stopSignal: {
               reason: "task_completion",
               payload: {
@@ -341,7 +340,7 @@ describe("TaskExecutionRunner", () => {
         expect(input.messageType).toBe("task_kickoff");
         return makeStartedRun({
           sessionId: created.executionSession.id,
-          scenario: "subagent",
+          scenario: "task",
         });
       })
       .mockImplementationOnce(async (input) => {
@@ -349,7 +348,7 @@ describe("TaskExecutionRunner", () => {
         expect(input.content).toContain("ended without calling finish_task");
         return makeStartedRun({
           sessionId: created.executionSession.id,
-          scenario: "subagent",
+          scenario: "task",
           stopSignal: {
             reason: "task_completion",
             payload: {
@@ -400,7 +399,7 @@ describe("TaskExecutionRunner", () => {
         submitMessage: vi.fn(async () =>
           makeStartedRun({
             sessionId: created.executionSession.id,
-            scenario: "cron",
+            scenario: "task",
             stopSignal: {
               reason: "task_completion",
               payload: {
@@ -445,7 +444,7 @@ describe("TaskExecutionRunner", () => {
     const submitMessage = vi.fn(async (input) =>
       makeStartedRun({
         sessionId: created.executionSession.id,
-        scenario: input.scenario as "subagent",
+        scenario: input.scenario as "task",
       }),
     );
 
@@ -580,7 +579,7 @@ describe("TaskExecutionRunner", () => {
         submitMessage: vi.fn(async (input) => {
           expect(input).toMatchObject({
             sessionId: created.executionSession.id,
-            scenario: "cron",
+            scenario: "task",
             messageType: "cron_kickoff",
             visibility: "hidden_system",
           });
@@ -605,7 +604,7 @@ describe("TaskExecutionRunner", () => {
           expect(input.content).toContain("Do not tell the user to look at them");
           return makeStartedRun({
             sessionId: created.executionSession.id,
-            scenario: "cron",
+            scenario: "task",
             stopSignal: {
               reason: "task_completion",
               payload: {

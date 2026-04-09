@@ -32,6 +32,10 @@ import type {
 } from "@/src/agent/llm/messages.js";
 import type { ModelScenario, ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
+import {
+  type ProviderRegistrySource,
+  resolveProviderRegistry,
+} from "@/src/agent/llm/provider-registry-source.js";
 import { type AgentMemoryResolver, FilesystemAgentMemoryResolver } from "@/src/agent/memory.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
 import { assertToolAllowedForSession } from "@/src/agent/session-policy.js";
@@ -185,7 +189,7 @@ export interface AgentLoopAfterToolResultHook {
 export interface AgentLoopDependencies {
   sessions: AgentSessionService;
   messages: MessagesRepo;
-  models: ProviderRegistry;
+  models: ProviderRegistry | ProviderRegistrySource;
   tools: ToolRegistry;
   skillsResolver?: AgentSkillsResolver;
   bootstrapResolver?: AgentBootstrapResolver;
@@ -400,7 +404,8 @@ export class AgentLoop {
         })),
       ),
     });
-    const model = this.deps.models.getRequiredScenarioModel(input.scenario);
+    const models = resolveProviderRegistry(this.deps.models);
+    const model = models.getRequiredScenarioModel(input.scenario);
     assertSessionModelSupportsTools({
       sessionPurpose: context.session.purpose,
       scenario: input.scenario,

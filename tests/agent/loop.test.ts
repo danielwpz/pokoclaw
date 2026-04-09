@@ -69,8 +69,7 @@ function createModelConfig(
       scenarios: {
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
-        subagent: ["anthropic_main/claude-sonnet-4-5"],
-        cron: ["anthropic_main/claude-sonnet-4-5"],
+        task: ["anthropic_main/claude-sonnet-4-5"],
         meditationBucket: [],
         meditationConsolidation: [],
       },
@@ -1272,7 +1271,7 @@ describe("agent loop", () => {
     expect(seenSystemPrompts[0]).not.toContain("<name>repo-review</name>");
   });
 
-  test("filters non-readable skills out of the injected catalog for subagent sessions", async () => {
+  test("filters non-readable skills out of the injected catalog for task sessions", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
 
@@ -1408,7 +1407,7 @@ describe("agent loop", () => {
       compaction: DEFAULT_CONFIG.compaction,
     });
 
-    await expect(loop.run({ sessionId: "sess_task", scenario: "cron" })).rejects.toThrow(
+    await expect(loop.run({ sessionId: "sess_task", scenario: "task" })).rejects.toThrow(
       'Session purpose "task" requires a tool-capable model',
     );
   });
@@ -2612,7 +2611,7 @@ describe("agent loop", () => {
       },
     });
 
-    const runPromise = loop.run({ sessionId: "sess_task", scenario: "chat" });
+    const runPromise = loop.run({ sessionId: "sess_task", scenario: "task" });
     const approvalId = Number(await waitForApprovalRequested(emittedEvents));
     const approvalRecord = approvalsRepo.getById(approvalId);
 

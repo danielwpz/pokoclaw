@@ -6,6 +6,7 @@ import {
   buildLarkChatSurfaceKey,
   buildLarkThreadSurfaceKey,
   createLarkCardActionHandler,
+  createLarkInboundRuntime,
   createLarkMessageReceiveHandler,
   createLarkQuoteMessageFetcher,
   normalizeLarkTextMessage,
@@ -817,7 +818,7 @@ describe("lark inbound message handling", () => {
 
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
-        scenario: "cron",
+        scenario: "task",
         content: "Please prioritize this error.",
         channelMessageId: "om_task_thread_msg_1",
         channelParentMessageId: "om_task_card_1",
@@ -888,7 +889,7 @@ describe("lark inbound message handling", () => {
 
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
-        scenario: "cron",
+        scenario: "task",
         content: "Continue, but prioritize fixing the previous error.",
         channelMessageId: "om_task_thread_msg_2",
         channelParentMessageId: "om_user_reply_1",
@@ -965,7 +966,7 @@ describe("lark inbound message handling", () => {
 
       expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
         sessionId: "sess_task_1",
-        scenario: "cron",
+        scenario: "task",
         content: "Use the stack trace above and fix the failing step.",
         channelMessageId: "om_task_thread_msg_child_1",
         channelParentMessageId: "om_task_thread_card_1",
@@ -2426,6 +2427,314 @@ describe("lark card actions", () => {
       toast: {
         type: "info",
         content: "该授权请求已结束或无法处理",
+      },
+    });
+  });
+
+  test("forwards modelSwitch through lark inbound runtime so /model works end-to-end", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      type InboundDispatcher = {
+        invoke(data: unknown, params?: { needCheck?: boolean }): Promise<unknown>;
+      };
+      const dispatchers: InboundDispatcher[] = [];
+      const wsClose = vi.fn();
+      const messageCreate = vi.fn(async () => ({}));
+      const modelSwitch = {
+        getOverview: vi.fn(() => ({
+          models: [
+            {
+              index: 1,
+              modelId: "gpt5",
+              providerId: "main",
+              upstreamModelId: "openai/gpt-5",
+              supportsTools: true,
+              supportsVision: false,
+              supportsReasoning: true,
+            },
+          ],
+          scenarios: [
+            {
+              scenario: "chat",
+              currentModelId: "gpt5",
+              configuredModelIds: ["gpt5"],
+            },
+          ],
+        })),
+      };
+      const runtime = createLarkInboundRuntime({
+        installations: [
+          {
+            installationId: "default",
+            appId: "cli_123",
+            appSecret: "secret_123",
+            config: {
+              enabled: true,
+              appId: "cli_123",
+              appSecret: "secret_123",
+              connectionMode: "websocket",
+            },
+          },
+        ],
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "started" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        modelSwitch: modelSwitch as never,
+        clients: {
+          getOrCreate: () =>
+            ({
+              sdk: {
+                im: {
+                  message: {
+                    create: messageCreate,
+                    reply: vi.fn(async () => ({})),
+                  },
+                },
+              },
+            }) as unknown as LarkSdkClient,
+        },
+        wsClientFactory: () =>
+          ({
+            start: ({ eventDispatcher }: { eventDispatcher: InboundDispatcher }) => {
+              dispatchers.push(eventDispatcher);
+            },
+            close: wsClose,
+          }) as never,
+      });
+
+      runtime.start();
+      const activeDispatcher = dispatchers.at(0);
+      if (activeDispatcher == null) {
+        throw new Error("expected lark inbound runtime to install an event dispatcher");
+      }
+      await activeDispatcher.invoke(
+        {
+          schema: "2.0",
+          header: {
+            event_type: "im.message.receive_v1",
+          },
+          event: makeTextEvent("/model"),
+        },
+        { needCheck: false },
+      );
+
+      expect(modelSwitch.getOverview).toHaveBeenCalledTimes(1);
+      expect(messageCreate).toHaveBeenCalledTimes(1);
+
+      await runtime.shutdown();
+      expect(wsClose).toHaveBeenCalledOnce();
+    });
+  });
+
+  test("routes /model to the model switch service and sends an interactive card", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const messageCreate = vi.fn(async () => ({}));
+      const modelSwitch = {
+        getOverview: vi.fn(() => ({
+          models: [
+            {
+              index: 1,
+              modelId: "gpt5",
+              providerId: "main",
+              upstreamModelId: "openai/gpt-5",
+              supportsTools: true,
+              supportsVision: false,
+              supportsReasoning: true,
+            },
+          ],
+          scenarios: [
+            {
+              scenario: "chat",
+              currentModelId: "gpt5",
+              configuredModelIds: ["gpt5"],
+            },
+          ],
+        })),
+      };
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        modelSwitch: modelSwitch as never,
+        clients: {
+          getOrCreate: () =>
+            ({
+              sdk: {
+                im: {
+                  message: {
+                    create: messageCreate,
+                    reply: vi.fn(async () => ({})),
+                  },
+                },
+              },
+            }) as unknown as LarkSdkClient,
+        },
+      });
+
+      await handler(makeTextEvent("/model"));
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(modelSwitch.getOverview).toHaveBeenCalledTimes(1);
+      expect(messageCreate).toHaveBeenCalledTimes(1);
+      const firstCall = messageCreate.mock.calls.at(0) as
+        | [
+            {
+              data?: {
+                msg_type?: string;
+                content?: string;
+              };
+            },
+          ]
+        | undefined;
+      const payload = firstCall?.[0];
+      expect(payload?.data?.msg_type).toBe("interactive");
+      const content = JSON.parse(String(payload?.data?.content)) as {
+        header?: { title?: { content?: string } };
+      };
+      expect(content.header?.title?.content).toBe("模型切换");
+    });
+  });
+
+  test("returns an updated card when selecting a scenario from the model switch card", async () => {
+    const modelSwitch = {
+      getOverview: vi.fn(() => ({
+        models: [
+          {
+            index: 1,
+            modelId: "gpt5",
+            providerId: "main",
+            upstreamModelId: "openai/gpt-5",
+            supportsTools: true,
+            supportsVision: false,
+            supportsReasoning: true,
+          },
+        ],
+        scenarios: [
+          {
+            scenario: "chat",
+            currentModelId: "gpt5",
+            configuredModelIds: ["gpt5"],
+          },
+        ],
+      })),
+      switchScenarioModel: vi.fn(),
+    };
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
+      },
+      control: {} as RuntimeControlService,
+      modelSwitch: modelSwitch as never,
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "model_switch_select_scenario",
+          scenario: "chat",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(modelSwitch.getOverview).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      card: {
+        type: "raw",
+        data: {
+          header: {
+            title: {
+              content: "模型切换",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  test("applies a model switch from card action and returns toast plus refreshed card", async () => {
+    const modelSwitch = {
+      getOverview: vi.fn(() => ({
+        models: [
+          {
+            index: 1,
+            modelId: "gpt5",
+            providerId: "main",
+            upstreamModelId: "openai/gpt-5",
+            supportsTools: true,
+            supportsVision: false,
+            supportsReasoning: true,
+          },
+        ],
+        scenarios: [
+          {
+            scenario: "chat",
+            currentModelId: "gpt5",
+            configuredModelIds: ["gpt5"],
+          },
+        ],
+      })),
+      switchScenarioModel: vi.fn(async () => ({
+        scenario: "chat",
+        previousModelId: "deepseek",
+        nextModelId: "gpt5",
+        configuredModelIds: ["gpt5", "deepseek"],
+        reloaded: true,
+        version: 2,
+        warnings: [],
+      })),
+    };
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
+      },
+      control: {} as RuntimeControlService,
+      modelSwitch: modelSwitch as never,
+    });
+
+    const result = await handler({
+      action: {
+        value: {
+          action: "model_switch_apply",
+          scenario: "chat",
+          modelId: "gpt5",
+        },
+      },
+      operator: {
+        open_id: "ou_sender",
+      },
+    });
+
+    expect(modelSwitch.switchScenarioModel).toHaveBeenCalledExactlyOnceWith({
+      scenario: "chat",
+      modelId: "gpt5",
+    });
+    expect(result).toMatchObject({
+      toast: {
+        type: "success",
+        content: "已切换 chat → gpt5",
+      },
+      card: {
+        type: "raw",
+        data: {
+          header: {
+            title: {
+              content: "模型切换",
+            },
+          },
+        },
       },
     });
   });

@@ -49,8 +49,7 @@ export interface ResolvedModel {
 const MODEL_SCENARIOS = [
   "chat",
   "compaction",
-  "subagent",
-  "cron",
+  "task",
   "meditationBucket",
   "meditationConsolidation",
 ] as const;

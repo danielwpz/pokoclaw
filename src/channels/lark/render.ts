@@ -8,6 +8,11 @@ import type { LarkApprovalState } from "@/src/channels/lark/approval-state.js";
 import { describePermissionRequestLines } from "@/src/security/scope.js";
 
 export {
+  buildLarkRenderedModelSwitchCard,
+  type LarkModelSwitchCardState,
+  type LarkRenderedModelSwitchCard,
+} from "@/src/channels/lark/render/model-switch-card.js";
+export {
   buildLarkRenderedRunCard,
   buildLarkRenderedRunCardPages,
   type LarkRenderedRunCard,

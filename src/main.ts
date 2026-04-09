@@ -5,7 +5,7 @@
  * start runtime bootstrap, listen for shutdown signals, and perform graceful
  * teardown. Business logic lives in runtime/orchestration/channel modules.
  */
-import { loadConfig } from "@/src/config/load.js";
+import { getDefaultConfigPaths, loadConfig } from "@/src/config/load.js";
 import { createRuntimeBootstrap } from "@/src/runtime/bootstrap.js";
 import { readLastRuntimeLogTimestamp } from "@/src/runtime/runtime-log.js";
 import {
@@ -27,7 +27,8 @@ export async function main(): Promise<void> {
   let runtime: ReturnType<typeof createRuntimeBootstrap> | null = null;
 
   try {
-    const config = await loadConfig();
+    const configPaths = getDefaultConfigPaths();
+    const config = await loadConfig(configPaths);
     const previousLastSeenAt = await readLastRuntimeLogTimestamp(POKECLAW_RUNTIME_LOG_PATH);
     configureRuntimeLogging(config.logging);
     logger.info("application config loaded", {
@@ -40,6 +41,7 @@ export async function main(): Promise<void> {
       config,
       storage: storage.db,
       previousLastSeenAt,
+      configPaths,
     });
 
     runtime.start();

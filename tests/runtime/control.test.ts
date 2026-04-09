@@ -258,7 +258,7 @@ describe("RuntimeControlService", () => {
         sessionId: "sess_1",
         conversationId: "conv_1",
         branchId: "branch_1",
-        scenario: "cron",
+        scenario: "task",
       });
 
       control.stopRun({
