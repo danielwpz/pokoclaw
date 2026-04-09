@@ -9,7 +9,7 @@ Use this file when the task is to answer questions like:
 
 ## Core rule
 
-The heuristics in this file are for the **agent**, not for the helper scripts.
+The heuristics in this file are for **you**, not for the helper scripts.
 
 Scripts may retrieve evidence slices. They should not be treated as the entity that understands the meaning of the session.
 
@@ -95,7 +95,7 @@ After collecting evidence, reason in this order:
 5. What does the current repo/worktree state confirm or contradict?
 6. What should happen next?
 
-That final reasoning step belongs to the agent.
+That final reasoning step belongs to you.
 
 ## Suggested answer shape
 
@@ -125,4 +125,4 @@ If confidence is low, include ranked alternatives and explain the uncertainty.
 - `scripts/find_project_sessions.py --project /abs/path/to/project`
 - `scripts/read_session_records.py --session-file /path/to/session.jsonl`
 
-Use them to retrieve data more quickly. The judgment still belongs to the agent.
+Use them to retrieve data more quickly. The judgment still belongs to you.

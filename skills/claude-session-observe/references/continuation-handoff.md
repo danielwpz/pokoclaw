@@ -4,7 +4,7 @@ Use this file when the task is not just to observe a session, but to **take it o
 
 ## Core idea
 
-Continuation is not a script feature. Continuation is an **agent workflow**.
+Continuation is not a script feature. Continuation is **your workflow**.
 
 A good continuation answer needs at least two evidence planes:
 

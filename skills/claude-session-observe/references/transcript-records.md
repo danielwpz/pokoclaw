@@ -13,7 +13,7 @@ You are looking at JSONL records and asking:
 - what fixed fields they expose
 - what additional sidecar files might matter
 
-The interpretation still belongs to the agent.
+The interpretation still belongs to you.
 
 ## Main record types observed in project transcripts
 

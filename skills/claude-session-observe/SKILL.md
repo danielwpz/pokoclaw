@@ -8,7 +8,7 @@ skillKey: pokeclaw/claude-session-observe
 
 Use this skill to inspect Claude Code's local session artifacts under `~/.claude`.
 
-The goal of this skill is **not** to teach the agent to trust a magic script. The goal is to teach the agent how to:
+The goal of this skill is **not** to teach you to trust a magic script. The goal is to teach you how to:
 
 - find which Claude Code sessions exist for a project
 - inspect what happened in a session
@@ -26,15 +26,15 @@ There are three layers here:
 2. **Query helpers**
    - optional scripts under `scripts/`
    - ordinary file reads, `ls`, `grep`, `tail`-style inspection
-3. **Agent judgment**
+3. **Your judgment**
    - "what sessions exist"
    - "what this session was doing"
    - "what was completed"
    - "what should happen next"
 
-The scripts are only layer 2. They are read-only retrieval helpers, similar to `ls`, `tail`, or `select ... from ... limit ...`. They do **not** decide the final answer.
+The scripts are only layer 2. They are read-only retrieval helpers, similar to `ls`, `tail`, or `select ... from ... limit ...`. **You** decide the final answer.
 
-If the scripts do not exist, the skill should still work. The real contract of this skill is the investigation workflow.
+If the scripts do not exist, you should still be able to use this skill. The real contract of this skill is the investigation workflow.
 
 ## Channels
 
