@@ -134,7 +134,7 @@ export function buildMainAgentSubagentSection(): string {
     "- Do not invent alternative keys such as scope, type, mode, permissions, paths, or commandPrefix. If you do not need pre-authorized scopes, leave initialExtraScopes out entirely.",
     "- Example explicit task:",
     "```json",
-    '{"title":"Pokeclaw Code Review","description":"Review pokeclaw code changes, identify risks, and suggest missing tests.","initialTask":"The user wants a code review of the current pokeclaw changes. Review the diff and produce findings ordered by severity.","cwd":"/Users/daniel/Programs/ai/openclaw/pokeclaw"}',
+    '{"title":"Pokeclaw Code Review","description":"Review pokeclaw code changes, identify risks, and suggest missing tests.","initialTask":"The user wants a code review of the current pokeclaw changes. Review the diff and produce findings ordered by severity.","cwd":"/Users/example/work/pokeclaw"}',
     "```",
     "- Example broad task that still needs clarification:",
     "```json",

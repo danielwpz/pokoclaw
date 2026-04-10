@@ -77,8 +77,8 @@ describe("lark subagent provisioner", () => {
       title: "PR Review",
       description: "Review pull requests and summarize findings.",
       initialTask: "Review the current PR and report concrete issues.",
-      workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
-      privateWorkspaceDir: "/Users/daniel/.pokeclaw/workspace/subagents/abcd1234",
+      workdir: "/Users/example/work/pokeclaw",
+      privateWorkspaceDir: "/Users/example/.pokeclaw/workspace/subagents/abcd1234",
       preferredSurface: "independent_chat",
     });
 
@@ -144,7 +144,7 @@ describe("lark subagent provisioner", () => {
       | undefined;
 
     expect(welcomeContent).toContain(
-      "**私有工作区**：`/Users/daniel/.pokeclaw/workspace/subagents/abcd1234`",
+      "**私有工作区**：`/Users/example/.pokeclaw/workspace/subagents/abcd1234`",
     );
     expect(welcomeContent).not.toContain("**初始任务**：Review the current PR");
     expect(welcomeContent).toContain(
@@ -218,8 +218,8 @@ describe("lark subagent provisioner", () => {
       title: "PR Review",
       description: "Review pull requests and summarize findings.",
       initialTask: "Review the current PR and report concrete issues.",
-      workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
-      privateWorkspaceDir: "/Users/daniel/.pokeclaw/workspace/subagents/abcd1234",
+      workdir: "/Users/example/work/pokeclaw",
+      privateWorkspaceDir: "/Users/example/.pokeclaw/workspace/subagents/abcd1234",
       preferredSurface: "independent_chat",
     });
 

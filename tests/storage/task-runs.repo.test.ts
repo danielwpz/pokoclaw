@@ -158,13 +158,13 @@ describe("task runs repo", () => {
     repo.updateStatus({
       id: "run_1",
       status: "cancelled",
-      cancelledBy: "user:daniel",
+      cancelledBy: "user:test-user",
     });
 
     expect(repo.getById("run_1")).toMatchObject({
       id: "run_1",
       status: "cancelled",
-      cancelledBy: "user:daniel",
+      cancelledBy: "user:test-user",
       priority: 3,
       attempt: 2,
       finishedAt: null,

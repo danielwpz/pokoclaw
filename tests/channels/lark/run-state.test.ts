@@ -1165,8 +1165,8 @@ describe("lark run state", () => {
         title: "需要授权",
         request: {
           scopes: [
-            { kind: "fs.read", path: "/Users/daniel/project/README.md" },
-            { kind: "fs.write", path: "/Users/daniel/project/output.txt" },
+            { kind: "fs.read", path: "/Users/example/project/README.md" },
+            { kind: "fs.write", path: "/Users/example/project/output.txt" },
           ],
         },
         reasonText: "当前操作需要你的授权才能继续。",
@@ -1182,8 +1182,8 @@ describe("lark run state", () => {
     expect(cardText).toContain("### 授权运行命令");
     expect(cardText).not.toContain("**操作**");
     expect(cardText).toContain("**权限**");
-    expect(cardText).toContain("**Read** `/Users/daniel/project/README.md`");
-    expect(cardText).toContain("**Write** `/Users/daniel/project/output.txt`");
+    expect(cardText).toContain("**Read** `/Users/example/project/README.md`");
+    expect(cardText).toContain("**Write** `/Users/example/project/output.txt`");
     expect(cardText).toContain("**原因**");
     expect(cardText).toContain("允许 1天");
     expect(cardText).toContain("允许 永久");
@@ -1202,9 +1202,9 @@ describe("lark run state", () => {
         runId: "run_1",
         approvalId: "approval_fmt_1",
         approvalTarget: "user",
-        title: "Approval required: Write /Users/daniel/Desktop/test-new-2.js",
+        title: "Approval required: Write /Users/example/Desktop/test-new-2.js",
         request: {
-          scopes: [{ kind: "fs.write", path: "/Users/daniel/Desktop/test-new-2.js" }],
+          scopes: [{ kind: "fs.write", path: "/Users/example/Desktop/test-new-2.js" }],
         },
         reasonText: "当前操作需要你的授权才能继续。",
         expiresAt: null,
@@ -1214,7 +1214,7 @@ describe("lark run state", () => {
 
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
     expect(cardText).toContain("**权限**");
-    expect(cardText).toContain("**Write** `/Users/daniel/Desktop/test-new-2.js`");
+    expect(cardText).toContain("**Write** `/Users/example/Desktop/test-new-2.js`");
   });
 
   test("hides bash prefix when it matches the current command exactly", () => {
@@ -1291,9 +1291,9 @@ describe("lark run state", () => {
         runId: "run_1",
         approvalId: "approval_fmt_2",
         approvalTarget: "user",
-        title: "Approval required: Write /Users/daniel/Desktop/test-new-2.js",
+        title: "Approval required: Write /Users/example/Desktop/test-new-2.js",
         request: {
-          scopes: [{ kind: "fs.write", path: "/Users/daniel/Desktop/test-new-2.js" }],
+          scopes: [{ kind: "fs.write", path: "/Users/example/Desktop/test-new-2.js" }],
         },
         reasonText: "当前操作需要你的授权才能继续。",
         expiresAt: null,
@@ -1312,7 +1312,7 @@ describe("lark run state", () => {
     expect(cardText).not.toContain("### 已授权");
     expect(cardText).toContain("授权请求 — 授权成功");
     expect(cardText).toContain("**权限**");
-    expect(cardText).toContain("**Write** `/Users/daniel/Desktop/test-new-2.js`");
+    expect(cardText).toContain("**Write** `/Users/example/Desktop/test-new-2.js`");
     expect(cardText).not.toContain("**结果**：agent 将继续执行。");
   });
 
@@ -1329,19 +1329,12 @@ describe("lark run state", () => {
         approvalId: "approval_fmt_3",
         approvalTarget: "user",
         title:
-          "Approval required: run bash with full access for prefix git -C /Users/daniel/Programs/ai/openclaw/pokeclaw log --oneline -5",
+          "Approval required: run bash with full access for prefix git -C /Users/example/work/pokeclaw log --oneline -5",
         request: {
           scopes: [
             {
               kind: "bash.full_access",
-              prefix: [
-                "git",
-                "-C",
-                "/Users/daniel/Programs/ai/openclaw/pokeclaw",
-                "log",
-                "--oneline",
-                "-5",
-              ],
+              prefix: ["git", "-C", "/Users/example/work/pokeclaw", "log", "--oneline", "-5"],
             },
           ],
         },
@@ -1360,9 +1353,7 @@ describe("lark run state", () => {
 
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(resolved).card);
     expect(cardText).toContain("**命令**");
-    expect(cardText).toContain(
-      "`git -C /Users/daniel/Programs/ai/openclaw/pokeclaw log --oneline -5`",
-    );
+    expect(cardText).toContain("`git -C /Users/example/work/pokeclaw log --oneline -5`");
     expect(cardText).not.toContain("Run bash commands with full access for prefix:");
   });
 
@@ -1513,7 +1504,7 @@ describe("lark run state", () => {
           ],
           details: {
             command: "date '+%Y-%m-%d %H:%M:%S %Z (%A)'",
-            cwd: "/Users/daniel/.pokeclaw/workspace",
+            cwd: "/Users/example/.pokeclaw/workspace",
             timeoutMs: 10000,
             exitCode: 0,
             signal: null,

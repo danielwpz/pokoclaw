@@ -96,7 +96,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
-      cwd: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      cwd: "/Users/example/work/pokeclaw",
       initialExtraScopes: [{ kind: "db.read", database: "system" }],
       createdAt: submittedAt,
     });
@@ -111,7 +111,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
-      workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      workdir: "/Users/example/work/pokeclaw",
       status: "pending",
       createdAt: "2026-03-26T00:05:00.000Z",
     });
@@ -151,7 +151,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
-      cwd: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      cwd: "/Users/example/work/pokeclaw",
       initialExtraScopes: [{ kind: "db.read", database: "system" }],
       createdAt: new Date("2026-03-26T00:05:00.000Z"),
     });
@@ -168,7 +168,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
-      workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      workdir: "/Users/example/work/pokeclaw",
       privateWorkspaceDir: buildSubagentWorkspaceDir(created.agent.id),
       preferredSurface: "independent_chat",
     });
@@ -184,7 +184,7 @@ describe("subagent orchestration", () => {
       kind: "sub",
       displayName: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
-      workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      workdir: "/Users/example/work/pokeclaw",
     });
 
     const requestAfterApproval = new SubagentCreationRequestsRepo(handle.storage.db).getById(
@@ -207,19 +207,11 @@ describe("subagent orchestration", () => {
         JSON.stringify({ kind: "db.read", database: "system" }),
         JSON.stringify({
           kind: "fs.read",
-          path: "/Users/daniel/Programs/ai/openclaw/pokeclaw/.agents/skills/**",
-        }),
-        JSON.stringify({
-          kind: "fs.read",
-          path: "/Users/daniel/Programs/ai/openclaw/pokeclaw/.claude/skills/**",
-        }),
-        JSON.stringify({
-          kind: "fs.read",
-          path: "/Users/daniel/Programs/ai/openclaw/pokeclaw/**",
+          path: "/Users/example/work/pokeclaw/**",
         }),
         JSON.stringify({
           kind: "fs.write",
-          path: "/Users/daniel/Programs/ai/openclaw/pokeclaw/**",
+          path: "/Users/example/work/pokeclaw/**",
         }),
       ].sort(),
     );
@@ -471,12 +463,12 @@ describe("subagent orchestration", () => {
       title: "Repo Helper",
       description: "Operate inside the repo while keeping a private scratch directory.",
       initialTask: "Start by checking the repo state.",
-      cwd: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+      cwd: "/Users/example/work/pokeclaw",
     });
 
-    expect(submitted.workdir).toBe("/Users/daniel/Programs/ai/openclaw/pokeclaw");
+    expect(submitted.workdir).toBe("/Users/example/work/pokeclaw");
     expect(submitted.privateWorkspaceDir).toBe(buildSubagentWorkspaceDir(submitted.request.id));
-    expect(submitted.request.workdir).toBe("/Users/daniel/Programs/ai/openclaw/pokeclaw");
+    expect(submitted.request.workdir).toBe("/Users/example/work/pokeclaw");
   });
 
   test("rejects subagent creation request submission from a non-main session", async () => {

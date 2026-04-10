@@ -37,12 +37,12 @@ describe("effective permissions", () => {
   test("parses granted scopes from stored JSON", () => {
     expect(
       parseGrantedScopes([
-        '{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}',
+        '{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}',
         '{"kind":"db.read","database":"system"}',
         '{"kind":"bash.full_access","prefix":["git","push"]}',
       ]),
     ).toEqual([
-      { kind: "fs.read", path: "/Users/daniel/.pokeclaw/workspace/**" },
+      { kind: "fs.read", path: "/Users/example/.pokeclaw/workspace/**" },
       { kind: "db.read", database: "system" },
       { kind: "bash.full_access", prefix: ["git", "push"] },
     ]);
@@ -84,11 +84,11 @@ describe("effective permissions", () => {
 
   test("buildEffectivePermissionsForRole merges explicit grants with the role baseline", () => {
     const permissions = buildEffectivePermissionsForRole(
-      [{ kind: "fs.write", path: "/Users/daniel/project/README.md" }],
+      [{ kind: "fs.write", path: "/Users/example/project/README.md" }],
       "subagent",
     );
 
-    expect(permissions.fs.write.allow).toContain(path.resolve("/Users/daniel/project/README.md"));
+    expect(permissions.fs.write.allow).toContain(path.resolve("/Users/example/project/README.md"));
     expect(permissions.fs.write.allow).toContain(`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`);
   });
 
@@ -248,7 +248,7 @@ describe("filesystem permission checks", () => {
           ...DEFAULT_SYSTEM_POLICY.fs,
           read: {
             ...DEFAULT_SYSTEM_POLICY.fs.read,
-            deny: ["/Users/daniel/project/**"],
+            deny: ["/Users/example/project/**"],
           },
         },
       },
@@ -258,32 +258,32 @@ describe("filesystem permission checks", () => {
     expect(
       checkFilesystemPermission({
         kind: "fs.read",
-        targetPath: "/Users/daniel/project/private.txt",
+        targetPath: "/Users/example/project/private.txt",
         permissions,
       }),
     ).toEqual({
       result: "deny",
       reason: "not_granted",
-      summary: "fs.read is not granted for /Users/daniel/project/private.txt",
+      summary: "fs.read requires approval for /Users/example/project/private.txt",
     });
   });
 
   test("subtree grants do not leak into sibling paths", () => {
     const permissions = buildEffectivePermissionsForRole(
-      [{ kind: "fs.read", path: "/Users/daniel/project/**" }],
+      [{ kind: "fs.read", path: "/Users/example/project/**" }],
       "subagent",
     );
 
     expect(
       checkFilesystemPermission({
         kind: "fs.read",
-        targetPath: "/Users/daniel/project-file/notes.txt",
+        targetPath: "/Users/example/project-file/notes.txt",
         permissions,
       }),
     ).toEqual({
       result: "deny",
       reason: "not_granted",
-      summary: "fs.read requires approval for /Users/daniel/project-file/notes.txt",
+      summary: "fs.read requires approval for /Users/example/project-file/notes.txt",
     });
   });
 

@@ -41,7 +41,7 @@ describe("approvals repo", () => {
       ownerAgentId: "agent_1",
       requestedBySessionId: "sess_1",
       requestedScopeJson:
-        '{"scopes":[{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
+        '{"scopes":[{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}]}',
       approvalTarget: "user",
       expiresAt: new Date("2026-03-22T00:03:01.000Z"),
       resumePayloadJson:
@@ -107,7 +107,7 @@ describe("approvals repo", () => {
       ownerAgentId: "agent_1",
       requestedBySessionId: "sess_1",
       requestedScopeJson:
-        '{"scopes":[{"kind":"fs.write","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
+        '{"scopes":[{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"}]}',
       approvalTarget: "user",
       createdAt: new Date("2026-03-22T00:00:03.000Z"),
     });

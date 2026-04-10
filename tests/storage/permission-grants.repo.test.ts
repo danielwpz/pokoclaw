@@ -36,7 +36,7 @@ describe("permission grants repo", () => {
     repo.create({
       id: "grant_1",
       ownerAgentId: "agent_1",
-      scopeJson: '{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}',
+      scopeJson: '{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}',
       grantedBy: "main_agent",
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
@@ -58,7 +58,7 @@ describe("permission grants repo", () => {
     repo.create({
       id: "grant_expired",
       ownerAgentId: "agent_1",
-      scopeJson: '{"kind":"fs.read","path":"/Users/daniel/project-a/**"}',
+      scopeJson: '{"kind":"fs.read","path":"/Users/example/project-a/**"}',
       grantedBy: "user",
       createdAt: new Date("2026-03-22T00:00:00.000Z"),
       expiresAt: new Date("2026-03-22T00:10:00.000Z"),
@@ -85,7 +85,7 @@ describe("permission grants repo", () => {
     repo.create({
       id: "grant_1",
       ownerAgentId: "agent_1",
-      scopeJson: '{"kind":"fs.read","path":"/Users/daniel/project-a/**"}',
+      scopeJson: '{"kind":"fs.read","path":"/Users/example/project-a/**"}',
       grantedBy: "user",
       createdAt: new Date("2026-03-22T00:00:00.000Z"),
     });
