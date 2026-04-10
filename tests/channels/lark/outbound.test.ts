@@ -1924,7 +1924,7 @@ describe("lark outbound runtime", () => {
       ) VALUES (
         1,
         'agent_1',
-        '{"scopes":[{"kind":"fs.read","path":"/Users/daniel/project/README.md"},{"kind":"fs.write","path":"/Users/daniel/project/output.txt"}]}',
+        '{"scopes":[{"kind":"fs.read","path":"/Users/example/project/README.md"},{"kind":"fs.write","path":"/Users/example/project/output.txt"}]}',
         'user',
         'pending',
         'Need to inspect and update project files.',
@@ -1987,8 +1987,8 @@ describe("lark outbound runtime", () => {
         title: "Approval required",
         request: {
           scopes: [
-            { kind: "fs.read", path: "/Users/daniel/project/README.md" },
-            { kind: "fs.write", path: "/Users/daniel/project/output.txt" },
+            { kind: "fs.read", path: "/Users/example/project/README.md" },
+            { kind: "fs.write", path: "/Users/example/project/output.txt" },
           ],
         },
         reasonText: "Need to inspect and update project files.",
@@ -2003,8 +2003,8 @@ describe("lark outbound runtime", () => {
     const approvalCardInput = (createCard.mock.calls as unknown as Array<[unknown]>)[0]?.[0];
     const approvalCardText = JSON.stringify(approvalCardInput);
     expect(approvalCardText).toContain("**权限**");
-    expect(approvalCardText).toContain("**Read** `/Users/daniel/project/README.md`");
-    expect(approvalCardText).toContain("**Write** `/Users/daniel/project/output.txt`");
+    expect(approvalCardText).toContain("**Read** `/Users/example/project/README.md`");
+    expect(approvalCardText).toContain("**Write** `/Users/example/project/output.txt`");
     expect(approvalCardText).not.toContain("2 permissions");
     expect(approvalCardText).not.toContain("**操作**：Approval required");
     expect(approvalCardText).toContain("### 授权运行命令");

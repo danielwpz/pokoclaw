@@ -634,7 +634,7 @@ describe("storage db bootstrap", () => {
           .run(
             "agent_1",
             "sess_1",
-            '{"scopes":[{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
+            '{"scopes":[{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}]}',
             "runtime",
             "waiting",
             "2026-03-22T00:00:00.000Z",
@@ -687,7 +687,7 @@ describe("storage db bootstrap", () => {
         .run(
           "agent_1",
           "sess_1",
-          '{"scopes":[{"kind":"fs.read","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
+          '{"scopes":[{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}]}',
           "user",
           "pending",
           "2026-03-22T00:00:00.000Z",
@@ -737,7 +737,7 @@ describe("storage db bootstrap", () => {
         .run(
           "agent_1",
           "sess_1",
-          '{"scopes":[{"kind":"fs.write","path":"/Users/daniel/.pokeclaw/workspace/**"}]}',
+          '{"scopes":[{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"}]}',
           "user",
           "approved",
           "2026-03-22T00:00:00.000Z",
@@ -752,7 +752,7 @@ describe("storage db bootstrap", () => {
           "grant_1",
           "agent_1",
           approval.lastInsertRowid,
-          '{"kind":"fs.write","path":"/Users/daniel/.pokeclaw/workspace/**"}',
+          '{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"}',
           "user",
           "2026-03-22T00:00:02.000Z",
           "2026-03-29T00:00:02.000Z",

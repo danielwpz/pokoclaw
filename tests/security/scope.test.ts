@@ -13,21 +13,23 @@ import {
 describe("permission scope parsing", () => {
   test("parses fs exact path scopes", () => {
     expect(
-      parsePermissionScopeJson('{"kind":"fs.read","path":"/Users/daniel/project/README.md"}'),
+      parsePermissionScopeJson('{"kind":"fs.read","path":"/Users/example/project/README.md"}'),
     ).toEqual({
       kind: "fs.read",
-      path: "/Users/daniel/project/README.md",
+      path: "/Users/example/project/README.md",
     });
   });
 
   test("parses fs subtree scopes", () => {
     expect(
-      parsePermissionScopeJson('{"kind":"fs.write","path":"/Users/daniel/.pokeclaw/workspace/**"}'),
+      parsePermissionScopeJson(
+        '{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"}',
+      ),
     ).toEqual({
       kind: "fs.write",
-      path: "/Users/daniel/.pokeclaw/workspace/**",
+      path: "/Users/example/.pokeclaw/workspace/**",
     });
-    expect(isFsSubtreeScopePath("/Users/daniel/.pokeclaw/workspace/**")).toBe(true);
+    expect(isFsSubtreeScopePath("/Users/example/.pokeclaw/workspace/**")).toBe(true);
   });
 
   test("parses db scopes", () => {
@@ -51,7 +53,7 @@ describe("permission scope parsing", () => {
 
   test("rejects unsupported globs", () => {
     expect(() =>
-      parsePermissionScopeJson('{"kind":"fs.read","path":"/Users/daniel/project/*.ts"}'),
+      parsePermissionScopeJson('{"kind":"fs.read","path":"/Users/example/project/*.ts"}'),
     ).toThrow(
       "Invalid permission scope JSON: fs.read path only supports exact absolute paths or paths ending with /**",
     );
@@ -59,7 +61,7 @@ describe("permission scope parsing", () => {
 
   test("rejects wildcard characters outside trailing subtree suffix", () => {
     expect(() =>
-      parsePermissionScopeJson('{"kind":"fs.write","path":"/Users/daniel/*/build.log"}'),
+      parsePermissionScopeJson('{"kind":"fs.write","path":"/Users/example/*/build.log"}'),
     ).toThrow(
       "Invalid permission scope JSON: fs.write path only supports exact absolute paths or paths ending with /**",
     );
@@ -76,13 +78,13 @@ describe("permission request parsing", () => {
   test("parses requests with multiple scopes", () => {
     expect(
       parsePermissionRequestJson(
-        '{"scopes":[{"kind":"fs.write","path":"/Users/daniel/.pokeclaw/workspace/**"},{"kind":"db.read","database":"system"}]}',
+        '{"scopes":[{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"},{"kind":"db.read","database":"system"}]}',
       ),
     ).toEqual({
       scopes: [
         {
           kind: "fs.write",
-          path: "/Users/daniel/.pokeclaw/workspace/**",
+          path: "/Users/example/.pokeclaw/workspace/**",
         },
         {
           kind: "db.read",
@@ -114,9 +116,9 @@ describe("permission scope serialization", () => {
     expect(
       serializePermissionScope({
         kind: "fs.read",
-        path: "/Users/daniel/project/README.md",
+        path: "/Users/example/project/README.md",
       }),
-    ).toBe('{"kind":"fs.read","path":"/Users/daniel/project/README.md"}');
+    ).toBe('{"kind":"fs.read","path":"/Users/example/project/README.md"}');
 
     expect(
       serializePermissionRequest({
@@ -129,9 +131,9 @@ describe("permission scope serialization", () => {
     expect(
       describePermissionScope({
         kind: "fs.write",
-        path: "/Users/daniel/.pokeclaw/workspace/**",
+        path: "/Users/example/.pokeclaw/workspace/**",
       }),
-    ).toBe("Write /Users/daniel/.pokeclaw/workspace/**");
+    ).toBe("Write /Users/example/.pokeclaw/workspace/**");
     expect(
       describePermissionScope({
         kind: "db.read",
@@ -146,11 +148,11 @@ describe("permission scope serialization", () => {
         scopes: [
           {
             kind: "fs.read",
-            path: "/Users/daniel/project/README.md",
+            path: "/Users/example/project/README.md",
           },
           {
             kind: "fs.write",
-            path: "/Users/daniel/project/output.txt",
+            path: "/Users/example/project/output.txt",
           },
           {
             kind: "db.read",
@@ -159,11 +161,11 @@ describe("permission scope serialization", () => {
         ],
       }),
     ).toBe(
-      "Read /Users/daniel/project/README.md; Write /Users/daniel/project/output.txt; Read system database",
+      "Read /Users/example/project/README.md; Write /Users/example/project/output.txt; Read system database",
     );
   });
 
   test("detects non-subtree filesystem paths correctly", () => {
-    expect(isFsSubtreeScopePath("/Users/daniel/project/README.md")).toBe(false);
+    expect(isFsSubtreeScopePath("/Users/example/project/README.md")).toBe(false);
   });
 });

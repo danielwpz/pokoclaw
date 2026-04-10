@@ -38,16 +38,18 @@ describe("tool errors", () => {
 
   test("keeps raw internal runtime details when normalizing unexpected tool errors", () => {
     const error = normalizeToolFailure(
-      new Error("EPERM: operation not permitted, scandir '/Users/daniel/.Trash'"),
+      new Error("EPERM: operation not permitted, scandir '/Users/example/.Trash'"),
     );
 
     expect(error.kind).toBe("internal_error");
     expect(error.message).toBe("Tool execution failed due to an internal runtime error.");
-    expect(error.rawMessage).toBe("EPERM: operation not permitted, scandir '/Users/daniel/.Trash'");
+    expect(error.rawMessage).toBe(
+      "EPERM: operation not permitted, scandir '/Users/example/.Trash'",
+    );
     expect(buildToolFailureContent(error)).toEqual([
       {
         type: "text",
-        text: "Tool execution failed due to an internal runtime error.\n\nRaw error: EPERM: operation not permitted, scandir '/Users/daniel/.Trash'",
+        text: "Tool execution failed due to an internal runtime error.\n\nRaw error: EPERM: operation not permitted, scandir '/Users/example/.Trash'",
       },
     ]);
   });

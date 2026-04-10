@@ -71,7 +71,7 @@ describe("security service", () => {
       requestedBySessionId: "sess_1",
       request: {
         scopes: [
-          { kind: "fs.read", path: "/Users/daniel/project/**" },
+          { kind: "fs.read", path: "/Users/example/project/**" },
           { kind: "db.read", database: "system" },
         ],
       },
@@ -104,7 +104,7 @@ describe("security service", () => {
       service.checkFilesystemAccess({
         ownerAgentId: "agent_1",
         kind: "fs.read",
-        targetPath: `${process.env.HOME ?? "/Users/daniel"}/Documents/summary.md`,
+        targetPath: `${process.env.HOME ?? "/Users/example"}/Documents/summary.md`,
       }),
     ).toMatchObject({ result: "allow" });
   });
@@ -118,7 +118,7 @@ describe("security service", () => {
       service.checkFilesystemAccess({
         ownerAgentId: "agent_2",
         kind: "fs.read",
-        targetPath: `${process.env.HOME ?? "/Users/daniel"}/Documents/summary.md`,
+        targetPath: `${process.env.HOME ?? "/Users/example"}/Documents/summary.md`,
       }),
     ).toMatchObject({ result: "deny", reason: "not_granted" });
   });

@@ -406,8 +406,8 @@ describe("agent system prompt", () => {
       agentKind: "sub",
       displayName: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
-      workdir: "/Users/daniel/Programs/ai/openclaw/pokeclaw",
-      privateWorkspaceDir: "/Users/daniel/.pokeclaw/workspace/subagents/1234abcd",
+      workdir: "/Users/example/work/pokeclaw",
+      privateWorkspaceDir: "/Users/example/.pokeclaw/workspace/subagents/1234abcd",
     });
 
     expect(prompt).toContain("You are Pokeclaw SubAgent");
@@ -415,9 +415,9 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("## SubAgent Profile");
     expect(prompt).toContain("<title>PR Review</title>");
     expect(prompt).toContain("<description>");
-    expect(prompt).toContain("<workdir>/Users/daniel/Programs/ai/openclaw/pokeclaw</workdir>");
+    expect(prompt).toContain("<workdir>/Users/example/work/pokeclaw</workdir>");
     expect(prompt).toContain(
-      "<private_workspace_dir>/Users/daniel/.pokeclaw/workspace/subagents/1234abcd</private_workspace_dir>",
+      "<private_workspace_dir>/Users/example/.pokeclaw/workspace/subagents/1234abcd</private_workspace_dir>",
     );
     expect(prompt).not.toContain("<initial_task>");
     expect(prompt).toContain("You own this workstream");

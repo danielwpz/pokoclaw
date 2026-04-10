@@ -121,14 +121,14 @@ describe("task run lifecycle", () => {
     const settled = cancelTaskExecution({
       db: handle.storage.db,
       taskRunId: "run_1",
-      cancelledBy: "user:daniel",
+      cancelledBy: "user:test-user",
       resultSummary: "cancelled by user",
       finishedAt: new Date("2026-03-26T00:00:09.000Z"),
     });
 
     expect(settled.taskRun).toMatchObject({
       status: "cancelled",
-      cancelledBy: "user:daniel",
+      cancelledBy: "user:test-user",
       resultSummary: "cancelled by user",
       durationMs: 7000,
     });

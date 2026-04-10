@@ -352,8 +352,8 @@ describe("config loader", () => {
       [
         "[security.filesystem]",
         "overrideHardDenyRead = true",
-        'hardDenyRead = ["/Users/daniel/private/**"]',
-        'hardDenyWrite = ["/Users/daniel/private/**"]',
+        'hardDenyRead = ["/Users/example/private/**"]',
+        'hardDenyWrite = ["/Users/example/private/**"]',
         "",
         "[security.network]",
         "overrideHardDenyHosts = true",
@@ -369,8 +369,8 @@ describe("config loader", () => {
       filesystem: {
         overrideHardDenyRead: true,
         overrideHardDenyWrite: false,
-        hardDenyRead: ["/Users/daniel/private/**"],
-        hardDenyWrite: ["/Users/daniel/private/**"],
+        hardDenyRead: ["/Users/example/private/**"],
+        hardDenyWrite: ["/Users/example/private/**"],
       },
       network: {
         overrideHardDenyHosts: true,
