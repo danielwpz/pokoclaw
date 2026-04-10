@@ -16,6 +16,7 @@ export interface LarkApprovalState {
   title: string;
   request: PermissionRequest;
   reasonText: string;
+  commandText: string | null;
   approvalTarget: "user" | "main_agent";
   expiresAt: string | null;
   resolved: boolean;
@@ -36,6 +37,7 @@ export function createLarkApprovalStateFromRequest(input: {
     title: input.event.title,
     request: input.event.request,
     reasonText: input.event.reasonText,
+    commandText: input.event.commandText ?? null,
     approvalTarget: input.event.approvalTarget,
     expiresAt: input.event.expiresAt,
     resolved: false,

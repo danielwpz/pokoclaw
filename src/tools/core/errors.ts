@@ -32,6 +32,7 @@ export interface ToolApprovalRequiredShape {
   reasonText: string;
   retryToolCallId?: string;
   approvalTitle?: string;
+  approvalCommand?: string;
   grantOnApprove?: boolean;
   approvalState?: ToolExecutionApprovalState;
 }
@@ -67,6 +68,7 @@ export class ToolApprovalRequired extends Error {
   readonly reasonText: string;
   readonly retryToolCallId?: string;
   readonly approvalTitle?: string;
+  readonly approvalCommand?: string;
   readonly grantOnApprove: boolean;
   readonly approvalState?: ToolExecutionApprovalState;
 
@@ -81,6 +83,9 @@ export class ToolApprovalRequired extends Error {
     }
     if (shape.approvalTitle !== undefined) {
       this.approvalTitle = shape.approvalTitle;
+    }
+    if (shape.approvalCommand !== undefined) {
+      this.approvalCommand = shape.approvalCommand;
     }
     if (shape.approvalState !== undefined) {
       this.approvalState = shape.approvalState;

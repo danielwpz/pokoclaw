@@ -43,6 +43,7 @@ export async function requestToolApproval(input: {
   request: PermissionRequest;
   reasonText: string;
   approvalTitle?: string;
+  approvalCommand?: string;
   signal: AbortSignal;
   recordEvent(event: AgentRuntimeEventInput): void;
   onRequested?: (input: { approvalId: number; createdAt: Date; expiresAt: Date }) => void;
@@ -108,6 +109,7 @@ export async function requestToolApproval(input: {
     title: input.approvalTitle ?? buildApprovalTitle(),
     request: input.request,
     reasonText: input.reasonText,
+    ...(input.approvalCommand == null ? {} : { commandText: input.approvalCommand }),
     expiresAt: expiresAt.toISOString(),
     sessionId: input.runInput.sessionId,
     conversationId: input.session.conversationId,
