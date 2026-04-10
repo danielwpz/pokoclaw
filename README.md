@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License: Apache-2.0" /></a>
+</p>
+
+<p align="center">
   <a href="./README.md">English</a> |
   <a href="./README.zh-CN.md">简体中文</a>
 </p>
@@ -25,26 +29,24 @@
 
 ---
 
-Pokeclaw is not another chatty AI.  
-It is a personal AI assistant system designed for **real execution, long-running collaboration, and reliable delivery**.
-
-Not just a model wired into chat.  
-Not a pile of tools inside a bot.  
-Not AI that merely looks busy.
-
-> Pokeclaw turns **execution, observability, control, collaboration, and self-improvement** into one coherent product.
+Pokeclaw is **the claw that actually ships**.  
+It brings **execution, observability, control, collaboration, and self-improvement** together into a personal AI assistant built for sustained real work.
 
 ---
 
 ## ✨ What Is Pokeclaw
 
-Pokeclaw is a personal AI assistant built for real work.
+Pokeclaw is a personal AI assistant built for real work.  
+It is not just a model wired into chat, and not just a pile of tools inside a bot.
 
 Its goal is not to keep AI at the level of “responding to prompts”.  
 Its goal is to push AI into **continuously moving work forward**.
 
 In Pokeclaw, AI is not just something that answers questions.  
 It is a system that can be delegated to, supervised, corrected, reviewed, and continuously improved.
+
+In other words, Pokeclaw is not trying to look busy.  
+It is trying to become an AI assistant that can actually move tasks forward and keep collaborating over time.
 
 ---
 
@@ -84,26 +86,6 @@ It is about **automation that remains under human control**:
 What makes an assistant trustworthy is not that it works on its own.  
 It is that it works on its own **while staying under your control**.
 
-### 🧭 Task Boundaries
-
-Many **OpenClaw-like products** run into the same problem once they start carrying real work:
-
-**everything gets pushed into the same chat stream.**
-
-Research, coding, planning, reporting, and follow-ups end up sharing one context.  
-Old tasks jump back into new conversations. Work quickly becomes messy.
-
-Pokeclaw is not designed to cram more things into one window.  
-It separates different layers of work:
-
-- **Main Agent**: the persistent front door, coordinating everything like a chief of staff
-- **SubAgent**: a long-lived collaboration space for a specific topic
-- **TaskAgent**: a background execution unit that reports back when done
-
-This is not an implementation detail.  
-It is product structure.  
-It decides whether AI collaboration becomes clearer or more chaotic over time.
-
 ### 🧠 Self-Harness
 
 Pokeclaw does not just try to make AI remember information.  
@@ -124,6 +106,26 @@ Its goal is to make the system feel more like a truly aligned assistant.
 
 Not just remembering what you said.  
 But gradually learning **how to work in a way that fits you**.
+
+### 🧭 Task Boundaries
+
+Many **OpenClaw-like products** run into the same problem once they start carrying real work:
+
+**everything gets pushed into the same chat stream.**
+
+Research, coding, planning, reporting, and follow-ups end up sharing one context.  
+Old tasks jump back into new conversations. Work quickly becomes messy.
+
+Pokeclaw is not designed to cram more things into one window.  
+It separates different layers of work:
+
+- **Main Agent**: the persistent front door, coordinating everything like a chief of staff
+- **SubAgent**: a long-lived collaboration space for a specific topic
+- **TaskAgent**: a background execution unit that reports back when done
+
+This is not an implementation detail.  
+It is product structure.  
+It decides whether AI collaboration becomes clearer or more chaotic over time.
 
 ### ⚙️ Unattended Execution
 
