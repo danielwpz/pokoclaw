@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -16,7 +17,8 @@ def resolve_claude_dir(raw: str | None) -> Path:
 
 def encode_project_path(project_path: Path) -> str:
     resolved = project_path.expanduser().resolve()
-    return str(resolved).replace("/", "-")
+    normalized = resolved.as_posix().replace("\\", "/")
+    return re.sub(r"[^A-Za-z0-9._-]", "-", normalized)
 
 
 def safe_read_json(path: Path) -> dict[str, Any] | None:
@@ -57,6 +59,25 @@ def iter_active_sessions(project_path: Path, sessions_dir: Path) -> list[dict[st
             }
         )
     return matches
+
+
+def transcript_matches_project(path: Path, project_path: Path) -> bool:
+    wanted = str(project_path)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict) and record.get("cwd") == wanted:
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def summarize_session_file(path: Path, active_session_ids: set[str]) -> dict[str, Any]:
@@ -180,10 +201,17 @@ def main() -> int:
         item["session_id"] for item in active_sessions if isinstance(item.get("session_id"), str)
     }
 
-    sessions: list[dict[str, Any]] = []
+    transcript_paths: list[Path] = []
+    discovery_mode = "encoded-project-dir"
     if project_dir.exists():
-        for transcript in sorted(project_dir.glob("*.jsonl")):
-            sessions.append(summarize_session_file(transcript, active_session_ids))
+        transcript_paths = sorted(project_dir.glob("*.jsonl"))
+    if not transcript_paths:
+        discovery_mode = "cwd-fallback-scan"
+        for transcript in sorted(projects_dir.glob("*/*.jsonl")):
+            if transcript_matches_project(transcript, project_path):
+                transcript_paths.append(transcript)
+
+    sessions = [summarize_session_file(transcript, active_session_ids) for transcript in transcript_paths]
     sessions.sort(key=sort_key, reverse=True)
     sessions = sessions[: max(args.limit, 0)]
 
@@ -192,6 +220,7 @@ def main() -> int:
         "project_path": str(project_path),
         "encoded_project_dir": str(project_dir),
         "project_dir_exists": project_dir.exists(),
+        "discovery_mode": discovery_mode,
         "active_sessions": active_sessions,
         "sessions": sessions,
     }
@@ -205,6 +234,7 @@ def main() -> int:
     print(f"project_path: {payload['project_path']}")
     print(f"encoded_project_dir: {payload['encoded_project_dir']}")
     print(f"project_dir_exists: {payload['project_dir_exists']}")
+    print(f"discovery_mode: {payload['discovery_mode']}")
     if args.include_active:
         print("active_sessions:")
         if active_sessions:

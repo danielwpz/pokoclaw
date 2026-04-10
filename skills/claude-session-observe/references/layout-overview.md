@@ -23,18 +23,20 @@ For "continue recent work on project X", start with `projects/` and `sessions/`,
 
 Project session data is keyed by an encoded absolute path under `~/.claude/projects/`.
 
-Observed pattern:
+Observed practical lookup rule:
 
 - start from the absolute project path
-- replace `/` with `-`
-- keep the leading slash as a leading `-`
+- normalize path separators before encoding
+- expect Claude's directory name to be lossy rather than perfectly reversible
+- on observed installations, path separators, spaces, and other unsupported characters often collapse to `-`
+- on POSIX paths, the leading slash usually appears as a leading `-`
 
-Example:
+POSIX example:
 
 - project path: `/absolute/path/to/project`
 - project dir: `~/.claude/projects/-absolute-path-to-project/`
 
-Treat this as the practical lookup rule, but still verify the resulting directory exists.
+Do not treat this as an exact universal encoding contract. Use it as a first lookup guess, then verify the resulting directory exists. If it does not, inspect candidate project directories and confirm matches from transcript `cwd` values.
 
 ## Project directory layout
 

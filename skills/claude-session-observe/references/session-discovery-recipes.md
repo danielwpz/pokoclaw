@@ -24,9 +24,11 @@ Do not skip this step. The encoded Claude directory depends on the exact path.
 
 ### 2. Map the path to the encoded project directory
 
-Compute the expected directory under `~/.claude/projects/` using the path-encoding rule from `layout-overview.md`.
+Compute the expected directory under `~/.claude/projects/` using the practical encoding rule from `layout-overview.md`.
 
 Then verify that directory exists.
+
+If it does not exist, do not stop there. The encoding is lossy and may vary across platforms or path contents. Fall back to inspecting candidate transcript files under `~/.claude/projects/*/` and match them by transcript `cwd`.
 
 ### 3. Check active sessions first
 
