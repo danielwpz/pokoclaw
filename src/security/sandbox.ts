@@ -8,7 +8,7 @@ import {
   type SandboxExecResult,
   type SandboxPermissionIssue,
   type SandboxRuntimeConfig,
-} from "@anthropic-ai/sandbox-runtime";
+} from "@danielwpz/sandbox-runtime";
 
 import {
   checkFilesystemPermission,
