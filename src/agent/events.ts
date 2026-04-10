@@ -167,6 +167,7 @@ export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
   title: string;
   request: PermissionRequest;
   reasonText: string;
+  commandText?: string;
   expiresAt: string | null;
 }
 

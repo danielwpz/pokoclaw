@@ -232,6 +232,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
     request: { scopes: [scope] },
     reasonText: justification,
     approvalTitle,
+    approvalCommand: input.args.command,
     grantOnApprove: input.args.prefix != null,
     ...(input.args.prefix == null
       ? {

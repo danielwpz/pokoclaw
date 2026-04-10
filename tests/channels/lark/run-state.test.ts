@@ -1179,8 +1179,8 @@ describe("lark run state", () => {
     expect(cardText).toContain('"template":"blue"');
     expect(cardText).toContain("lock_chat_filled");
     expect(cardText).not.toContain('"subtitle"');
-    expect(cardText).toContain("### 需要你的授权");
-    expect(cardText).toContain("**操作**");
+    expect(cardText).toContain("### 授权运行命令");
+    expect(cardText).not.toContain("**操作**");
     expect(cardText).toContain("**权限**");
     expect(cardText).toContain("**Read** `/Users/daniel/project/README.md`");
     expect(cardText).toContain("**Write** `/Users/daniel/project/output.txt`");
@@ -1213,9 +1213,70 @@ describe("lark run state", () => {
     });
 
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
-    expect(cardText).toContain(
-      "Approval required: **Write** `/Users/daniel/Desktop/test-new-2.js`",
-    );
+    expect(cardText).toContain("**权限**");
+    expect(cardText).toContain("**Write** `/Users/daniel/Desktop/test-new-2.js`");
+  });
+
+  test("hides bash prefix when it matches the current command exactly", () => {
+    const approvalState = createLarkApprovalStateFromRequest({
+      event: {
+        type: "approval_requested",
+        eventId: "evt_approval_card_bash_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_bash_1",
+        approvalTarget: "user",
+        title: "Approval required: run bash with full access for prefix git status",
+        request: {
+          scopes: [{ kind: "bash.full_access", prefix: ["git", "status"] }],
+        },
+        reasonText: "需要读取本地仓库状态。",
+        commandText: "git status",
+        expiresAt: null,
+      },
+      sourceRunCardObjectId: "run_1:seg:1",
+    });
+
+    const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
+    expect(cardText).toContain("### 授权运行命令");
+    expect(cardText).toContain("**原因**");
+    expect(cardText).toContain("需要读取本地仓库状态。");
+    expect(cardText).toContain("**命令**");
+    expect(cardText).toContain("`git status`");
+    expect(cardText).not.toContain("**授权范围**");
+    expect(cardText).not.toContain("**权限**");
+    expect(cardText).not.toContain("**操作**");
+  });
+
+  test("renders wider bash prefix when it grants more than the current command", () => {
+    const approvalState = createLarkApprovalStateFromRequest({
+      event: {
+        type: "approval_requested",
+        eventId: "evt_approval_card_bash_2",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_bash_2",
+        approvalTarget: "user",
+        title: "Approval required: run bash with full access for prefix pnpm test",
+        request: {
+          scopes: [{ kind: "bash.full_access", prefix: ["pnpm", "test"] }],
+        },
+        reasonText: "需要运行测试。",
+        commandText: "pnpm test tests/channels/lark/outbound.test.ts",
+        expiresAt: null,
+      },
+      sourceRunCardObjectId: "run_1:seg:1",
+    });
+
+    const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
+    expect(cardText).toContain("**授权范围**");
+    expect(cardText).toContain("`pnpm test`");
   });
 
   test("does not repeat resolved approval state text inside the card body", () => {
@@ -1250,7 +1311,59 @@ describe("lark run state", () => {
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(resolved).card);
     expect(cardText).not.toContain("### 已授权");
     expect(cardText).toContain("授权请求 — 授权成功");
+    expect(cardText).toContain("**权限**");
+    expect(cardText).toContain("**Write** `/Users/daniel/Desktop/test-new-2.js`");
     expect(cardText).not.toContain("**结果**：agent 将继续执行。");
+  });
+
+  test("renders resolved bash approval command as inline code", () => {
+    const approvalState = createLarkApprovalStateFromRequest({
+      event: {
+        type: "approval_requested",
+        eventId: "evt_approval_card_fmt_3",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_fmt_3",
+        approvalTarget: "user",
+        title:
+          "Approval required: run bash with full access for prefix git -C /Users/daniel/Programs/ai/openclaw/pokeclaw log --oneline -5",
+        request: {
+          scopes: [
+            {
+              kind: "bash.full_access",
+              prefix: [
+                "git",
+                "-C",
+                "/Users/daniel/Programs/ai/openclaw/pokeclaw",
+                "log",
+                "--oneline",
+                "-5",
+              ],
+            },
+          ],
+        },
+        reasonText: "当前操作需要你的授权才能继续。",
+        expiresAt: null,
+      },
+      sourceRunCardObjectId: "run_1:seg:1",
+    });
+
+    const resolved = {
+      ...approvalState,
+      resolved: true as const,
+      decision: "approve" as const,
+      actor: "user:test",
+    };
+
+    const cardText = JSON.stringify(buildLarkRenderedApprovalCard(resolved).card);
+    expect(cardText).toContain("**命令**");
+    expect(cardText).toContain(
+      "`git -C /Users/daniel/Programs/ai/openclaw/pokeclaw log --oneline -5`",
+    );
+    expect(cardText).not.toContain("Run bash commands with full access for prefix:");
   });
 
   test("renders stop button while running and removes it after completion", () => {

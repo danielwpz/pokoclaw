@@ -140,40 +140,30 @@ export function buildLarkRenderedApprovalCard(state: LarkApprovalState): LarkRen
 
 function buildApprovalCardElements(state: LarkApprovalState): Array<Record<string, unknown>> {
   const approved = state.decision === "approve";
-  const requestedPermissionLines = formatRequestedPermissionLines(
-    describePermissionRequestLines(state.request),
-  );
-  const requestedBashPrefixLines = formatRequestedBashPrefixLines(
-    state.request.scopes.flatMap((scope) =>
-      scope.kind === "bash.full_access" ? [scope.prefix] : [],
-    ),
-  );
+  const permissionSummaryLines = formatPermissionSummaryLines(state);
   const elements: Array<Record<string, unknown>> = [
     {
       tag: "markdown",
       content: !state.resolved
         ? [
-            "### 需要你的授权",
+            "### 授权运行命令",
             "",
-            `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
-            ...requestedPermissionLines,
-            ...requestedBashPrefixLines,
-            "",
-            `**原因**：${state.reasonText}`,
-            ...(state.expiresAt == null ? [] : ["", `**有效期至**：\`${state.expiresAt}\``]),
+            "**原因**",
+            state.reasonText,
+            ...formatApprovalCommandLines(state.commandText),
+            ...permissionSummaryLines,
+            ...formatHumanDeadlineLines("有效期至", state.expiresAt),
             "",
             "> 你处理后，agent 才会继续执行。",
           ].join("\n")
         : approved
           ? [
               `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
-              ...requestedPermissionLines,
-              ...requestedBashPrefixLines,
+              ...formatResolvedPermissionLines(state.request),
             ].join("\n")
           : [
               `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
-              ...requestedPermissionLines,
-              ...requestedBashPrefixLines,
+              ...formatResolvedPermissionLines(state.request),
               "",
               "**结果**：当前操作已停止。",
             ].join("\n"),
@@ -247,7 +237,7 @@ function buildSubagentCreationRequestCardElements(
         state.description,
         "",
         `**工作目录**：\`${state.workdir}\``,
-        ...(state.expiresAt == null ? [] : ["", `**确认截止**：\`${state.expiresAt}\``]),
+        ...formatHumanDeadlineLines("确认截止", state.expiresAt),
       ].join("\n"),
       text_size: "normal",
     },
@@ -342,23 +332,92 @@ function summarizeApprovalState(state: LarkApprovalState): string {
   return state.decision === "approve" ? "授权成功" : "已拒绝";
 }
 
+function formatHumanDeadlineLines(label: string, isoTimestamp: string | null): string[] {
+  if (isoTimestamp == null) {
+    return [];
+  }
+
+  return ["", `**${label}**：${formatHumanLocalTimestamp(isoTimestamp)}`];
+}
+
+function formatHumanLocalTimestamp(isoTimestamp: string): string {
+  const date = new Date(isoTimestamp);
+  if (Number.isNaN(date.getTime())) {
+    return `\`${isoTimestamp}\``;
+  }
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch {
+    return `\`${isoTimestamp}\``;
+  }
+}
+
+function formatPermissionSummaryLines(state: LarkApprovalState): string[] {
+  const bashPrefixes = state.request.scopes.flatMap((scope) =>
+    scope.kind === "bash.full_access" ? [scope.prefix] : [],
+  );
+
+  if (state.commandText != null && bashPrefixes.length > 0) {
+    return formatBashPermissionSummaryLines({
+      commandText: state.commandText,
+      prefixes: bashPrefixes,
+    });
+  }
+
+  return formatResolvedPermissionLines(state.request);
+}
+
+function formatResolvedPermissionLines(request: LarkApprovalState["request"]): string[] {
+  const bashPrefixes = request.scopes.flatMap((scope) =>
+    scope.kind === "bash.full_access" ? [scope.prefix.join(" ")] : [],
+  );
+  if (bashPrefixes.length > 0) {
+    return ["", "**命令**", ...bashPrefixes.map((prefix) => `\`${prefix}\``)];
+  }
+
+  return formatRequestedPermissionLines(describePermissionRequestLines(request));
+}
+
+function formatApprovalCommandLines(commandText: string | null): string[] {
+  if (commandText == null || commandText.trim().length === 0) {
+    return [];
+  }
+
+  return ["", "**命令**", `\`${commandText.trim()}\``];
+}
+
+function formatBashPermissionSummaryLines(input: {
+  commandText: string;
+  prefixes: string[][];
+}): string[] {
+  const distinctPrefixes = input.prefixes.map((prefix) => prefix.join(" "));
+  const commandText = input.commandText.trim();
+  const widerPrefixes = distinctPrefixes.filter((prefix) => prefix !== commandText);
+  if (widerPrefixes.length === 0) {
+    return [];
+  }
+  if (widerPrefixes.length === 1) {
+    return ["", "**授权范围**", `\`${widerPrefixes[0]}\``];
+  }
+
+  return ["", "**授权范围**", ...widerPrefixes.map((prefix) => `- \`${prefix}\``)];
+}
+
 function formatRequestedPermissionLines(lines: string[]): string[] {
   if (lines.length === 0) {
     return [];
   }
 
   return ["", "**权限**", ...lines.map((line) => `- ${formatPermissionScopeMarkdown(line)}`)];
-}
-
-function formatRequestedBashPrefixLines(prefixes: string[][]): string[] {
-  if (prefixes.length === 0) {
-    return [];
-  }
-  if (prefixes.length === 1) {
-    return ["", `**Prefix**：\`${prefixes[0]?.join(" ") ?? ""}\``];
-  }
-
-  return ["", "**Prefixes**", ...prefixes.map((prefix) => `- \`${prefix.join(" ")}\``)];
 }
 
 function formatApprovalTitleMarkdown(title: string): string {

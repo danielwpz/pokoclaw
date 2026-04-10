@@ -1894,7 +1894,9 @@ describe("lark outbound runtime", () => {
     expect(createCard).toHaveBeenCalledOnce();
     const approvalCardInput = (createCard.mock.calls as unknown as Array<[unknown]>)[0]?.[0];
     const approvalCardText = JSON.stringify(approvalCardInput);
-    expect(approvalCardText).toContain("Prefix");
+    expect(approvalCardText).not.toContain("Prefix");
+    expect(approvalCardText).not.toContain("**权限**");
+    expect(approvalCardText).toContain("**命令**");
     expect(approvalCardText).toContain("git status");
     expect(updateCard).not.toHaveBeenCalled();
 
@@ -2004,7 +2006,8 @@ describe("lark outbound runtime", () => {
     expect(approvalCardText).toContain("**Read** `/Users/daniel/project/README.md`");
     expect(approvalCardText).toContain("**Write** `/Users/daniel/project/output.txt`");
     expect(approvalCardText).not.toContain("2 permissions");
-    expect(approvalCardText).toContain("**操作**：Approval required");
+    expect(approvalCardText).not.toContain("**操作**：Approval required");
+    expect(approvalCardText).toContain("### 授权运行命令");
 
     await runtime.shutdown();
   });
