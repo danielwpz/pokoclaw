@@ -8,7 +8,7 @@ const { executeSandboxedCommandMock } = vi.hoisted(() => ({
   executeSandboxedCommandMock: vi.fn(),
 }));
 
-import { SandboxPermissionError } from "@anthropic-ai/sandbox-runtime";
+import { SandboxPermissionError } from "@danielwpz/sandbox-runtime";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
@@ -27,9 +27,9 @@ import {
   type TestDatabaseHandle,
 } from "@/tests/storage/helpers/test-db.js";
 
-vi.mock("@anthropic-ai/sandbox-runtime", async () => {
-  const actual = await vi.importActual<typeof import("@anthropic-ai/sandbox-runtime")>(
-    "@anthropic-ai/sandbox-runtime",
+vi.mock("@danielwpz/sandbox-runtime", async () => {
+  const actual = await vi.importActual<typeof import("@danielwpz/sandbox-runtime")>(
+    "@danielwpz/sandbox-runtime",
   );
 
   return {

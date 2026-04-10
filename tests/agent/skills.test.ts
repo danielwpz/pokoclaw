@@ -199,6 +199,7 @@ describe("agent skills catalog", () => {
     });
 
     expect(snapshot.entries.some((entry) => entry.name === "system-observe")).toBe(true);
+    expect(snapshot.entries.some((entry) => entry.name === "claude-session-observe")).toBe(true);
   });
 
   async function createTempDir(): Promise<string> {
