@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -11,7 +11,9 @@ export interface CreateTaskRunInput {
   ownerAgentId: string;
   conversationId: string;
   branchId: string;
+  workstreamId?: string | null;
   initiatorSessionId?: string | null;
+  initiatorThreadId?: string | null;
   parentRunId?: string | null;
   cronJobId?: string | null;
   executionSessionId?: string | null;
@@ -49,7 +51,9 @@ export class TaskRunsRepo {
       ownerAgentId: input.ownerAgentId,
       conversationId: input.conversationId,
       branchId: input.branchId,
+      workstreamId: input.workstreamId ?? null,
       initiatorSessionId: input.initiatorSessionId ?? null,
+      initiatorThreadId: input.initiatorThreadId ?? null,
       parentRunId: input.parentRunId ?? null,
       cronJobId: input.cronJobId ?? null,
       executionSessionId: input.executionSessionId ?? null,
@@ -101,6 +105,55 @@ export class TaskRunsRepo {
       .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
       .limit(limit)
       .all();
+  }
+
+  listByWorkstreamId(workstreamId: string, limit = 20): TaskRun[] {
+    return this.db
+      .select()
+      .from(taskRuns)
+      .where(eq(taskRuns.workstreamId, workstreamId))
+      .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
+      .limit(limit)
+      .all();
+  }
+
+  findLatestByWorkstreamId(workstreamId: string): TaskRun | null {
+    return (
+      this.db
+        .select()
+        .from(taskRuns)
+        .where(eq(taskRuns.workstreamId, workstreamId))
+        .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
+        .get() ?? null
+    );
+  }
+
+  findActiveByWorkstreamId(workstreamId: string): TaskRun | null {
+    return (
+      this.db
+        .select()
+        .from(taskRuns)
+        .where(and(eq(taskRuns.workstreamId, workstreamId), eq(taskRuns.status, "running")))
+        .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
+        .get() ?? null
+    );
+  }
+
+  updateWorkstream(input: {
+    id: string;
+    workstreamId: string | null;
+    initiatorThreadId?: string | null;
+  }): void {
+    this.db
+      .update(taskRuns)
+      .set({
+        workstreamId: input.workstreamId,
+        ...(input.initiatorThreadId === undefined
+          ? {}
+          : { initiatorThreadId: input.initiatorThreadId }),
+      })
+      .where(eq(taskRuns.id, input.id))
+      .run();
   }
 
   updateStatus(input: UpdateTaskRunStatusInput): void {

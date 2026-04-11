@@ -17,6 +17,7 @@ export function initSchemaIfNeeded(
 ): void {
   const initSqlPath = options.initSqlPath ?? getDefaultInitSqlPath();
   const initSql = readFileSync(initSqlPath, "utf8");
+  upgradeTaskThreadSchema(sqlite);
   sqlite.exec(initSql);
   upgradeCronJobsSchema(sqlite);
   upgradeMessagesSchema(sqlite);
@@ -25,14 +26,84 @@ export function initSchemaIfNeeded(
   upgradeLarkObjectBindingsSchema(sqlite);
 }
 
-function upgradeCronJobsSchema(sqlite: Database.Database): void {
-  const cronJobColumns = new Set(
+function upgradeTaskThreadSchema(sqlite: Database.Database): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS task_workstreams (
+      id TEXT PRIMARY KEY,
+      owner_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      branch_id TEXT NOT NULL REFERENCES conversation_branches(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'archived')),
+      created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
+      updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL)
+    );
+
+    CREATE TABLE IF NOT EXISTS channel_threads (
+      id TEXT PRIMARY KEY,
+      channel_type TEXT NOT NULL,
+      channel_installation_id TEXT NOT NULL,
+      home_conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      external_chat_id TEXT NOT NULL,
+      external_thread_id TEXT NOT NULL,
+      subject_kind TEXT NOT NULL
+        CHECK (subject_kind IN ('chat', 'task')),
+      branch_id TEXT REFERENCES conversation_branches(id) ON DELETE CASCADE,
+      task_workstream_id TEXT REFERENCES task_workstreams(id) ON DELETE CASCADE,
+      opened_from_message_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'archived')),
+      created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
+      updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
+      CHECK (
+        (subject_kind = 'chat' AND branch_id IS NOT NULL AND task_workstream_id IS NULL)
+        OR (subject_kind = 'task' AND task_workstream_id IS NOT NULL AND branch_id IS NULL)
+      ),
+      UNIQUE(channel_type, channel_installation_id, external_chat_id, external_thread_id),
+      UNIQUE(channel_type, branch_id),
+      UNIQUE(channel_type, task_workstream_id)
+    );
+  `);
+
+  const cronJobColumns = getColumnNames(sqlite, "cron_jobs");
+  if (cronJobColumns.size > 0 && !cronJobColumns.has("workstream_id")) {
+    sqlite.exec(
+      "ALTER TABLE cron_jobs ADD COLUMN workstream_id TEXT REFERENCES task_workstreams(id) ON DELETE SET NULL",
+    );
+  }
+
+  const taskRunColumns = getColumnNames(sqlite, "task_runs");
+  if (taskRunColumns.size > 0 && !taskRunColumns.has("workstream_id")) {
+    sqlite.exec(
+      "ALTER TABLE task_runs ADD COLUMN workstream_id TEXT REFERENCES task_workstreams(id) ON DELETE SET NULL",
+    );
+  }
+  if (taskRunColumns.size > 0 && !taskRunColumns.has("initiator_thread_id")) {
+    sqlite.exec(
+      "ALTER TABLE task_runs ADD COLUMN initiator_thread_id TEXT REFERENCES channel_threads(id) ON DELETE SET NULL",
+    );
+  }
+}
+
+function getColumnNames(sqlite: Database.Database, tableName: string): Set<string> {
+  const table = sqlite
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+    .get(tableName) as { name: string } | undefined;
+  if (table == null) {
+    return new Set();
+  }
+
+  return new Set(
     (
-      sqlite.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{
+      sqlite.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
         name: string;
       }>
     ).map((column) => column.name),
   );
+}
+
+function upgradeCronJobsSchema(sqlite: Database.Database): void {
+  const cronJobColumns = getColumnNames(sqlite, "cron_jobs");
 
   if (!cronJobColumns.has("deleted_at")) {
     sqlite.exec("ALTER TABLE cron_jobs ADD COLUMN deleted_at TEXT");
@@ -40,13 +111,7 @@ function upgradeCronJobsSchema(sqlite: Database.Database): void {
 }
 
 function upgradeMessagesSchema(sqlite: Database.Database): void {
-  const messageColumns = new Set(
-    (
-      sqlite.prepare("PRAGMA table_info(messages)").all() as Array<{
-        name: string;
-      }>
-    ).map((column) => column.name),
-  );
+  const messageColumns = getColumnNames(sqlite, "messages");
 
   if (!messageColumns.has("channel_parent_message_id")) {
     sqlite.exec("ALTER TABLE messages ADD COLUMN channel_parent_message_id TEXT");
@@ -111,13 +176,7 @@ function upgradeMeditationStateSchema(sqlite: Database.Database): void {
 }
 
 function upgradeLarkObjectBindingsSchema(sqlite: Database.Database): void {
-  const larkObjectBindingColumns = new Set(
-    (
-      sqlite.prepare("PRAGMA table_info(lark_object_bindings)").all() as Array<{
-        name: string;
-      }>
-    ).map((column) => column.name),
-  );
+  const larkObjectBindingColumns = getColumnNames(sqlite, "lark_object_bindings");
 
   if (!larkObjectBindingColumns.has("lark_message_uuid")) {
     sqlite.exec("ALTER TABLE lark_object_bindings ADD COLUMN lark_message_uuid TEXT");

@@ -7,6 +7,7 @@ import type {
   authEvents,
   channelInstances,
   channelSurfaces,
+  channelThreads,
   conversationBranches,
   conversations,
   cronJobs,
@@ -17,6 +18,7 @@ import type {
   sessions,
   subagentCreationRequests,
   taskRuns,
+  taskWorkstreams,
 } from "@/src/storage/schema/tables.js";
 
 export type ChannelInstance = InferSelectModel<typeof channelInstances>;
@@ -31,8 +33,14 @@ export type NewConversationBranch = InferInsertModel<typeof conversationBranches
 export type ChannelSurface = InferSelectModel<typeof channelSurfaces>;
 export type NewChannelSurface = InferInsertModel<typeof channelSurfaces>;
 
+export type ChannelThread = InferSelectModel<typeof channelThreads>;
+export type NewChannelThread = InferInsertModel<typeof channelThreads>;
+
 export type Agent = InferSelectModel<typeof agents>;
 export type NewAgent = InferInsertModel<typeof agents>;
+
+export type TaskWorkstream = InferSelectModel<typeof taskWorkstreams>;
+export type NewTaskWorkstream = InferInsertModel<typeof taskWorkstreams>;
 
 export type Session = InferSelectModel<typeof sessions>;
 export type NewSession = InferInsertModel<typeof sessions>;
