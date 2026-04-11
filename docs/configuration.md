@@ -21,6 +21,8 @@ Feishu/Lark is currently the only supported channel. A runnable onboarding setup
 
 Do not treat channel setup as optional during onboarding.
 
+In the overall flow, channel setup is completed independently in `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
+
 ## Supported credential patterns
 
 ### Direct non-secret config
@@ -78,6 +80,8 @@ For first-run onboarding, write:
 - at least one `[[models.catalog]]` entry
 - all five lists in `[models.scenarios]`
 - Feishu/Lark channel config under `[channels.lark.installations.<id>]`
+
+The provider and model templates below cover the LLM side first. Complete the required channel separately in `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
 
 The five scenario keys are:
 

@@ -8,7 +8,7 @@ Do not try to preserve every OpenClaw internal detail. The goal is to migrate th
 
 Read this together with:
 
-- `docs/onboarding.md` for execution order
+- `docs/onboarding.md`, Phase 3A: OpenClaw import, for execution order
 - `docs/configuration.md` for the final Pokeclaw target shape
 
 ## What to inspect
@@ -64,7 +64,7 @@ After import:
 
 - check that providers, models, and scenarios line up
 - resolve unsupported or uncertain pieces with the user
-- complete Feishu/Lark setup because channel config is still required for startup
+- complete `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup, because channel config is still required for startup
 - finish with the normal onboarding validation flow
 
 ## Confidence tiers
@@ -106,7 +106,11 @@ OpenClaw may contain Feishu-related config. If it does:
 
 - mention that it exists
 - do not force a full automatic Feishu/Lark migration
-- use `docs/feishu-lark-setup.md` for the manual target-side setup
+- do not directly copy the existing OpenClaw Feishu/Lark bot config into Pokeclaw
+- first ask the user whether they want to reuse the same bot or create a new one
+- explain that reusing the same bot is risky because one channel with two active backends can conflict or mix behavior
+- recommend creating a new bot or app
+- use `docs/feishu-lark-setup.md`, Step 3C-1: Decide whether to reuse the existing OpenClaw bot, before the rest of the Feishu/Lark setup
 - remind the user that current Pokeclaw Feishu/Lark support is intended for one personal assistant, not a shared team bot
 
-Even if OpenClaw import succeeds for LLM config, onboarding is not complete until Feishu/Lark is configured, because it is the current required channel.
+Even if OpenClaw import succeeds for LLM config, onboarding is not complete until `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup, is complete.

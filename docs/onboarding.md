@@ -17,7 +17,7 @@ Finish with a valid config under `~/.pokeclaw/system/`, including Feishu/Lark ch
 - If file-based secrets are needed, write a `secrets.toml` skeleton with placeholders and ask the user to fill the real values.
 - Only write real secrets into files if the user explicitly asks.
 - Feishu/Lark is currently the only supported channel and is required before startup.
-- Use `docs/feishu-lark-setup.md` for channel setup.
+- Run Feishu/Lark as an independent required phase: `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
 - For Feishu/Lark, warn that current support is for one personal assistant, not a shared team bot.
 
 ## Phase 1: Repository setup
@@ -107,7 +107,7 @@ Use `docs/openclaw-import.md` for details. The execution order is:
 2. Ask the user to choose import all, some, or none.
 3. Convert only the chosen pieces into valid Pokeclaw config.
 4. Preserve `env://...` refs when they are clear; otherwise generate placeholder `secrets.toml` entries.
-5. Complete Feishu/Lark setup and then finish with the same validation flow as a normal Pokeclaw setup.
+5. Continue to Phase 3C: Required Feishu/Lark setup in `docs/feishu-lark-setup.md`.
 
 ## Phase 3B: Clean setup
 
@@ -134,7 +134,8 @@ For initial setup, always write:
 - at least one provider
 - at least one `[[models.catalog]]` entry
 - all five scenario lists in `[models.scenarios]`
-- Feishu/Lark channel config
+
+This phase is for LLM configuration. Complete channel setup separately in Phase 3C: Required Feishu/Lark setup.
 
 Default scenario rule:
 
@@ -148,13 +149,13 @@ Default scenario rule:
 - tell the user exactly which file and field they need to fill
 - do not request the real secret in chat unless the user explicitly wants you to write it
 
-### 4. Configure the required channel
+## Phase 3C: Required Feishu/Lark setup
 
 Current onboarding must include Feishu/Lark because it is the only supported channel right now.
 
-- switch to `docs/feishu-lark-setup.md`
-- complete Feishu/Lark app creation and channel config
-- return here only after the channel config is in place
+- Run `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
+- If OpenClaw already has Feishu/Lark configured, first follow `docs/feishu-lark-setup.md`, Step 3C-1: Decide whether to reuse the existing OpenClaw bot.
+- Recommended default: create a new bot or app instead of reusing the OpenClaw one.
 
 ## Phase 4: Validation and first run
 
@@ -195,7 +196,7 @@ When something is unclear, explain the gap and ask the user for a decision inste
 
 ## Feishu/Lark
 
-Feishu/Lark is not optional in the current product. It is the required channel for startup, so every runnable onboarding flow must complete `docs/feishu-lark-setup.md`.
+Feishu/Lark is not optional in the current product. It is the required channel for startup, so every runnable onboarding flow must complete `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
 
 Give this warning clearly before that flow:
 
@@ -204,4 +205,4 @@ Give this warning clearly before that flow:
 - shared team accounts are not a valid normal setup target right now
 - current design does not provide proper multi-user isolation for a shared bot account, so conversations can mix
 
-Then follow the dedicated guide and return to the normal validation flow.
+Then follow `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup, and return to Phase 4: Validation and first run.
