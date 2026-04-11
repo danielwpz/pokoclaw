@@ -35,6 +35,19 @@ It brings **execution, observability, control, collaboration, and self-improveme
 
 ---
 
+<table align="center">
+  <tr align="center">
+    <th><p align="center">Cronjob</p></th>
+    <th><p align="center">Introspection</p></th>
+    <th><p align="center">Subagent</p></th>
+  </tr>
+  <tr>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-cronjob.gif" width="240" height="521"></p></td>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-query-status.gif" width="240" height="521"></p></td>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-subagent.gif" width="240" height="521"></p></td>
+  </tr>
+</table>
+
 ## Setup
 
 Send this to your AI coding assistant (such as Claude Code, Codex, or another similar tool):

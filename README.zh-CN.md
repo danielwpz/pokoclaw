@@ -33,7 +33,18 @@
 Pokeclaw 是一只**真正能做事的 Claw**。  
 它把 **执行、观察、控制、协作、沉淀** 组合成一个长期可用的个人 AI 助理系统。
 
----
+<table align="center">
+  <tr align="center">
+    <th><p align="center">Cronjob</p></th>
+    <th><p align="center">Introspection</p></th>
+    <th><p align="center">Subagent</p></th>
+  </tr>
+  <tr>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-cronjob.gif" width="240" height="521"></p></td>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-query-status.gif" width="240" height="521"></p></td>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-subagent.gif" width="240" height="521"></p></td>
+  </tr>
+</table>
 
 ## Setup
 
