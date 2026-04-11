@@ -1504,6 +1504,9 @@ async function resolveLarkInboundRoute(input: {
   }
 
   const allowTaskFollowupCreation = !isLarkThreadControlCommand(input.normalized.text);
+  // channel_threads is the durable source of truth for thread routing. We only
+  // fall back to lark_object_bindings when bootstrapping an older task thread
+  // into that persisted model for the first time.
   const channelThread = new ChannelThreadsRepo(input.db).getByExternalThread({
     channelType: LARK_CHANNEL_TYPE,
     channelInstallationId: input.installationId,
@@ -1942,7 +1945,8 @@ function resolveStoredChannelThreadRoute(input: {
         scenario: "task",
         stopScope: "session",
         chatId: input.normalized.chatId,
-        replyToMessageId: input.normalized.parentMessageId,
+        replyToMessageId:
+          input.normalized.parentMessageId ?? input.channelThread.openedFromMessageId ?? null,
       };
     }
 
@@ -1983,7 +1987,8 @@ function resolveStoredChannelThreadRoute(input: {
       scenario: "task",
       stopScope: "session",
       chatId: input.normalized.chatId,
-      replyToMessageId: input.normalized.parentMessageId,
+      replyToMessageId:
+        input.normalized.parentMessageId ?? input.channelThread.openedFromMessageId ?? null,
     };
   }
 
@@ -2019,7 +2024,8 @@ function resolveStoredChannelThreadRoute(input: {
     scenario: "task",
     stopScope: "session",
     chatId: input.normalized.chatId,
-    replyToMessageId: input.normalized.parentMessageId,
+    replyToMessageId:
+      input.normalized.parentMessageId ?? input.channelThread.openedFromMessageId ?? null,
   };
 }
 
