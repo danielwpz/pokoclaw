@@ -2,6 +2,15 @@
 
 Use this guide when the user is onboarding Pokeclaw. Feishu/Lark is currently the only supported channel, so this setup is required before startup.
 
+## Phase 3C: Required Feishu/Lark setup
+
+This phase is independent from:
+
+- `docs/onboarding.md`, Phase 3A: OpenClaw import
+- `docs/onboarding.md`, Phase 3B: Clean setup
+
+Both paths must still complete this phase before `pnpm start`.
+
 ## Product boundary
 
 Say this clearly before setup starts:
@@ -19,7 +28,18 @@ For normal onboarding:
 
 ## Setup steps
 
-### 1. Choose the correct platform
+### 3C-1. Decide whether to reuse the existing OpenClaw bot
+
+If the user's current OpenClaw already has Feishu/Lark configured:
+
+- do not silently copy that bot config into Pokeclaw
+- first ask whether they want to reuse the same bot or create a new one
+- explain that reusing the same bot is risky because one channel with two active backends can conflict or mix behavior
+- recommend creating a new bot or app
+
+If the user explicitly chooses to reuse the same bot, make sure they understand the risk and do not present it as the default path.
+
+### 3C-2. Choose the correct platform
 
 Use the matching developer console:
 
@@ -28,7 +48,7 @@ Use the matching developer console:
 
 If the user is unsure, ask whether they are using a China Feishu tenant or an international Lark tenant.
 
-### 2. Create the app
+### 3C-3. Create the app
 
 In the developer console:
 
@@ -36,7 +56,7 @@ In the developer console:
 2. Fill in the app name and description.
 3. Choose an app icon.
 
-### 3. Collect credentials
+### 3C-4. Collect credentials
 
 From **Credentials & Basic Info**, collect:
 
@@ -45,7 +65,7 @@ From **Credentials & Basic Info**, collect:
 
 Do not ask the user to paste the App Secret into chat by default.
 
-### 4. Configure permissions
+### 3C-5. Configure permissions
 
 In **Permissions**, use **Batch import** and paste this permission set:
 
@@ -83,14 +103,14 @@ In **Permissions**, use **Batch import** and paste this permission set:
 
 If the platform UI or permission names have changed, adapt carefully instead of pretending the old list is exact.
 
-### 5. Enable bot capability
+### 3C-6. Enable bot capability
 
 In **App Capability** > **Bot**:
 
 1. Enable bot capability.
 2. Set the bot name.
 
-### 6. Configure event subscription
+### 3C-7. Configure event subscription
 
 In **Event Subscription**:
 
@@ -100,13 +120,13 @@ In **Event Subscription**:
 
 Do not guide the user into webhook mode for normal onboarding.
 
-### 7. Publish the app
+### 3C-8. Publish the app
 
 1. Create a version in **Version Management & Release**.
 2. Submit for review and publish.
 3. Wait for approval if the tenant requires it.
 
-### 8. Configure Pokeclaw
+### 3C-9. Configure Pokeclaw
 
 This is a required part of runnable onboarding, not an optional integration step.
 
@@ -129,7 +149,7 @@ appSecret = "paste-your-feishu-or-lark-app-secret-here"
 
 Only write the real App Secret into a file if the user explicitly asks you to do that.
 
-### 9. Start Pokeclaw
+### 3C-10. Start Pokeclaw
 
 Run:
 
@@ -142,6 +162,6 @@ pnpm start
 
 Pokeclaw does not yet provide a built-in background service or automatic restart path in this setup flow, so `pnpm start` is the normal launch path.
 
-### 10. Return to normal onboarding
+### 3C-11. Return to normal onboarding
 
-Once Pokeclaw has started successfully, continue with any remaining checks from `docs/onboarding.md`.
+Once Pokeclaw has started successfully, continue with `docs/onboarding.md`, Phase 4: Validation and first run.
