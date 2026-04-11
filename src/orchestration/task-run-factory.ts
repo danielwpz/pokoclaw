@@ -19,6 +19,7 @@ export interface CreateTaskExecutionInput {
   conversationId: string;
   branchId: string;
   workstreamId?: string | null;
+  threadRootRunId?: string | null;
   initiatorSessionId?: string | null;
   initiatorThreadId?: string | null;
   forkSourceSessionId?: string | null;
@@ -89,6 +90,7 @@ export function createTaskExecution(input: {
       conversationId: input.params.conversationId,
       branchId: input.params.branchId,
       workstreamId: input.params.workstreamId ?? null,
+      threadRootRunId: input.params.threadRootRunId ?? taskRunId,
       initiatorSessionId: input.params.initiatorSessionId ?? null,
       initiatorThreadId: input.params.initiatorThreadId ?? null,
       parentRunId: input.params.parentRunId ?? null,

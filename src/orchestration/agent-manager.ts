@@ -207,22 +207,21 @@ export class AgentManager {
   }
 
   createTaskThreadFollowupExecution(input: {
-    workstreamId: string;
+    rootTaskRunId: string;
     initiatorThreadId?: string | null;
     createdAt?: Date;
   }): CreatedTaskExecution {
-    const workstreamsRepo = new TaskWorkstreamsRepo(this.deps.storage);
     const taskRunsRepo = new TaskRunsRepo(this.deps.storage);
     const sessionsRepo = new SessionsRepo(this.deps.storage);
     const cronJobsRepo = new CronJobsRepo(this.deps.storage);
-    const workstream = workstreamsRepo.getById(input.workstreamId);
-    if (workstream == null) {
+    const rootRun = taskRunsRepo.getById(input.rootTaskRunId);
+    if (rootRun == null) {
       throw new Error(
-        `Cannot create follow-up task execution for unknown workstream ${input.workstreamId}`,
+        `Cannot create follow-up task execution for unknown root task run ${input.rootTaskRunId}`,
       );
     }
 
-    const latestRun = taskRunsRepo.findLatestByWorkstreamId(workstream.id);
+    const latestRun = taskRunsRepo.findLatestByThreadRootRunId(input.rootTaskRunId);
     const latestSession =
       latestRun?.executionSessionId == null
         ? null
@@ -233,10 +232,11 @@ export class AgentManager {
       null;
     return this.createTaskExecution({
       runType: "thread",
-      ownerAgentId: workstream.ownerAgentId,
-      conversationId: workstream.conversationId,
-      branchId: workstream.branchId,
-      workstreamId: workstream.id,
+      ownerAgentId: rootRun.ownerAgentId,
+      conversationId: rootRun.conversationId,
+      branchId: rootRun.branchId,
+      workstreamId: latestRun?.workstreamId ?? rootRun.workstreamId ?? null,
+      threadRootRunId: input.rootTaskRunId,
       initiatorThreadId: input.initiatorThreadId ?? null,
       parentRunId: latestRun?.id ?? null,
       forkSourceSessionId: latestRun?.executionSessionId ?? null,

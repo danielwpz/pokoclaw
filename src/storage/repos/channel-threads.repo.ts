@@ -14,7 +14,7 @@ export interface UpsertChannelThreadInput {
   externalThreadId: string;
   subjectKind: "chat" | "task";
   branchId?: string | null;
-  taskWorkstreamId?: string | null;
+  rootTaskRunId?: string | null;
   openedFromMessageId?: string | null;
   status?: string;
   createdAt?: Date;
@@ -36,7 +36,7 @@ export class ChannelThreadsRepo {
       externalThreadId: input.externalThreadId,
       subjectKind: input.subjectKind,
       branchId: input.branchId ?? null,
-      taskWorkstreamId: input.taskWorkstreamId ?? null,
+      rootTaskRunId: input.rootTaskRunId ?? null,
       openedFromMessageId: input.openedFromMessageId ?? null,
       status: input.status ?? "active",
       createdAt: toCanonicalUtcIsoTimestamp(createdAt),
@@ -57,7 +57,7 @@ export class ChannelThreadsRepo {
           homeConversationId: row.homeConversationId,
           subjectKind: row.subjectKind,
           branchId: row.branchId,
-          taskWorkstreamId: row.taskWorkstreamId,
+          rootTaskRunId: row.rootTaskRunId,
           openedFromMessageId: row.openedFromMessageId,
           status: row.status,
           updatedAt: row.updatedAt,
@@ -103,10 +103,10 @@ export class ChannelThreadsRepo {
     );
   }
 
-  getByTaskWorkstream(input: {
+  getByRootTaskRun(input: {
     channelType: string;
     channelInstallationId: string;
-    taskWorkstreamId: string;
+    rootTaskRunId: string;
   }): ChannelThread | null {
     return (
       this.db
@@ -116,7 +116,7 @@ export class ChannelThreadsRepo {
           and(
             eq(channelThreads.channelType, input.channelType),
             eq(channelThreads.channelInstallationId, input.channelInstallationId),
-            eq(channelThreads.taskWorkstreamId, input.taskWorkstreamId),
+            eq(channelThreads.rootTaskRunId, input.rootTaskRunId),
           ),
         )
         .get() ?? null

@@ -1115,7 +1115,7 @@ describe("lark inbound message handling", () => {
       });
 
       expect(taskThreads.createFollowupExecution).toHaveBeenCalledExactlyOnceWith({
-        workstreamId: expect.any(String),
+        rootTaskRunId: "task_1",
         initiatorThreadId: expect.any(String),
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
@@ -1126,6 +1126,106 @@ describe("lark inbound message handling", () => {
         sessionId: "sess_task_followup_1",
         scenario: "task",
         content: "Can we keep discussing this in the thread?",
+      });
+    });
+  });
+
+  test("routes task-thread follow-up by root run instead of the shared workstream", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at, ended_at)
+        VALUES (
+          'sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'completed',
+          '2026-03-27T00:00:03.000Z', '2026-03-27T00:05:00.000Z', '2026-03-27T00:05:00.000Z'
+        );
+
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at, ended_at)
+        VALUES (
+          'sess_task_2', 'conv_main', 'branch_main', 'agent_main', 'task', 'completed',
+          '2026-03-27T00:10:03.000Z', '2026-03-27T00:15:00.000Z', '2026-03-27T00:15:00.000Z'
+        );
+
+        INSERT INTO task_workstreams (id, owner_agent_id, conversation_id, branch_id, created_at, updated_at)
+        VALUES (
+          'ws_1', 'agent_main', 'conv_main', 'branch_main',
+          '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, workstream_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'ws_1', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, workstream_id, thread_root_run_id,
+          execution_session_id, status, priority, attempt, description, input_json, started_at, finished_at
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'ws_1', 'task_1',
+          'sess_task_1', 'completed', 0, 1, 'Older task thread', '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:05:00.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, workstream_id, thread_root_run_id,
+          execution_session_id, status, priority, attempt, description, input_json, started_at, finished_at
+        ) VALUES (
+          'task_2', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'ws_1', 'task_2',
+          'sess_task_2', 'completed', 0, 1, 'Newer task thread', '{}', '2026-03-27T00:10:03.000Z', '2026-03-27T00:15:00.000Z'
+        );
+
+        INSERT INTO channel_threads (
+          id, channel_type, channel_installation_id, home_conversation_id, external_chat_id, external_thread_id,
+          subject_kind, root_task_run_id, opened_from_message_id, created_at, updated_at
+        ) VALUES (
+          'thread_1', 'lark', 'default', 'conv_main', 'oc_chat_1', 'omt_task_thread_1',
+          'task', 'task_1', 'om_task_card_1', '2026-03-27T00:00:03.000Z', '2026-03-27T00:05:00.000Z'
+        );
+      `);
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const taskThreads = {
+        createFollowupExecution: vi.fn(() => ({
+          taskRunId: "task_followup_1",
+          sessionId: "sess_task_followup_1",
+          conversationId: "conv_main",
+          branchId: "branch_main",
+        })),
+        completeTaskExecution: vi.fn(),
+        blockTaskExecution: vi.fn(),
+        failTaskExecution: vi.fn(),
+      };
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        taskThreads,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_task_thread_msg_rooted",
+          parent_id: "om_user_reply_rooted",
+          thread_id: "omt_task_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "Continue only this older run thread." }),
+        },
+      });
+
+      expect(taskThreads.createFollowupExecution).toHaveBeenCalledExactlyOnceWith({
+        rootTaskRunId: "task_1",
+        initiatorThreadId: "thread_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
       });
     });
   });
