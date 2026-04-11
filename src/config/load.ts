@@ -46,9 +46,10 @@ async function loadSecretsToml(secretsTomlPath: string): Promise<unknown | undef
 export function buildAppConfigFromInputs(
   rawConfigInput: unknown | undefined,
   rawSecretsInput: unknown | undefined,
+  env: NodeJS.ProcessEnv = process.env,
 ): AppConfig {
   const secrets = validateSecretsFile(rawSecretsInput).root;
-  const resolvedConfigInput = resolveConfigRefs(rawConfigInput, secrets);
+  const resolvedConfigInput = resolveConfigRefs(rawConfigInput, { secrets, env });
   const resolvedConfig = validateFileConfig(resolvedConfigInput, DEFAULT_CONFIG);
 
   return {
