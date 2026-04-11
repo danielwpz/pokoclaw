@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="#setup">Setup</a> •
   <a href="#什么是-pokeclaw">什么是 Pokeclaw</a> •
   <a href="#核心理念">核心理念</a> •
   <a href="#适合谁用">适合谁用</a> •
@@ -31,6 +32,16 @@
 
 Pokeclaw 是一只**真正能做事的 Claw**。  
 它把 **执行、观察、控制、协作、沉淀** 组合成一个长期可用的个人 AI 助理系统。
+
+---
+
+## Setup
+
+把下面这句话发给你的 AI 编程助手（例如 Claude Code、Codex 或其他类似工具）：
+
+> Read `docs/onboarding.md` and help me set up and run this project.
+
+当前 onboarding 会包含飞书/Lark 配置，因为它是现在唯一支持的 channel。
 
 ---
 

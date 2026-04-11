@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <a href="#setup">Setup</a> •
   <a href="#what-is-pokeclaw">What Is Pokeclaw</a> •
   <a href="#core-principles">Core Principles</a> •
   <a href="#built-for">Built For</a> •
@@ -31,6 +32,16 @@
 
 Pokeclaw is **the claw that actually ships**.  
 It brings **execution, observability, control, collaboration, and self-improvement** together into a personal AI assistant built for sustained real work.
+
+---
+
+## Setup
+
+Send this to your AI coding assistant (such as Claude Code, Codex, or another similar tool):
+
+> Read `docs/onboarding.md` and help me set up and run this project.
+
+The onboarding flow currently includes Feishu/Lark setup, because Feishu/Lark is the only supported channel right now.
 
 ---
 
