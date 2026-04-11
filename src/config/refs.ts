@@ -1,5 +1,12 @@
 import type { SecretValueTree } from "@/src/config/schema.js";
 
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export interface ConfigRefSources {
+  secrets: SecretValueTree;
+  env?: NodeJS.ProcessEnv;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -8,18 +15,21 @@ function hasOwnKey(value: Record<string, unknown>, key: string): boolean {
   return Object.hasOwn(value, key);
 }
 
-function getSecretPathSegments(ref: string): string[] {
-  const prefix = "secret://";
-
+function getRefPayload(ref: string, prefix: string, errorKind: string): string {
   if (!ref.startsWith(prefix)) {
-    throw new Error(`Invalid secret ref: ${ref}`);
+    throw new Error(`Invalid ${errorKind} ref: ${ref}`);
   }
 
-  const secretPath = ref.slice(prefix.length);
-  if (secretPath.length === 0) {
-    throw new Error(`Invalid secret ref: ${ref}`);
+  const payload = ref.slice(prefix.length);
+  if (payload.length === 0) {
+    throw new Error(`Invalid ${errorKind} ref: ${ref}`);
   }
 
+  return payload;
+}
+
+function getSecretPathSegments(ref: string): string[] {
+  const secretPath = getRefPayload(ref, "secret://", "secret");
   const pathSegments = secretPath.split("/").filter((segment) => segment.length > 0);
   if (pathSegments.length === 0) {
     throw new Error(`Invalid secret ref: ${ref}`);
@@ -56,7 +66,37 @@ export function resolveSecretRef(secrets: SecretValueTree, ref: string): string 
   return current;
 }
 
-export function resolveConfigRefs<T>(input: T, secrets: SecretValueTree): T {
+function getEnvVarName(ref: string): string {
+  const envVarName = getRefPayload(ref, "env://", "env");
+  if (!ENV_VAR_NAME_RE.test(envVarName)) {
+    throw new Error(`Invalid env ref: ${ref}`);
+  }
+
+  return envVarName;
+}
+
+export function resolveEnvRef(env: NodeJS.ProcessEnv, ref: string): string {
+  const envVarName = getEnvVarName(ref);
+  const value = env[envVarName];
+  if (value == null) {
+    throw new Error(`Missing env for ref: ${ref}`);
+  }
+
+  return value;
+}
+
+function resolveRefValue(ref: string, sources: ConfigRefSources): string {
+  if (ref.startsWith("secret://")) {
+    return resolveSecretRef(sources.secrets, ref);
+  }
+  if (ref.startsWith("env://")) {
+    return resolveEnvRef(sources.env ?? process.env, ref);
+  }
+
+  throw new Error(`Invalid config ref: ${ref}`);
+}
+
+export function resolveConfigRefs<T>(input: T, sources: ConfigRefSources): T {
   if (!isPlainObject(input)) {
     return input;
   }
@@ -78,11 +118,11 @@ export function resolveConfigRefs<T>(input: T, secrets: SecretValueTree): T {
         throw new Error(`Config cannot contain both ${targetKey} and ${key}`);
       }
 
-      resolved[targetKey] = resolveSecretRef(secrets, value);
+      resolved[targetKey] = resolveRefValue(value, sources);
       continue;
     }
 
-    resolved[key] = isPlainObject(value) ? resolveConfigRefs(value, secrets) : value;
+    resolved[key] = isPlainObject(value) ? resolveConfigRefs(value, sources) : value;
   }
 
   return resolved as T;

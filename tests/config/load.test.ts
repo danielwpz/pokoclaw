@@ -4,8 +4,8 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { loadConfig } from "@/src/config/load.js";
-import { resolveConfigRefs, resolveSecretRef } from "@/src/config/refs.js";
+import { buildAppConfigFromInputs, loadConfig } from "@/src/config/load.js";
+import { resolveConfigRefs, resolveEnvRef, resolveSecretRef } from "@/src/config/refs.js";
 
 describe("config loader", () => {
   test("resolves a secret ref directly", () => {
@@ -31,9 +31,11 @@ describe("config loader", () => {
         },
       },
       {
-        llm: {
-          anthropic: {
-            apiKey: "secret-value",
+        secrets: {
+          llm: {
+            anthropic: {
+              apiKey: "secret-value",
+            },
           },
         },
       },
@@ -42,6 +44,34 @@ describe("config loader", () => {
     expect(resolved).toEqual({
       service: {
         apiKey: "secret-value",
+      },
+    });
+  });
+
+  test("resolves an env ref directly", () => {
+    expect(resolveEnvRef({ OPENAI_API_KEY: "env-secret" }, "env://OPENAI_API_KEY")).toBe(
+      "env-secret",
+    );
+  });
+
+  test("resolves env _ref fields into normal fields", () => {
+    const resolved = resolveConfigRefs(
+      {
+        service: {
+          apiKey_ref: "env://OPENAI_API_KEY",
+        },
+      },
+      {
+        secrets: {},
+        env: {
+          OPENAI_API_KEY: "env-secret",
+        },
+      },
+    );
+
+    expect(resolved).toEqual({
+      service: {
+        apiKey: "env-secret",
       },
     });
   });
@@ -56,6 +86,20 @@ describe("config loader", () => {
   test("rejects missing secret ref path", () => {
     expect(() => resolveSecretRef({}, "secret://llm/anthropic/apiKey")).toThrow(
       "Missing secret for ref: secret://llm/anthropic/apiKey",
+    );
+  });
+
+  test("rejects invalid env ref format", () => {
+    expect(() => resolveEnvRef({}, "OPENAI_API_KEY")).toThrow("Invalid env ref: OPENAI_API_KEY");
+    expect(() => resolveEnvRef({}, "env://")).toThrow("Invalid env ref: env://");
+    expect(() => resolveEnvRef({}, "env://OPENAI/API_KEY")).toThrow(
+      "Invalid env ref: env://OPENAI/API_KEY",
+    );
+  });
+
+  test("rejects missing env refs", () => {
+    expect(() => resolveEnvRef({}, "env://OPENAI_API_KEY")).toThrow(
+      "Missing env for ref: env://OPENAI_API_KEY",
     );
   });
 
@@ -82,7 +126,7 @@ describe("config loader", () => {
             apiKey_ref: 123,
           },
         },
-        {},
+        { secrets: {} },
       ),
     ).toThrow("Config ref apiKey_ref must be a string");
   });
@@ -97,9 +141,11 @@ describe("config loader", () => {
           },
         },
         {
-          llm: {
-            anthropic: {
-              apiKey: "secret-value",
+          secrets: {
+            llm: {
+              anthropic: {
+                apiKey: "secret-value",
+              },
             },
           },
         },
@@ -193,6 +239,66 @@ describe("config loader", () => {
 
     expect(config.logging.level).toBe("debug");
     expect(config.logging.useColors).toBe(false);
+  });
+
+  test("resolves env _ref values during config build", () => {
+    const config = buildAppConfigFromInputs(
+      {
+        providers: {
+          openai_main: {
+            api: "openai-responses",
+            apiKey_ref: "env://OPENAI_API_KEY",
+          },
+        },
+      },
+      undefined,
+      {
+        OPENAI_API_KEY: "env-secret",
+      },
+    );
+
+    expect(config.providers.openai_main).toEqual({
+      api: "openai-responses",
+      apiKey: "env-secret",
+    });
+  });
+
+  test("supports secret and env refs in the same config", () => {
+    const config = buildAppConfigFromInputs(
+      {
+        providers: {
+          anthropic_main: {
+            api: "anthropic-messages",
+            apiKey_ref: "secret://llm/anthropic/apiKey",
+          },
+          openai_main: {
+            api: "openai-responses",
+            apiKey_ref: "env://OPENAI_API_KEY",
+          },
+        },
+      },
+      {
+        llm: {
+          anthropic: {
+            apiKey: "secret-value",
+          },
+        },
+      },
+      {
+        OPENAI_API_KEY: "env-secret",
+      },
+    );
+
+    expect(config.providers).toEqual({
+      anthropic_main: {
+        api: "anthropic-messages",
+        apiKey: "secret-value",
+      },
+      openai_main: {
+        api: "openai-responses",
+        apiKey: "env-secret",
+      },
+    });
   });
 
   test("loads provider, model catalog, scenario lists, and compaction config", async () => {
