@@ -69,7 +69,7 @@ export interface CreateLarkChannelRuntimeInput {
   };
   taskThreads?: {
     createFollowupExecution(input: {
-      workstreamId: string;
+      rootTaskRunId: string;
       initiatorThreadId?: string | null;
       createdAt?: Date;
     }): {

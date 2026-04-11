@@ -99,19 +99,19 @@ CREATE TABLE IF NOT EXISTS channel_threads (
   subject_kind TEXT NOT NULL
     CHECK (subject_kind IN ('chat', 'task')),
   branch_id TEXT REFERENCES conversation_branches(id) ON DELETE CASCADE,
-  task_workstream_id TEXT REFERENCES task_workstreams(id) ON DELETE CASCADE,
+  root_task_run_id TEXT REFERENCES task_runs(id) ON DELETE CASCADE,
   opened_from_message_id TEXT,
   status TEXT NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'archived')),
   created_at TEXT NOT NULL CHECK (created_at GLOB '????-??-??T??:??:??*Z' AND datetime(created_at) IS NOT NULL),
   updated_at TEXT NOT NULL CHECK (updated_at GLOB '????-??-??T??:??:??*Z' AND datetime(updated_at) IS NOT NULL),
   CHECK (
-    (subject_kind = 'chat' AND branch_id IS NOT NULL AND task_workstream_id IS NULL)
-    OR (subject_kind = 'task' AND task_workstream_id IS NOT NULL AND branch_id IS NULL)
+    (subject_kind = 'chat' AND branch_id IS NOT NULL AND root_task_run_id IS NULL)
+    OR (subject_kind = 'task' AND root_task_run_id IS NOT NULL AND branch_id IS NULL)
   ),
   UNIQUE(channel_type, channel_installation_id, external_chat_id, external_thread_id),
   UNIQUE(channel_type, branch_id),
-  UNIQUE(channel_type, task_workstream_id)
+  UNIQUE(channel_type, root_task_run_id)
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   branch_id TEXT NOT NULL REFERENCES conversation_branches(id) ON DELETE CASCADE,
   workstream_id TEXT REFERENCES task_workstreams(id) ON DELETE SET NULL,
+  thread_root_run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
   initiator_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   initiator_thread_id TEXT REFERENCES channel_threads(id) ON DELETE SET NULL,
   parent_run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
@@ -388,6 +389,8 @@ CREATE INDEX IF NOT EXISTS idx_runs_cron_started
   ON task_runs(cron_job_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_runs_workstream_started
   ON task_runs(workstream_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_runs_thread_root_started
+  ON task_runs(thread_root_run_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_approval_owner_time
   ON approval_ledger(owner_agent_id, decided_at);
 CREATE INDEX IF NOT EXISTS idx_approval_session_status_created

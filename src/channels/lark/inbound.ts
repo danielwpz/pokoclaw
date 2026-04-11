@@ -102,7 +102,7 @@ export interface CreateLarkInboundRuntimeInput {
   };
   taskThreads?: {
     createFollowupExecution(input: {
-      workstreamId: string;
+      rootTaskRunId: string;
       initiatorThreadId?: string | null;
       createdAt?: Date;
     }): {
@@ -1695,6 +1695,10 @@ function resolveTaskThreadRoute(input: {
     taskRun,
     ...(input.normalized.createdAt == null ? {} : { createdAt: input.normalized.createdAt }),
   });
+  const rootTaskRunId = ensureTaskRunThreadRoot({
+    db: input.db,
+    taskRun,
+  });
   const rootBinding = bindingsRepo.getByInternalObject({
     channelInstallationId: input.installationId,
     internalObjectKind: RUN_CARD_OBJECT_KIND,
@@ -1708,7 +1712,7 @@ function resolveTaskThreadRoute(input: {
     externalChatId: input.normalized.chatId,
     externalThreadId: threadId,
     subjectKind: "task",
-    taskWorkstreamId: workstreamId,
+    rootTaskRunId,
     openedFromMessageId:
       rootBinding?.larkMessageId ??
       binding.larkMessageId ??
@@ -1718,10 +1722,15 @@ function resolveTaskThreadRoute(input: {
       ? {}
       : { createdAt: input.normalized.createdAt, updatedAt: input.normalized.createdAt }),
   });
-  if (taskRun.initiatorThreadId == null || taskRun.workstreamId == null) {
+  if (
+    taskRun.initiatorThreadId == null ||
+    taskRun.workstreamId == null ||
+    taskRun.threadRootRunId == null
+  ) {
     taskRunsRepo.updateWorkstream({
       id: taskRun.id,
       workstreamId,
+      threadRootRunId: rootTaskRunId,
       initiatorThreadId: taskRun.initiatorThreadId ?? channelThread.id,
     });
   }
@@ -1869,7 +1878,7 @@ function resolveStoredChannelThreadRoute(input: {
     id: string;
     subjectKind: string;
     branchId: string | null;
-    taskWorkstreamId: string | null;
+    rootTaskRunId: string | null;
     homeConversationId: string;
     openedFromMessageId: string | null;
   };
@@ -1918,8 +1927,8 @@ function resolveStoredChannelThreadRoute(input: {
     };
   }
 
-  if (input.channelThread.taskWorkstreamId == null) {
-    logger.warn("ignoring invalid stored lark task thread without workstream", {
+  if (input.channelThread.rootTaskRunId == null) {
+    logger.warn("ignoring invalid stored lark task thread without root task run", {
       installationId: input.installationId,
       threadId: input.normalized.threadId,
       channelThreadId: input.channelThread.id,
@@ -1928,7 +1937,7 @@ function resolveStoredChannelThreadRoute(input: {
   }
 
   const taskRunsRepo = new TaskRunsRepo(input.db);
-  const activeRun = taskRunsRepo.findActiveByWorkstreamId(input.channelThread.taskWorkstreamId);
+  const activeRun = taskRunsRepo.findActiveByThreadRootRunId(input.channelThread.rootTaskRunId);
   if (activeRun != null && activeRun.executionSessionId != null) {
     const activeSession = sessionsRepo.getById(activeRun.executionSessionId);
     if (
@@ -1961,20 +1970,20 @@ function resolveStoredChannelThreadRoute(input: {
     });
   }
 
-  const latestRun = taskRunsRepo.findLatestByWorkstreamId(input.channelThread.taskWorkstreamId);
+  const latestRun = taskRunsRepo.findLatestByThreadRootRunId(input.channelThread.rootTaskRunId);
   if (latestRun == null) {
-    logger.warn("stored lark task thread has no task runs", {
+    logger.warn("stored lark task thread has no runs in its lineage", {
       installationId: input.installationId,
       threadId: input.normalized.threadId,
       channelThreadId: input.channelThread.id,
-      workstreamId: input.channelThread.taskWorkstreamId,
+      rootTaskRunId: input.channelThread.rootTaskRunId,
     });
     return null;
   }
 
   if (input.allowTaskFollowupCreation && input.taskThreads != null) {
     const created = input.taskThreads.createFollowupExecution({
-      workstreamId: input.channelThread.taskWorkstreamId,
+      rootTaskRunId: input.channelThread.rootTaskRunId,
       initiatorThreadId: input.channelThread.id,
       ...(input.normalized.createdAt == null ? {} : { createdAt: input.normalized.createdAt }),
     });
@@ -2064,6 +2073,19 @@ function ensureTaskRunWorkstream(input: {
   }
 
   return workstream.id;
+}
+
+function ensureTaskRunThreadRoot(input: { db: StorageDb; taskRun: TaskRun }): string {
+  if (input.taskRun.threadRootRunId != null) {
+    return input.taskRun.threadRootRunId;
+  }
+
+  new TaskRunsRepo(input.db).updateWorkstream({
+    id: input.taskRun.id,
+    workstreamId: input.taskRun.workstreamId ?? null,
+    threadRootRunId: input.taskRun.id,
+  });
+  return input.taskRun.id;
 }
 
 function settleTaskThreadCompletionIfNeeded(input: {

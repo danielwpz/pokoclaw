@@ -178,9 +178,9 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
         }),
     },
     taskThreads: {
-      createFollowupExecution: ({ workstreamId, initiatorThreadId, createdAt }) => {
+      createFollowupExecution: ({ rootTaskRunId, initiatorThreadId, createdAt }) => {
         const created = manager.createTaskThreadFollowupExecution({
-          workstreamId,
+          rootTaskRunId,
           ...(initiatorThreadId === undefined ? {} : { initiatorThreadId }),
           ...(createdAt === undefined ? {} : { createdAt }),
         });

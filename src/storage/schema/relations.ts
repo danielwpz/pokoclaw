@@ -107,7 +107,6 @@ export const taskWorkstreamsRelations = relations(taskWorkstreams, ({ one, many 
     fields: [taskWorkstreams.branchId],
     references: [conversationBranches.id],
   }),
-  channelThreads: many(channelThreads),
   cronJobs: many(cronJobs),
   taskRuns: many(taskRuns),
 }));
@@ -121,9 +120,9 @@ export const channelThreadsRelations = relations(channelThreads, ({ one }) => ({
     fields: [channelThreads.branchId],
     references: [conversationBranches.id],
   }),
-  taskWorkstream: one(taskWorkstreams, {
-    fields: [channelThreads.taskWorkstreamId],
-    references: [taskWorkstreams.id],
+  rootTaskRun: one(taskRuns, {
+    fields: [channelThreads.rootTaskRunId],
+    references: [taskRuns.id],
   }),
 }));
 
@@ -190,6 +189,10 @@ export const taskRunsRelations = relations(taskRuns, ({ one }) => ({
   workstream: one(taskWorkstreams, {
     fields: [taskRuns.workstreamId],
     references: [taskWorkstreams.id],
+  }),
+  threadRootRun: one(taskRuns, {
+    fields: [taskRuns.threadRootRunId],
+    references: [taskRuns.id],
   }),
   initiatorThread: one(channelThreads, {
     fields: [taskRuns.initiatorThreadId],

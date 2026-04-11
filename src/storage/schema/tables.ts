@@ -171,7 +171,7 @@ export const channelThreads = sqliteTable(
     branchId: text("branch_id").references(() => conversationBranches.id, {
       onDelete: "cascade",
     }),
-    taskWorkstreamId: text("task_workstream_id").references(() => taskWorkstreams.id, {
+    rootTaskRunId: text("root_task_run_id").references((): AnySQLiteColumn => taskRuns.id, {
       onDelete: "cascade",
     }),
     openedFromMessageId: text("opened_from_message_id"),
@@ -187,7 +187,7 @@ export const channelThreads = sqliteTable(
       table.externalThreadId,
     ),
     uniqueIndex("uidx_channel_threads_branch").on(table.channelType, table.branchId),
-    uniqueIndex("uidx_channel_threads_workstream").on(table.channelType, table.taskWorkstreamId),
+    uniqueIndex("uidx_channel_threads_root_run").on(table.channelType, table.rootTaskRunId),
     index("idx_channel_threads_home_conversation").on(table.homeConversationId, table.updatedAt),
   ],
 );
@@ -334,6 +334,9 @@ export const taskRuns = sqliteTable(
     workstreamId: text("workstream_id").references(() => taskWorkstreams.id, {
       onDelete: "set null",
     }),
+    threadRootRunId: text("thread_root_run_id").references((): AnySQLiteColumn => taskRuns.id, {
+      onDelete: "set null",
+    }),
     initiatorSessionId: text("initiator_session_id").references(() => sessions.id, {
       onDelete: "set null",
     }),
@@ -368,6 +371,7 @@ export const taskRuns = sqliteTable(
     index("idx_runs_owner_status_started").on(table.ownerAgentId, table.status, table.startedAt),
     index("idx_runs_cron_started").on(table.cronJobId, table.startedAt),
     index("idx_runs_workstream_started").on(table.workstreamId, table.startedAt),
+    index("idx_runs_thread_root_started").on(table.threadRootRunId, table.startedAt),
   ],
 );
 

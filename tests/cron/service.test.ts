@@ -81,6 +81,7 @@ function createCompletedRunResult(taskRunId: string): TaskExecutionRunResult {
         conversationId: "conv_1",
         branchId: "branch_1",
         workstreamId: "workstream_1",
+        threadRootRunId: taskRunId,
         initiatorSessionId: null,
         initiatorThreadId: null,
         parentRunId: null,

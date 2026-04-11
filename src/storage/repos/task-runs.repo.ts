@@ -12,6 +12,7 @@ export interface CreateTaskRunInput {
   conversationId: string;
   branchId: string;
   workstreamId?: string | null;
+  threadRootRunId?: string | null;
   initiatorSessionId?: string | null;
   initiatorThreadId?: string | null;
   parentRunId?: string | null;
@@ -52,6 +53,7 @@ export class TaskRunsRepo {
       conversationId: input.conversationId,
       branchId: input.branchId,
       workstreamId: input.workstreamId ?? null,
+      threadRootRunId: input.threadRootRunId ?? null,
       initiatorSessionId: input.initiatorSessionId ?? null,
       initiatorThreadId: input.initiatorThreadId ?? null,
       parentRunId: input.parentRunId ?? null,
@@ -128,6 +130,17 @@ export class TaskRunsRepo {
     );
   }
 
+  findLatestByThreadRootRunId(threadRootRunId: string): TaskRun | null {
+    return (
+      this.db
+        .select()
+        .from(taskRuns)
+        .where(eq(taskRuns.threadRootRunId, threadRootRunId))
+        .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
+        .get() ?? null
+    );
+  }
+
   findActiveByWorkstreamId(workstreamId: string): TaskRun | null {
     return (
       this.db
@@ -139,15 +152,28 @@ export class TaskRunsRepo {
     );
   }
 
+  findActiveByThreadRootRunId(threadRootRunId: string): TaskRun | null {
+    return (
+      this.db
+        .select()
+        .from(taskRuns)
+        .where(and(eq(taskRuns.threadRootRunId, threadRootRunId), eq(taskRuns.status, "running")))
+        .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
+        .get() ?? null
+    );
+  }
+
   updateWorkstream(input: {
     id: string;
     workstreamId: string | null;
     initiatorThreadId?: string | null;
+    threadRootRunId?: string | null;
   }): void {
     this.db
       .update(taskRuns)
       .set({
         workstreamId: input.workstreamId,
+        ...(input.threadRootRunId === undefined ? {} : { threadRootRunId: input.threadRootRunId }),
         ...(input.initiatorThreadId === undefined
           ? {}
           : { initiatorThreadId: input.initiatorThreadId }),
