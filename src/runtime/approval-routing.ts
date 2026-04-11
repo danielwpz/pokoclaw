@@ -20,7 +20,8 @@ export type ApprovalRuntimeKind =
   | "task_session"
   | "delegate_run"
   | "cron_run"
-  | "system_run";
+  | "system_run"
+  | "thread_run";
 
 export interface ResolvedApprovalRoute {
   target: ApprovalTarget;
@@ -68,6 +69,16 @@ export function resolveApprovalRouteForSession(input: {
           route: {
             target: "user",
             runtimeKind: "system_run",
+            ownerRole,
+            taskRunId: taskRun.id,
+          },
+        });
+      case "thread":
+        return logResolvedRoute({
+          sessionId: input.session.id,
+          route: {
+            target: "user",
+            runtimeKind: "thread_run",
             ownerRole,
             taskRunId: taskRun.id,
           },

@@ -266,4 +266,45 @@ describe("approval routing", () => {
       });
     });
   });
+
+  test("routes thread task runs to user approvals", async () => {
+    await withHandle(async (handle) => {
+      seedBase(handle);
+      const sessionsRepo = new SessionsRepo(handle.storage.db);
+      sessionsRepo.create({
+        id: "sess_thread_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        ownerAgentId: "agent_main",
+        purpose: "task",
+      });
+      handle.storage.sqlite.exec(`
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id,
+          execution_session_id, status, started_at
+        ) VALUES (
+          'run_thread', 'thread', 'agent_main', 'conv_1', 'branch_1',
+          'sess_thread_task', 'running', '2026-03-25T00:00:00.000Z'
+        );
+      `);
+
+      const session = sessionsRepo.getById("sess_thread_task");
+      expect(session).not.toBeNull();
+      if (session == null) {
+        throw new Error("Expected sess_thread_task to exist");
+      }
+
+      const route = resolveApprovalRouteForSession({
+        db: handle.storage.db,
+        session,
+      });
+
+      expect(route).toEqual({
+        target: "user",
+        runtimeKind: "thread_run",
+        ownerRole: "main",
+        taskRunId: "run_thread",
+      });
+    });
+  });
 });
