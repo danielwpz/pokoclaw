@@ -505,4 +505,29 @@ export class LarkObjectBindingsRepo {
           binding.internalObjectId.startsWith(`${prefix}:page:`),
       );
   }
+
+  listRunCardSegmentsByRunId(input: {
+    runId: string;
+    channelInstallationId?: string;
+  }): LarkObjectBinding[] {
+    const prefix = `${input.runId}:seg:`;
+    const predicate = [eq(larkObjectBindings.internalObjectKind, "run_card")];
+
+    if (input.channelInstallationId != null) {
+      predicate.unshift(eq(larkObjectBindings.channelInstallationId, input.channelInstallationId));
+    }
+
+    return this.db
+      .select()
+      .from(larkObjectBindings)
+      .where(and(...predicate, like(larkObjectBindings.internalObjectId, `${prefix}%`)))
+      .all()
+      .filter((binding) => {
+        if (!binding.internalObjectId.startsWith(prefix)) {
+          return false;
+        }
+        const suffix = binding.internalObjectId.slice(prefix.length);
+        return /^[1-9]\d*$/.test(suffix);
+      });
+  }
 }
