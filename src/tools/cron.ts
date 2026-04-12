@@ -13,6 +13,7 @@ import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ConversationBranchesRepo } from "@/src/storage/repos/conversation-branches.repo.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { TaskWorkstreamsRepo } from "@/src/storage/repos/task-workstreams.repo.js";
 import type { CronJob } from "@/src/storage/schema/types.js";
 import { toolInternalError, toolRecoverableError } from "@/src/tools/core/errors.js";
 import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/core/types.js";
@@ -103,12 +104,21 @@ export function createScheduleTaskTool() {
             },
             now,
           );
+          const workstream = new TaskWorkstreamsRepo(context.storage).create({
+            id: randomUUID(),
+            ownerAgentId: resolved.callerAgent.id,
+            conversationId: resolved.callerAgent.conversationId,
+            branchId: resolved.homeBranchId,
+            createdAt: now,
+            updatedAt: now,
+          });
 
           const created = repo.create({
             id: randomUUID(),
             ownerAgentId: resolved.callerAgent.id,
             targetConversationId: resolved.callerAgent.conversationId,
             targetBranchId: resolved.homeBranchId,
+            workstreamId: workstream.id,
             name: args.name ?? null,
             scheduleKind,
             scheduleValue: normalizedSchedule.scheduleValue,

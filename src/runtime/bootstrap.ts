@@ -177,6 +177,24 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
           reasonText: "Denied from lark subagent creation card",
         }),
     },
+    taskThreads: {
+      createFollowupExecution: ({ rootTaskRunId, initiatorThreadId, createdAt }) => {
+        const created = manager.createTaskThreadFollowupExecution({
+          rootTaskRunId,
+          ...(initiatorThreadId === undefined ? {} : { initiatorThreadId }),
+          ...(createdAt === undefined ? {} : { createdAt }),
+        });
+        return {
+          taskRunId: created.taskRun.id,
+          sessionId: created.executionSession.id,
+          conversationId: created.taskRun.conversationId,
+          branchId: created.taskRun.branchId,
+        };
+      },
+      completeTaskExecution: (taskInput) => manager.completeTaskExecution(taskInput),
+      blockTaskExecution: (taskInput) => manager.blockTaskExecution(taskInput),
+      failTaskExecution: (taskInput) => manager.failTaskExecution(taskInput),
+    },
   });
 
   let started = false;

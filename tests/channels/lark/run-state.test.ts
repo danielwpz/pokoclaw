@@ -181,11 +181,47 @@ describe("lark run state", () => {
         elements: expect.arrayContaining([
           expect.objectContaining({
             tag: "markdown",
-            content: expect.stringContaining("任务已启动"),
+            content: "_正在思考..._",
           }),
         ]),
       },
     });
+  });
+
+  test("renders only one thinking placeholder when an active task assistant message has no text yet", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "thread",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: null,
+        executionSessionId: "sess_task",
+      }),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_task_started",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+
+    const rendered = buildLarkRenderedRunCard(state);
+    const bodyJson = JSON.stringify((rendered.card as { body?: unknown }).body ?? {});
+    const placeholderMatches = bodyJson.match(/_正在思考\.\.\._/g) ?? [];
+    expect(placeholderMatches).toHaveLength(1);
   });
 
   test("finalizes task cards from task lifecycle events instead of runtime terminal events", () => {

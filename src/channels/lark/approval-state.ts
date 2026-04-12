@@ -13,6 +13,8 @@ export interface LarkApprovalState {
   runId: string;
   conversationId: string;
   branchId: string;
+  taskRunId: string | null;
+  taskRunType: string | null;
   title: string;
   request: PermissionRequest;
   reasonText: string;
@@ -27,6 +29,8 @@ export interface LarkApprovalState {
 
 export function createLarkApprovalStateFromRequest(input: {
   event: ApprovalRequestedEvent;
+  taskRunId?: string | null;
+  taskRunType?: string | null;
   sourceRunCardObjectId: string | null;
 }): LarkApprovalState {
   return {
@@ -34,6 +38,8 @@ export function createLarkApprovalStateFromRequest(input: {
     runId: input.event.runId,
     conversationId: input.event.conversationId,
     branchId: input.event.branchId,
+    taskRunId: input.taskRunId ?? null,
+    taskRunType: input.taskRunType ?? null,
     title: input.event.title,
     request: input.event.request,
     reasonText: input.event.reasonText,
@@ -60,6 +66,8 @@ export function reduceLarkApprovalState(
         previous ??
         createLarkApprovalStateFromRequest({
           event: envelope.event,
+          taskRunId: envelope.taskRun.taskRunId,
+          taskRunType: envelope.taskRun.runType,
           sourceRunCardObjectId: input?.sourceRunCardObjectId ?? null,
         })
       );

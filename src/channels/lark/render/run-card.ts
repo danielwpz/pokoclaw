@@ -443,6 +443,7 @@ function buildRunCardPage(
         elementId,
         text: LARK_ASSISTANT_PLACEHOLDER_TEXT,
       };
+      hasVisibleTranscript = true;
     }
 
     if (allowEmptyPlaceholder) {
@@ -599,7 +600,7 @@ function renderEmptyRunStatePlaceholder(
   if (state.terminal === "running" && state.taskRunId != null) {
     return {
       tag: "markdown",
-      content: "⏳ **任务已启动**\n\n等待输出或工具执行结果。",
+      content: LARK_ASSISTANT_PLACEHOLDER_TEXT,
     };
   }
 

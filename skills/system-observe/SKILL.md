@@ -25,8 +25,9 @@ Choose one or more channels based on the question. Do not force a fixed order fo
   - If that is still insufficient, inspect:
     - `../../src/storage/schema/tables.ts`
     - `../../src/storage/schema/types.ts`
-    - `../../src/storage/db/init.ts`
     - `../../src/storage/migrate/files/0001_init.sql`
+    - `../../src/storage/db/init.ts`
+      This file is only the bootstrap entrypoint now. The schema truth lives in `tables.ts` and `0001_init.sql`.
   - Only then use `query_system_db` for live schema discovery.
 - If the task involves live runtime status payload semantics for `get_runtime_status`:
   - Read `references/runtime-status.md` first.

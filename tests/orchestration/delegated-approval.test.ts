@@ -115,9 +115,33 @@ describe("delegated approval orchestration", () => {
     expect(text).toContain("blocked by permissions: Write access is missing for /tmp/demo.txt");
   });
 
+  test("renders delegated bash approvals with both prefix and full command text", () => {
+    const text = renderDelegatedApprovalMessage({
+      approvalId: 13,
+      ownerAgentId: "agent_sub",
+      reasonText: "Need to inspect the repo and run the requested script.",
+      requestedScopeJson: '{"scopes":[{"kind":"bash.full_access","prefix":["bash","-lc"]}]}',
+      commandText: "cat foo && npm run foo",
+      commandCwd: "/tmp/demo",
+    });
+
+    expect(text).toContain("Run bash commands with full access for prefix: bash -lc");
+    expect(text).toContain("<requested_command>");
+    expect(text).toContain("cat foo &amp;&amp; npm run foo");
+    expect(text).toContain("<command_cwd>/tmp/demo</command_cwd>");
+  });
+
   test("delivers a main-agent-targeted approval request into a dedicated approval session", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
+      handle.storage.sqlite
+        .prepare(
+          "UPDATE approval_ledger SET requested_scope_json = ?, resume_payload_json = ? WHERE id = 1",
+        )
+        .run(
+          '{"scopes":[{"kind":"bash.full_access","prefix":["bash","-lc"]}]}',
+          '{"toolCallId":"tool_1","toolName":"bash","toolArgs":{"command":"cat foo && npm run foo","cwd":"/tmp/demo"}}',
+        );
 
       const submitted: SubmitMessageInput[] = [];
       const approvalsRepo = new ApprovalsRepo(handle.storage.db);
@@ -165,6 +189,12 @@ describe("delegated approval orchestration", () => {
       expect(submitted[0]?.content).toContain("<task_context>");
       expect(submitted[0]?.content).toContain("Handles delegated file update tasks.");
       expect(submitted[0]?.content).toContain("Update the task output file requested by the user.");
+      expect(submitted[0]?.content).toContain(
+        "Run bash commands with full access for prefix: bash -lc",
+      );
+      expect(submitted[0]?.content).toContain("<requested_command>");
+      expect(submitted[0]?.content).toContain("cat foo &amp;&amp; npm run foo");
+      expect(submitted[0]?.content).toContain("<command_cwd>/tmp/demo</command_cwd>");
       expect(submitted[0]?.content).toContain("<recent_task_transcript>");
       expect(submitted[0]?.content).toContain(
         "blocked by permissions: Write access is missing for /tmp/demo.txt",
