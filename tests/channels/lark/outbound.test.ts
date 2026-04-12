@@ -1942,7 +1942,7 @@ describe("lark outbound runtime", () => {
     expect(createCard).toHaveBeenCalledTimes(2);
     expect(createMessage).toHaveBeenCalledOnce();
     expect(reply).toHaveBeenCalledOnce();
-    expect(updateCard).toHaveBeenCalled();
+    expect(updateCard).not.toHaveBeenCalled();
     expect(
       new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
         channelInstallationId: "default",
@@ -1951,16 +1951,7 @@ describe("lark outbound runtime", () => {
       }),
     ).toBeNull();
 
-    const updateCalls = updateCard.mock.calls as unknown[][];
     const createCalls = createCard.mock.calls as unknown[][];
-
-    const taskStatusUpdate = updateCalls.find(
-      (call) =>
-        ((call[0] as { path?: { card_id?: string } } | undefined)?.path?.card_id ?? null) ===
-        "card_task_status_1",
-    )?.[0];
-    expect(JSON.stringify(taskStatusUpdate)).toContain("等待授权");
-    expect(JSON.stringify(taskStatusUpdate)).toContain("日报汇总");
 
     const taskThreadCreate = createCalls.at(1)?.[0];
     expect(JSON.stringify(taskThreadCreate)).toContain("request_permissions");

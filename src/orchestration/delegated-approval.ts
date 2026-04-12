@@ -98,6 +98,7 @@ export async function deliverDelegatedApprovalRequest(input: {
     ownerAgentId: approval.ownerAgentId,
     reasonText: approval.reasonText,
     requestedScopeJson: approval.requestedScopeJson,
+    ...extractDelegatedApprovalCommandDetails(approval.resumePayloadJson),
     context: buildDelegatedApprovalContext({
       db: input.db,
       sourceSessionId: approval.requestedBySessionId,
@@ -190,6 +191,8 @@ export function renderDelegatedApprovalMessage(input: {
   ownerAgentId: string;
   reasonText: string | null;
   requestedScopeJson: string;
+  commandText?: string;
+  commandCwd?: string;
   context?: DelegatedApprovalContext;
   history?: ApprovalHistoryItem[];
 }): string {
@@ -208,6 +211,12 @@ export function renderDelegatedApprovalMessage(input: {
       ),
       "",
       ...renderLineBlock("requested_permissions", lines),
+      ...(input.commandText == null || input.commandText.trim().length === 0
+        ? []
+        : ["", ...renderMultilineElement("requested_command", escapeXmlText(input.commandText))]),
+      ...(input.commandCwd == null || input.commandCwd.trim().length === 0
+        ? []
+        : ["", ...renderSingleLineElement("command_cwd", escapeXmlText(input.commandCwd))]),
       "",
       ...renderLineBlock("guidance", DELEGATED_APPROVAL_GUIDANCE_LINES),
     ]),
@@ -258,6 +267,44 @@ interface DelegatedTranscriptEntry {
   seq: number;
   role: string;
   summary: string;
+}
+
+function extractDelegatedApprovalCommandDetails(resumePayloadJson: string | null): {
+  commandText?: string;
+  commandCwd?: string;
+} {
+  if (resumePayloadJson == null || resumePayloadJson.trim().length === 0) {
+    return {};
+  }
+
+  try {
+    const payload = JSON.parse(resumePayloadJson) as Record<string, unknown>;
+    const toolArgs =
+      typeof payload.toolArgs === "object" &&
+      payload.toolArgs != null &&
+      !Array.isArray(payload.toolArgs)
+        ? (payload.toolArgs as Record<string, unknown>)
+        : null;
+    if (toolArgs == null) {
+      return {};
+    }
+
+    const commandText =
+      typeof toolArgs.command === "string" && toolArgs.command.trim().length > 0
+        ? toolArgs.command.trim()
+        : null;
+    const commandCwd =
+      typeof toolArgs.cwd === "string" && toolArgs.cwd.trim().length > 0
+        ? toolArgs.cwd.trim()
+        : null;
+
+    return {
+      ...(commandText == null ? {} : { commandText }),
+      ...(commandCwd == null ? {} : { commandCwd }),
+    };
+  } catch {
+    return {};
+  }
 }
 
 function listRecentApprovalHistory(input: {

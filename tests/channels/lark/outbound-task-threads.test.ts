@@ -323,7 +323,7 @@ describe("lark outbound runtime task threads", () => {
     expect(updatedTaskCard.header?.template).toBe("green");
   });
 
-  test("does not reuse an older task thread for a fresh cron run from the same workstream", async () => {
+  test("creates a standalone task status card for a fresh cron run and does not reuse an older task thread", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`
@@ -550,6 +550,15 @@ describe("lark outbound runtime task threads", () => {
     expect(reply).toHaveBeenCalledOnce();
     expect(
       (
+        (createMessage.mock.calls as unknown[][]).at(0)?.[0] as
+          | { params?: { receive_id_type?: string }; data?: { msg_type?: string } }
+          | undefined
+      )?.params,
+    ).toMatchObject({
+      receive_id_type: "chat_id",
+    });
+    expect(
+      (
         (reply.mock.calls as unknown[][]).at(0)?.[0] as
           | { path?: { message_id?: string } }
           | undefined
@@ -557,6 +566,221 @@ describe("lark outbound runtime task threads", () => {
     ).toMatchObject({
       message_id: "om_task_card_2",
     });
+
+    await runtime.shutdown();
+  });
+
+  test("does not change the standalone task status card terminal state when approval is denied", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '每日新闻摘要', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '每日新闻摘要', '2026-03-28T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: {
+          card_id: "card_task_status_1",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          card_id: "card_task_approval_1",
+        },
+      });
+    const createMessage = vi
+      .fn(async () => ({
+        data: {
+          message_id: "om_task_card_1",
+          open_message_id: "om_task_open_1",
+        },
+      }))
+      .mockResolvedValueOnce({
+        data: {
+          message_id: "om_task_approval_1",
+          open_message_id: "om_task_approval_open_1",
+        },
+      });
+    const updateCard = vi.fn(async (_input: unknown) => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: updateCard,
+                  },
+                  cardElement: {
+                    content: vi.fn(async () => ({})),
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply: vi.fn(async () => ({
+                    data: {
+                      message_id: "om_unused_reply",
+                      open_message_id: "om_unused_reply_open",
+                    },
+                  })),
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    bus.publish({
+      kind: "runtime_event",
+      target: { conversationId: "conv_1", branchId: "branch_1" },
+      session: { sessionId: "sess_task", purpose: "task" },
+      agent: { ownerAgentId: "agent_1", ownerRole: "main", mainAgentId: "agent_1" },
+      taskRun: {
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        executionSessionId: "sess_task",
+      },
+      run: { runId: "run_task_1" },
+      object: { messageId: null, toolCallId: null, toolName: null, approvalId: null },
+      event: {
+        type: "approval_requested",
+        eventId: "evt_task_perm_req",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        approvalId: "approval_1",
+        approvalTarget: "user",
+        title: "需要授权",
+        request: { scopes: [{ kind: "fs.write", path: "/tmp/news.txt" }] },
+        reasonText: "需要写入输出文件。",
+        expiresAt: null,
+      },
+    } satisfies OrchestratedRuntimeEventEnvelope);
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    bus.publish({
+      kind: "runtime_event",
+      target: { conversationId: "conv_1", branchId: "branch_1" },
+      session: { sessionId: "sess_task", purpose: "task" },
+      agent: { ownerAgentId: "agent_1", ownerRole: "main", mainAgentId: "agent_1" },
+      taskRun: {
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        executionSessionId: "sess_task",
+      },
+      run: { runId: "run_task_1" },
+      object: { messageId: null, toolCallId: null, toolName: null, approvalId: null },
+      event: {
+        type: "approval_resolved",
+        eventId: "evt_task_perm_deny",
+        createdAt: "2026-03-28T00:00:03.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        approvalId: "approval_1",
+        decision: "deny",
+        actor: "user:demo",
+        rawInput: "deny",
+      },
+    } satisfies OrchestratedRuntimeEventEnvelope);
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    const createdStatusCard = JSON.parse(
+      (createCard.mock.calls.at(0)?.[0] as { data?: { data?: string } } | undefined)?.data?.data ??
+        "{}",
+    ) as {
+      header?: { subtitle?: { content?: string }; template?: string };
+      body?: { elements?: Array<{ content?: string }> };
+    };
+
+    expect(createdStatusCard.header?.subtitle?.content).toBe("定时任务运行中");
+    expect(createdStatusCard.header?.template).toBe("blue");
+    expect(JSON.stringify(createdStatusCard.body ?? {})).not.toContain("授权被拒绝");
+    expect(JSON.stringify(createdStatusCard.body ?? {})).not.toContain("等待授权");
+    expect(
+      updateCard.mock.calls.some(
+        (call) =>
+          (call[0] as { path?: { card_id?: string } } | undefined)?.path?.card_id ===
+          "card_task_status_1",
+      ),
+    ).toBe(false);
 
     await runtime.shutdown();
   });
