@@ -2463,8 +2463,15 @@ describe("lark inbound message handling", () => {
         .filter((element) => element.tag === "markdown")
         .map((element) => element.content ?? "")
         .join("\n");
-      expect(markdown).toContain("/status");
-      expect(markdown).toContain("Suggested Usage");
+      expect(markdown).toBe(
+        [
+          "### Slash Commands",
+          "- /help — Show this help message.",
+          "- /status — Show the current conversation status, model, usage, and active runs.",
+          "- /model — Open the model switch card for the current conversation.",
+          "- /stop — Stop the current conversation or session.",
+        ].join("\n"),
+      );
     });
   });
 });
