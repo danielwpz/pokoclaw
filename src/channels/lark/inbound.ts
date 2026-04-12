@@ -17,6 +17,7 @@ import {
 } from "@/src/agent/llm/messages.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { AgentLoopAfterToolResultHook } from "@/src/agent/loop.js";
+import { buildSlashCommandHelpPresentation } from "@/src/channels/help.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
   buildLarkRenderedModelSwitchCard,
@@ -490,6 +491,25 @@ export function createLarkMessageReceiveHandler(input: {
         ...(input.clients == null ? {} : { clients: input.clients }),
       });
       logger.info("processed lark model command", {
+        installationId: input.installationId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
+        conversationId: route.conversationId,
+        sessionId: route.sessionId,
+        routeKind: route.kind,
+      });
+      return;
+    }
+
+    if (hydrated.text === "/help") {
+      await sendLarkHelpMessage({
+        installationId: input.installationId,
+        chatId: route.chatId,
+        replyToMessageId: route.replyToMessageId,
+        channelType: "lark",
+        ...(input.clients == null ? {} : { clients: input.clients }),
+      });
+      logger.info("processed lark help command", {
         installationId: input.installationId,
         chatId: hydrated.chatId,
         messageId: hydrated.messageId,
@@ -2142,7 +2162,7 @@ function extractStartedSubmitMessageResult(
 }
 
 function isLarkThreadControlCommand(text: string): boolean {
-  return text === "/stop" || text === "/status" || text === "/model";
+  return text === "/stop" || text === "/status" || text === "/model" || text === "/help";
 }
 
 function buildTaskRunCardObjectId(taskRunId: string): string {
@@ -3088,6 +3108,81 @@ async function sendLarkStatusCard(input: {
     ...(input.replyToMessageId === undefined ? {} : { replyToMessageId: input.replyToMessageId }),
     card,
     ...(input.clients == null ? {} : { clients: input.clients }),
+  });
+}
+
+async function sendLarkHelpMessage(input: {
+  installationId: string;
+  chatId: string;
+  replyToMessageId?: string | null;
+  channelType: string;
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<void> {
+  const presentation = buildSlashCommandHelpPresentation(input.channelType);
+  if (presentation.renderMode === "markdown") {
+    await sendLarkStatusCard({
+      installationId: input.installationId,
+      chatId: input.chatId,
+      ...(input.replyToMessageId == null ? {} : { replyToMessageId: input.replyToMessageId }),
+      presentation: {
+        title: presentation.title,
+        summary: presentation.summary,
+        markdownSections: presentation.markdownSections,
+      },
+      ...(input.clients == null ? {} : { clients: input.clients }),
+    });
+    return;
+  }
+
+  await sendLarkTextMessage({
+    installationId: input.installationId,
+    chatId: input.chatId,
+    ...(input.replyToMessageId == null ? {} : { replyToMessageId: input.replyToMessageId }),
+    text: presentation.plainText,
+    ...(input.clients == null ? {} : { clients: input.clients }),
+  });
+}
+
+async function sendLarkTextMessage(input: {
+  installationId: string;
+  chatId: string;
+  replyToMessageId?: string | null;
+  text: string;
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<void> {
+  if (input.clients == null) {
+    logger.warn("cannot send lark text message because no sdk clients are configured", {
+      installationId: input.installationId,
+      chatId: input.chatId,
+    });
+    return;
+  }
+
+  const client = input.clients.getOrCreate(input.installationId);
+  const content = JSON.stringify({ text: input.text });
+  if (input.replyToMessageId != null && input.replyToMessageId.length > 0) {
+    await client.sdk.im.message.reply({
+      path: { message_id: input.replyToMessageId },
+      data: {
+        msg_type: "text",
+        content,
+        reply_in_thread: true,
+      },
+    });
+    return;
+  }
+
+  await client.sdk.im.message.create({
+    params: { receive_id_type: "chat_id" },
+    data: {
+      receive_id: input.chatId,
+      msg_type: "text",
+      content,
+    },
   });
 }
 
