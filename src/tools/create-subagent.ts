@@ -54,7 +54,7 @@ export const CREATE_SUBAGENT_TOOL_SCHEMA = Type.Object(
     title: Type.String({
       minLength: 1,
       description:
-        'The SubAgent display name and future conversation title, for example "Pokeclaw Code Review".',
+        'The SubAgent display name and future conversation title, for example "Pokoclaw Code Review".',
     }),
     description: Type.String({
       minLength: 1,
@@ -69,7 +69,7 @@ export const CREATE_SUBAGENT_TOOL_SCHEMA = Type.Object(
       Type.String({
         minLength: 1,
         description:
-          "Optional absolute working directory for the SubAgent. If omitted, it defaults to the SubAgent's dedicated workspace inside the Pokeclaw workspace.",
+          "Optional absolute working directory for the SubAgent. If omitted, it defaults to the SubAgent's dedicated workspace inside the Pokoclaw workspace.",
       }),
     ),
     initialExtraScopes: Type.Optional(

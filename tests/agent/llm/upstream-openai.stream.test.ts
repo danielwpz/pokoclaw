@@ -237,7 +237,7 @@ describe("upstream openai completions streaming", () => {
     chatCompletionsCreateMock.mockReturnValue({
       asResponse: vi.fn().mockResolvedValue(
         new Response(
-          'data: {"choices":[{"finish_reason":"stop","delta":{"content":"POKECLAW_LOOP_OK"}}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}',
+          'data: {"choices":[{"finish_reason":"stop","delta":{"content":"POKOCLAW_LOOP_OK"}}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}',
           {
             status: 200,
             headers: {
@@ -284,7 +284,7 @@ describe("upstream openai completions streaming", () => {
     expect(result.stopReason).toBe("stop");
     expect(result.content[0]).toEqual({
       type: "text",
-      text: "POKECLAW_LOOP_OK",
+      text: "POKOCLAW_LOOP_OK",
     });
   });
 });

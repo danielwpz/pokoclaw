@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
-import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createLsTool } from "@/src/tools/ls.js";
@@ -42,7 +42,7 @@ describe("ls tool", () => {
   test("lists a granted directory and marks directories with a trailing slash", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-ls-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-ls-tool-"));
 
     await writeFile(path.join(tempDir, "b.txt"), "b", "utf8");
     await mkdir(path.join(tempDir, "a-dir"));
@@ -87,8 +87,8 @@ describe("ls tool", () => {
   test("filters out unreadable symlink targets from a granted directory listing", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-ls-tool-"));
-    outsideDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-ls-outside-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-ls-tool-"));
+    outsideDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-ls-outside-"));
 
     await writeFile(path.join(tempDir, "visible.txt"), "ok", "utf8");
     const deniedLinkPath = path.join(tempDir, "system-link");
@@ -133,7 +133,7 @@ describe("ls tool", () => {
   test("shows all direct children when the parent directory itself is granted exactly", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-ls-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-ls-tool-"));
 
     const chatApiDir = path.join(tempDir, "chat-api");
     const stripeNodeDir = path.join(tempDir, "stripe-node");
@@ -185,7 +185,7 @@ describe("ls tool", () => {
   test("denies listing the system directory", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-ls-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-ls-tool-"));
 
     const registry = new ToolRegistry();
     registry.register(createLsTool());
@@ -202,7 +202,7 @@ describe("ls tool", () => {
           storage: handle.storage.db,
         },
         {
-          path: POKECLAW_SYSTEM_DIR,
+          path: POKOCLAW_SYSTEM_DIR,
         },
       ),
     ).rejects.toMatchObject({
@@ -214,8 +214,8 @@ describe("ls tool", () => {
         entries: [
           {
             resource: "filesystem",
-            path: POKECLAW_SYSTEM_DIR,
-            scope: "subtree",
+            path: POKOCLAW_SYSTEM_DIR,
+            scope: "exact",
             access: "read",
           },
         ],
@@ -226,7 +226,7 @@ describe("ls tool", () => {
   test("recommends subtree read when listing an ungranted directory", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-ls-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-ls-tool-"));
     await mkdir(path.join(tempDir, "src"), { recursive: true });
 
     const registry = new ToolRegistry();

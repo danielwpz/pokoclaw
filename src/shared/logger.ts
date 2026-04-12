@@ -5,7 +5,7 @@ import util from "node:util";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { loadConfig } from "@/src/config/load.js";
 import type { LoggingConfig, LogLevel } from "@/src/config/schema.js";
-import { POKECLAW_RUNTIME_LOG_PATH } from "@/src/shared/paths.js";
+import { POKOCLAW_RUNTIME_LOG_PATH } from "@/src/shared/paths.js";
 
 export interface LoggerContext {
   [key: string]: unknown;
@@ -44,7 +44,7 @@ const LEVEL_COLORS: Record<LogLevel, string> = {
 
 let loggingConfigPromise: Promise<LoggingConfig> | null = null;
 let resolvedLoggingConfig: LoggingConfig | null = null;
-let runtimeLogPath = POKECLAW_RUNTIME_LOG_PATH;
+let runtimeLogPath = POKOCLAW_RUNTIME_LOG_PATH;
 let runtimeFileSinkEnabled = false;
 let runtimeLogStream: WriteStream | null = null;
 let runtimeLogStreamPath: string | null = null;
@@ -177,7 +177,7 @@ export function configureRuntimeLogging(
 ): void {
   resolvedLoggingConfig = config;
   runtimeFileSinkEnabled = true;
-  runtimeLogPath = options.runtimeLogPath ?? POKECLAW_RUNTIME_LOG_PATH;
+  runtimeLogPath = options.runtimeLogPath ?? POKOCLAW_RUNTIME_LOG_PATH;
   if (runtimeLogStreamPath != null && runtimeLogStreamPath !== runtimeLogPath) {
     void closeRuntimeLogStream();
   }
@@ -201,7 +201,7 @@ export async function flushRuntimeLoggingForTests(): Promise<void> {
 
 export async function resetRuntimeLoggingForTests(): Promise<void> {
   runtimeFileSinkEnabled = false;
-  runtimeLogPath = POKECLAW_RUNTIME_LOG_PATH;
+  runtimeLogPath = POKOCLAW_RUNTIME_LOG_PATH;
   loggingConfigPromise = null;
   resolvedLoggingConfig = null;
   await closeRuntimeLogStream();

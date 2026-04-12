@@ -1,15 +1,15 @@
 # OpenClaw Import Guide for AI Setup Flows
 
-Use this document when the user already has OpenClaw config and wants to carry some or all of it into Pokeclaw.
+Use this document when the user already has OpenClaw config and wants to carry some or all of it into Pokoclaw.
 
 ## Goal
 
-Do not try to preserve every OpenClaw internal detail. The goal is to migrate the parts that are visible, high-confidence, and still useful in Pokeclaw.
+Do not try to preserve every OpenClaw internal detail. The goal is to migrate the parts that are visible, high-confidence, and still useful in Pokoclaw.
 
 Read this together with:
 
 - `docs/onboarding.md`, Phase 3A: OpenClaw import, for execution order
-- `docs/configuration.md` for the final Pokeclaw target shape
+- `docs/configuration.md` for the final Pokoclaw target shape
 
 ## What to inspect
 
@@ -26,11 +26,11 @@ Do not depend on source-code inference, OS keychains, or unusual secret backends
 
 ### 1. Detect whether OpenClaw is configured
 
-If no clear OpenClaw config artifacts are present, stop the import path and continue with clean Pokeclaw setup.
+If no clear OpenClaw config artifacts are present, stop the import path and continue with clean Pokoclaw setup.
 
 ### 2. Summarize what looks importable
 
-Before changing Pokeclaw config, summarize the visible state at a high level:
+Before changing Pokoclaw config, summarize the visible state at a high level:
 
 - providers
 - models or provider/model mappings
@@ -45,20 +45,20 @@ Offer a clear choice:
 - import only a selected subset
 - skip import
 
-Do not assume that every OpenClaw provider or model should be copied into Pokeclaw.
+Do not assume that every OpenClaw provider or model should be copied into Pokoclaw.
 
 ### 4. Convert only the chosen pieces
 
-Translate the selected pieces into the Pokeclaw config model from `docs/configuration.md`.
+Translate the selected pieces into the Pokoclaw config model from `docs/configuration.md`.
 
 Keep these rules:
 
 - preserve `env://...` refs when that path is clear and stable
 - generate placeholder `secrets.toml` entries when file-based secrets are needed
 - do not guess low-confidence secret resolution paths
-- produce understandable Pokeclaw config, not a 1:1 clone of OpenClaw internals
+- produce understandable Pokoclaw config, not a 1:1 clone of OpenClaw internals
 
-### 5. Validate like a normal Pokeclaw setup
+### 5. Validate like a normal Pokoclaw setup
 
 After import:
 
@@ -74,7 +74,7 @@ After import:
 These are good candidates for direct migration after user confirmation:
 
 - provider definitions clearly visible in standard OpenClaw config files
-- model definitions or provider/model mappings that translate cleanly into Pokeclaw
+- model definitions or provider/model mappings that translate cleanly into Pokoclaw
 - obvious env-managed credentials that can stay env-managed
 
 ### Medium confidence
@@ -82,7 +82,7 @@ These are good candidates for direct migration after user confirmation:
 These need a short explanation and explicit user confirmation:
 
 - many providers where the user probably only wants a subset
-- fields whose meaning does not map 1:1 into Pokeclaw
+- fields whose meaning does not map 1:1 into Pokoclaw
 - partial provider metadata that needs interpretation
 
 ### Low confidence or unsupported
@@ -91,14 +91,14 @@ Do not migrate these automatically by default:
 
 - OS keychains or system-managed secret stores
 - file, exec, or other secret backends whose runtime resolution path is unclear
-- OAuth or auth-profile stores that do not map cleanly into current Pokeclaw support
+- OAuth or auth-profile stores that do not map cleanly into current Pokoclaw support
 - anything that depends on source-code knowledge instead of visible user config
 
 For these cases:
 
 - do not guess
 - explain the limitation briefly
-- provide a clean manual Pokeclaw path instead
+- provide a clean manual Pokoclaw path instead
 
 ## Feishu/Lark note
 
@@ -106,11 +106,11 @@ OpenClaw may contain Feishu-related config. If it does:
 
 - mention that it exists
 - do not force a full automatic Feishu/Lark migration
-- do not directly copy the existing OpenClaw Feishu/Lark bot config into Pokeclaw
+- do not directly copy the existing OpenClaw Feishu/Lark bot config into Pokoclaw
 - first ask the user whether they want to reuse the same bot or create a new one
 - explain that reusing the same bot is risky because one channel with two active backends can conflict or mix behavior
 - recommend creating a new bot or app
 - use `docs/feishu-lark-setup.md`, Step 3C-1: Decide whether to reuse the existing OpenClaw bot, before the rest of the Feishu/Lark setup
-- remind the user that current Pokeclaw Feishu/Lark support is intended for one personal assistant, not a shared team bot
+- remind the user that current Pokoclaw Feishu/Lark support is intended for one personal assistant, not a shared team bot
 
 Even if OpenClaw import succeeds for LLM config, onboarding is not complete until `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup, is complete.

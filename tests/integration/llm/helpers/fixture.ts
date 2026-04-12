@@ -38,7 +38,7 @@ export interface IntegrationLlmFixture {
 
 export async function createIntegrationLlmFixture(): Promise<IntegrationLlmFixture> {
   const profile = await loadRequiredIntegrationLlmProfile();
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-llm-integration-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-llm-integration-"));
   const systemDir = path.join(tempDir, "system");
   const configPath = path.join(systemDir, "config.toml");
   const secretsPath = path.join(systemDir, "secrets.toml");
@@ -216,18 +216,18 @@ function defaultUsage(): MessageUsage {
 async function loadRequiredIntegrationLlmProfile(): Promise<IntegrationLlmProfile> {
   const envPath = path.resolve(process.cwd(), ENV_FILE_NAME);
   const env = parseEnvFile(await readFile(envPath, "utf8"), envPath);
-  const baseUrl = getOptionalEnv(env, "POKECLAW_IT_LLM_BASE_URL");
+  const baseUrl = getOptionalEnv(env, "POKOCLAW_IT_LLM_BASE_URL");
 
   return {
-    api: getRequiredEnv(env, "POKECLAW_IT_LLM_API"),
+    api: getRequiredEnv(env, "POKOCLAW_IT_LLM_API"),
     ...(baseUrl !== undefined ? { baseUrl } : {}),
-    apiKey: getRequiredEnv(env, "POKECLAW_IT_LLM_API_KEY"),
-    upstreamId: getRequiredEnv(env, "POKECLAW_IT_LLM_UPSTREAM_ID"),
-    contextWindow: getIntegerEnv(env, "POKECLAW_IT_LLM_CONTEXT_WINDOW", 200_000),
-    maxOutputTokens: getIntegerEnv(env, "POKECLAW_IT_LLM_MAX_OUTPUT_TOKENS", 16_384),
-    supportsTools: getBooleanEnv(env, "POKECLAW_IT_LLM_SUPPORTS_TOOLS", true),
-    supportsVision: getBooleanEnv(env, "POKECLAW_IT_LLM_SUPPORTS_VISION", false),
-    reasoningEnabled: getBooleanEnv(env, "POKECLAW_IT_LLM_SUPPORTS_REASONING", true),
+    apiKey: getRequiredEnv(env, "POKOCLAW_IT_LLM_API_KEY"),
+    upstreamId: getRequiredEnv(env, "POKOCLAW_IT_LLM_UPSTREAM_ID"),
+    contextWindow: getIntegerEnv(env, "POKOCLAW_IT_LLM_CONTEXT_WINDOW", 200_000),
+    maxOutputTokens: getIntegerEnv(env, "POKOCLAW_IT_LLM_MAX_OUTPUT_TOKENS", 16_384),
+    supportsTools: getBooleanEnv(env, "POKOCLAW_IT_LLM_SUPPORTS_TOOLS", true),
+    supportsVision: getBooleanEnv(env, "POKOCLAW_IT_LLM_SUPPORTS_VISION", false),
+    reasoningEnabled: getBooleanEnv(env, "POKOCLAW_IT_LLM_SUPPORTS_REASONING", true),
   };
 }
 
@@ -252,8 +252,7 @@ function buildConfigToml(profile: IntegrationLlmProfile): string {
     "[models.scenarios]",
     `chat = [${toTomlString(MODEL_ID)}]`,
     `compaction = [${toTomlString(MODEL_ID)}]`,
-    `subagent = [${toTomlString(MODEL_ID)}]`,
-    `cron = [${toTomlString(MODEL_ID)}]`,
+    `task = [${toTomlString(MODEL_ID)}]`,
     "",
   ];
 

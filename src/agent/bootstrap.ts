@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { buildWorkspaceBootstrapPath } from "@/src/memory/files.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 
 const logger = createSubsystemLogger("agent-bootstrap");
 
@@ -40,7 +40,7 @@ export function loadAgentBootstrapSnapshot(input: {
     return null;
   }
 
-  const workspaceDir = path.resolve(input.workspaceDir ?? POKECLAW_WORKSPACE_DIR);
+  const workspaceDir = path.resolve(input.workspaceDir ?? POKOCLAW_WORKSPACE_DIR);
   const bootstrapPath = buildWorkspaceBootstrapPath(workspaceDir);
 
   try {

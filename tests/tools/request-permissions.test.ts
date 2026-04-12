@@ -34,7 +34,7 @@ describe("request_permissions tool", () => {
   test("returns already_granted when the requested path is already allowed", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-request-perms-"));
 
     const targetPath = path.join(tempDir, "notes.txt");
     const security = new SecurityService(handle.storage.db);
@@ -92,7 +92,7 @@ describe("request_permissions tool", () => {
   test("rejects relative paths", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-request-perms-"));
 
     const registry = new ToolRegistry([createRequestPermissionsTool()]);
 
@@ -132,7 +132,7 @@ describe("request_permissions tool", () => {
   test("rejects retryToolCallId when it is not the latest permission-blocked tool result", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-request-perms-"));
 
     const sessions = new SessionsRepo(handle.storage.db);
     sessions.create({
@@ -213,7 +213,7 @@ describe("request_permissions tool", () => {
   test("raises ToolApprovalRequired for a valid new permission request", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-request-perms-"));
 
     const registry = new ToolRegistry([createRequestPermissionsTool()]);
 
@@ -252,7 +252,7 @@ describe("request_permissions tool", () => {
   test("defaults directory read requests to subtree when scope is omitted", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-request-perms-"));
     const srcDir = path.join(tempDir, "src");
     await mkdir(path.join(srcDir, "resources"), { recursive: true });
 
@@ -292,7 +292,7 @@ describe("request_permissions tool", () => {
   test("keeps directory write requests exact when scope is omitted", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-request-perms-"));
     const outputDir = path.join(tempDir, "output");
     await mkdir(outputDir);
 
@@ -332,7 +332,7 @@ describe("request_permissions tool", () => {
   test("accepts a long justification without an arbitrary max length cap", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-request-perms-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-request-perms-"));
 
     const registry = new ToolRegistry([createRequestPermissionsTool()]);
     const longJustification =

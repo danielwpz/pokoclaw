@@ -20,14 +20,14 @@ describe("web_search tool", () => {
 
   test("maps Tavily search results into the tool response shape", async () => {
     searchMock.mockResolvedValue({
-      query: "latest pokeclaw news",
+      query: "latest pokoclaw news",
       answer: "Short answer",
       requestId: "req_123",
       responseTime: 321,
       usage: { credits: 2 },
       results: [
         {
-          title: "Pokeclaw launch",
+          title: "Pokoclaw launch",
           url: "https://example.com/news",
           content: "Snippet text",
           score: 0.91,
@@ -52,12 +52,12 @@ describe("web_search tool", () => {
         storage: {} as never,
       },
       {
-        query: "latest pokeclaw news",
+        query: "latest pokoclaw news",
         maxResults: 4,
       },
     );
 
-    expect(searchMock).toHaveBeenCalledWith("latest pokeclaw news", {
+    expect(searchMock).toHaveBeenCalledWith("latest pokoclaw news", {
       includeAnswer: "basic",
       maxResults: 4,
     });
@@ -67,14 +67,14 @@ describe("web_search tool", () => {
         json: {
           providerId: "tavily",
           providerApi: "tavily",
-          query: "latest pokeclaw news",
+          query: "latest pokoclaw news",
           answer: "Short answer",
           requestId: "req_123",
           responseTimeMs: 321,
           creditsUsed: 2,
           results: [
             {
-              title: "Pokeclaw launch",
+              title: "Pokoclaw launch",
               url: "https://example.com/news",
               snippet: "Snippet text",
               score: 0.91,

@@ -1,7 +1,7 @@
 ---
 name: claude-session-observe
 description: Use this skill to inspect Claude Code session history under ~/.claude, recover what sessions exist, and manually determine what a session was doing from transcript evidence.
-skillKey: pokeclaw/claude-session-observe
+skillKey: pokoclaw/claude-session-observe
 ---
 
 # Claude Session Observe

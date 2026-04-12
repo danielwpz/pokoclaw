@@ -9,7 +9,7 @@ let lockTarget: string;
 
 describe("file lock", () => {
   beforeEach(async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-file-lock-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-file-lock-test-"));
     lockTarget = path.join(tempDir, "target.json");
   });
 

@@ -21,7 +21,7 @@ describe("agent memory resolver", () => {
   });
 
   test("loads workspace soul and shared memory for main-agent runs", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-"));
     await writeFile(path.join(tempDir, "SOUL.md"), "# SOUL\nUser is a founder in Shanghai.\n");
     await writeFile(path.join(tempDir, "MEMORY.md"), "# MEMORY\nPrefers concise updates.\n");
 
@@ -38,7 +38,7 @@ describe("agent memory resolver", () => {
   });
 
   test("loads subagent private memory in addition to workspace memory", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-"));
     const privateWorkspaceDir = path.join(tempDir, "subagents", "abcd1234");
     await mkdir(privateWorkspaceDir, { recursive: true });
     await writeFile(path.join(tempDir, "SOUL.md"), "Soul");
@@ -57,7 +57,7 @@ describe("agent memory resolver", () => {
   });
 
   test("ignores missing or empty memory files", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-"));
     await writeFile(path.join(tempDir, "SOUL.md"), "   \n");
 
     const snapshot = loadAgentMemoryCatalog({
@@ -75,19 +75,19 @@ describe("agent memory resolver", () => {
         layer: "soul",
         path: "/tmp/ws/SOUL.md",
         purpose: "Identity, tone, boundaries, and stable user profile.",
-        content: "Name: Pokeclaw\nUser: Founder",
+        content: "Name: Pokoclaw\nUser: Founder",
       },
     ]);
 
     expect(prompt).toContain("<memory_files>");
     expect(prompt).toContain("<layer>soul</layer>");
     expect(prompt).toContain("<path>/tmp/ws/SOUL.md</path>");
-    expect(prompt).toContain("Name: Pokeclaw");
+    expect(prompt).toContain("Name: Pokoclaw");
     expect(prompt).toContain("User: Founder");
   });
 
   test("resolver seeds missing workspace memory files before reading them", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-"));
     const resolver = new FilesystemAgentMemoryResolver();
 
     const snapshot = resolver.resolveForRun({
@@ -108,7 +108,7 @@ describe("agent memory resolver", () => {
   });
 
   test("resolver seeds subagent private memory before reading it", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-"));
     const privateWorkspaceDir = path.join(tempDir, "subagents", "abcd1234");
     const resolver = new FilesystemAgentMemoryResolver();
 

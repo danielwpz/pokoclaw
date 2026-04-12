@@ -13,7 +13,7 @@ import {
   createBootstrapLogger,
   createSubsystemLogger,
 } from "@/src/shared/logger.js";
-import { POKECLAW_RUNTIME_LOG_PATH } from "@/src/shared/paths.js";
+import { POKOCLAW_RUNTIME_LOG_PATH } from "@/src/shared/paths.js";
 import type { StorageDatabase } from "@/src/storage/index.js";
 import { initializeStorageOnStartup } from "@/src/storage/index.js";
 
@@ -21,7 +21,7 @@ const logger = createSubsystemLogger("main");
 
 export async function main(): Promise<void> {
   const bootstrapLogger = createBootstrapLogger({ subsystem: "bootstrap" });
-  bootstrapLogger.info("starting pokeclaw");
+  bootstrapLogger.info("starting pokoclaw");
 
   let storage: StorageDatabase | null = null;
   let runtime: ReturnType<typeof createRuntimeBootstrap> | null = null;
@@ -29,7 +29,7 @@ export async function main(): Promise<void> {
   try {
     const configPaths = getDefaultConfigPaths();
     const config = await loadConfig(configPaths);
-    const previousLastSeenAt = await readLastRuntimeLogTimestamp(POKECLAW_RUNTIME_LOG_PATH);
+    const previousLastSeenAt = await readLastRuntimeLogTimestamp(POKOCLAW_RUNTIME_LOG_PATH);
     configureRuntimeLogging(config.logging);
     logger.info("application config loaded", {
       providers: Object.keys(config.providers).length,

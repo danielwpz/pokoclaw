@@ -1,14 +1,14 @@
 # Architecture
 
-Pokeclaw is a personal AI assistant. This document explains the key design decisions behind its technical architecture — aimed at developers who want to understand *why* it is built this way, not just *what* it does.
+Pokoclaw is a personal AI assistant. This document explains the key design decisions behind its technical architecture — aimed at developers who want to understand *why* it is built this way, not just *what* it does.
 
 ---
 
-**Pokeclaw is a system where the agent is not the control plane.**
+**Pokoclaw is a system where the agent is not the control plane.**
 
 ## TL;DR
 
-Pokeclaw is built around a **semantic event stream**. The Runtime emits structured events, Orchestration routes them across sessions and tasks, and Channel adapters render them into user-facing surfaces. The Main Agent stays responsive by delegating long-running work to SubAgents and TaskAgents. Trust boundaries are enforced by the host runtime, not by the model. State lives across `config.toml`, `secrets.toml`, SQLite, and editable Markdown memory layers.
+Pokoclaw is built around a **semantic event stream**. The Runtime emits structured events, Orchestration routes them across sessions and tasks, and Channel adapters render them into user-facing surfaces. The Main Agent stays responsive by delegating long-running work to SubAgents and TaskAgents. Trust boundaries are enforced by the host runtime, not by the model. State lives across `config.toml`, `secrets.toml`, SQLite, and editable Markdown memory layers.
 
 ```
 User / Channel
@@ -28,7 +28,7 @@ Tools / Sandbox / Storage
 
 Many two-layer systems find that the channel adapter bleeds assumptions into the runtime — the event model inherits the shape of the first channel, and the permission model becomes channel-shaped. Adding a second channel means untangling both layers at once.
 
-Pokeclaw draws three lines instead of two:
+Pokoclaw draws three lines instead of two:
 
 **Runtime** — pure agent logic. It produces semantic events only: `assistant_message_start`, `assistant_message_delta`, `assistant_message_end`, `tool_call_start`, `tool_call_end`, `compaction_start`, `compaction_end`, `approval_requested`, `approval_resolved`, `turn_start`, `turn_end`, `run_error`. It has no concept of a channel, a card, a patch, or a typing indicator.
 
@@ -64,13 +64,13 @@ The event stream is the source of truth for execution, not derived logs. Every d
 
 ## 2. The Agent Is Never the Boss
 
-A core product property of Pokeclaw is that the Main Agent — the permanent entry point the user talks to — should always be responsive. This sounds obvious but has deep architectural consequences.
+A core product property of Pokoclaw is that the Main Agent — the permanent entry point the user talks to — should always be responsive. This sounds obvious but has deep architectural consequences.
 
 In a single-loop system, a heavy request blocks the main conversation loop. The agent is thinking, the user is waiting, and any new message either gets queued or interrupts a run that may not be safe to interrupt. The user experience degrades in proportion to the complexity of what they ask for.
 
-The key architectural shift: in many AI assistant systems, the agent loop *is* the system — it owns execution, control flow, and context simultaneously. Pokeclaw separates these. The agent is not the control plane; the system is. The Orchestration layer owns routing, scheduling, and lifecycle. The Runtime executes. The Channel renders. The agent executes within the boundaries the system sets.
+The key architectural shift: in many AI assistant systems, the agent loop *is* the system — it owns execution, control flow, and context simultaneously. Pokoclaw separates these. The agent is not the control plane; the system is. The Orchestration layer owns routing, scheduling, and lifecycle. The Runtime executes. The Channel renders. The agent executes within the boundaries the system sets.
 
-Pokeclaw separates *responsiveness* from *capability* by giving the Main Agent two tools that other roles do not have: **delegation** and **deferred execution**.
+Pokoclaw separates *responsiveness* from *capability* by giving the Main Agent two tools that other roles do not have: **delegation** and **deferred execution**.
 
 When the Main Agent receives a complex request, it can delegate to a **SubAgent** — a task-specific persistent agent that owns its own channel thread. SubAgents live in their own conversation context and accumulate their own memory. The Main Agent returns to listening immediately. A SubAgent gets its own thread so work is cleanly isolated, steering is unambiguous, the Main Agent's context stays clean, and it is easy to observe what is happening in each SubAgent separately.
 
@@ -101,7 +101,7 @@ An ordinary thread creates a new conversation branch with inherited context. A t
 
 ## 3. Trust Is Layered, Not Binary
 
-Many AI assistant systems treat trust as binary: the agent either has full tool access or runs sandboxed. Pokeclaw uses a layered model. The meaning of "trusted" depends on what you are talking about.
+Many AI assistant systems treat trust as binary: the agent either has full tool access or runs sandboxed. Pokoclaw uses a layered model. The meaning of "trusted" depends on what you are talking about.
 
 **The agent is untrusted by default for all external effects.** Every tool call and bash command executes in a constrained context. The agent can try anything, but the execution environment enforces boundaries before anything dangerous happens.
 
@@ -119,20 +119,20 @@ This leads to three concrete patterns:
 
 Delegated approval operates within a policy ceiling defined in `config.toml`. Sensitive permission types — dangerous bash prefixes, access to specific paths, operations above a configured risk threshold — are marked as `always_require_human`. These never flow through delegated approval; they always surface to the user directly. The Main Agent's approval authority is scoped by policy, not unbounded. Decisions are written to an approval ledger in SQLite. The ledger is an audit record, not an authorization source; the source of truth for what is permitted is the policy configuration plus the human-decided boundary.
 
-**Trade-off:** Explicit permission checks and approval sessions add latency and friction to some tool calls. The alternative — silent escalation or hidden approval — makes security invisible and unauditable. Pokeclaw accepts the friction because it makes the trust model something you can reason about and audit.
+**Trade-off:** Explicit permission checks and approval sessions add latency and friction to some tool calls. The alternative — silent escalation or hidden approval — makes security invisible and unauditable. Pokoclaw accepts the friction because it makes the trust model something you can reason about and audit.
 
 ---
 
 ## 4. Storage Follows Access Control
 
-Pokeclaw has three storage layers. The layering is not organizational — it maps to access control boundaries.
+Pokoclaw has three storage layers. The layering is not organizational — it maps to access control boundaries.
 
 | Layer | Location | Who can access | What lives here |
 |-------|----------|---------------|-----------------|
-| `config.toml` | `~/.pokeclaw/system/` | User / CLI only | Global defaults, hard limits, system policy |
-| `secrets.toml` | `~/.pokeclaw/system/` | Host runtime only | API keys, tokens, credentials |
-| **SQLite** | `~/.pokeclaw/system/pokeclaw.db` | Host runtime | Sessions, task runs, approval ledger, cron state, runtime snapshots |
-| Memory files | `~/.pokeclaw/workspace/` | User + agents | Layered Markdown memory (see below) |
+| `config.toml` | `~/.pokoclaw/system/` | User / CLI only | Global defaults, hard limits, system policy |
+| `secrets.toml` | `~/.pokoclaw/system/` | Host runtime only | API keys, tokens, credentials |
+| **SQLite** | `~/.pokoclaw/system/pokoclaw.db` | Host runtime | Sessions, task runs, approval ledger, cron state, runtime snapshots |
+| Memory files | `~/.pokoclaw/workspace/` | User + agents | Layered Markdown memory (see below) |
 
 Agents receive `*_ref` fields in structured config (e.g., `api_key_ref = "env:ANTHROPIC_API_KEY"`). The host runtime resolves the actual value at use time. Agents never see raw secrets. Spawned processes also have environment variables filtered as a defense-in-depth measure.
 
@@ -170,7 +170,7 @@ Without real context materialization, background tasks run blind: they get eithe
 
 ## 6. Self-Harness: The System That Improves Itself
 
-Most AI assistants improve only when the user explicitly says "remember this." Pokeclaw has a self-harness system — the self-improvement subsystem — that observes how the user actually works, identifies friction, and closes the feedback loop automatically. Configuration lives under the `self-harness` namespace and runs on a configurable cron schedule.
+Most AI assistants improve only when the user explicitly says "remember this." Pokoclaw has a self-harness system — the self-improvement subsystem — that observes how the user actually works, identifies friction, and closes the feedback loop automatically. Configuration lives under the `self-harness` namespace and runs on a configurable cron schedule.
 
 The first concrete implementation under self-harness is **Meditation** — the daily reflective analysis job. It has one mechanism at this stage: **Worn-in**.
 
@@ -200,9 +200,9 @@ Worn-in is orthogonal to the skill system. Worn-in learns from *runtime friction
 
 ---
 
-## What Pokeclaw Is Not
+## What Pokoclaw Is Not
 
-Pokeclaw is intentionally not the following:
+Pokoclaw is intentionally not the following:
 
 - **A single-loop chatbot with tools.** It has a multi-role agent model, a layered architecture, and a self-harness system.
 - **An agent that runs without constraints.** Trust boundaries are enforced by the host runtime, not by the model's self-discipline.
@@ -221,9 +221,9 @@ Most agent systems are built around an **agent loop**:
 - the agent is both the executor and the control plane
 - the system evolves within a continuous, stateful process
 
-Pokeclaw separates these concerns:
+Pokoclaw separates these concerns:
 
-| | In many agent-loop systems | In Pokeclaw |
+| | In many agent-loop systems | In Pokoclaw |
 |---|---|---|
 | **Control** | The agent loop is the control plane | Orchestration owns routing, scheduling, lifecycle |
 | **Context** | Continuous, shared, global | Scoped per role; forked for background work |
@@ -235,7 +235,7 @@ The shift:
 
 ```
 many agent-loop systems:   agent → system
-Pokeclaw:                  system → agents
+Pokoclaw:                  system → agents
 ```
 
 The agent executes within boundaries set by the system. The system owns the control plane. This is not a structural optimization — it is an architectural commitment that makes the other properties (observability, auditability, isolation, self-improvement) possible.

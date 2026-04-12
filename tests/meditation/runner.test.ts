@@ -161,7 +161,7 @@ describe("MeditationPipelineRunner", () => {
   test("runs bucket + consolidation, writes artifacts, and rewrites durable memory", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-runner-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-runner-"));
     const workspaceDir = path.join(tempDir, "workspace");
     let bridgeCall = 0;
 
@@ -357,7 +357,7 @@ describe("MeditationPipelineRunner", () => {
   test("re-resolves meditation models from a provider registry source on each run", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-live-models-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-live-models-"));
     const workspaceDir = path.join(tempDir, "workspace");
     const state = new MeditationStateRepo(handle.storage.db);
     state.markFinished({
@@ -434,7 +434,7 @@ describe("MeditationPipelineRunner", () => {
   test("skips safely when meditation models are not configured", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-no-models-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-no-models-"));
     const workspaceDir = path.join(tempDir, "workspace");
 
     const state = new MeditationStateRepo(handle.storage.db);
@@ -531,7 +531,7 @@ describe("MeditationPipelineRunner", () => {
   test("persists early artifacts even when a bucket phase fails later", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-runner-fail-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-runner-fail-"));
 
     const runner = new MeditationPipelineRunner({
       storage: handle.storage.db,
@@ -577,7 +577,7 @@ describe("MeditationPipelineRunner", () => {
   test("ignores empty shared memory rewrites during consolidation", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-empty-shared-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-empty-shared-"));
     const workspaceDir = path.join(tempDir, "workspace");
     let bridgeCall = 0;
 

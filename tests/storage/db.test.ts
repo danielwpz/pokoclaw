@@ -33,9 +33,9 @@ function seedAgentFixture(handle: TestDatabaseHandle): void {
 }
 
 describe("storage db bootstrap", () => {
-  test("uses ~/.pokeclaw/system/pokeclaw.db as production path", () => {
+  test("uses ~/.pokoclaw/system/pokoclaw.db as production path", () => {
     const productionPath = getProductionDatabasePath();
-    expect(productionPath.endsWith("/.pokeclaw/system/pokeclaw.db")).toBe(true);
+    expect(productionPath.endsWith("/.pokoclaw/system/pokoclaw.db")).toBe(true);
   });
 
   test("initializes all core tables on open", async () => {
@@ -250,7 +250,7 @@ describe("storage db bootstrap", () => {
           .run(
             "agent_1",
             "sess_1",
-            '{"scopes":[{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}]}',
+            '{"scopes":[{"kind":"fs.read","path":"/Users/example/.pokoclaw/workspace/**"}]}',
             "runtime",
             "waiting",
             "2026-03-22T00:00:00.000Z",
@@ -303,7 +303,7 @@ describe("storage db bootstrap", () => {
         .run(
           "agent_1",
           "sess_1",
-          '{"scopes":[{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}]}',
+          '{"scopes":[{"kind":"fs.read","path":"/Users/example/.pokoclaw/workspace/**"}]}',
           "user",
           "pending",
           "2026-03-22T00:00:00.000Z",
@@ -353,7 +353,7 @@ describe("storage db bootstrap", () => {
         .run(
           "agent_1",
           "sess_1",
-          '{"scopes":[{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"}]}',
+          '{"scopes":[{"kind":"fs.write","path":"/Users/example/.pokoclaw/workspace/**"}]}',
           "user",
           "approved",
           "2026-03-22T00:00:00.000Z",
@@ -368,7 +368,7 @@ describe("storage db bootstrap", () => {
           "grant_1",
           "agent_1",
           approval.lastInsertRowid,
-          '{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"}',
+          '{"kind":"fs.write","path":"/Users/example/.pokoclaw/workspace/**"}',
           "user",
           "2026-03-22T00:00:02.000Z",
           "2026-03-29T00:00:02.000Z",

@@ -55,7 +55,7 @@ describe("meditation daily note", () => {
   });
 
   test("appends multiple run blocks into the same daily note file", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-daily-note-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-daily-note-"));
     const workspaceDir = path.join(tempDir, "workspace");
 
     await appendMeditationDailyRunBlock({

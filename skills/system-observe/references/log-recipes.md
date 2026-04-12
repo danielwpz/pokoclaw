@@ -2,7 +2,7 @@
 
 Runtime logs live at:
 
-- `~/.pokeclaw/logs/runtime.log`
+- `~/.pokoclaw/logs/runtime.log`
 
 Use logs as supporting evidence when the database does not fully explain what happened.
 

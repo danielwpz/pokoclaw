@@ -23,13 +23,13 @@ describe("permission scope parsing", () => {
   test("parses fs subtree scopes", () => {
     expect(
       parsePermissionScopeJson(
-        '{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"}',
+        '{"kind":"fs.write","path":"/Users/example/.pokoclaw/workspace/**"}',
       ),
     ).toEqual({
       kind: "fs.write",
-      path: "/Users/example/.pokeclaw/workspace/**",
+      path: "/Users/example/.pokoclaw/workspace/**",
     });
-    expect(isFsSubtreeScopePath("/Users/example/.pokeclaw/workspace/**")).toBe(true);
+    expect(isFsSubtreeScopePath("/Users/example/.pokoclaw/workspace/**")).toBe(true);
   });
 
   test("parses db scopes", () => {
@@ -78,13 +78,13 @@ describe("permission request parsing", () => {
   test("parses requests with multiple scopes", () => {
     expect(
       parsePermissionRequestJson(
-        '{"scopes":[{"kind":"fs.write","path":"/Users/example/.pokeclaw/workspace/**"},{"kind":"db.read","database":"system"}]}',
+        '{"scopes":[{"kind":"fs.write","path":"/Users/example/.pokoclaw/workspace/**"},{"kind":"db.read","database":"system"}]}',
       ),
     ).toEqual({
       scopes: [
         {
           kind: "fs.write",
-          path: "/Users/example/.pokeclaw/workspace/**",
+          path: "/Users/example/.pokoclaw/workspace/**",
         },
         {
           kind: "db.read",
@@ -131,9 +131,9 @@ describe("permission scope serialization", () => {
     expect(
       describePermissionScope({
         kind: "fs.write",
-        path: "/Users/example/.pokeclaw/workspace/**",
+        path: "/Users/example/.pokoclaw/workspace/**",
       }),
-    ).toBe("Write /Users/example/.pokeclaw/workspace/**");
+    ).toBe("Write /Users/example/.pokoclaw/workspace/**");
     expect(
       describePermissionScope({
         kind: "db.read",

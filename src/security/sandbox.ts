@@ -19,7 +19,7 @@ import { buildSystemPolicy, type SystemPermissionPolicy } from "@/src/security/p
 import { describePermissionScope, type PermissionScope } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import type { ToolExecutionContext } from "@/src/tools/core/types.js";
@@ -89,7 +89,7 @@ const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
 const BASH_SANDBOX_ESCALATION_GUIDANCE =
   "Review whether running this bash command with full access is necessary and legitimate for the current user request.\nIf it is necessary, rerun the bash tool with full-access approval fields.\nIf it is not necessary, do not request escalation.";
 
-// This adapter is the only place that should know how Pokeclaw's permission
+// This adapter is the only place that should know how Pokoclaw's permission
 // model maps onto sandbox-runtime's config surface.
 export function buildSandboxConfigForAgent(
   input: BuildSandboxConfigForAgentInput,
@@ -322,7 +322,7 @@ async function resolveSandboxCwd(input: {
 }): Promise<string> {
   const fallbackCwd =
     input.context.cwd == null || input.context.cwd.trim().length === 0
-      ? POKECLAW_WORKSPACE_DIR
+      ? POKOCLAW_WORKSPACE_DIR
       : input.context.cwd;
   const candidate = input.requestedCwd == null ? fallbackCwd : input.requestedCwd;
   const normalizedPath = normalizeFilesystemTargetPath(candidate, fallbackCwd);
@@ -408,7 +408,7 @@ async function resolveUnsandboxedBashCwd(input: {
 }): Promise<string> {
   const fallbackCwd =
     input.context.cwd == null || input.context.cwd.trim().length === 0
-      ? POKECLAW_WORKSPACE_DIR
+      ? POKOCLAW_WORKSPACE_DIR
       : input.context.cwd;
   const candidate = input.requestedCwd == null ? fallbackCwd : input.requestedCwd;
   const normalizedPath = normalizeFilesystemTargetPath(candidate, fallbackCwd);

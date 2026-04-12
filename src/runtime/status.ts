@@ -245,7 +245,7 @@ export function buildConversationStatusPresentation(
     summary: snapshot.activeRuns.length > 0 ? "存在活跃 run" : "当前空闲",
     markdownSections: [
       [
-        `**版本**: \`${getPokeclawVersion()}\``,
+        `**版本**: \`${getPokoclawVersion()}\``,
         `**会话**: \`${snapshot.sessionId}\``,
         `**模型**: ${formatModelLine(snapshot.model)}`,
         ...(snapshot.model.supportsReasoning == null
@@ -527,7 +527,7 @@ function formatModelLine(model: StatusModelSnapshot): string {
   return parts.length > 0 ? parts.join(" / ") : "未知";
 }
 
-function getPokeclawVersion(): string {
+function getPokoclawVersion(): string {
   try {
     const raw = readFileSync(new URL("../../package.json", import.meta.url), "utf8");
     const parsed = JSON.parse(raw) as { version?: unknown };

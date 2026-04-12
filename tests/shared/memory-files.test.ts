@@ -24,10 +24,10 @@ describe("memory file helpers", () => {
   });
 
   test("builds workspace-level soul and shared memory paths", () => {
-    const workspaceDir = "/tmp/pokeclaw-workspace";
+    const workspaceDir = "/tmp/pokoclaw-workspace";
 
-    expect(buildWorkspaceSoulPath(workspaceDir)).toBe("/tmp/pokeclaw-workspace/SOUL.md");
-    expect(buildWorkspaceSharedMemoryPath(workspaceDir)).toBe("/tmp/pokeclaw-workspace/MEMORY.md");
+    expect(buildWorkspaceSoulPath(workspaceDir)).toBe("/tmp/pokoclaw-workspace/SOUL.md");
+    expect(buildWorkspaceSharedMemoryPath(workspaceDir)).toBe("/tmp/pokoclaw-workspace/MEMORY.md");
   });
 
   test("builds private workspace and subagent memory paths", () => {
@@ -93,7 +93,7 @@ describe("memory file helpers", () => {
   });
 
   test("seeds main-agent soul and shared memory scaffolds when missing", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-files-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-files-"));
 
     ensureAgentMemoryFiles({
       agentKind: "main",
@@ -113,7 +113,7 @@ describe("memory file helpers", () => {
   });
 
   test("seeds subagent private memory scaffold when missing", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-files-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-files-"));
     const privateWorkspaceDir = path.join(tempDir, "subagents", "abcd1234");
 
     ensureAgentMemoryFiles({
@@ -128,7 +128,7 @@ describe("memory file helpers", () => {
   });
 
   test("does not overwrite existing memory content when scaffolding", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-files-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-files-"));
     const soulPath = path.join(tempDir, "SOUL.md");
     await writeFile(soulPath, "# Identity\n- Assistant name: Rowan\n", "utf-8");
 
@@ -142,7 +142,7 @@ describe("memory file helpers", () => {
   });
 
   test("does not create BOOTSTRAP.md when SOUL.md already exists", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-memory-files-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-memory-files-"));
     await writeFile(
       path.join(tempDir, "SOUL.md"),
       "# Identity\n- Assistant name: Rowan\n\n# User Profile\n- Preferred name: Mina\n",

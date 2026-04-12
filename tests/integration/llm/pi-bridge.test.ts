@@ -34,7 +34,7 @@ describe("real llm pi bridge integration", () => {
           sessionId: "sess_stream",
           id: "msg_user_1",
           seq: 1,
-          content: "Reply with the token POKECLAW_STREAM_OK and nothing else.",
+          content: "Reply with the token POKOCLAW_STREAM_OK and nothing else.",
           createdAt: "2026-03-23T00:00:01.000Z",
         }),
       ],
@@ -46,7 +46,7 @@ describe("real llm pi bridge integration", () => {
     });
 
     expect(deltas.length).toBeGreaterThan(0);
-    expect(collectAssistantText(result.content)).toContain("POKECLAW_STREAM_OK");
+    expect(collectAssistantText(result.content)).toContain("POKOCLAW_STREAM_OK");
     expect(result.stopReason).toBe("stop");
     expect(result.usage.totalTokens).toBeGreaterThan(0);
     expect(result.modelApi).toBe(resolveExpectedPiApi(model));
@@ -64,7 +64,7 @@ describe("real llm pi bridge integration", () => {
           sessionId: "sess_complete",
           id: "msg_user_1",
           seq: 1,
-          content: "Reply with the token POKECLAW_COMPLETE_OK and nothing else.",
+          content: "Reply with the token POKOCLAW_COMPLETE_OK and nothing else.",
           createdAt: "2026-03-23T00:00:01.000Z",
         }),
       ],
@@ -72,7 +72,7 @@ describe("real llm pi bridge integration", () => {
       signal: new AbortController().signal,
     });
 
-    expect(collectAssistantText(result.content)).toContain("POKECLAW_COMPLETE_OK");
+    expect(collectAssistantText(result.content)).toContain("POKOCLAW_COMPLETE_OK");
     expect(result.usage.totalTokens).toBeGreaterThan(0);
   }, 30_000);
 

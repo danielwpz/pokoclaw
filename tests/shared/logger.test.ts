@@ -28,7 +28,7 @@ describe("runtime log file sink", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 3, 4, 8, 9, 10, 123));
 
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-logger-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-logger-test-"));
     const runtimeLogPath = path.join(tempDir, "runtime.log");
 
     configureRuntimeLogging(

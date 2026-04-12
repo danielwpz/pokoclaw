@@ -17,16 +17,16 @@ import {
   DEFAULT_SYSTEM_POLICY,
 } from "@/src/security/policy.js";
 import {
-  POKECLAW_LOGS_DIR,
-  POKECLAW_REPO_DIR,
-  POKECLAW_SKILLS_DIR,
-  POKECLAW_WORKSPACE_DIR,
+  POKOCLAW_LOGS_DIR,
+  POKOCLAW_REPO_DIR,
+  POKOCLAW_SKILLS_DIR,
+  POKOCLAW_WORKSPACE_DIR,
 } from "@/src/shared/paths.js";
 
 let tempDir: string;
 
 beforeEach(async () => {
-  tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-permissions-test-"));
+  tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-permissions-test-"));
 });
 
 afterEach(async () => {
@@ -37,12 +37,12 @@ describe("effective permissions", () => {
   test("parses granted scopes from stored JSON", () => {
     expect(
       parseGrantedScopes([
-        '{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}',
+        '{"kind":"fs.read","path":"/Users/example/.pokoclaw/workspace/**"}',
         '{"kind":"db.read","database":"system"}',
         '{"kind":"bash.full_access","prefix":["git","push"]}',
       ]),
     ).toEqual([
-      { kind: "fs.read", path: "/Users/example/.pokeclaw/workspace/**" },
+      { kind: "fs.read", path: "/Users/example/.pokoclaw/workspace/**" },
       { kind: "db.read", database: "system" },
       { kind: "bash.full_access", prefix: ["git", "push"] },
     ]);
@@ -57,14 +57,14 @@ describe("effective permissions", () => {
 
     expect(permissions.fs.read.mode).toBe("allow_only");
     expect(permissions.fs.read.allow).toContain(`${path.resolve(os.homedir())}/**`);
-    expect(permissions.fs.read.allow).toContain(`${path.resolve(POKECLAW_SKILLS_DIR)}/**`);
-    expect(permissions.fs.read.allow).toContain(`${path.resolve(POKECLAW_REPO_DIR)}/**`);
-    expect(permissions.fs.write.allow).toContain(`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`);
+    expect(permissions.fs.read.allow).toContain(`${path.resolve(POKOCLAW_SKILLS_DIR)}/**`);
+    expect(permissions.fs.read.allow).toContain(`${path.resolve(POKOCLAW_REPO_DIR)}/**`);
+    expect(permissions.fs.write.allow).toContain(`${path.resolve(POKOCLAW_WORKSPACE_DIR)}/**`);
     expect(permissions.db.read).toBe(true);
     expect(permissions.db.write).toBe(false);
   });
 
-  test("subagent baseline grants workspace, global skills, and pokeclaw repo read by default", () => {
+  test("subagent baseline grants workspace, global skills, and pokoclaw repo read by default", () => {
     const permissions = buildEffectivePermissions(
       [],
       buildSystemPolicy(),
@@ -73,11 +73,11 @@ describe("effective permissions", () => {
 
     expect(permissions.fs.read.mode).toBe("allow_only");
     expect(permissions.fs.read.allow).toEqual([
-      `${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`,
-      `${path.resolve(POKECLAW_SKILLS_DIR)}/**`,
-      `${path.resolve(POKECLAW_REPO_DIR)}/**`,
+      `${path.resolve(POKOCLAW_WORKSPACE_DIR)}/**`,
+      `${path.resolve(POKOCLAW_SKILLS_DIR)}/**`,
+      `${path.resolve(POKOCLAW_REPO_DIR)}/**`,
     ]);
-    expect(permissions.fs.write.allow).toEqual([`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`]);
+    expect(permissions.fs.write.allow).toEqual([`${path.resolve(POKOCLAW_WORKSPACE_DIR)}/**`]);
     expect(permissions.db.read).toBe(false);
     expect(permissions.db.write).toBe(false);
   });
@@ -89,7 +89,7 @@ describe("effective permissions", () => {
     );
 
     expect(permissions.fs.write.allow).toContain(path.resolve("/Users/example/project/README.md"));
-    expect(permissions.fs.write.allow).toContain(`${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`);
+    expect(permissions.fs.write.allow).toContain(`${path.resolve(POKOCLAW_WORKSPACE_DIR)}/**`);
   });
 
   test("buildEffectivePermissions collects bash full-access prefixes from grants", () => {
@@ -130,7 +130,7 @@ describe("filesystem permission checks", () => {
       buildSystemPolicy(),
       buildAgentPermissionBaseline("main"),
     );
-    const targetPath = path.join(POKECLAW_LOGS_DIR, "runtime.log");
+    const targetPath = path.join(POKOCLAW_LOGS_DIR, "runtime.log");
 
     expect(
       checkFilesystemPermission({
@@ -191,7 +191,7 @@ describe("filesystem permission checks", () => {
       buildSystemPolicy(),
       buildAgentPermissionBaseline("subagent"),
     );
-    const workspaceFile = path.join(POKECLAW_WORKSPACE_DIR, "memory", "state.json");
+    const workspaceFile = path.join(POKOCLAW_WORKSPACE_DIR, "memory", "state.json");
 
     expect(
       checkFilesystemPermission({
@@ -224,7 +224,7 @@ describe("filesystem permission checks", () => {
       buildSystemPolicy(),
       buildAgentPermissionBaseline("main"),
     );
-    const targetPath = path.join(os.homedir(), ".pokeclaw", "system", "config.toml");
+    const targetPath = path.join(os.homedir(), ".pokoclaw", "system", "config.toml");
 
     expect(
       checkFilesystemPermission({

@@ -96,7 +96,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
-      cwd: "/Users/example/work/pokeclaw",
+      cwd: "/Users/example/work/pokoclaw",
       initialExtraScopes: [{ kind: "db.read", database: "system" }],
       createdAt: submittedAt,
     });
@@ -111,7 +111,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
-      workdir: "/Users/example/work/pokeclaw",
+      workdir: "/Users/example/work/pokoclaw",
       status: "pending",
       createdAt: "2026-03-26T00:05:00.000Z",
     });
@@ -151,7 +151,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
-      cwd: "/Users/example/work/pokeclaw",
+      cwd: "/Users/example/work/pokoclaw",
       initialExtraScopes: [{ kind: "db.read", database: "system" }],
       createdAt: new Date("2026-03-26T00:05:00.000Z"),
     });
@@ -168,7 +168,7 @@ describe("subagent orchestration", () => {
       title: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
       initialTask: "Review the current PR and report concrete issues to the user.",
-      workdir: "/Users/example/work/pokeclaw",
+      workdir: "/Users/example/work/pokoclaw",
       privateWorkspaceDir: buildSubagentWorkspaceDir(created.agent.id),
       preferredSurface: "independent_chat",
     });
@@ -184,7 +184,7 @@ describe("subagent orchestration", () => {
       kind: "sub",
       displayName: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
-      workdir: "/Users/example/work/pokeclaw",
+      workdir: "/Users/example/work/pokoclaw",
     });
 
     const requestAfterApproval = new SubagentCreationRequestsRepo(handle.storage.db).getById(
@@ -207,11 +207,11 @@ describe("subagent orchestration", () => {
         JSON.stringify({ kind: "db.read", database: "system" }),
         JSON.stringify({
           kind: "fs.read",
-          path: "/Users/example/work/pokeclaw/**",
+          path: "/Users/example/work/pokoclaw/**",
         }),
         JSON.stringify({
           kind: "fs.write",
-          path: "/Users/example/work/pokeclaw/**",
+          path: "/Users/example/work/pokoclaw/**",
         }),
       ].sort(),
     );
@@ -231,7 +231,7 @@ describe("subagent orchestration", () => {
   test("approving a nested-repo subagent grants repo-local skill directories for reading", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedMainAgentFixture();
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-subagent-repo-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-subagent-repo-"));
     tempDirs.push(repoRoot);
     const nestedWorkdir = path.join(repoRoot, "packages", "web");
     await mkdir(nestedWorkdir, { recursive: true });
@@ -463,12 +463,12 @@ describe("subagent orchestration", () => {
       title: "Repo Helper",
       description: "Operate inside the repo while keeping a private scratch directory.",
       initialTask: "Start by checking the repo state.",
-      cwd: "/Users/example/work/pokeclaw",
+      cwd: "/Users/example/work/pokoclaw",
     });
 
-    expect(submitted.workdir).toBe("/Users/example/work/pokeclaw");
+    expect(submitted.workdir).toBe("/Users/example/work/pokoclaw");
     expect(submitted.privateWorkspaceDir).toBe(buildSubagentWorkspaceDir(submitted.request.id));
-    expect(submitted.request.workdir).toBe("/Users/example/work/pokeclaw");
+    expect(submitted.request.workdir).toBe("/Users/example/work/pokoclaw");
   });
 
   test("rejects subagent creation request submission from a non-main session", async () => {

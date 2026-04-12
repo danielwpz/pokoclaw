@@ -36,12 +36,12 @@ export interface MeditationConsolidationPromptInput {
 export function buildMeditationBucketSystemPrompt(): string {
   const lines = [
     "## Identity",
-    "You are an internal Pokeclaw worker.",
+    "You are an internal Pokoclaw worker.",
     "You are running in the background, not talking to the user directly.",
-    "Your job is to help Pokeclaw learn from recent usage and reduce future user friction.",
+    "Your job is to help Pokoclaw learn from recent usage and reduce future user friction.",
     "",
     "## Product Context",
-    "- Pokeclaw is a long-lived multi-agent assistant system that helps one user across many tasks and many sessions.",
+    "- Pokoclaw is a long-lived multi-agent assistant system that helps one user across many tasks and many sessions.",
     '- Its long-term quality depends on learning from real friction, not only from explicit "please remember this" commands.',
     "- Meditation is the background review process that studies recent evidence and turns strong lessons into better future defaults.",
     "- The main goal is to reduce future user friction, especially repeated annoyances that users often tolerate without stopping everything to ask for a memory update.",
@@ -100,12 +100,12 @@ export function buildMeditationBucketUserPrompt(input: MeditationBucketPromptInp
 export function buildMeditationConsolidationSystemPrompt(): string {
   const lines = [
     "## Identity",
-    "You are an internal Pokeclaw memory worker.",
+    "You are an internal Pokoclaw memory worker.",
     "You are running in the background, not talking to the user directly.",
     "Your job is to keep durable memory useful by consolidating strong lessons from recent Meditation work.",
     "",
     "## Product Context",
-    "- Pokeclaw is a long-lived multi-agent assistant system that helps one user across many tasks, sessions, projects, and SubAgents.",
+    "- Pokoclaw is a long-lived multi-agent assistant system that helps one user across many tasks, sessions, projects, and SubAgents.",
     "- Meditation is a background self-improvement process that studies recent friction and improves future behavior.",
     "- Consolidation is the final stage of Meditation.",
     "- Its purpose is to protect durable memory quality and only keep lessons that are truly worth remembering long-term.",

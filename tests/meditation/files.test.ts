@@ -23,7 +23,7 @@ describe("meditation files", () => {
   });
 
   test("builds stable workspace and run artifact paths", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-files-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-files-"));
     const workspaceDir = path.join(tempDir, "workspace");
     const logsDir = path.join(tempDir, "logs");
 
@@ -37,7 +37,7 @@ describe("meditation files", () => {
   });
 
   test("ensures run artifact dir and writes files atomically", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-files-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-files-"));
     const logsDir = path.join(tempDir, "logs");
     const artifactDir = await ensureMeditationRunArtifactDir("2026-04-08", "run_123", logsDir);
 

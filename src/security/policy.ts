@@ -3,10 +3,10 @@ import path from "node:path";
 
 import type { AppConfig } from "@/src/config/schema.js";
 import {
-  POKECLAW_REPO_DIR,
-  POKECLAW_SKILLS_DIR,
-  POKECLAW_SYSTEM_DIR,
-  POKECLAW_WORKSPACE_DIR,
+  POKOCLAW_REPO_DIR,
+  POKOCLAW_SKILLS_DIR,
+  POKOCLAW_SYSTEM_DIR,
+  POKOCLAW_WORKSPACE_DIR,
 } from "@/src/shared/paths.js";
 
 export interface FilesystemPermissionPolicy {
@@ -50,7 +50,7 @@ function subtree(value: string): string {
 const HOME_DIR = os.homedir();
 
 export const DEFAULT_FILESYSTEM_HARD_DENY_READ = [
-  subtree(POKECLAW_SYSTEM_DIR),
+  subtree(POKOCLAW_SYSTEM_DIR),
   subtree(path.join("~", ".ssh")),
   subtree(path.join("~", ".gnupg")),
   subtree(path.join("~", ".aws")),
@@ -61,7 +61,7 @@ export const DEFAULT_FILESYSTEM_HARD_DENY_READ = [
 ] as const;
 
 export const DEFAULT_FILESYSTEM_HARD_DENY_WRITE = [
-  subtree(POKECLAW_SYSTEM_DIR),
+  subtree(POKOCLAW_SYSTEM_DIR),
   subtree(path.join("~", ".ssh")),
   subtree(path.join("~", ".gnupg")),
   subtree(path.join("~", ".aws")),
@@ -128,11 +128,11 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
           readMode: "allow_only",
           readAllow: [
             subtree(HOME_DIR),
-            subtree(POKECLAW_WORKSPACE_DIR),
-            subtree(POKECLAW_SKILLS_DIR),
-            subtree(POKECLAW_REPO_DIR),
+            subtree(POKOCLAW_WORKSPACE_DIR),
+            subtree(POKOCLAW_SKILLS_DIR),
+            subtree(POKOCLAW_REPO_DIR),
           ],
-          writeAllow: [subtree(POKECLAW_WORKSPACE_DIR)],
+          writeAllow: [subtree(POKOCLAW_WORKSPACE_DIR)],
         },
       };
     case "subagent":
@@ -146,11 +146,11 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
         fs: {
           readMode: "allow_only",
           readAllow: [
-            subtree(POKECLAW_WORKSPACE_DIR),
-            subtree(POKECLAW_SKILLS_DIR),
-            subtree(POKECLAW_REPO_DIR),
+            subtree(POKOCLAW_WORKSPACE_DIR),
+            subtree(POKOCLAW_SKILLS_DIR),
+            subtree(POKOCLAW_REPO_DIR),
           ],
-          writeAllow: [subtree(POKECLAW_WORKSPACE_DIR)],
+          writeAllow: [subtree(POKOCLAW_WORKSPACE_DIR)],
         },
       };
   }

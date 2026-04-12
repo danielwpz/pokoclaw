@@ -16,9 +16,9 @@ import { buildSystemPolicy } from "@/src/security/policy.js";
 import { buildSandboxConfigForAgent, executeSandboxedBash } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
 import {
-  POKECLAW_REPO_DIR,
-  POKECLAW_SKILLS_DIR,
-  POKECLAW_WORKSPACE_DIR,
+  POKOCLAW_REPO_DIR,
+  POKOCLAW_SKILLS_DIR,
+  POKOCLAW_WORKSPACE_DIR,
 } from "@/src/shared/paths.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
 import {
@@ -103,10 +103,10 @@ describe("sandbox config compilation", () => {
     expect(config.filesystem.allowRead).toContain(`${path.resolve(os.homedir())}/**`);
     expect(config.filesystem.allowRead).toContain(path.resolve(os.homedir()));
     expect(config.filesystem.allowWrite).toContain(
-      `${path.resolve(path.join(os.homedir(), ".pokeclaw", "workspace"))}/**`,
+      `${path.resolve(path.join(os.homedir(), ".pokoclaw", "workspace"))}/**`,
     );
     expect(config.filesystem.allowWrite).toContain(
-      path.resolve(path.join(os.homedir(), ".pokeclaw", "workspace")),
+      path.resolve(path.join(os.homedir(), ".pokoclaw", "workspace")),
     );
     expect(config.filesystem.allowWrite).not.toContain(`${path.resolve(os.homedir())}/**`);
   });
@@ -122,23 +122,23 @@ describe("sandbox config compilation", () => {
 
     expect(config.filesystem.readMode).toBe("allow_only");
     expect(config.filesystem.allowRead).toEqual([
-      path.resolve(POKECLAW_WORKSPACE_DIR),
-      `${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`,
-      path.resolve(POKECLAW_SKILLS_DIR),
-      `${path.resolve(POKECLAW_SKILLS_DIR)}/**`,
-      path.resolve(POKECLAW_REPO_DIR),
-      `${path.resolve(POKECLAW_REPO_DIR)}/**`,
+      path.resolve(POKOCLAW_WORKSPACE_DIR),
+      `${path.resolve(POKOCLAW_WORKSPACE_DIR)}/**`,
+      path.resolve(POKOCLAW_SKILLS_DIR),
+      `${path.resolve(POKOCLAW_SKILLS_DIR)}/**`,
+      path.resolve(POKOCLAW_REPO_DIR),
+      `${path.resolve(POKOCLAW_REPO_DIR)}/**`,
     ]);
     expect(config.filesystem.allowWrite).toEqual([
-      path.resolve(POKECLAW_WORKSPACE_DIR),
-      `${path.resolve(POKECLAW_WORKSPACE_DIR)}/**`,
+      path.resolve(POKOCLAW_WORKSPACE_DIR),
+      `${path.resolve(POKOCLAW_WORKSPACE_DIR)}/**`,
     ]);
   });
 
   test("expands a granted read subtree so the directory node itself remains readable to sandboxed processes", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
 
     grantFilesystemScope(handle, "agent_sub", {
       kind: "fs.read",
@@ -158,7 +158,7 @@ describe("sandbox config compilation", () => {
   test("expands a granted write subtree so the directory node itself remains writable to sandboxed processes", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
 
     grantFilesystemScope(handle, "agent_sub", {
       kind: "fs.write",
@@ -207,7 +207,7 @@ describe("sandbox config compilation", () => {
   test("executes bash through the sandbox with sanitized env and compiled config", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
     await mkdir(path.join(tempDir, "workspace"), { recursive: true });
     grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
     executeSandboxedCommandMock.mockResolvedValue({
@@ -329,7 +329,7 @@ describe("sandbox config compilation", () => {
   test("adds direct children of an exactly granted read directory to sandbox allowRead", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
     const chatApiDir = path.join(tempDir, "chat-api");
     const stripeNodeDir = path.join(tempDir, "stripe-node");
     await mkdir(chatApiDir);
@@ -372,7 +372,7 @@ describe("sandbox config compilation", () => {
   test("does not expand exact read directory grants through escaping symlink children", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
     const parentDir = path.join(tempDir, "near-ai");
     const allowedChildDir = path.join(parentDir, "chat-api");
     const outsideDir = path.join(tempDir, "outside");
@@ -418,7 +418,7 @@ describe("sandbox config compilation", () => {
   test("turns ungranted filesystem sandbox blocks into approval requests", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
     grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
     const expectedBlockedPath = normalizeFilesystemTargetPath(path.join(tempDir, "notes.txt"));
     executeSandboxedCommandMock.mockRejectedValue(
@@ -467,12 +467,12 @@ describe("sandbox config compilation", () => {
   test("turns hard-denied filesystem sandbox blocks into recoverable tool failures", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
     grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
     executeSandboxedCommandMock.mockRejectedValue(
       new SandboxPermissionError({
         issues: [
-          { kind: "fs.read", path: path.join(os.homedir(), ".pokeclaw", "system", "config.toml") },
+          { kind: "fs.read", path: path.join(os.homedir(), ".pokoclaw", "system", "config.toml") },
         ],
         stdout: "",
         stderr: "",
@@ -492,7 +492,7 @@ describe("sandbox config compilation", () => {
           storage: handle.storage.db,
           toolCallId: "tool_1",
         },
-        command: "cat ~/.pokeclaw/system/config.toml",
+        command: "cat ~/.pokoclaw/system/config.toml",
         timeoutMs: 10_000,
       }),
     ).rejects.toMatchObject({
@@ -505,7 +505,7 @@ describe("sandbox config compilation", () => {
   test("turns blocked network access into recoverable tool failures", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
     grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
     executeSandboxedCommandMock.mockRejectedValue(
       new SandboxPermissionError({
@@ -541,7 +541,7 @@ describe("sandbox config compilation", () => {
   test("turns sandbox aborts caused by timeout into recoverable timeout failures", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
     grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
 
     executeSandboxedCommandMock.mockImplementation(async (_command, options) => {
@@ -588,7 +588,7 @@ describe("sandbox config compilation", () => {
   test("passes through the combined abort signal to sandbox-runtime", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-sandbox-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
     grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
 
     const upstreamAbort = new AbortController();

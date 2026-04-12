@@ -17,7 +17,7 @@ describe("runtime log tail reader", () => {
   });
 
   test("returns null when the runtime log does not exist", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-runtime-log-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-runtime-log-test-"));
 
     await expect(
       readLastRuntimeLogTimestamp(path.join(tempDir, "missing-runtime.log")),
@@ -25,7 +25,7 @@ describe("runtime log tail reader", () => {
   });
 
   test("reads the timestamp from the last non-empty runtime log line in local time format", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-runtime-log-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-runtime-log-test-"));
     const runtimeLogPath = path.join(tempDir, "runtime.log");
     await writeFile(
       runtimeLogPath,

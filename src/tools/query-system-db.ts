@@ -15,7 +15,7 @@ export const QUERY_SYSTEM_DB_TOOL_SCHEMA = Type.Object(
   {
     sql: Type.String({
       minLength: 1,
-      description: "A SQL statement to run against pokeclaw's read-only system SQLite database.",
+      description: "A SQL statement to run against pokoclaw's read-only system SQLite database.",
     }),
   },
   { additionalProperties: false },
@@ -27,7 +27,7 @@ export function createQuerySystemDbTool() {
   return defineTool({
     name: "query_system_db",
     description:
-      "Run a SQL query against pokeclaw's read-only system SQLite database for diagnostics and observability.",
+      "Run a SQL query against pokoclaw's read-only system SQLite database for diagnostics and observability.",
     inputSchema: QUERY_SYSTEM_DB_TOOL_SCHEMA,
     execute(context, args) {
       const ownerAgentId = resolveToolOwnerAgentId(context);

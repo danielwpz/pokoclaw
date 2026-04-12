@@ -92,7 +92,7 @@ describe("LiveConfigManager", () => {
   });
 
   test("reloadFromDisk replaces the active snapshot and notifies subscribers", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-live-config-"));
+    const dir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-live-config-"));
     tempDirs.push(dir);
     const configTomlPath = path.join(dir, "config.toml");
     const secretsTomlPath = path.join(dir, "secrets.toml");
@@ -131,7 +131,7 @@ describe("LiveConfigManager", () => {
   });
 
   test("reloadFromDisk keeps the previous snapshot when the updated file uses legacy scenario keys", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-live-config-"));
+    const dir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-live-config-"));
     tempDirs.push(dir);
     const configTomlPath = path.join(dir, "config.toml");
     const secretsTomlPath = path.join(dir, "secrets.toml");

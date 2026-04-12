@@ -1,10 +1,10 @@
-# Pokeclaw AI Onboarding Guide
+# Pokoclaw AI Onboarding Guide
 
-Use this guide to take a user from a fresh clone to a running local Pokeclaw setup.
+Use this guide to take a user from a fresh clone to a running local Pokoclaw setup.
 
 ## Goal
 
-Finish with a valid config under `~/.pokeclaw/system/`, including Feishu/Lark channel config, and a successful `pnpm start`.
+Finish with a valid config under `~/.pokoclaw/system/`, including Feishu/Lark channel config, and a successful `pnpm start`.
 
 ## Rules
 
@@ -26,7 +26,7 @@ Do this before any configuration branching.
 
 ### 1. Enter the project root
 
-Work from the `pokeclaw/` directory.
+Work from the `pokoclaw/` directory.
 
 ### 2. Check the toolchain
 
@@ -65,7 +65,7 @@ pnpm preflight
 
 ## Phase 2: Detect OpenClaw
 
-Before creating new Pokeclaw config, check whether the user already has OpenClaw config artifacts.
+Before creating new Pokoclaw config, check whether the user already has OpenClaw config artifacts.
 
 ### Check these locations first
 
@@ -88,12 +88,12 @@ Then ask whether the user wants to:
 
 - import all relevant config
 - import only part of it
-- skip import and configure Pokeclaw manually
+- skip import and configure Pokoclaw manually
 
 If they choose import, use:
 
 - `docs/openclaw-import.md` for source-side migration rules
-- `docs/configuration.md` for the target Pokeclaw config shape
+- `docs/configuration.md` for the target Pokoclaw config shape
 
 ### If OpenClaw is not detected, or the user declines import
 
@@ -105,7 +105,7 @@ Use `docs/openclaw-import.md` for details. The execution order is:
 
 1. Summarize what looks importable.
 2. Ask the user to choose import all, some, or none.
-3. Convert only the chosen pieces into valid Pokeclaw config.
+3. Convert only the chosen pieces into valid Pokoclaw config.
 4. Preserve `env://...` refs when they are clear; otherwise generate placeholder `secrets.toml` entries.
 5. Continue to Phase 3C: Required Feishu/Lark setup in `docs/feishu-lark-setup.md`.
 
@@ -126,8 +126,8 @@ Do not stop at "please configure a provider". Help the user pick one path first:
 
 Write config under:
 
-- `~/.pokeclaw/system/config.toml`
-- `~/.pokeclaw/system/secrets.toml` if needed
+- `~/.pokoclaw/system/config.toml`
+- `~/.pokoclaw/system/secrets.toml` if needed
 
 For initial setup, always write:
 
@@ -161,13 +161,13 @@ Current onboarding must include Feishu/Lark because it is the only supported cha
 
 After LLM config and Feishu/Lark config both exist, and the user has filled any manual secrets:
 
-### 1. Start Pokeclaw
+### 1. Start Pokoclaw
 
 ```bash
 pnpm start
 ```
 
-This is the final onboarding check because startup loads config from `~/.pokeclaw/system/`.
+This is the final onboarding check because startup loads config from `~/.pokoclaw/system/`.
 
 ### 2. Use broader repo checks when useful
 
@@ -179,7 +179,7 @@ pnpm test
 pnpm preflight
 ```
 
-Pokeclaw does not yet provide a built-in background service or automatic restart path in this flow. For now, `pnpm start` is the normal launch path.
+Pokoclaw does not yet provide a built-in background service or automatic restart path in this flow. For now, `pnpm start` is the normal launch path.
 
 ### Common failure categories
 

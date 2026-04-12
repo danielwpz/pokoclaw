@@ -1365,12 +1365,12 @@ describe("lark run state", () => {
         approvalId: "approval_fmt_3",
         approvalTarget: "user",
         title:
-          "Approval required: run bash with full access for prefix git -C /Users/example/work/pokeclaw log --oneline -5",
+          "Approval required: run bash with full access for prefix git -C /Users/example/work/pokoclaw log --oneline -5",
         request: {
           scopes: [
             {
               kind: "bash.full_access",
-              prefix: ["git", "-C", "/Users/example/work/pokeclaw", "log", "--oneline", "-5"],
+              prefix: ["git", "-C", "/Users/example/work/pokoclaw", "log", "--oneline", "-5"],
             },
           ],
         },
@@ -1389,7 +1389,7 @@ describe("lark run state", () => {
 
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(resolved).card);
     expect(cardText).toContain("**命令**");
-    expect(cardText).toContain("`git -C /Users/example/work/pokeclaw log --oneline -5`");
+    expect(cardText).toContain("`git -C /Users/example/work/pokoclaw log --oneline -5`");
     expect(cardText).not.toContain("Run bash commands with full access for prefix:");
   });
 
@@ -1540,7 +1540,7 @@ describe("lark run state", () => {
           ],
           details: {
             command: "date '+%Y-%m-%d %H:%M:%S %Z (%A)'",
-            cwd: "/Users/example/.pokeclaw/workspace",
+            cwd: "/Users/example/.pokoclaw/workspace",
             timeoutMs: 10000,
             exitCode: 0,
             signal: null,

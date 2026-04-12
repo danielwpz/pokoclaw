@@ -91,9 +91,9 @@ describe("meditation prompts", () => {
         {
           agentId: "agent_main_1",
           agentKind: "main",
-          displayName: "Pokeclaw Main Agent",
+          displayName: "Pokoclaw Main Agent",
           description: "Owns the main user conversation.",
-          workdir: "/repo/pokeclaw",
+          workdir: "/repo/pokoclaw",
           compactSummary: null,
           privateMemoryCurrent: null,
           bucketNote: "The main agent also saw repeated permission friction.",
