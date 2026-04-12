@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
-import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createReadTool } from "@/src/tools/read.js";
@@ -37,7 +37,7 @@ describe("read tool", () => {
   test("reads a granted file with numbered lines and pagination details", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-read-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-read-tool-"));
 
     const filePath = path.join(tempDir, "notes.txt");
     await writeFile(filePath, "alpha\nbeta\ngamma\n", "utf8");
@@ -111,7 +111,7 @@ describe("read tool", () => {
   test("denies reads from the system directory before touching the filesystem", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-read-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-read-tool-"));
 
     const registry = new ToolRegistry();
     registry.register(createReadTool());
@@ -127,7 +127,7 @@ describe("read tool", () => {
           securityConfig: DEFAULT_CONFIG.security,
           storage: handle.storage.db,
         },
-        { path: path.join(POKECLAW_SYSTEM_DIR, "config.toml") },
+        { path: path.join(POKOCLAW_SYSTEM_DIR, "config.toml") },
       ),
     ).rejects.toMatchObject({
       name: "ToolFailure",
@@ -138,7 +138,7 @@ describe("read tool", () => {
         entries: [
           {
             resource: "filesystem",
-            path: path.join(POKECLAW_SYSTEM_DIR, "config.toml"),
+            path: path.join(POKOCLAW_SYSTEM_DIR, "config.toml"),
             scope: "exact",
             access: "read",
           },
@@ -150,7 +150,7 @@ describe("read tool", () => {
   test("denies reads that are outside the current agent grant set", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-read-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-read-tool-"));
 
     await writeFile(path.join(tempDir, "private.txt"), "secret", "utf8");
 

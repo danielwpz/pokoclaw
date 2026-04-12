@@ -17,7 +17,7 @@ describe("agent bootstrap resolver", () => {
   });
 
   test("loads BOOTSTRAP.md only for main chat sessions", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-bootstrap-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-bootstrap-"));
     await writeFile(
       path.join(tempDir, "BOOTSTRAP.md"),
       "# BOOTSTRAP.md\n\nAsk what to call the user.\n",

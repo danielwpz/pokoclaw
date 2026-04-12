@@ -17,7 +17,7 @@ describe("meditation consolidation context", () => {
   });
 
   test("loads touched private memory, shared memory, and recent meditation excerpts", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-consolidation-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-consolidation-"));
     const workspaceDir = path.join(tempDir, "workspace");
     const meditationDir = path.join(workspaceDir, "meditation");
     const privateWorkspaceDir = path.join(workspaceDir, "subagents", "agentsub");
@@ -70,9 +70,9 @@ describe("meditation consolidation context", () => {
           profile: {
             agentId: "agent_main_1",
             kind: "main",
-            displayName: "Pokeclaw Main Agent",
+            displayName: "Pokoclaw Main Agent",
             description: "Owns the main user conversation.",
-            workdir: "/repo/pokeclaw",
+            workdir: "/repo/pokoclaw",
             compactSummary: null,
           },
           note: "The main agent also hit repeated permission loops.",
@@ -103,7 +103,7 @@ describe("meditation consolidation context", () => {
         expect.objectContaining({
           agentId: "agent_main_1",
           agentKind: "main",
-          displayName: "Pokeclaw Main Agent",
+          displayName: "Pokoclaw Main Agent",
           privateMemoryCurrent: null,
           bucketNote: "The main agent also hit repeated permission loops.",
           memoryCandidates: ["Avoid repeating the same denied permission request."],
@@ -119,7 +119,7 @@ describe("meditation consolidation context", () => {
   });
 
   test("skips buckets whose agent profile cannot be resolved", async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-meditation-consolidation-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-consolidation-"));
     const workspaceDir = path.join(tempDir, "workspace");
     await mkdir(workspaceDir, { recursive: true });
 

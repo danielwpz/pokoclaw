@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import * as sandboxModule from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
-import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import { type ToolFailure, toolRecoverableError } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createGrepTool } from "@/src/tools/grep.js";
@@ -130,7 +130,7 @@ describe("grep tool", () => {
 
   test("uses real rg through the sandboxed grep backend for a basic directory search", async () => {
     assertRipgrepInstalled();
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await writeFile(path.join(tempDir, "README.md"), "alpha\nneedle here\n", "utf8");
     await writeFile(path.join(tempDir, "notes.txt"), "nothing to see\n", "utf8");
@@ -155,7 +155,7 @@ describe("grep tool", () => {
 
   test("uses real rg through the sandboxed grep backend when there are no matches", async () => {
     assertRipgrepInstalled();
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await writeFile(path.join(tempDir, "README.md"), "alpha\nbeta\n", "utf8");
     await writeFile(path.join(tempDir, "notes.txt"), "nothing to see\n", "utf8");
@@ -181,7 +181,7 @@ describe("grep tool", () => {
 
   test("uses real rg through the sandboxed grep backend for regex and case-sensitive matching", async () => {
     assertRipgrepInstalled();
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await writeFile(path.join(tempDir, "README.md"), "needle lower\nNeedle UPPER\n", "utf8");
 
@@ -210,7 +210,7 @@ describe("grep tool", () => {
 
   test("uses real rg through the sandboxed grep backend with glob filtering", async () => {
     assertRipgrepInstalled();
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await mkdir(path.join(tempDir, "src"));
     await writeFile(path.join(tempDir, "src", "match.ts"), "const needle = true;\n", "utf8");
@@ -240,7 +240,7 @@ describe("grep tool", () => {
 
   test("uses real rg through the sandboxed grep backend with global result limits", async () => {
     assertRipgrepInstalled();
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await writeFile(path.join(tempDir, "README.md"), "needle one\nneedle two\n", "utf8");
     await writeFile(path.join(tempDir, "notes.txt"), "needle three\n", "utf8");
@@ -274,7 +274,7 @@ describe("grep tool", () => {
 
   test("uses real rg through the sandboxed grep backend for an explicitly requested file", async () => {
     assertRipgrepInstalled();
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     const targetFile = path.join(tempDir, "README.md");
     await writeFile(targetFile, "alpha\nneedle here\n", "utf8");
@@ -305,7 +305,7 @@ describe("grep tool", () => {
   test("searches a granted directory tree and returns matching lines", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await mkdir(path.join(tempDir, "src"));
     await writeFile(path.join(tempDir, "README.md"), "alpha\nneedle here\n", "utf8");
@@ -369,7 +369,7 @@ describe("grep tool", () => {
   test("supports regex mode, file glob filtering, and result limits", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await mkdir(path.join(tempDir, "src"));
     await writeFile(path.join(tempDir, "src", "a.ts"), "const a = 1;\nconst b = 2;\n", "utf8");
@@ -442,7 +442,7 @@ describe("grep tool", () => {
   test("builds the rg command with default ignore behavior instead of forcing hidden or no-ignore scanning", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await writeFile(path.join(tempDir, "README.md"), "needle\n", "utf8");
 
@@ -494,8 +494,8 @@ describe("grep tool", () => {
   test("skips unreadable symlink targets and binary files", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
-    outsideDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-outside-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
+    outsideDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-outside-"));
 
     await mkdir(path.join(tempDir, "inside"));
     await writeFile(path.join(tempDir, "inside", "visible.txt"), "needle\n", "utf8");
@@ -559,8 +559,8 @@ describe("grep tool", () => {
   test("falls back to the JS walker when rg is unavailable and still skips directory symlink targets", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
-    outsideDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-outside-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
+    outsideDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-outside-"));
 
     await mkdir(path.join(tempDir, "inside"));
     await writeFile(path.join(tempDir, "inside", "visible.txt"), "needle\n", "utf8");
@@ -625,7 +625,7 @@ describe("grep tool", () => {
   test("does not fall back to the JS walker when rg exits with an unexpected error", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await writeFile(path.join(tempDir, "README.md"), "needle\n", "utf8");
 
@@ -676,7 +676,7 @@ describe("grep tool", () => {
   test("does not fall back to the JS walker when rg returns malformed output", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await writeFile(path.join(tempDir, "README.md"), "needle\n", "utf8");
 
@@ -727,7 +727,7 @@ describe("grep tool", () => {
   test("does not fall back to the JS walker when sandbox rejects the rg search", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     await writeFile(path.join(tempDir, "README.md"), "needle\n", "utf8");
 
@@ -775,7 +775,7 @@ describe("grep tool", () => {
   test("continues broad scans but reports unreadable paths as warnings", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     const readableDir = path.join(tempDir, "inside");
     const unreadableDir = path.join(tempDir, "private");
@@ -859,7 +859,7 @@ describe("grep tool", () => {
   test("fails when the explicitly requested root directory is unreadable", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     const unreadableRoot = path.join(tempDir, "private");
     await mkdir(unreadableRoot);
@@ -918,7 +918,7 @@ describe("grep tool", () => {
   test("denies searching the system directory", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-grep-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-grep-tool-"));
 
     const registry = new ToolRegistry();
     registry.register(createGrepTool());
@@ -935,7 +935,7 @@ describe("grep tool", () => {
           storage: handle.storage.db,
         },
         {
-          path: POKECLAW_SYSTEM_DIR,
+          path: POKOCLAW_SYSTEM_DIR,
           query: "secret",
         },
       ),
@@ -948,8 +948,8 @@ describe("grep tool", () => {
         entries: [
           {
             resource: "filesystem",
-            path: POKECLAW_SYSTEM_DIR,
-            scope: "subtree",
+            path: POKOCLAW_SYSTEM_DIR,
+            scope: "exact",
             access: "read",
           },
         ],

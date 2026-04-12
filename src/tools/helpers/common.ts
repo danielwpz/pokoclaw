@@ -5,7 +5,7 @@ import { buildSystemPolicy } from "@/src/security/policy.js";
 import { describePermissionScope, type PermissionScope } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import type { ToolExecutionContext } from "@/src/tools/core/types.js";
 import {
@@ -33,7 +33,7 @@ export function resolveToolOwnerAgentId(context: ToolExecutionContext): string {
 
 export function resolveToolCwd(context: ToolExecutionContext): string {
   return context.cwd == null || context.cwd.trim().length === 0
-    ? POKECLAW_WORKSPACE_DIR
+    ? POKOCLAW_WORKSPACE_DIR
     : context.cwd;
 }
 

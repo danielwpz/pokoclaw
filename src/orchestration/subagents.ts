@@ -14,8 +14,8 @@ import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import {
   buildSubagentWorkspaceDir,
-  POKECLAW_SYSTEM_DIR,
-  POKECLAW_WORKSPACE_DIR,
+  POKOCLAW_SYSTEM_DIR,
+  POKOCLAW_WORKSPACE_DIR,
 } from "@/src/shared/paths.js";
 import { resolveRepoLocalSkillDirs } from "@/src/shared/repo-skill-roots.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -631,7 +631,7 @@ function buildInitialSubagentScopes(input: {
         );
   const scopes: PermissionScope[] = [...repoLocalSkillScopes];
 
-  if (!isPathWithinOrEqual(input.workdir, POKECLAW_WORKSPACE_DIR)) {
+  if (!isPathWithinOrEqual(input.workdir, POKOCLAW_WORKSPACE_DIR)) {
     scopes.push(
       { kind: "fs.read", path: toSubtreePath(input.workdir) },
       { kind: "fs.write", path: toSubtreePath(input.workdir) },
@@ -652,7 +652,7 @@ function normalizeSubagentWorkdir(cwd: string | undefined, fallbackWorkdir: stri
   if (normalized === path.parse(normalized).root) {
     throw new Error("SubAgent workdir must not be the filesystem root");
   }
-  if (isPathWithinOrEqual(normalized, POKECLAW_SYSTEM_DIR)) {
+  if (isPathWithinOrEqual(normalized, POKOCLAW_SYSTEM_DIR)) {
     throw new Error(`SubAgent workdir must not target the protected system area: ${normalized}`);
   }
 

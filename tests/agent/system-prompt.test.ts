@@ -32,7 +32,7 @@ describe("agent system prompt", () => {
       agentKind: "main",
     });
 
-    expect(prompt).toContain("You are Pokeclaw Main Agent");
+    expect(prompt).toContain("You are Pokoclaw Main Agent");
     expect(prompt).toContain("friendly personal assistant");
     expect(prompt).toContain("## Operating Model");
     expect(prompt).toContain("## Scheduled Tasks");
@@ -57,7 +57,7 @@ describe("agent system prompt", () => {
       "    <purpose>Identity, tone, boundaries, and stable user profile.</purpose>",
       "    <path>/tmp/ws/SOUL.md</path>",
       "    <content>",
-      "      Name: Pokeclaw",
+      "      Name: Pokoclaw",
       "    </content>",
       "  </memory_file>",
       "</memory_files>",
@@ -152,10 +152,10 @@ describe("agent system prompt", () => {
       sessionPurpose: "chat",
     });
 
-    expect(prompt).toContain("You are Pokeclaw Main Agent");
+    expect(prompt).toContain("You are Pokoclaw Main Agent");
     expect(prompt).toContain("## Scheduled Tasks");
     expect(prompt).not.toContain(
-      "You are Pokeclaw, an agent that completes the user's request by using tools.",
+      "You are Pokoclaw, an agent that completes the user's request by using tools.",
     );
     expect(prompt).not.toContain("You must explicitly call finish_task");
   });
@@ -235,18 +235,18 @@ describe("agent system prompt", () => {
     const taskPrompt = buildAgentSystemPrompt({ sessionPurpose: "task" });
     const approvalPrompt = buildAgentSystemPrompt({ sessionPurpose: "approval" });
 
-    expect(taskPrompt).toContain("You are Pokeclaw, an agent that completes the user's request");
+    expect(taskPrompt).toContain("You are Pokoclaw, an agent that completes the user's request");
     expect(taskPrompt).toContain("You must explicitly call finish_task");
     expect(taskPrompt).toContain('status="blocked"');
     expect(approvalPrompt).toContain(
-      "You are Pokeclaw Approval Reviewer, a dedicated approval agent.",
+      "You are Pokoclaw Approval Reviewer, a dedicated approval agent.",
     );
     expect(approvalPrompt).toContain(
       "Your job is to review permission requests from other runs, not to continue those tasks.",
     );
-    expect(taskPrompt).not.toContain("Pokeclaw Approval Reviewer");
+    expect(taskPrompt).not.toContain("Pokoclaw Approval Reviewer");
     expect(approvalPrompt).not.toContain(
-      "You are Pokeclaw, an agent that completes the user's request",
+      "You are Pokoclaw, an agent that completes the user's request",
     );
     expect(approvalPrompt).not.toContain("friendly personal assistant");
   });
@@ -271,7 +271,7 @@ describe("agent system prompt", () => {
       skillsCatalog,
     });
 
-    expect(prompt).toContain("Pokeclaw Approval Reviewer");
+    expect(prompt).toContain("Pokoclaw Approval Reviewer");
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain("<name>approval-review</name>");
     expect(prompt.endsWith(skillsCatalog)).toBe(true);
@@ -365,7 +365,7 @@ describe("agent system prompt", () => {
     expect(prompt).toContain('{"kind":"fs.read","path":"/abs/path"}');
     expect(prompt).toContain('{"kind":"db.read","database":"system"}');
     expect(prompt).toContain('{"kind":"bash.full_access","prefix":["git","status"]}');
-    expect(prompt).toContain('"title":"Pokeclaw Code Review"');
+    expect(prompt).toContain('"title":"Pokoclaw Code Review"');
     expect(prompt).toContain('"title":"Daily News Briefing"');
     expect(prompt).toContain(
       "greeting the user and clarifying the desired sources, schedule, and output format",
@@ -406,18 +406,18 @@ describe("agent system prompt", () => {
       agentKind: "sub",
       displayName: "PR Review",
       description: "Review pull requests and summarize concrete findings.",
-      workdir: "/Users/example/work/pokeclaw",
-      privateWorkspaceDir: "/Users/example/.pokeclaw/workspace/subagents/1234abcd",
+      workdir: "/Users/example/work/pokoclaw",
+      privateWorkspaceDir: "/Users/example/.pokoclaw/workspace/subagents/1234abcd",
     });
 
-    expect(prompt).toContain("You are Pokeclaw SubAgent");
+    expect(prompt).toContain("You are Pokoclaw SubAgent");
     expect(prompt).toContain("light emoji are fine");
     expect(prompt).toContain("## SubAgent Profile");
     expect(prompt).toContain("<title>PR Review</title>");
     expect(prompt).toContain("<description>");
-    expect(prompt).toContain("<workdir>/Users/example/work/pokeclaw</workdir>");
+    expect(prompt).toContain("<workdir>/Users/example/work/pokoclaw</workdir>");
     expect(prompt).toContain(
-      "<private_workspace_dir>/Users/example/.pokeclaw/workspace/subagents/1234abcd</private_workspace_dir>",
+      "<private_workspace_dir>/Users/example/.pokoclaw/workspace/subagents/1234abcd</private_workspace_dir>",
     );
     expect(prompt).not.toContain("<initial_task>");
     expect(prompt).toContain("You own this workstream");

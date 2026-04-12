@@ -1,11 +1,11 @@
 import path from "node:path";
 
-import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 
-export const PRODUCTION_DB_BASENAME = "pokeclaw.db";
+export const PRODUCTION_DB_BASENAME = "pokoclaw.db";
 
 export function getProductionDatabasePath(): string {
-  return path.join(POKECLAW_SYSTEM_DIR, PRODUCTION_DB_BASENAME);
+  return path.join(POKOCLAW_SYSTEM_DIR, PRODUCTION_DB_BASENAME);
 }
 
 function sanitizePathPart(input: string): string {

@@ -16,7 +16,7 @@ import {
   ensureAgentMemoryFiles,
 } from "@/src/memory/files.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { buildSubagentWorkspaceDir, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { buildSubagentWorkspaceDir, POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 
 const DEFAULT_EXCERPT_LOOKBACK_DAYS = 7;
 const MAX_EXCERPT_CHARS = 2_000;
@@ -40,7 +40,7 @@ export interface LoadMeditationConsolidationPromptInputInput {
 export async function loadMeditationConsolidationPromptInput(
   input: LoadMeditationConsolidationPromptInputInput,
 ): Promise<MeditationConsolidationPromptInput> {
-  const workspaceDir = input.workspaceDir ?? POKECLAW_WORKSPACE_DIR;
+  const workspaceDir = input.workspaceDir ?? POKOCLAW_WORKSPACE_DIR;
   ensureAgentMemoryFiles({
     agentKind: "main",
     workspaceDir,

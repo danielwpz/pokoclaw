@@ -1,6 +1,6 @@
 # Feishu/Lark Setup Guide
 
-Use this guide when the user is onboarding Pokeclaw. Feishu/Lark is currently the only supported channel, so this setup is required before startup.
+Use this guide when the user is onboarding Pokoclaw. Feishu/Lark is currently the only supported channel, so this setup is required before startup.
 
 ## Phase 3C: Required Feishu/Lark setup
 
@@ -32,7 +32,7 @@ For normal onboarding:
 
 If the user's current OpenClaw already has Feishu/Lark configured:
 
-- do not silently copy that bot config into Pokeclaw
+- do not silently copy that bot config into Pokoclaw
 - first ask whether they want to reuse the same bot or create a new one
 - explain that reusing the same bot is risky because one channel with two active backends can conflict or mix behavior
 - recommend creating a new bot or app
@@ -126,7 +126,7 @@ Do not guide the user into webhook mode for normal onboarding.
 2. Submit for review and publish.
 3. Wait for approval if the tenant requires it.
 
-### 3C-9. Configure Pokeclaw
+### 3C-9. Configure Pokoclaw
 
 This is a required part of runnable onboarding, not an optional integration step.
 
@@ -149,7 +149,7 @@ appSecret = "paste-your-feishu-or-lark-app-secret-here"
 
 Only write the real App Secret into a file if the user explicitly asks you to do that.
 
-### 3C-10. Start Pokeclaw
+### 3C-10. Start Pokoclaw
 
 Run:
 
@@ -160,8 +160,8 @@ pnpm start
 
 `pnpm build` is the repo and toolchain check. `pnpm start` is the real config and startup check.
 
-Pokeclaw does not yet provide a built-in background service or automatic restart path in this setup flow, so `pnpm start` is the normal launch path.
+Pokoclaw does not yet provide a built-in background service or automatic restart path in this setup flow, so `pnpm start` is the normal launch path.
 
 ### 3C-11. Return to normal onboarding
 
-Once Pokeclaw has started successfully, continue with `docs/onboarding.md`, Phase 4: Validation and first run.
+Once Pokoclaw has started successfully, continue with `docs/onboarding.md`, Phase 4: Validation and first run.

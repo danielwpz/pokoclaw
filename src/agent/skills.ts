@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import {
-  POKECLAW_BUILTIN_SKILLS_DIR,
-  POKECLAW_SKILLS_DIR,
-  POKECLAW_WORKSPACE_DIR,
+  POKOCLAW_BUILTIN_SKILLS_DIR,
+  POKOCLAW_SKILLS_DIR,
+  POKOCLAW_WORKSPACE_DIR,
 } from "@/src/shared/paths.js";
 import { resolveRepoLocalSkillDirs } from "@/src/shared/repo-skill-roots.js";
 
@@ -195,11 +195,11 @@ export function resolveDefaultSkillRoots(workdir?: string | null): AgentSkillRoo
   const roots: AgentSkillRoot[] = [
     {
       source: "global",
-      rootDir: POKECLAW_SKILLS_DIR,
+      rootDir: POKOCLAW_SKILLS_DIR,
     },
     {
       source: "workspace",
-      rootDir: path.join(POKECLAW_WORKSPACE_DIR, "skills"),
+      rootDir: path.join(POKOCLAW_WORKSPACE_DIR, "skills"),
     },
   ];
 
@@ -214,7 +214,7 @@ export function resolveDefaultSkillRoots(workdir?: string | null): AgentSkillRoo
 }
 
 export function resolveBundledSkillsDir(): string {
-  return POKECLAW_BUILTIN_SKILLS_DIR;
+  return POKOCLAW_BUILTIN_SKILLS_DIR;
 }
 
 function resolveRepoSkillRoots(workdir?: string | null): AgentSkillRoot[] {

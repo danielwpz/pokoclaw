@@ -14,7 +14,7 @@ vi.mock("@/src/shared/paths.js", () => ({
 
 describe("codex credential store", () => {
   beforeEach(async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-codex-store-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-codex-store-test-"));
     credentialPath = path.join(tempDir, "codex-credentials.json");
   });
 

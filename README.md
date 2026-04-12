@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/pokeclaw-logo.png" alt="Pokeclaw" width="220"/>
+  <img src="assets/pokoclaw-logo.png" alt="Pokoclaw" width="220"/>
 </p>
 
-<h1 align="center">Pokeclaw</h1>
+<h1 align="center">Pokoclaw</h1>
 
 <p align="center">
   <strong>The claw that actually ships 🚀</strong>
@@ -19,10 +19,10 @@
 
 <p align="center">
   <a href="#setup">Setup</a> •
-  <a href="#what-is-pokeclaw">What Is Pokeclaw</a> •
+  <a href="#what-is-pokoclaw">What Is Pokoclaw</a> •
   <a href="#core-principles">Core Principles</a> •
   <a href="#built-for">Built For</a> •
-  <a href="#why-pokeclaw">Why Pokeclaw</a> •
+  <a href="#why-pokoclaw">Why Pokoclaw</a> •
   <a href="#what-makes-it-different">What Makes It Different</a> •
   <a href="#product-tradeoffs">Product Tradeoffs</a> •
   <a href="#under-the-hood">Under The Hood</a>
@@ -30,7 +30,7 @@
 
 ---
 
-Pokeclaw is **the claw that actually ships**.  
+Pokoclaw is **the claw that actually ships**.  
 It brings **execution, observability, control, collaboration, and self-improvement** together into a personal AI assistant built for sustained real work.
 
 ---
@@ -42,9 +42,9 @@ It brings **execution, observability, control, collaboration, and self-improveme
     <th><p align="center">Subagent</p></th>
   </tr>
   <tr>
-    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-cronjob.gif" width="240" height="521"></p></td>
-    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-query-status.gif" width="240" height="521"></p></td>
-    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokeclaw-assets/main/demo/demo-subagent.gif" width="240" height="521"></p></td>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokoclaw-assets/main/demo/demo-cronjob.gif" width="240" height="521"></p></td>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokoclaw-assets/main/demo/demo-query-status.gif" width="240" height="521"></p></td>
+    <td align="center"><p align="center"><img src="https://raw.githubusercontent.com/danielwpz/pokoclaw-assets/main/demo/demo-subagent.gif" width="240" height="521"></p></td>
   </tr>
 </table>
 
@@ -58,18 +58,18 @@ The onboarding flow currently includes Feishu/Lark setup, because Feishu/Lark is
 
 ---
 
-## ✨ What Is Pokeclaw
+## ✨ What Is Pokoclaw
 
-Pokeclaw is a personal AI assistant built for real work.  
+Pokoclaw is a personal AI assistant built for real work.  
 It is not just a model wired into chat, and not just a pile of tools inside a bot.
 
 Its goal is not to keep AI at the level of “responding to prompts”.  
 Its goal is to push AI into **continuously moving work forward**.
 
-In Pokeclaw, AI is not just something that answers questions.  
+In Pokoclaw, AI is not just something that answers questions.  
 It is a system that can be delegated to, supervised, corrected, reviewed, and continuously improved.
 
-In other words, Pokeclaw is not trying to look busy.  
+In other words, Pokoclaw is not trying to look busy.  
 It is trying to become an AI assistant that can actually move tasks forward and keep collaborating over time.
 
 ---
@@ -85,7 +85,7 @@ Once execution starts, you do not know what it is doing.
 You do not know whether it has drifted.  
 You do not know whether it is stuck or still progressing.
 
-Pokeclaw treats **observability** as a first-class capability:
+Pokoclaw treats **observability** as a first-class capability:
 
 - execution is not a black box
 - tool calls, progress, and run state can be surfaced
@@ -99,7 +99,7 @@ Pokeclaw treats **observability** as a first-class capability:
 A real AI assistant should not only run by itself.  
 It should be interruptible, steerable, pausable, resumable, and correctable.
 
-Pokeclaw is not about “full automation”.  
+Pokoclaw is not about “full automation”.  
 It is about **automation that remains under human control**:
 
 - wrong direction can be corrected in time
@@ -112,7 +112,7 @@ It is that it works on its own **while staying under your control**.
 
 ### 🧠 Self-Harness
 
-Pokeclaw does not just try to make AI remember information.  
+Pokoclaw does not just try to make AI remember information.  
 It tries to help AI **learn how to work with you better over time**.
 
 That is what **Self-Harness** is for.
@@ -140,7 +140,7 @@ Many **OpenClaw-like products** run into the same problem once they start carryi
 Research, coding, planning, reporting, and follow-ups end up sharing one context.  
 Old tasks jump back into new conversations. Work quickly becomes messy.
 
-Pokeclaw is not designed to cram more things into one window.  
+Pokoclaw is not designed to cram more things into one window.  
 It separates different layers of work:
 
 - **Main Agent**: the persistent front door, coordinating everything like a chief of staff
@@ -161,7 +161,7 @@ The hard part is not whether they can start a task. The hard part is whether the
 - what happens when execution fails
 - can the system keep moving while the user is away
 
-Pokeclaw is built around **real unattended execution**, not demo automation.
+Pokoclaw is built around **real unattended execution**, not demo automation.
 
 It is not only trying to answer “can it do the task?”  
 It is trying to answer:
@@ -172,7 +172,7 @@ It is trying to answer:
 
 ## 👥 Built For
 
-Pokeclaw is currently best suited for:
+Pokoclaw is currently best suited for:
 
 - developers
 - product managers
@@ -185,7 +185,7 @@ It is for people who already feel these problems and genuinely want AI to do rea
 
 ---
 
-## 💥 Why Pokeclaw
+## 💥 Why Pokoclaw
 
 We do not lack chat AI anymore.  
 We do not lack tool-using AI anymore.  
@@ -198,28 +198,28 @@ What remains rare is something else:
 - AI designed for long-term collaboration
 - AI that is actually trustworthy with real work
 
-Pokeclaw is not an attempt to make an existing Claw bigger.  
+Pokoclaw is not an attempt to make an existing Claw bigger.  
 It is an attempt to rethink the **personal AI assistant** from the product structure up.
 
 ---
 
 ## 🦞 What Makes It Different
 
-> ✨ **OpenClaw is fun, but Pokeclaw ships.**
+> ✨ **OpenClaw is fun, but Pokoclaw ships.**
 
-Pokeclaw is not trying to compete on “bigger, broader, more channels, more platform”.
+Pokoclaw is not trying to compete on “bigger, broader, more channels, more platform”.
 
 Because we believe what defines an AI assistant is not the feature list.  
 It is the product structure.
 
 Many Claws feel like platforms.  
-Pokeclaw feels more like an assistant.
+Pokoclaw feels more like an assistant.
 
 Many systems optimize for capability coverage.  
-Pokeclaw optimizes for collaboration quality.
+Pokoclaw optimizes for collaboration quality.
 
 Many products can run tasks.  
-Pokeclaw cares whether those tasks are **visible, controllable, sustainable, and trustworthy**.
+Pokoclaw cares whether those tasks are **visible, controllable, sustainable, and trustworthy**.
 
 We are not trying to build another bigger Claw.  
 We are trying to build a Claw that actually gets things done.
@@ -228,13 +228,13 @@ We are trying to build a Claw that actually gets things done.
 
 ## 🎯 Product Tradeoffs
 
-Pokeclaw is not trying to integrate every channel from day one.  
+Pokoclaw is not trying to integrate every channel from day one.  
 And it does not believe “more integrations” automatically means “better product”.
 
 For a personal AI assistant, the real question is not whether it can appear everywhere.  
 The real question is whether it chooses surfaces that are **actually good for AI collaboration** and pushes those experiences deep enough.
 
-That is why Pokeclaw cares more about:
+That is why Pokoclaw cares more about:
 
 - which channel best supports task collaboration
 - which channel best supports status feedback
@@ -248,7 +248,7 @@ It makes product choices in service of **AI that can really do work**.
 
 ## 🛠️ Under The Hood
 
-Pokeclaw is built with **TypeScript / Node.js**, designed around real task execution and long-running collaboration.
+Pokoclaw is built with **TypeScript / Node.js**, designed around real task execution and long-running collaboration.
 
 Its core is not one model trick.  
 It is the interaction of several layers:

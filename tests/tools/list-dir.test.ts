@@ -35,7 +35,7 @@ describe("list_dir tool", () => {
   test("lists directory entries with codex-style labels", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-list-dir-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-list-dir-tool-"));
 
     const nestedDir = path.join(tempDir, "nested");
     const deeperDir = path.join(nestedDir, "deeper");
@@ -103,7 +103,7 @@ describe("list_dir tool", () => {
   test("respects the depth parameter", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-list-dir-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-list-dir-tool-"));
 
     const nestedDir = path.join(tempDir, "nested");
     const deeperDir = path.join(nestedDir, "deeper");
@@ -153,7 +153,7 @@ describe("list_dir tool", () => {
   test("paginates in sorted order", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-list-dir-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-list-dir-tool-"));
 
     const dirA = path.join(tempDir, "a");
     const dirB = path.join(tempDir, "b");
@@ -234,7 +234,7 @@ describe("list_dir tool", () => {
   test("errors when offset exceeds the visible entry count", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-list-dir-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-list-dir-tool-"));
     await mkdir(path.join(tempDir, "nested"));
 
     const security = new SecurityService(handle.storage.db);
@@ -274,7 +274,7 @@ describe("list_dir tool", () => {
   test("requires an absolute dir_path", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-list-dir-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-list-dir-tool-"));
 
     const registry = new ToolRegistry();
     registry.register(createListDirTool());
@@ -303,7 +303,7 @@ describe("list_dir tool", () => {
   test("omits entries outside the granted subtree", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-list-dir-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-list-dir-tool-"));
 
     const visibleDir = path.join(tempDir, "visible");
     const hiddenDir = path.join(tempDir, "hidden");
@@ -351,7 +351,7 @@ describe("list_dir tool", () => {
   test("shows all top-level children when the parent directory is granted exactly", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-list-dir-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-list-dir-tool-"));
 
     const chatApiDir = path.join(tempDir, "chat-api");
     const stripeNodeDir = path.join(tempDir, "stripe-node");

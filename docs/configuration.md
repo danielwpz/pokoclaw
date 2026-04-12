@@ -1,13 +1,13 @@
-# Pokeclaw Configuration Guide for AI Setup Flows
+# Pokoclaw Configuration Guide for AI Setup Flows
 
-Use this document when you are creating or validating Pokeclaw configuration during onboarding. Every setup path should end in valid config under `~/.pokeclaw/system/`.
+Use this document when you are creating or validating Pokoclaw configuration during onboarding. Every setup path should end in valid config under `~/.pokoclaw/system/`.
 
 ## Files
 
 Treat these layers separately:
 
-- `~/.pokeclaw/system/config.toml`: normal, non-sensitive configuration
-- `~/.pokeclaw/system/secrets.toml`: sensitive values only
+- `~/.pokoclaw/system/config.toml`: normal, non-sensitive configuration
+- `~/.pokoclaw/system/secrets.toml`: sensitive values only
 - SQLite runtime state: runtime data, not part of normal onboarding file-writing
 
 Do not collapse these into one file.
@@ -244,4 +244,4 @@ Do not declare onboarding complete until the config is understandable and runnab
 
 - `docs/onboarding.md` tells you when to use this file.
 - `docs/openclaw-import.md` tells you what is safe to import from OpenClaw.
-- This file tells you what the final Pokeclaw config should look like.
+- This file tells you what the final Pokoclaw config should look like.

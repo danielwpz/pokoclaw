@@ -156,7 +156,7 @@ describe("config loader", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-config-test-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-config-test-"));
   });
 
   afterEach(async () => {
@@ -779,8 +779,8 @@ describe("config loader", () => {
     );
   });
 
-  test("uses system config paths under pokeclaw home override", async () => {
-    const configHome = path.join(tempDir, ".pokeclaw", "system");
+  test("uses system config paths under pokoclaw home override", async () => {
+    const configHome = path.join(tempDir, ".pokoclaw", "system");
     await mkdir(configHome, { recursive: true });
     await writeFile(
       path.join(configHome, "config.toml"),

@@ -8,35 +8,35 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { POKECLAW_LOGS_DIR, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_LOGS_DIR, POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 
 export const MEDITATION_DIRNAME = "meditation";
 
-export function buildMeditationWorkspaceDir(workspaceDir = POKECLAW_WORKSPACE_DIR): string {
+export function buildMeditationWorkspaceDir(workspaceDir = POKOCLAW_WORKSPACE_DIR): string {
   return path.resolve(workspaceDir, MEDITATION_DIRNAME);
 }
 
 export function buildMeditationDailyNotePath(
   localDate: string,
-  workspaceDir = POKECLAW_WORKSPACE_DIR,
+  workspaceDir = POKOCLAW_WORKSPACE_DIR,
 ): string {
   return path.join(buildMeditationWorkspaceDir(workspaceDir), `${localDate}.md`);
 }
 
-export function buildMeditationLogsRoot(logsDir = POKECLAW_LOGS_DIR): string {
+export function buildMeditationLogsRoot(logsDir = POKOCLAW_LOGS_DIR): string {
   return path.resolve(logsDir, MEDITATION_DIRNAME);
 }
 
 export function buildMeditationRunArtifactDir(
   localDate: string,
   runId: string,
-  logsDir = POKECLAW_LOGS_DIR,
+  logsDir = POKOCLAW_LOGS_DIR,
 ): string {
   return path.join(buildMeditationLogsRoot(logsDir), `${localDate}--${runId}`);
 }
 
 export async function ensureMeditationWorkspaceDir(
-  workspaceDir = POKECLAW_WORKSPACE_DIR,
+  workspaceDir = POKOCLAW_WORKSPACE_DIR,
 ): Promise<void> {
   await mkdir(buildMeditationWorkspaceDir(workspaceDir), { recursive: true });
 }
@@ -44,7 +44,7 @@ export async function ensureMeditationWorkspaceDir(
 export async function ensureMeditationRunArtifactDir(
   localDate: string,
   runId: string,
-  logsDir = POKECLAW_LOGS_DIR,
+  logsDir = POKOCLAW_LOGS_DIR,
 ): Promise<string> {
   const artifactDir = buildMeditationRunArtifactDir(localDate, runId, logsDir);
   await mkdir(artifactDir, { recursive: true });

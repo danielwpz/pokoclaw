@@ -73,7 +73,7 @@ describe("real llm loop integration", () => {
       seq: 1,
       role: "user",
       payloadJson: JSON.stringify({
-        content: "Reply with the token POKECLAW_LOOP_OK and nothing else.",
+        content: "Reply with the token POKOCLAW_LOOP_OK and nothing else.",
       }),
       createdAt: new Date("2026-03-23T00:00:01.000Z"),
     });
@@ -108,7 +108,7 @@ describe("real llm loop integration", () => {
           .join("")
       : "";
 
-    expect(assistantText).toContain("POKECLAW_LOOP_OK");
+    expect(assistantText).toContain("POKOCLAW_LOOP_OK");
     expect(storedMessages[1]?.stopReason).toBe("stop");
     expect((storedMessages[1]?.tokenTotal ?? 0) > 0).toBe(true);
   }, 30_000);
@@ -176,7 +176,7 @@ describe("real llm loop integration", () => {
     const steerResult = await ingress.submitMessage({
       sessionId: "sess_1",
       scenario: "chat",
-      content: "FINAL_TOKEN: POKECLAW_STEER_OK",
+      content: "FINAL_TOKEN: POKOCLAW_STEER_OK",
     });
 
     expect(steerResult).toEqual({ status: "steered" });
@@ -188,7 +188,7 @@ describe("real llm loop integration", () => {
     expect(storedMessages.length).toBeGreaterThanOrEqual(5);
     expect(storedMessages[2]?.role).toBe("tool");
     expect(JSON.parse(storedMessages[3]?.payloadJson ?? "{}")).toEqual({
-      content: "FINAL_TOKEN: POKECLAW_STEER_OK",
+      content: "FINAL_TOKEN: POKOCLAW_STEER_OK",
     });
 
     // Keep this strict. The point of the integration test is not just that the
@@ -202,14 +202,14 @@ describe("real llm loop integration", () => {
           .join("")
       : "";
 
-    expect(assistantText).toContain("POKECLAW_STEER_OK");
+    expect(assistantText).toContain("POKOCLAW_STEER_OK");
   }, 45_000);
 
   test("loads a repo-local skill, reads its SKILL.md, and answers with the skill's commit rules", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle.storage.sqlite);
 
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-it-skill-repo-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-it-skill-repo-"));
     tempDirs.push(repoRoot);
     const workdir = path.join(repoRoot, "packages", "app");
     const skillDir = path.join(repoRoot, ".claude", "skills", "commit-rules");

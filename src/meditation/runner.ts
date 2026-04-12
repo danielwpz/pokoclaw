@@ -53,7 +53,7 @@ import {
   buildWorkspaceSharedMemoryPath,
 } from "@/src/memory/files.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { buildSubagentWorkspaceDir, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { buildSubagentWorkspaceDir, POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import type { LocalCalendarContext } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import type { MeditationStateRepo } from "@/src/storage/repos/meditation-state.repo.js";
@@ -148,7 +148,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
     });
     const executedBucketInputs =
       configuredModels == null ? [] : bucketInputs.slice(0, MAX_BUCKETS_PER_RUN);
-    const workspaceDir = this.deps.workspaceDir ?? POKECLAW_WORKSPACE_DIR;
+    const workspaceDir = this.deps.workspaceDir ?? POKOCLAW_WORKSPACE_DIR;
     const startedAtMs = Date.now();
 
     try {

@@ -57,8 +57,8 @@ describe("create_subagent tool", () => {
     const requestSubagentCreation = vi.fn(async () => ({
       requestId: "req_new",
       title: "PR Review",
-      workdir: "/Users/example/work/pokeclaw",
-      privateWorkspaceDir: "/Users/example/.pokeclaw/workspace/subagents/reqnew00",
+      workdir: "/Users/example/work/pokoclaw",
+      privateWorkspaceDir: "/Users/example/.pokoclaw/workspace/subagents/reqnew00",
       status: "pending_confirmation" as const,
       expiresAt: "2026-03-26T01:00:00.000Z",
     }));
@@ -81,7 +81,7 @@ describe("create_subagent tool", () => {
         title: "PR Review",
         description: "Review pull requests and summarize findings.",
         initialTask: "Review the current PR and report concrete issues.",
-        cwd: "/Users/example/work/pokeclaw",
+        cwd: "/Users/example/work/pokoclaw",
         initialExtraScopes: [{ kind: "db.read", database: "system" }],
       },
     );
@@ -91,7 +91,7 @@ describe("create_subagent tool", () => {
       title: "PR Review",
       description: "Review pull requests and summarize findings.",
       initialTask: "Review the current PR and report concrete issues.",
-      cwd: "/Users/example/work/pokeclaw",
+      cwd: "/Users/example/work/pokoclaw",
       initialExtraScopes: [{ kind: "db.read", database: "system" }],
     });
     expect(result.content[0]).toEqual({
@@ -103,7 +103,7 @@ describe("create_subagent tool", () => {
     expect(result.content[0]).toEqual({
       type: "text",
       text: expect.stringContaining(
-        "Private workspace: /Users/example/.pokeclaw/workspace/subagents/reqnew00",
+        "Private workspace: /Users/example/.pokoclaw/workspace/subagents/reqnew00",
       ),
     });
   });

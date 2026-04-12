@@ -65,7 +65,7 @@ import { buildSystemPolicy } from "@/src/security/policy.js";
 import type { PermissionRequest } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { buildSubagentWorkspaceDir, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { buildSubagentWorkspaceDir, POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { resolveLocalCalendarContext } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -302,7 +302,7 @@ export class AgentLoop {
       sessionId: input.sessionId,
       conversationId: input.conversationId,
       ...(input.sessionPurpose === undefined ? {} : { sessionPurpose: input.sessionPurpose }),
-      cwd: input.cwd ?? POKECLAW_WORKSPACE_DIR,
+      cwd: input.cwd ?? POKOCLAW_WORKSPACE_DIR,
       securityConfig: this.deps.securityConfig,
       storage: this.deps.storage,
       abortSignal: input.signal,

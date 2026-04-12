@@ -56,7 +56,7 @@ type ThresholdReport<T> = {
   matched: T[];
 };
 
-const DEFAULT_DB_PATH = path.join(os.homedir(), ".pokeclaw", "system", "pokeclaw.db");
+const DEFAULT_DB_PATH = path.join(os.homedir(), ".pokoclaw", "system", "pokoclaw.db");
 const SAMPLE_LIMIT = 8;
 
 function main(): void {

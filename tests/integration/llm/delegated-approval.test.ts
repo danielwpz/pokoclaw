@@ -253,8 +253,8 @@ describe("real llm delegated approval integration", () => {
   test("delegates approval to the main-agent review session, approves, and resumes the task run", async () => {
     handle = await createTestDatabase(import.meta.url);
 
-    const targetPath = "/tmp/pokeclaw-it-approve.txt";
-    const finalToken = "POKECLAW_DELEGATED_APPROVE_OK";
+    const targetPath = "/tmp/pokoclaw-it-approve.txt";
+    const finalToken = "POKOCLAW_DELEGATED_APPROVE_OK";
     seedDelegatedApprovalFixture({
       handle,
       mainPolicy: [
@@ -362,7 +362,7 @@ describe("real llm delegated approval integration", () => {
     handle = await createTestDatabase(import.meta.url);
 
     const targetPath = "/home/dev/.bitcoin/privatekey.wallet";
-    const deniedToken = "POKECLAW_DELEGATED_DENY_OK";
+    const deniedToken = "POKOCLAW_DELEGATED_DENY_OK";
     seedDelegatedApprovalFixture({
       handle,
       mainPolicy: [

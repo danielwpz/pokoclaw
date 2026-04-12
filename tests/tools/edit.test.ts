@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
-import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createEditTool } from "@/src/tools/edit.js";
@@ -37,7 +37,7 @@ describe("edit tool", () => {
   test("edits a granted file with an exact text match", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-edit-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-edit-tool-"));
 
     const filePath = path.join(tempDir, "notes.txt");
     await writeFile(filePath, "alpha\nbeta\ngamma\n", "utf8");
@@ -88,7 +88,7 @@ describe("edit tool", () => {
   test("rejects ambiguous matches unless replaceAll is enabled", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-edit-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-edit-tool-"));
 
     const filePath = path.join(tempDir, "notes.txt");
     await writeFile(filePath, "alpha\nbeta\nbeta\n", "utf8");
@@ -133,7 +133,7 @@ describe("edit tool", () => {
   test("denies edits in the system directory", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-edit-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-edit-tool-"));
 
     const registry = new ToolRegistry();
     registry.register(createEditTool());
@@ -150,7 +150,7 @@ describe("edit tool", () => {
           storage: handle.storage.db,
         },
         {
-          path: path.join(POKECLAW_SYSTEM_DIR, "config.toml"),
+          path: path.join(POKOCLAW_SYSTEM_DIR, "config.toml"),
           oldText: "old",
           newText: "new",
         },
@@ -164,7 +164,7 @@ describe("edit tool", () => {
         entries: [
           {
             resource: "filesystem",
-            path: path.join(POKECLAW_SYSTEM_DIR, "config.toml"),
+            path: path.join(POKOCLAW_SYSTEM_DIR, "config.toml"),
             scope: "exact",
             access: "read",
           },
@@ -176,7 +176,7 @@ describe("edit tool", () => {
   test("requests both read and write approval together for an ungranted edit", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-edit-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-edit-tool-"));
 
     const filePath = path.join(tempDir, "notes.txt");
     await writeFile(filePath, "alpha\nbeta\ngamma\n", "utf8");

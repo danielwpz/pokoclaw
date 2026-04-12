@@ -36,7 +36,7 @@ describe("permission grants repo", () => {
     repo.create({
       id: "grant_1",
       ownerAgentId: "agent_1",
-      scopeJson: '{"kind":"fs.read","path":"/Users/example/.pokeclaw/workspace/**"}',
+      scopeJson: '{"kind":"fs.read","path":"/Users/example/.pokoclaw/workspace/**"}',
       grantedBy: "main_agent",
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });

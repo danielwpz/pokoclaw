@@ -11,7 +11,7 @@ async function createConfigWorkspace(): Promise<{
   configTomlPath: string;
   secretsTomlPath: string;
 }> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-model-switch-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-model-switch-"));
   const configTomlPath = path.join(dir, "config.toml");
   const secretsTomlPath = path.join(dir, "secrets.toml");
   await writeFile(configTomlPath, buildConfigToml(), "utf8");

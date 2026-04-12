@@ -1,6 +1,6 @@
 # System Observe Schema Overview
 
-These tables are the main structured evidence sources for pokeclaw runtime diagnosis.
+These tables are the main structured evidence sources for pokoclaw runtime diagnosis.
 
 This file is only a guide.
 For exact column names and current truth, inspect the live schema with SQL.

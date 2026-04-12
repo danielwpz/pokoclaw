@@ -14,9 +14,9 @@ import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
 import {
-  POKECLAW_REPO_DIR,
-  POKECLAW_SKILLS_DIR,
-  POKECLAW_WORKSPACE_DIR,
+  POKOCLAW_REPO_DIR,
+  POKOCLAW_SKILLS_DIR,
+  POKOCLAW_WORKSPACE_DIR,
 } from "@/src/shared/paths.js";
 import { resolveLocalCalendarContext } from "@/src/shared/time.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
@@ -149,7 +149,7 @@ async function waitForApprovalRequested(
   throw new Error("Approval request was not emitted");
 }
 
-const LOOP_PROTECTED_FILE = "/tmp/pokeclaw-loop-protected.txt";
+const LOOP_PROTECTED_FILE = "/tmp/pokoclaw-loop-protected.txt";
 
 describe("agent loop", () => {
   let handle: TestDatabaseHandle | null = null;
@@ -541,9 +541,9 @@ describe("agent loop", () => {
               description: "Review the current repository.",
               skillKey: "builtin:repo-review/SKILL.md",
               source: "builtin" as const,
-              rootDir: `${POKECLAW_REPO_DIR}/skills`,
-              skillDir: `${POKECLAW_REPO_DIR}/skills/repo-review`,
-              skillFilePath: `${POKECLAW_REPO_DIR}/skills/repo-review/SKILL.md`,
+              rootDir: `${POKOCLAW_REPO_DIR}/skills`,
+              skillDir: `${POKOCLAW_REPO_DIR}/skills/repo-review`,
+              skillFilePath: `${POKOCLAW_REPO_DIR}/skills/repo-review/SKILL.md`,
             },
           ];
           return {
@@ -1094,7 +1094,7 @@ describe("agent loop", () => {
         inputSchema: NO_ARGS_TOOL_SCHEMA,
         execute(context) {
           expect(context.ownerAgentId).toBe("agent_1");
-          expect(context.cwd).toBe(POKECLAW_WORKSPACE_DIR);
+          expect(context.cwd).toBe(POKOCLAW_WORKSPACE_DIR);
           return textToolResult("ok");
         },
       }),
@@ -1236,9 +1236,9 @@ describe("agent loop", () => {
               description: "Review permission requests safely.",
               skillKey: "builtin:approval-review/SKILL.md",
               source: "builtin" as const,
-              rootDir: `${POKECLAW_REPO_DIR}/skills`,
-              skillDir: `${POKECLAW_REPO_DIR}/skills/approval-review`,
-              skillFilePath: `${POKECLAW_REPO_DIR}/skills/approval-review/SKILL.md`,
+              rootDir: `${POKOCLAW_REPO_DIR}/skills`,
+              skillDir: `${POKOCLAW_REPO_DIR}/skills/approval-review`,
+              skillFilePath: `${POKOCLAW_REPO_DIR}/skills/approval-review/SKILL.md`,
             },
           ];
 
@@ -1313,9 +1313,9 @@ describe("agent loop", () => {
               description: "Global skill.",
               skillKey: "global:global-review/SKILL.md",
               source: "global" as const,
-              rootDir: POKECLAW_SKILLS_DIR,
-              skillDir: `${POKECLAW_SKILLS_DIR}/global-review`,
-              skillFilePath: `${POKECLAW_SKILLS_DIR}/global-review/SKILL.md`,
+              rootDir: POKOCLAW_SKILLS_DIR,
+              skillDir: `${POKOCLAW_SKILLS_DIR}/global-review`,
+              skillFilePath: `${POKOCLAW_SKILLS_DIR}/global-review/SKILL.md`,
             },
             {
               name: "repo-review",
@@ -1331,9 +1331,9 @@ describe("agent loop", () => {
               description: "Builtin skill.",
               skillKey: "builtin:system-observe/SKILL.md",
               source: "builtin" as const,
-              rootDir: `${POKECLAW_REPO_DIR}/skills`,
-              skillDir: `${POKECLAW_REPO_DIR}/skills/system-observe`,
-              skillFilePath: `${POKECLAW_REPO_DIR}/skills/system-observe/SKILL.md`,
+              rootDir: `${POKOCLAW_REPO_DIR}/skills`,
+              skillDir: `${POKOCLAW_REPO_DIR}/skills/system-observe`,
+              skillFilePath: `${POKOCLAW_REPO_DIR}/skills/system-observe/SKILL.md`,
             },
           ];
 

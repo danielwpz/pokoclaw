@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { SecurityService } from "@/src/security/service.js";
-import { POKECLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_SYSTEM_DIR } from "@/src/shared/paths.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createWriteTool } from "@/src/tools/write.js";
@@ -37,7 +37,7 @@ describe("write tool", () => {
   test("writes a granted file path and creates parent directories", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-write-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-write-tool-"));
 
     const security = new SecurityService(handle.storage.db);
     security.grantScopes({
@@ -81,7 +81,7 @@ describe("write tool", () => {
   test("denies writes into the system directory", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-write-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-write-tool-"));
 
     const registry = new ToolRegistry();
     registry.register(createWriteTool());
@@ -98,7 +98,7 @@ describe("write tool", () => {
           storage: handle.storage.db,
         },
         {
-          path: path.join(POKECLAW_SYSTEM_DIR, "config.toml"),
+          path: path.join(POKOCLAW_SYSTEM_DIR, "config.toml"),
           content: "unsafe = true",
         },
       ),
@@ -111,7 +111,7 @@ describe("write tool", () => {
         entries: [
           {
             resource: "filesystem",
-            path: path.join(POKECLAW_SYSTEM_DIR, "config.toml"),
+            path: path.join(POKOCLAW_SYSTEM_DIR, "config.toml"),
             scope: "exact",
             access: "write",
           },
@@ -123,7 +123,7 @@ describe("write tool", () => {
   test("denies writes that are outside the current agent grant set", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokeclaw-write-tool-"));
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-write-tool-"));
 
     const registry = new ToolRegistry();
     registry.register(createWriteTool());

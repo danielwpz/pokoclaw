@@ -160,8 +160,8 @@ describe("agent skills catalog", () => {
     const roots = resolveDefaultSkillRoots(nestedWorkdir);
 
     expect(roots.map((root) => [root.source, root.rootDir])).toEqual([
-      ["global", expect.stringMatching(/\.pokeclaw[\\/]skills$/)],
-      ["workspace", expect.stringMatching(/\.pokeclaw[\\/]workspace[\\/]skills$/)],
+      ["global", expect.stringMatching(/\.pokoclaw[\\/]skills$/)],
+      ["workspace", expect.stringMatching(/\.pokoclaw[\\/]workspace[\\/]skills$/)],
       ["repo_agents", path.join(repoRoot, ".agents", "skills")],
       ["repo_claude", path.join(repoRoot, ".claude", "skills")],
       ["builtin", expect.any(String)],
@@ -203,7 +203,7 @@ describe("agent skills catalog", () => {
   });
 
   async function createTempDir(): Promise<string> {
-    const dir = await mkdtemp(path.join(tmpdir(), "pokeclaw-skills-"));
+    const dir = await mkdtemp(path.join(tmpdir(), "pokoclaw-skills-"));
     tempDirs.push(dir);
     return dir;
   }

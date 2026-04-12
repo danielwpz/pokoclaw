@@ -1,12 +1,12 @@
 ---
 name: system-observe
-description: Use this skill for pokeclaw observability and self-diagnosis, including delegated approval review. It shows how to inspect pokeclaw through the system database, runtime logs, and authoritative source definitions.
-skillKey: pokeclaw/system-observe
+description: Use this skill for pokoclaw observability and self-diagnosis, including delegated approval review. It shows how to inspect pokoclaw through the system database, runtime logs, and authoritative source definitions.
+skillKey: pokoclaw/system-observe
 ---
 
 # System Observe
 
-Use this skill to inspect pokeclaw itself.
+Use this skill to inspect pokoclaw itself.
 
 ## Channels
 

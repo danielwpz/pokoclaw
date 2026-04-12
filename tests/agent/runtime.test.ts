@@ -22,7 +22,7 @@ import {
 } from "@/tests/storage/helpers/test-db.js";
 
 const NO_ARGS_TOOL_SCHEMA = Type.Object({}, { additionalProperties: false });
-const RUNTIME_PROTECTED_FILE = "/tmp/pokeclaw-runtime-protected.txt";
+const RUNTIME_PROTECTED_FILE = "/tmp/pokoclaw-runtime-protected.txt";
 
 function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
   return {

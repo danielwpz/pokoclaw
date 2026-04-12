@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { buildSubagentWorkspaceDir, POKECLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { buildSubagentWorkspaceDir, POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 
 export type AgentMemoryLayer = "soul" | "shared" | "private";
 
@@ -104,7 +104,7 @@ export function ensureAgentMemoryFiles(input: {
   workspaceDir?: string | null;
   privateWorkspaceDir?: string | null;
 }): AgentMemoryFileDescriptor[] {
-  const workspaceDir = path.resolve(input.workspaceDir ?? POKECLAW_WORKSPACE_DIR);
+  const workspaceDir = path.resolve(input.workspaceDir ?? POKOCLAW_WORKSPACE_DIR);
   const soulPath = buildWorkspaceSoulPath(workspaceDir);
   const soulMissing = !fs.existsSync(soulPath);
   const descriptors = resolveAgentMemoryFileDescriptors(input);
@@ -126,7 +126,7 @@ export function resolveAgentMemoryFileDescriptors(input: {
     return [];
   }
 
-  const workspaceDir = path.resolve(input.workspaceDir ?? POKECLAW_WORKSPACE_DIR);
+  const workspaceDir = path.resolve(input.workspaceDir ?? POKOCLAW_WORKSPACE_DIR);
   const descriptors: AgentMemoryFileDescriptor[] = [
     {
       layer: "soul",
