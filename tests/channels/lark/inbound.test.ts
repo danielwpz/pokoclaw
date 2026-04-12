@@ -2404,6 +2404,76 @@ describe("lark inbound message handling", () => {
       expect(markdown).toContain("**版本**");
     });
   });
+
+  test("routes /help to a markdown help card with slash command guidance", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_help_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const create = vi.fn(async () => ({ data: { message_id: "om_help_1" } }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        clients: {
+          getOrCreate: vi.fn(() => ({
+            sdk: {
+              im: {
+                message: {
+                  create,
+                  reply: vi.fn(),
+                },
+              },
+            },
+          })) as unknown as (installationId: string) => LarkSdkClient,
+        },
+      });
+
+      await handler(makeTextEvent("/help"));
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(create).toHaveBeenCalledTimes(1);
+      const firstCall = create.mock.calls[0] as [Record<string, unknown>] | undefined;
+      expect(firstCall?.[0]).toMatchObject({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: "oc_chat_1",
+          msg_type: "interactive",
+        },
+      });
+      const content = JSON.parse(
+        String((firstCall?.[0] as { data?: { content?: string } } | undefined)?.data?.content),
+      ) as {
+        header?: { title?: { content?: string } };
+        body?: { elements?: Array<{ tag?: string; content?: string }> };
+      };
+      expect(content.header?.title?.content).toBe("Slash Commands");
+      const markdown = (content.body?.elements ?? [])
+        .filter((element) => element.tag === "markdown")
+        .map((element) => element.content ?? "")
+        .join("\n");
+      expect(markdown).toBe(
+        [
+          "### Slash Commands",
+          "- /help — Show this help message.",
+          "- /status — Show the current conversation status, model, usage, and active runs.",
+          "- /model — Open the model switch card for the current conversation.",
+          "- /stop — Stop the current conversation or session.",
+        ].join("\n"),
+      );
+    });
+  });
 });
 
 describe("lark card actions", () => {
