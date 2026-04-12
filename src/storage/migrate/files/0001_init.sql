@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS channel_threads (
   ),
   UNIQUE(channel_type, channel_installation_id, external_chat_id, external_thread_id),
   UNIQUE(channel_type, branch_id),
-  UNIQUE(channel_type, root_task_run_id)
+  CONSTRAINT uidx_channel_threads_root_run UNIQUE(channel_type, root_task_run_id)
 );
 
 CREATE TABLE IF NOT EXISTS sessions (

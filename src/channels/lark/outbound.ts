@@ -1132,21 +1132,6 @@ export function createLarkOutboundRuntime(
           bumpVersionAndSchedule(`run:${sourceRunCardObjectId}`);
         }
       }
-      if (
-        isTaskRunCardRuntimeEnvelope(envelope) &&
-        envelope.taskRun.taskRunId != null &&
-        shouldRenderStandaloneTaskCard(envelope.taskRun.runType)
-      ) {
-        const existingTaskState = taskStates.get(envelope.taskRun.taskRunId);
-        if (existingTaskState != null) {
-          taskStates.set(
-            envelope.taskRun.taskRunId,
-            markLarkRunAwaitingApproval(existingTaskState),
-          );
-          bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${envelope.taskRun.taskRunId}`);
-        }
-      }
-
       approvalStates.set(
         approvalId,
         createLarkApprovalStateFromRequest({
@@ -1201,20 +1186,6 @@ export function createLarkOutboundRuntime(
           decision: event.decision,
         });
         bumpVersionAndSchedule(`run:${previousApprovalState.sourceRunCardObjectId}`);
-      }
-    }
-    if (
-      isTaskRunCardRuntimeEnvelope(envelope) &&
-      envelope.taskRun.taskRunId != null &&
-      shouldRenderStandaloneTaskCard(envelope.taskRun.runType)
-    ) {
-      const existingTaskState = taskStates.get(envelope.taskRun.taskRunId);
-      if (existingTaskState != null) {
-        taskStates.set(
-          envelope.taskRun.taskRunId,
-          markLarkRunApprovalResolved(existingTaskState, event.decision),
-        );
-        bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${envelope.taskRun.taskRunId}`);
       }
     }
   };
@@ -1728,14 +1699,6 @@ function normalizeTaskCardTitleValue(value: string | null | undefined): string |
     return null;
   }
   return singleLine.length <= 120 ? singleLine : `${singleLine.slice(0, 117)}...`;
-}
-
-function isTaskRunCardRuntimeEnvelope(envelope: OrchestratedRuntimeEventEnvelope): boolean {
-  return (
-    envelope.session.sessionId != null &&
-    envelope.session.purpose === "task" &&
-    envelope.taskRun.taskRunId != null
-  );
 }
 
 function isRunTerminalEvent(envelope: OrchestratedRuntimeEventEnvelope): boolean {
