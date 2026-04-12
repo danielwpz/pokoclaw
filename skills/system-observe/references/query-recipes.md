@@ -11,6 +11,8 @@ SELECT
   id,
   run_type,
   owner_agent_id,
+  workstream_id,
+  thread_root_run_id,
   cron_job_id,
   execution_session_id,
   status,
@@ -20,6 +22,65 @@ SELECT
   error_text
 FROM task_runs
 ORDER BY started_at DESC
+LIMIT 20;
+```
+
+## Follow one task thread lineage
+
+Use this when the question is really about "this run thread and its follow-ups", not the entire cron job history.
+
+```sql
+SELECT
+  id,
+  run_type,
+  workstream_id,
+  thread_root_run_id,
+  parent_run_id,
+  initiator_thread_id,
+  execution_session_id,
+  status,
+  started_at,
+  finished_at,
+  error_text
+FROM task_runs
+WHERE thread_root_run_id = 'REPLACE_ROOT_TASK_RUN_ID'
+ORDER BY started_at ASC, id ASC;
+```
+
+## Resolve a task thread to its root run
+
+```sql
+SELECT
+  id,
+  channel_installation_id,
+  external_chat_id,
+  external_thread_id,
+  subject_kind,
+  root_task_run_id,
+  opened_from_message_id,
+  updated_at
+FROM channel_threads
+WHERE channel_type = 'lark'
+  AND subject_kind = 'task'
+  AND external_thread_id = 'REPLACE_EXTERNAL_THREAD_ID';
+```
+
+## Compare one workstream versus multiple run threads
+
+Use this when the user is asking whether multiple runs from the same cron job were kept separate.
+
+```sql
+SELECT
+  id,
+  run_type,
+  workstream_id,
+  thread_root_run_id,
+  status,
+  started_at,
+  finished_at
+FROM task_runs
+WHERE workstream_id = 'REPLACE_WORKSTREAM_ID'
+ORDER BY started_at DESC, id DESC
 LIMIT 20;
 ```
 
@@ -150,6 +211,8 @@ LIMIT 20;
 ```sql
 SELECT
   id,
+  workstream_id,
+  thread_root_run_id,
   status,
   attempt,
   started_at,
@@ -168,6 +231,7 @@ LIMIT 10;
 SELECT
   id,
   owner_agent_id,
+  workstream_id,
   enabled,
   next_run_at,
   running_at,
@@ -197,5 +261,7 @@ LIMIT 20;
 ## Tips
 
 - Select only the columns you need.
-- Filter by `session_id`, `owner_agent_id`, `cron_job_id`, or time window before reading large tables.
+- Filter by `session_id`, `owner_agent_id`, `cron_job_id`, `workstream_id`, `thread_root_run_id`, or time window before reading large tables.
+- For task-thread incidents, prefer `thread_root_run_id` over `workstream_id`.
+- For "same cron job, different runs" questions, inspect both `workstream_id` and `thread_root_run_id` so you do not accidentally merge distinct run threads.
 - If a message payload is the only likely source of detail, first identify the relevant rows, then do a second narrower query for `payload_json`.

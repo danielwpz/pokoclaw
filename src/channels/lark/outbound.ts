@@ -1036,6 +1036,68 @@ export function createLarkOutboundRuntime(
     return runCardObjectId;
   };
 
+  const ensureRecoveredRunSegmentState = (runId: string): string | null => {
+    const active = activeRunSegmentByRunId.get(runId);
+    if (active != null) {
+      return active;
+    }
+
+    const latest = latestRunSegmentByRunId.get(runId);
+    if (latest != null) {
+      return latest;
+    }
+
+    const bindings = new LarkObjectBindingsRepo(input.storage).listRunCardSegmentsByRunId({
+      runId,
+    });
+    if (bindings.length === 0) {
+      return null;
+    }
+
+    let latestSegmentIndex = 0;
+    let latestRunCardObjectId: string | null = null;
+    let activeSegmentIndex = 0;
+    let activeRunCardObjectId: string | null = null;
+    const seenObjectIds = new Set<string>();
+
+    for (const binding of bindings) {
+      if (seenObjectIds.has(binding.internalObjectId)) {
+        if (binding.status === "active") {
+          const segmentIndex = parseRunSegmentIndex(runId, binding.internalObjectId);
+          if (segmentIndex > activeSegmentIndex) {
+            activeSegmentIndex = segmentIndex;
+            activeRunCardObjectId = binding.internalObjectId;
+          }
+        }
+        continue;
+      }
+      seenObjectIds.add(binding.internalObjectId);
+
+      const segmentIndex = parseRunSegmentIndex(runId, binding.internalObjectId);
+      if (segmentIndex > latestSegmentIndex) {
+        latestSegmentIndex = segmentIndex;
+        latestRunCardObjectId = binding.internalObjectId;
+      }
+      if (binding.status === "active" && segmentIndex > activeSegmentIndex) {
+        activeSegmentIndex = segmentIndex;
+        activeRunCardObjectId = binding.internalObjectId;
+      }
+    }
+
+    if (latestRunCardObjectId == null) {
+      return null;
+    }
+
+    latestRunSegmentByRunId.set(runId, latestRunCardObjectId);
+    nextRunSegmentIndexByRunId.set(runId, latestSegmentIndex);
+    if (activeRunCardObjectId != null) {
+      activeRunSegmentByRunId.set(runId, activeRunCardObjectId);
+      return activeRunCardObjectId;
+    }
+
+    return latestRunCardObjectId;
+  };
+
   const handleApprovalEvent = (envelope: OrchestratedRuntimeEventEnvelope) => {
     if (!shouldHandleLarkApprovalRuntimeEvent(envelope)) {
       return;
@@ -1052,7 +1114,9 @@ export function createLarkOutboundRuntime(
 
     if (event.type === "approval_requested") {
       const sourceRunCardObjectId =
-        activeRunSegmentByRunId.get(runId) ?? latestRunSegmentByRunId.get(runId) ?? null;
+        activeRunSegmentByRunId.get(runId) ??
+        latestRunSegmentByRunId.get(runId) ??
+        ensureRecoveredRunSegmentState(runId);
 
       if (sourceRunCardObjectId != null) {
         const existingRunState = runStates.get(sourceRunCardObjectId);
@@ -1263,6 +1327,8 @@ export function createLarkOutboundRuntime(
         if (runId == null) {
           return;
         }
+
+        ensureRecoveredRunSegmentState(runId);
 
         if (
           shouldIgnorePostApprovalPermissionToolResolution(envelope, runId, {
@@ -1804,6 +1870,17 @@ function parseRunCardPageIndex(runCardObjectId: string, internalObjectId: string
   const suffix = internalObjectId.slice(prefix.length);
   const parsed = Number.parseInt(suffix, 10);
   return Number.isFinite(parsed) && parsed > 1 ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function parseRunSegmentIndex(runId: string, internalObjectId: string): number {
+  const prefix = `${runId}:seg:`;
+  if (!internalObjectId.startsWith(prefix)) {
+    return 0;
+  }
+
+  const suffix = internalObjectId.slice(prefix.length);
+  const parsed = Number.parseInt(suffix, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function listRunCardPageBindings(
