@@ -5,6 +5,8 @@
  * review input, deliver into dedicated approval session, parse decisions, and
  * feed results back into runtime approval-resume ingress.
  */
+
+import type { AgentLoopAfterToolResultHook } from "@/src/agent/loop.js";
 import { resolveOrCreateMainAgentApprovalSession } from "@/src/orchestration/approval-session.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
@@ -34,6 +36,18 @@ const APPROVAL_DECISION_REMINDER_LINES = [
   "You may inspect available read-only tools if needed, but you must now call review_permission_request exactly once.",
   "Do not continue the task itself.",
 ];
+const APPROVAL_SESSION_AFTER_TOOL_RESULT_HOOK: AgentLoopAfterToolResultHook = {
+  afterToolResult({ toolCall }) {
+    if (toolCall.name !== "review_permission_request") {
+      return { kind: "continue" };
+    }
+
+    return {
+      kind: "stop_run",
+      reason: "approval_review_recorded",
+    };
+  },
+};
 
 export interface DelegatedApprovalDeliveryResult {
   status:
@@ -148,6 +162,7 @@ async function driveApprovalSessionToDecision(input: {
         content,
         messageType,
         visibility: "hidden_system",
+        afterToolResultHook: APPROVAL_SESSION_AFTER_TOOL_RESULT_HOOK,
       });
     } catch (error) {
       logger.warn("approval session run failed before decision", {

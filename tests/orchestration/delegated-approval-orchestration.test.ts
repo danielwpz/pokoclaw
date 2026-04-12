@@ -412,7 +412,6 @@ describe("delegated approval end-to-end", () => {
       "approval_request",
       "text",
       "tool_result",
-      "text",
     ]);
     expect(approvalMessages[0]?.visibility).toBe("hidden_system");
     expect(JSON.parse(approvalMessages[2]?.payloadJson ?? "{}")).toMatchObject({

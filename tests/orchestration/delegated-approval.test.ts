@@ -185,6 +185,67 @@ describe("delegated approval orchestration", () => {
         messageType: "approval_request",
         visibility: "hidden_system",
       });
+      expect(submitted[0]?.afterToolResultHook).toBeDefined();
+      expect(
+        submitted[0]?.afterToolResultHook?.afterToolResult({
+          run: {
+            sessionId: submitted[0]?.sessionId ?? "",
+            scenario: "chat",
+            content: submitted[0]?.content ?? "",
+          },
+          sessionPurpose: "approval",
+          ownerAgentId: "agent_main",
+          agentKind: "main",
+          runId: "run_approval",
+          turn: 1,
+          toolCall: {
+            id: "call_1",
+            name: "review_permission_request",
+            args: {
+              approvalId: 1,
+              decision: "approve",
+              reason: "Approved during test delivery.",
+            },
+          },
+          result: {
+            content: [
+              {
+                type: "text",
+                text: "Recorded approve for approval 1. Reason: Approved during test delivery.",
+              },
+            ],
+            isError: false,
+          },
+        } as never),
+      ).toEqual({
+        kind: "stop_run",
+        reason: "approval_review_recorded",
+      });
+      expect(
+        submitted[0]?.afterToolResultHook?.afterToolResult({
+          run: {
+            sessionId: submitted[0]?.sessionId ?? "",
+            scenario: "chat",
+            content: submitted[0]?.content ?? "",
+          },
+          sessionPurpose: "approval",
+          ownerAgentId: "agent_main",
+          agentKind: "main",
+          runId: "run_approval",
+          turn: 1,
+          toolCall: {
+            id: "call_2",
+            name: "read",
+            args: {
+              path: "/tmp/demo.txt",
+            },
+          },
+          result: {
+            content: [{ type: "text", text: "demo" }],
+            isError: false,
+          },
+        } as never),
+      ).toEqual({ kind: "continue" });
       expect(submitted[0]?.content).toContain("<delegated_approval_request>");
       expect(submitted[0]?.content).toContain("<task_context>");
       expect(submitted[0]?.content).toContain("Handles delegated file update tasks.");

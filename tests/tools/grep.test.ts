@@ -949,7 +949,7 @@ describe("grep tool", () => {
           {
             resource: "filesystem",
             path: POKOCLAW_SYSTEM_DIR,
-            scope: "exact",
+            scope: "subtree",
             access: "read",
           },
         ],
