@@ -10,6 +10,7 @@ export interface CreateCronJobInput {
   ownerAgentId: string;
   targetConversationId: string;
   targetBranchId: string;
+  workstreamId?: string | null;
   name?: string | null;
   scheduleKind: "at" | "every" | "cron";
   scheduleValue: string;
@@ -75,6 +76,7 @@ export class CronJobsRepo {
       ownerAgentId: input.ownerAgentId,
       targetConversationId: input.targetConversationId,
       targetBranchId: input.targetBranchId,
+      workstreamId: input.workstreamId ?? null,
       name: input.name ?? null,
       scheduleKind: input.scheduleKind,
       scheduleValue: input.scheduleValue,
@@ -295,6 +297,22 @@ export class CronJobsRepo {
       .run();
 
     return result.changes ?? 0;
+  }
+
+  updateWorkstreamId(input: { id: string; workstreamId: string | null }): CronJob | null {
+    const result = this.db
+      .update(cronJobs)
+      .set({
+        workstreamId: input.workstreamId,
+      })
+      .where(eq(cronJobs.id, input.id))
+      .run();
+
+    if ((result.changes ?? 0) < 1) {
+      return null;
+    }
+
+    return this.getByIdIncludingDeleted(input.id);
   }
 
   private claimRun(input: {

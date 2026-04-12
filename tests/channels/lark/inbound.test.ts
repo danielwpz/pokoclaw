@@ -774,6 +774,22 @@ describe("lark inbound message handling", () => {
       handle.storage.sqlite.exec(`
         INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
         VALUES ('sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+          status, priority, attempt, description, input_json, started_at
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'sess_task_1',
+          'running', 0, 1, 'Existing task thread', '{}', '2026-03-27T00:00:03.000Z'
+        );
       `);
       new LarkObjectBindingsRepo(handle.storage.db).upsert({
         id: "binding_task_card",
@@ -844,6 +860,22 @@ describe("lark inbound message handling", () => {
       handle.storage.sqlite.exec(`
         INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
         VALUES ('sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+          status, priority, attempt, description, input_json, started_at
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'sess_task_1',
+          'running', 0, 1, 'Existing task thread', '{}', '2026-03-27T00:00:03.000Z'
+        );
       `);
       new LarkObjectBindingsRepo(handle.storage.db).upsert({
         id: "binding_task_card",
@@ -905,6 +937,22 @@ describe("lark inbound message handling", () => {
       handle.storage.sqlite.exec(`
         INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
         VALUES ('sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+          status, priority, attempt, description, input_json, started_at
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'sess_task_1',
+          'running', 0, 1, 'Existing task thread', '{}', '2026-03-27T00:00:03.000Z'
+        );
       `);
       const bindingsRepo = new LarkObjectBindingsRepo(handle.storage.db);
       bindingsRepo.upsert({
@@ -985,9 +1033,33 @@ describe("lark inbound message handling", () => {
     });
   });
 
-  test("falls back to an ordinary thread when a stored task thread binding points to a missing task session", async () => {
+  test("creates a follow-up task-thread run when the bound task session has already finished", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at, ended_at)
+        VALUES (
+          'sess_task_missing', 'conv_main', 'branch_main', 'agent_main', 'task', 'completed',
+          '2026-03-27T00:00:03.000Z', '2026-03-27T00:05:00.000Z', '2026-03-27T00:05:00.000Z'
+        );
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+          status, priority, attempt, description, input_json, started_at, finished_at, result_summary
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'sess_task_missing',
+          'completed', 0, 1, 'Existing task thread', '{}', '2026-03-27T00:00:03.000Z',
+          '2026-03-27T00:05:00.000Z', 'previous result'
+        );
+      `);
       new LarkObjectBindingsRepo(handle.storage.db).upsert({
         id: "binding_task_card",
         channelInstallationId: "default",
@@ -1006,11 +1078,23 @@ describe("lark inbound message handling", () => {
       });
 
       const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const taskThreads = {
+        createFollowupExecution: vi.fn(() => ({
+          taskRunId: "task_followup_1",
+          sessionId: "sess_task_followup_1",
+          conversationId: "conv_main",
+          branchId: "branch_main",
+        })),
+        completeTaskExecution: vi.fn(),
+        blockTaskExecution: vi.fn(),
+        failTaskExecution: vi.fn(),
+      };
       const handler = createLarkMessageReceiveHandler({
         installationId: "default",
         storage: handle.storage.db,
         ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        taskThreads,
       });
 
       await handler({
@@ -1030,18 +1114,227 @@ describe("lark inbound message handling", () => {
         },
       });
 
+      expect(taskThreads.createFollowupExecution).toHaveBeenCalledExactlyOnceWith({
+        rootTaskRunId: "task_1",
+        initiatorThreadId: expect.any(String),
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
       expect(submitMessage).toHaveBeenCalledOnce();
       const firstCall = (submitMessage as unknown as { mock: { calls: unknown[][] } }).mock
         .calls[0]?.[0] as { sessionId: string; scenario: string; content: string } | undefined;
-      expect(firstCall?.scenario).toBe("chat");
-      expect(firstCall?.sessionId).not.toBe("sess_task_missing");
-      expect(firstCall?.content).toBe("Can we keep discussing this in the thread?");
-
-      const forkedSession = new SessionsRepo(handle.storage.db).getById(firstCall?.sessionId ?? "");
-      expect(forkedSession).toMatchObject({
-        purpose: "chat",
-        forkedFromSessionId: "sess_chat_1",
+      expect(firstCall).toMatchObject({
+        sessionId: "sess_task_followup_1",
+        scenario: "task",
+        content: "Can we keep discussing this in the thread?",
       });
+    });
+  });
+
+  test("routes task-thread follow-up by root run instead of the shared workstream", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at, ended_at)
+        VALUES (
+          'sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'completed',
+          '2026-03-27T00:00:03.000Z', '2026-03-27T00:05:00.000Z', '2026-03-27T00:05:00.000Z'
+        );
+
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at, ended_at)
+        VALUES (
+          'sess_task_2', 'conv_main', 'branch_main', 'agent_main', 'task', 'completed',
+          '2026-03-27T00:10:03.000Z', '2026-03-27T00:15:00.000Z', '2026-03-27T00:15:00.000Z'
+        );
+
+        INSERT INTO task_workstreams (id, owner_agent_id, conversation_id, branch_id, created_at, updated_at)
+        VALUES (
+          'ws_1', 'agent_main', 'conv_main', 'branch_main',
+          '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, workstream_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'ws_1', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, workstream_id, thread_root_run_id,
+          execution_session_id, status, priority, attempt, description, input_json, started_at, finished_at
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'ws_1', 'task_1',
+          'sess_task_1', 'completed', 0, 1, 'Older task thread', '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:05:00.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, workstream_id, thread_root_run_id,
+          execution_session_id, status, priority, attempt, description, input_json, started_at, finished_at
+        ) VALUES (
+          'task_2', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'ws_1', 'task_2',
+          'sess_task_2', 'completed', 0, 1, 'Newer task thread', '{}', '2026-03-27T00:10:03.000Z', '2026-03-27T00:15:00.000Z'
+        );
+
+        INSERT INTO channel_threads (
+          id, channel_type, channel_installation_id, home_conversation_id, external_chat_id, external_thread_id,
+          subject_kind, root_task_run_id, opened_from_message_id, created_at, updated_at
+        ) VALUES (
+          'thread_1', 'lark', 'default', 'conv_main', 'oc_chat_1', 'omt_task_thread_1',
+          'task', 'task_1', 'om_task_card_1', '2026-03-27T00:00:03.000Z', '2026-03-27T00:05:00.000Z'
+        );
+      `);
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const taskThreads = {
+        createFollowupExecution: vi.fn(() => ({
+          taskRunId: "task_followup_1",
+          sessionId: "sess_task_followup_1",
+          conversationId: "conv_main",
+          branchId: "branch_main",
+        })),
+        completeTaskExecution: vi.fn(),
+        blockTaskExecution: vi.fn(),
+        failTaskExecution: vi.fn(),
+      };
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        taskThreads,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_task_thread_msg_rooted",
+          parent_id: "om_user_reply_rooted",
+          thread_id: "omt_task_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "Continue only this older run thread." }),
+        },
+      });
+
+      expect(taskThreads.createFollowupExecution).toHaveBeenCalledExactlyOnceWith({
+        rootTaskRunId: "task_1",
+        initiatorThreadId: "thread_1",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
+  test("settles a task-thread follow-up run when finish_task completes it", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at, ended_at)
+        VALUES (
+          'sess_task_missing', 'conv_main', 'branch_main', 'agent_main', 'task', 'completed',
+          '2026-03-27T00:00:03.000Z', '2026-03-27T00:05:00.000Z', '2026-03-27T00:05:00.000Z'
+        );
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+          status, priority, attempt, description, input_json, started_at, finished_at, result_summary
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'sess_task_missing',
+          'completed', 0, 1, 'Existing task thread', '{}', '2026-03-27T00:00:03.000Z',
+          '2026-03-27T00:05:00.000Z', 'previous result'
+        );
+      `);
+      new LarkObjectBindingsRepo(handle.storage.db).upsert({
+        id: "binding_task_card",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        internalObjectKind: "run_card",
+        internalObjectId: "task:task_1",
+        larkMessageId: "om_task_card_1",
+        larkCardId: "card_task_1",
+        threadRootMessageId: "omt_task_thread_missing",
+        metadataJson: JSON.stringify({
+          sessionId: "sess_task_missing",
+          taskRunId: "task_1",
+          taskRunType: "cron",
+        }),
+      });
+
+      const submitMessage = vi.fn(async () => ({
+        status: "started" as const,
+        run: {
+          stopSignal: {
+            reason: "task_completion",
+            payload: {
+              taskCompletion: {
+                status: "completed",
+                summary: "short summary",
+                finalMessage: "Thread follow-up finished",
+              },
+            },
+          },
+        },
+      }));
+      const taskThreads = {
+        createFollowupExecution: vi.fn(() => ({
+          taskRunId: "task_followup_1",
+          sessionId: "sess_task_followup_1",
+          conversationId: "conv_main",
+          branchId: "branch_main",
+        })),
+        completeTaskExecution: vi.fn(),
+        blockTaskExecution: vi.fn(),
+        failTaskExecution: vi.fn(),
+      };
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        taskThreads,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_task_thread_msg_finish",
+          parent_id: "om_user_reply_missing",
+          thread_id: "omt_task_thread_missing",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "Please finish this follow-up." }),
+        },
+      });
+
+      const firstCall = (submitMessage as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls[0]?.[0] as { afterToolResultHook?: unknown } | undefined;
+      expect(firstCall?.afterToolResultHook).toBeTruthy();
+      expect(taskThreads.completeTaskExecution).toHaveBeenCalledExactlyOnceWith({
+        taskRunId: "task_followup_1",
+        resultSummary: "Thread follow-up finished",
+        finishedAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+      expect(taskThreads.blockTaskExecution).not.toHaveBeenCalled();
+      expect(taskThreads.failTaskExecution).not.toHaveBeenCalled();
     });
   });
 
@@ -1695,6 +1988,22 @@ describe("lark inbound message handling", () => {
       handle.storage.sqlite.exec(`
         INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
         VALUES ('sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+          status, priority, attempt, description, input_json, started_at
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'sess_task_1',
+          'running', 0, 1, 'Existing task thread', '{}', '2026-03-27T00:00:03.000Z'
+        );
       `);
       new LarkObjectBindingsRepo(handle.storage.db).upsert({
         id: "binding_task_card",
@@ -1861,6 +2170,131 @@ describe("lark inbound message handling", () => {
         (reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0],
       ).toMatchObject({
         path: { message_id: "om_parent_1" },
+        data: {
+          msg_type: "interactive",
+          reply_in_thread: true,
+        },
+      });
+    });
+  });
+
+  test("routes /status inside a task thread back to the stored thread anchor when parent_id is missing", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+        VALUES ('sess_task_1', 'conv_main', 'branch_main', 'agent_main', 'task', 'active', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z');
+
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id, schedule_kind, schedule_value,
+          payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_1', 'agent_main', 'conv_main', 'branch_main', 'cron', '0 * * * *',
+          '{}', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+          status, priority, attempt, description, input_json, started_at
+        ) VALUES (
+          'task_1', 'cron', 'agent_main', 'conv_main', 'branch_main', 'cron_1', 'sess_task_1',
+          'running', 0, 1, 'Existing task thread', '{}', '2026-03-27T00:00:03.000Z'
+        );
+      `);
+      new LarkObjectBindingsRepo(handle.storage.db).upsert({
+        id: "binding_task_card",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        internalObjectKind: "run_card",
+        internalObjectId: "task:task_1",
+        larkMessageId: "om_task_card_1",
+        larkCardId: "card_task_1",
+        threadRootMessageId: "omt_task_thread_1",
+        metadataJson: JSON.stringify({
+          sessionId: "sess_task_1",
+          taskRunId: "task_1",
+          taskRunType: "cron",
+        }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const reply = vi.fn(async () => ({ data: { message_id: "om_task_status_thread_1" } }));
+      const status = {
+        getConversationStatus: vi.fn(() => ({
+          conversationId: "conv_main",
+          sessionId: "sess_task_1",
+          model: {
+            configuredModelId: "openrouter-gpt5.4",
+            providerId: "openrouter",
+            upstreamModelId: "openai/gpt-5.4",
+            modelApi: "openai-responses",
+            supportsReasoning: true,
+            source: "scenario_default" as const,
+          },
+          sessionUsage: {
+            input: 1,
+            output: 2,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 3,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          latestTurnUsage: null,
+          latestTurnErrorMessage: null,
+          activeRuns: [],
+          pendingApprovals: [],
+        })),
+      } satisfies Pick<RuntimeStatusService, "getConversationStatus">;
+      const clients = {
+        getOrCreate: vi.fn(() => ({
+          sdk: {
+            im: {
+              message: {
+                create: vi.fn(),
+                reply,
+              },
+            },
+          },
+        })),
+      } as unknown as { getOrCreate(installationId: string): LarkSdkClient };
+
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        status: status as unknown as RuntimeStatusService,
+        clients,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_task_thread_status_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          thread_id: "omt_task_thread_1",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({ text: "/status" }),
+        },
+      });
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(status.getConversationStatus).toHaveBeenCalledExactlyOnceWith({
+        conversationId: "conv_main",
+        sessionId: "sess_task_1",
+        scenario: "task",
+      });
+      expect(reply).toHaveBeenCalledOnce();
+      expect(
+        (reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0],
+      ).toMatchObject({
+        path: { message_id: "om_task_card_1" },
         data: {
           msg_type: "interactive",
           reply_in_thread: true,

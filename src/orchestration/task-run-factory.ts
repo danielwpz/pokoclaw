@@ -2,7 +2,7 @@
  * Task-run creation helpers.
  *
  * Creates durable `task_runs` and their execution sessions with normalized
- * metadata for delegate/cron/system workloads. AgentManager uses this factory
+ * metadata for delegate/cron/system/thread workloads. AgentManager uses this factory
  * to start unattended execution units consistently.
  */
 import { randomUUID } from "node:crypto";
@@ -14,11 +14,14 @@ import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import type { Session, TaskRun } from "@/src/storage/schema/types.js";
 
 export interface CreateTaskExecutionInput {
-  runType: "delegate" | "cron" | "system";
+  runType: "delegate" | "cron" | "system" | "thread";
   ownerAgentId: string;
   conversationId: string;
   branchId: string;
+  workstreamId?: string | null;
+  threadRootRunId?: string | null;
   initiatorSessionId?: string | null;
+  initiatorThreadId?: string | null;
   forkSourceSessionId?: string | null;
   forkSourceSeq?: number | null;
   parentRunId?: string | null;
@@ -86,7 +89,10 @@ export function createTaskExecution(input: {
       ownerAgentId: input.params.ownerAgentId,
       conversationId: input.params.conversationId,
       branchId: input.params.branchId,
+      workstreamId: input.params.workstreamId ?? null,
+      threadRootRunId: input.params.threadRootRunId ?? taskRunId,
       initiatorSessionId: input.params.initiatorSessionId ?? null,
+      initiatorThreadId: input.params.initiatorThreadId ?? null,
       parentRunId: input.params.parentRunId ?? null,
       cronJobId: input.params.cronJobId ?? null,
       executionSessionId,

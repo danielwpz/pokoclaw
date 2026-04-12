@@ -39,6 +39,7 @@ import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
+import { ChannelThreadsRepo } from "@/src/storage/repos/channel-threads.repo.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
@@ -362,14 +363,14 @@ export function createLarkOutboundRuntime(
       footerStatus: state.footerStatus,
     });
 
-    const surfaces = new ChannelSurfacesRepo(input.storage).listByConversationBranch({
-      channelType: LARK_CHANNEL_TYPE,
+    const deliveryTargets = listLarkDeliveryTargets(input.storage, {
       conversationId: state.conversationId,
       branchId: state.branchId,
+      taskRunId: state.taskRunId,
     });
 
-    for (const surface of surfaces) {
-      const surfaceObject = parseSurfaceObject(surface.surfaceObjectJson);
+    for (const target of deliveryTargets) {
+      const surfaceObject = target.surfaceObject;
       const chatId = typeof surfaceObject.chat_id === "string" ? surfaceObject.chat_id : null;
       if (chatId == null || chatId.length === 0) {
         logger.warn("skipping lark outbound delivery because surface is missing chat_id", {
@@ -377,28 +378,32 @@ export function createLarkOutboundRuntime(
           runCardObjectId,
           conversationId: state.conversationId,
           branchId: state.branchId,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
         });
         continue;
       }
 
-      const client = input.clients.getOrCreate(surface.channelInstallationId);
+      const client = input.clients.getOrCreate(target.channelInstallationId);
       const cardkit = getCardkitSdk(client);
       const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
       const taskRootBinding =
         state.taskRunId == null
           ? null
           : bindingsRepo.getByInternalObject({
-              channelInstallationId: surface.channelInstallationId,
+              channelInstallationId: target.channelInstallationId,
               internalObjectKind: RUN_CARD_OBJECT_KIND,
               internalObjectId: buildTaskRunCardObjectId(state.taskRunId),
             });
-      if (state.taskRunId != null && taskRootBinding?.larkMessageId == null) {
+      if (
+        state.taskRunId != null &&
+        shouldRenderStandaloneTaskCard(state.taskRunType) &&
+        taskRootBinding?.larkMessageId == null
+      ) {
         logger.debug("deferring task transcript flush until task status card exists", {
           runId: state.runId,
           runCardObjectId,
           taskRunId: state.taskRunId,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
         });
         bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`, {
           immediate: true,
@@ -411,7 +416,7 @@ export function createLarkOutboundRuntime(
       });
       const existingBindings = listRunCardPageBindings(
         bindingsRepo,
-        surface.channelInstallationId,
+        target.channelInstallationId,
         runCardObjectId,
       );
       const existingBindingsByObjectId = new Map(
@@ -423,7 +428,7 @@ export function createLarkOutboundRuntime(
         const pageObjectId = buildRunCardPageObjectId(runCardObjectId, renderedPage.pageIndex);
         deliveredPageObjectIds.add(pageObjectId);
         const existing = existingBindingsByObjectId.get(pageObjectId) ?? null;
-        const snapshotKey = `${surface.channelInstallationId}:run:${pageObjectId}`;
+        const snapshotKey = `${target.channelInstallationId}:run:${pageObjectId}`;
         const activeAssistantBlockId = renderedPage.activeAssistant?.elementId ?? null;
         const activeAssistantText = renderedPage.activeAssistant?.text ?? "";
         const snapshot = deliverySnapshots.get(snapshotKey) ?? null;
@@ -456,7 +461,7 @@ export function createLarkOutboundRuntime(
           pageCount: renderedPage.pageCount,
           jsonBytes: renderedPage.metrics.jsonBytes,
           taggedNodes: renderedPage.metrics.taggedNodes,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           larkCardId: existing?.larkCardId ?? null,
           lastSequence: existing?.lastSequence ?? null,
           structureChanged: shouldRenderUpdate,
@@ -473,14 +478,16 @@ export function createLarkOutboundRuntime(
             bindingsRepo,
             client,
             cardkit,
-            channelInstallationId: surface.channelInstallationId,
+            channelInstallationId: target.channelInstallationId,
             conversationId: state.conversationId,
             branchId: state.branchId,
             internalObjectKind: RUN_CARD_OBJECT_KIND,
             internalObjectId: pageObjectId,
             chatId,
             surfaceObject:
-              state.taskRunId != null && taskRootBinding?.larkMessageId != null
+              state.taskRunId != null &&
+              shouldRenderStandaloneTaskCard(state.taskRunType) &&
+              taskRootBinding?.larkMessageId != null
                 ? {
                     chat_id: chatId,
                     reply_to_message_id: taskRootBinding.larkMessageId,
@@ -514,7 +521,7 @@ export function createLarkOutboundRuntime(
             runCardObjectId,
             pageObjectId,
             pageIndex: renderedPage.pageIndex,
-            channelInstallationId: surface.channelInstallationId,
+            channelInstallationId: target.channelInstallationId,
             larkMessageId: binding.larkMessageId,
             larkCardId: binding.larkCardId,
             larkMessageUuid: binding.larkMessageUuid,
@@ -539,7 +546,7 @@ export function createLarkOutboundRuntime(
             },
           });
           bindingsRepo.updateDeliveryState({
-            channelInstallationId: surface.channelInstallationId,
+            channelInstallationId: target.channelInstallationId,
             internalObjectKind: RUN_CARD_OBJECT_KIND,
             internalObjectId: pageObjectId,
             lastSequence: sequence,
@@ -556,7 +563,7 @@ export function createLarkOutboundRuntime(
             runCardObjectId,
             pageObjectId,
             pageIndex: renderedPage.pageIndex,
-            channelInstallationId: surface.channelInstallationId,
+            channelInstallationId: target.channelInstallationId,
             larkCardId: existing.larkCardId,
             elementId,
             sequence,
@@ -580,7 +587,7 @@ export function createLarkOutboundRuntime(
           },
         });
         bindingsRepo.updateDeliveryState({
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           internalObjectKind: RUN_CARD_OBJECT_KIND,
           internalObjectId: pageObjectId,
           lastSequence: sequence,
@@ -597,7 +604,7 @@ export function createLarkOutboundRuntime(
           runCardObjectId,
           pageObjectId,
           pageIndex: renderedPage.pageIndex,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           larkCardId: existing.larkCardId,
           sequence,
         });
@@ -625,7 +632,7 @@ export function createLarkOutboundRuntime(
           },
         });
         bindingsRepo.updateDeliveryState({
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           internalObjectKind: RUN_CARD_OBJECT_KIND,
           internalObjectId: binding.internalObjectId,
           lastSequence: sequence,
@@ -635,7 +642,7 @@ export function createLarkOutboundRuntime(
             runId: state.runId,
           }),
         });
-        deliverySnapshots.set(`${surface.channelInstallationId}:run:${binding.internalObjectId}`, {
+        deliverySnapshots.set(`${target.channelInstallationId}:run:${binding.internalObjectId}`, {
           structureSignature: JSON.stringify(staleCard),
           activeAssistantElementId: null,
           activeAssistantText: "",
@@ -644,7 +651,7 @@ export function createLarkOutboundRuntime(
           runId: state.runId,
           runCardObjectId,
           stalePageObjectId: binding.internalObjectId,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           larkCardId: binding.larkCardId,
           sequence,
         });
@@ -657,27 +664,31 @@ export function createLarkOutboundRuntime(
     if (state == null) {
       return;
     }
+    if (!shouldRenderStandaloneTaskCard(state.taskRunType)) {
+      taskStates.delete(taskRunId);
+      return;
+    }
     const taskTitle = resolveTaskCardTitle(input.storage, taskRunId);
 
-    const surfaces = new ChannelSurfacesRepo(input.storage).listByConversationBranch({
-      channelType: LARK_CHANNEL_TYPE,
+    const deliveryTargets = listTaskCardDeliveryTargets(input.storage, {
+      taskRunId,
       conversationId: state.conversationId,
       branchId: state.branchId,
     });
 
-    for (const surface of surfaces) {
-      const surfaceObject = parseSurfaceObject(surface.surfaceObjectJson);
+    for (const target of deliveryTargets) {
+      const surfaceObject = target.surfaceObject;
       const chatId = typeof surfaceObject.chat_id === "string" ? surfaceObject.chat_id : null;
       if (chatId == null || chatId.length === 0) {
         continue;
       }
 
-      const client = input.clients.getOrCreate(surface.channelInstallationId);
+      const client = input.clients.getOrCreate(target.channelInstallationId);
       const cardkit = getCardkitSdk(client);
       const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
       const internalObjectId = buildTaskRunCardObjectId(taskRunId);
       const existing = bindingsRepo.getByInternalObject({
-        channelInstallationId: surface.channelInstallationId,
+        channelInstallationId: target.channelInstallationId,
         internalObjectKind: RUN_CARD_OBJECT_KIND,
         internalObjectId,
       });
@@ -686,7 +697,7 @@ export function createLarkOutboundRuntime(
         ...(taskTitle == null ? {} : { title: taskTitle }),
       });
       const terminalMessage = getLarkTaskTerminalMessagePresentation(state.terminalMessage);
-      const snapshotKey = `${surface.channelInstallationId}:${TASK_STATUS_DELIVERY_PREFIX}${taskRunId}`;
+      const snapshotKey = `${target.channelInstallationId}:${TASK_STATUS_DELIVERY_PREFIX}${taskRunId}`;
       const snapshot = deliverySnapshots.get(snapshotKey) ?? null;
       const shouldRenderUpdate =
         snapshot == null || snapshot.structureSignature !== rendered.structureSignature;
@@ -711,7 +722,7 @@ export function createLarkOutboundRuntime(
           bindingsRepo,
           client,
           cardkit,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           conversationId: state.conversationId,
           branchId: state.branchId,
           internalObjectKind: RUN_CARD_OBJECT_KIND,
@@ -738,7 +749,7 @@ export function createLarkOutboundRuntime(
         });
         metadataJson = await maybeSendFullTaskTerminalMessageToThread({
           bindingsRepo,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           binding,
           client,
           internalObjectId,
@@ -753,7 +764,7 @@ export function createLarkOutboundRuntime(
       if (!shouldRenderUpdate || existing.larkCardId == null) {
         await maybeSendFullTaskTerminalMessageToThread({
           bindingsRepo,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           binding: existing,
           client,
           internalObjectId,
@@ -777,7 +788,7 @@ export function createLarkOutboundRuntime(
         },
       });
       bindingsRepo.updateDeliveryState({
-        channelInstallationId: surface.channelInstallationId,
+        channelInstallationId: target.channelInstallationId,
         internalObjectKind: RUN_CARD_OBJECT_KIND,
         internalObjectId,
         lastSequence: sequence,
@@ -791,7 +802,7 @@ export function createLarkOutboundRuntime(
       });
       await maybeSendFullTaskTerminalMessageToThread({
         bindingsRepo,
-        channelInstallationId: surface.channelInstallationId,
+        channelInstallationId: target.channelInstallationId,
         binding: {
           ...existing,
           lastSequence: sequence,
@@ -829,24 +840,24 @@ export function createLarkOutboundRuntime(
       sourceRunCardObjectId: state.sourceRunCardObjectId,
     });
 
-    const surfaces = new ChannelSurfacesRepo(input.storage).listByConversationBranch({
-      channelType: LARK_CHANNEL_TYPE,
+    const deliveryTargets = listLarkDeliveryTargets(input.storage, {
       conversationId: state.conversationId,
       branchId: state.branchId,
+      taskRunId: state.taskRunId,
     });
 
-    for (const surface of surfaces) {
-      const surfaceObject = parseSurfaceObject(surface.surfaceObjectJson);
+    for (const target of deliveryTargets) {
+      const surfaceObject = target.surfaceObject;
       const chatId = typeof surfaceObject.chat_id === "string" ? surfaceObject.chat_id : null;
       if (chatId == null || chatId.length === 0) {
         continue;
       }
 
-      const client = input.clients.getOrCreate(surface.channelInstallationId);
+      const client = input.clients.getOrCreate(target.channelInstallationId);
       const cardkit = getCardkitSdk(client);
       const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
       const existing = bindingsRepo.getByInternalObject({
-        channelInstallationId: surface.channelInstallationId,
+        channelInstallationId: target.channelInstallationId,
         internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
         internalObjectId: approvalId,
       });
@@ -857,7 +868,7 @@ export function createLarkOutboundRuntime(
           bindingsRepo,
           client,
           cardkit,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           conversationId: state.conversationId,
           branchId: state.branchId,
           internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
@@ -883,7 +894,7 @@ export function createLarkOutboundRuntime(
         logger.info("created standalone lark approval card", {
           approvalId,
           runId: state.runId,
-          channelInstallationId: surface.channelInstallationId,
+          channelInstallationId: target.channelInstallationId,
           larkMessageId: binding.larkMessageId,
           larkCardId: binding.larkCardId,
           larkMessageUuid: binding.larkMessageUuid,
@@ -907,7 +918,7 @@ export function createLarkOutboundRuntime(
         },
       });
       bindingsRepo.updateDeliveryState({
-        channelInstallationId: surface.channelInstallationId,
+        channelInstallationId: target.channelInstallationId,
         internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
         internalObjectId: approvalId,
         lastSequence: sequence,
@@ -920,7 +931,7 @@ export function createLarkOutboundRuntime(
       logger.debug("updated standalone lark approval card", {
         approvalId,
         runId: state.runId,
-        channelInstallationId: surface.channelInstallationId,
+        channelInstallationId: target.channelInstallationId,
         larkCardId: existing.larkCardId,
         sequence,
       });
@@ -1025,6 +1036,68 @@ export function createLarkOutboundRuntime(
     return runCardObjectId;
   };
 
+  const ensureRecoveredRunSegmentState = (runId: string): string | null => {
+    const active = activeRunSegmentByRunId.get(runId);
+    if (active != null) {
+      return active;
+    }
+
+    const latest = latestRunSegmentByRunId.get(runId);
+    if (latest != null) {
+      return latest;
+    }
+
+    const bindings = new LarkObjectBindingsRepo(input.storage).listRunCardSegmentsByRunId({
+      runId,
+    });
+    if (bindings.length === 0) {
+      return null;
+    }
+
+    let latestSegmentIndex = 0;
+    let latestRunCardObjectId: string | null = null;
+    let activeSegmentIndex = 0;
+    let activeRunCardObjectId: string | null = null;
+    const seenObjectIds = new Set<string>();
+
+    for (const binding of bindings) {
+      if (seenObjectIds.has(binding.internalObjectId)) {
+        if (binding.status === "active") {
+          const segmentIndex = parseRunSegmentIndex(runId, binding.internalObjectId);
+          if (segmentIndex > activeSegmentIndex) {
+            activeSegmentIndex = segmentIndex;
+            activeRunCardObjectId = binding.internalObjectId;
+          }
+        }
+        continue;
+      }
+      seenObjectIds.add(binding.internalObjectId);
+
+      const segmentIndex = parseRunSegmentIndex(runId, binding.internalObjectId);
+      if (segmentIndex > latestSegmentIndex) {
+        latestSegmentIndex = segmentIndex;
+        latestRunCardObjectId = binding.internalObjectId;
+      }
+      if (binding.status === "active" && segmentIndex > activeSegmentIndex) {
+        activeSegmentIndex = segmentIndex;
+        activeRunCardObjectId = binding.internalObjectId;
+      }
+    }
+
+    if (latestRunCardObjectId == null) {
+      return null;
+    }
+
+    latestRunSegmentByRunId.set(runId, latestRunCardObjectId);
+    nextRunSegmentIndexByRunId.set(runId, latestSegmentIndex);
+    if (activeRunCardObjectId != null) {
+      activeRunSegmentByRunId.set(runId, activeRunCardObjectId);
+      return activeRunCardObjectId;
+    }
+
+    return latestRunCardObjectId;
+  };
+
   const handleApprovalEvent = (envelope: OrchestratedRuntimeEventEnvelope) => {
     if (!shouldHandleLarkApprovalRuntimeEvent(envelope)) {
       return;
@@ -1041,7 +1114,9 @@ export function createLarkOutboundRuntime(
 
     if (event.type === "approval_requested") {
       const sourceRunCardObjectId =
-        activeRunSegmentByRunId.get(runId) ?? latestRunSegmentByRunId.get(runId) ?? null;
+        activeRunSegmentByRunId.get(runId) ??
+        latestRunSegmentByRunId.get(runId) ??
+        ensureRecoveredRunSegmentState(runId);
 
       if (sourceRunCardObjectId != null) {
         const existingRunState = runStates.get(sourceRunCardObjectId);
@@ -1057,21 +1132,12 @@ export function createLarkOutboundRuntime(
           bumpVersionAndSchedule(`run:${sourceRunCardObjectId}`);
         }
       }
-      if (isTaskRunCardRuntimeEnvelope(envelope) && envelope.taskRun.taskRunId != null) {
-        const existingTaskState = taskStates.get(envelope.taskRun.taskRunId);
-        if (existingTaskState != null) {
-          taskStates.set(
-            envelope.taskRun.taskRunId,
-            markLarkRunAwaitingApproval(existingTaskState),
-          );
-          bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${envelope.taskRun.taskRunId}`);
-        }
-      }
-
       approvalStates.set(
         approvalId,
         createLarkApprovalStateFromRequest({
           event,
+          taskRunId: envelope.taskRun.taskRunId,
+          taskRunType: envelope.taskRun.runType,
           sourceRunCardObjectId,
         }),
       );
@@ -1120,16 +1186,6 @@ export function createLarkOutboundRuntime(
           decision: event.decision,
         });
         bumpVersionAndSchedule(`run:${previousApprovalState.sourceRunCardObjectId}`);
-      }
-    }
-    if (isTaskRunCardRuntimeEnvelope(envelope) && envelope.taskRun.taskRunId != null) {
-      const existingTaskState = taskStates.get(envelope.taskRun.taskRunId);
-      if (existingTaskState != null) {
-        taskStates.set(
-          envelope.taskRun.taskRunId,
-          markLarkRunApprovalResolved(existingTaskState, event.decision),
-        );
-        bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${envelope.taskRun.taskRunId}`);
       }
     }
   };
@@ -1195,6 +1251,10 @@ export function createLarkOutboundRuntime(
           if (!shouldHandleLarkTaskRunEvent(envelope)) {
             return;
           }
+          if (!shouldRenderStandaloneTaskCard(envelope.taskRun.runType)) {
+            taskStates.delete(envelope.event.taskRunId);
+            return;
+          }
           const next = reduceLarkRunState(
             taskStates.get(envelope.event.taskRunId) ?? null,
             envelope,
@@ -1239,6 +1299,8 @@ export function createLarkOutboundRuntime(
           return;
         }
 
+        ensureRecoveredRunSegmentState(runId);
+
         if (
           shouldIgnorePostApprovalPermissionToolResolution(envelope, runId, {
             activeRunSegmentByRunId,
@@ -1262,18 +1324,6 @@ export function createLarkOutboundRuntime(
               eventType: event.type,
               toolName,
               toolCallId,
-            },
-          );
-          return;
-        }
-
-        if (isTaskRunCardRuntimeEnvelope(envelope) && isTaskRuntimeTerminalEvent(envelope)) {
-          logger.debug(
-            "ignoring task runtime terminal event because task lifecycle owns final state",
-            {
-              runId,
-              taskRunId: envelope.taskRun.taskRunId,
-              eventType: envelope.event.type,
             },
           );
           return;
@@ -1551,6 +1601,70 @@ function readStringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function listLarkDeliveryTargets(
+  storage: StorageDb,
+  input: {
+    conversationId: string;
+    branchId: string;
+    taskRunId?: string | null;
+  },
+): Array<{
+  channelInstallationId: string;
+  surfaceObject: Record<string, unknown>;
+}> {
+  const surfaces = new ChannelSurfacesRepo(storage).listByConversationBranch({
+    channelType: LARK_CHANNEL_TYPE,
+    conversationId: input.conversationId,
+    branchId: input.branchId,
+  });
+  const taskRun =
+    input.taskRunId == null ? null : new TaskRunsRepo(storage).getById(input.taskRunId);
+  const channelThreadsRepo = new ChannelThreadsRepo(storage);
+
+  return surfaces.map((surface) => {
+    const threadBinding =
+      taskRun == null
+        ? null
+        : channelThreadsRepo.getByRootTaskRun({
+            channelType: LARK_CHANNEL_TYPE,
+            channelInstallationId: surface.channelInstallationId,
+            rootTaskRunId: taskRun.threadRootRunId ?? taskRun.id,
+          });
+
+    return {
+      channelInstallationId: surface.channelInstallationId,
+      surfaceObject:
+        threadBinding == null
+          ? parseSurfaceObject(surface.surfaceObjectJson)
+          : {
+              chat_id: threadBinding.externalChatId,
+              thread_id: threadBinding.externalThreadId,
+              ...(threadBinding.openedFromMessageId == null
+                ? {}
+                : { reply_to_message_id: threadBinding.openedFromMessageId }),
+            },
+    };
+  });
+}
+
+function listTaskCardDeliveryTargets(
+  storage: StorageDb,
+  input: {
+    taskRunId: string;
+    conversationId: string;
+    branchId: string;
+  },
+): Array<{
+  channelInstallationId: string;
+  surfaceObject: Record<string, unknown>;
+}> {
+  return listLarkDeliveryTargets(storage, input);
+}
+
+function shouldRenderStandaloneTaskCard(runType: string | null): boolean {
+  return runType !== "thread";
+}
+
 function buildTaskRunCardObjectId(taskRunId: string): string {
   return `task:${taskRunId}`;
 }
@@ -1585,22 +1699,6 @@ function normalizeTaskCardTitleValue(value: string | null | undefined): string |
     return null;
   }
   return singleLine.length <= 120 ? singleLine : `${singleLine.slice(0, 117)}...`;
-}
-
-function isTaskRunCardRuntimeEnvelope(envelope: OrchestratedRuntimeEventEnvelope): boolean {
-  return (
-    envelope.session.sessionId != null &&
-    envelope.session.purpose === "task" &&
-    envelope.taskRun.taskRunId != null
-  );
-}
-
-function isTaskRuntimeTerminalEvent(envelope: OrchestratedRuntimeEventEnvelope): boolean {
-  return (
-    envelope.event.type === "run_completed" ||
-    envelope.event.type === "run_failed" ||
-    envelope.event.type === "run_cancelled"
-  );
 }
 
 function isRunTerminalEvent(envelope: OrchestratedRuntimeEventEnvelope): boolean {
@@ -1735,6 +1833,17 @@ function parseRunCardPageIndex(runCardObjectId: string, internalObjectId: string
   const suffix = internalObjectId.slice(prefix.length);
   const parsed = Number.parseInt(suffix, 10);
   return Number.isFinite(parsed) && parsed > 1 ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function parseRunSegmentIndex(runId: string, internalObjectId: string): number {
+  const prefix = `${runId}:seg:`;
+  if (!internalObjectId.startsWith(prefix)) {
+    return 0;
+  }
+
+  const suffix = internalObjectId.slice(prefix.length);
+  const parsed = Number.parseInt(suffix, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function listRunCardPageBindings(

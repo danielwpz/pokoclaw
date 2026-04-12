@@ -5,6 +5,7 @@
  * It routes runtime events, manages delegated approvals, drives task/cron runs,
  * and publishes channel-facing outbound envelopes.
  */
+import { randomUUID } from "node:crypto";
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
 import { extractCronTaskDefinition } from "@/src/cron/payload.js";
 import { CronService } from "@/src/cron/service.js";
@@ -59,6 +60,7 @@ import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
+import { TaskWorkstreamsRepo } from "@/src/storage/repos/task-workstreams.repo.js";
 import type { SubagentCreationRequest } from "@/src/storage/schema/types.js";
 import { TaskExecutionRunner, type TaskExecutionRunResult } from "@/src/tasks/runner.js";
 
@@ -138,9 +140,21 @@ export class AgentManager {
       throw new Error(`Cannot create task execution for unknown agent ${params.ownerAgentId}`);
     }
 
+    const workstreamId =
+      params.workstreamId ??
+      this.createTaskWorkstream({
+        ownerAgentId: params.ownerAgentId,
+        conversationId: params.conversationId,
+        branchId: params.branchId,
+        ...(params.createdAt === undefined ? {} : { createdAt: params.createdAt }),
+      }).id;
+
     const created = createTaskExecution({
       db: this.deps.storage,
-      params,
+      params: {
+        ...params,
+        workstreamId,
+      },
     });
 
     logger.info("created task execution", {
@@ -173,6 +187,63 @@ export class AgentManager {
     );
 
     return created;
+  }
+
+  createTaskWorkstream(input: {
+    ownerAgentId: string;
+    conversationId: string;
+    branchId: string;
+    createdAt?: Date;
+  }) {
+    return new TaskWorkstreamsRepo(this.deps.storage).create({
+      id: randomUUID(),
+      ownerAgentId: input.ownerAgentId,
+      conversationId: input.conversationId,
+      branchId: input.branchId,
+      ...(input.createdAt === undefined
+        ? {}
+        : { createdAt: input.createdAt, updatedAt: input.createdAt }),
+    });
+  }
+
+  createTaskThreadFollowupExecution(input: {
+    rootTaskRunId: string;
+    initiatorThreadId?: string | null;
+    createdAt?: Date;
+  }): CreatedTaskExecution {
+    const taskRunsRepo = new TaskRunsRepo(this.deps.storage);
+    const sessionsRepo = new SessionsRepo(this.deps.storage);
+    const cronJobsRepo = new CronJobsRepo(this.deps.storage);
+    const rootRun = taskRunsRepo.getById(input.rootTaskRunId);
+    if (rootRun == null) {
+      throw new Error(
+        `Cannot create follow-up task execution for unknown root task run ${input.rootTaskRunId}`,
+      );
+    }
+
+    const latestRun = taskRunsRepo.findLatestByThreadRootRunId(input.rootTaskRunId);
+    const latestSession =
+      latestRun?.executionSessionId == null
+        ? null
+        : sessionsRepo.getById(latestRun.executionSessionId);
+    const inheritedDescription =
+      latestRun?.description ??
+      (latestRun?.cronJobId == null ? null : cronJobsRepo.getById(latestRun.cronJobId)?.name) ??
+      null;
+    return this.createTaskExecution({
+      runType: "thread",
+      ownerAgentId: rootRun.ownerAgentId,
+      conversationId: rootRun.conversationId,
+      branchId: rootRun.branchId,
+      workstreamId: latestRun?.workstreamId ?? rootRun.workstreamId ?? null,
+      threadRootRunId: input.rootTaskRunId,
+      initiatorThreadId: input.initiatorThreadId ?? null,
+      parentRunId: latestRun?.id ?? null,
+      forkSourceSessionId: latestRun?.executionSessionId ?? null,
+      contextMode: latestSession?.contextMode ?? "isolated",
+      description: inheritedDescription,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    });
   }
 
   submitSubagentCreationRequest(params: CreateSubagentInput): SubmittedSubagentCreationRequest {
@@ -361,9 +432,25 @@ export class AgentManager {
     const cronJobsRepo = new CronJobsRepo(this.deps.storage);
     const taskRunsRepo = new TaskRunsRepo(this.deps.storage);
     const sessionsRepo = new SessionsRepo(this.deps.storage);
-    const cronJob = cronJobsRepo.getById(input.cronJobId);
+    let cronJob = cronJobsRepo.getById(input.cronJobId);
     if (cronJob == null) {
       throw new Error(`Cannot create task execution for unknown cron job ${input.cronJobId}`);
+    }
+
+    if (cronJob.workstreamId == null) {
+      const workstream = this.createTaskWorkstream({
+        ownerAgentId: cronJob.ownerAgentId,
+        conversationId: cronJob.targetConversationId,
+        branchId: cronJob.targetBranchId,
+        ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+      });
+      cronJob = cronJobsRepo.updateWorkstreamId({
+        id: cronJob.id,
+        workstreamId: workstream.id,
+      });
+      if (cronJob == null) {
+        throw new Error(`Cron job ${input.cronJobId} disappeared while attaching a workstream`);
+      }
     }
 
     const recentRuns = taskRunsRepo.listByCronJobId(cronJob.id, 8);
@@ -399,6 +486,7 @@ export class AgentManager {
       ownerAgentId: cronJob.ownerAgentId,
       conversationId: cronJob.targetConversationId,
       branchId: cronJob.targetBranchId,
+      workstreamId: cronJob.workstreamId ?? null,
       forkSourceSessionId: forkSourceSession?.id ?? null,
       cronJobId: cronJob.id,
       contextMode: cronJob.contextMode,

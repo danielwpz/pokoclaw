@@ -16,6 +16,7 @@ import {
   normalizeAgentUserImageMessageId,
 } from "@/src/agent/llm/messages.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
+import type { AgentLoopAfterToolResultHook } from "@/src/agent/loop.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
   buildLarkRenderedModelSwitchCard,
@@ -26,6 +27,7 @@ import type { ScenarioModelSwitchService } from "@/src/config/scenario-model-swi
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
 import { materializeForkedSessionSnapshotInStorage } from "@/src/orchestration/session-fork.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
+import type { SubmitMessageResult } from "@/src/runtime/ingress.js";
 import {
   buildConversationStatusPresentation,
   type RuntimeStatusService,
@@ -35,12 +37,17 @@ import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ChannelInstancesRepo } from "@/src/storage/repos/channel-instances.repo.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
+import { ChannelThreadsRepo } from "@/src/storage/repos/channel-threads.repo.js";
 import { ConversationBranchesRepo } from "@/src/storage/repos/conversation-branches.repo.js";
 import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
+import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
-import type { ChannelSurface, LarkObjectBinding } from "@/src/storage/schema/types.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
+import { TaskWorkstreamsRepo } from "@/src/storage/repos/task-workstreams.repo.js";
+import type { ChannelSurface, TaskRun } from "@/src/storage/schema/types.js";
+import { extractTaskCompletionSignal } from "@/src/tasks/task-completion.js";
 
 const logger = createSubsystemLogger("channels/lark-inbound");
 
@@ -50,6 +57,7 @@ const LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH = 320;
 const LARK_INTERACTIVE_TEXT_NODE_LIMIT = 48;
 const LARK_INTERACTIVE_TEXT_CHAR_LIMIT = 4_000;
 const LARK_INTERACTIVE_TEXT_TRUNCATED_NOTICE = "[卡片内容过长，引用文本已截断]";
+const RUN_CARD_OBJECT_KIND = "run_card";
 
 export interface LarkInboundIngress {
   submitMessage(input: {
@@ -62,6 +70,7 @@ export interface LarkInboundIngress {
     channelParentMessageId?: string | null;
     channelThreadId?: string | null;
     createdAt?: Date;
+    afterToolResultHook?: AgentLoopAfterToolResultHook;
   }): Promise<unknown>;
   submitApprovalDecision(input: {
     approvalId: number;
@@ -90,6 +99,34 @@ export interface CreateLarkInboundRuntimeInput {
     deny(
       requestId: string,
     ): Promise<ResolveSubagentCreationRequestResult> | ResolveSubagentCreationRequestResult;
+  };
+  taskThreads?: {
+    createFollowupExecution(input: {
+      rootTaskRunId: string;
+      initiatorThreadId?: string | null;
+      createdAt?: Date;
+    }): {
+      taskRunId: string;
+      sessionId: string;
+      conversationId: string;
+      branchId: string;
+    };
+    completeTaskExecution(input: {
+      taskRunId: string;
+      resultSummary?: string | null;
+      finishedAt?: Date;
+    }): void;
+    blockTaskExecution(input: {
+      taskRunId: string;
+      resultSummary?: string | null;
+      finishedAt?: Date;
+    }): void;
+    failTaskExecution(input: {
+      taskRunId: string;
+      errorText?: string | null;
+      resultSummary?: string | null;
+      finishedAt?: Date;
+    }): void;
   };
 }
 
@@ -191,6 +228,7 @@ interface LarkInboundRoute {
   conversationId: string;
   branchId: string;
   sessionId: string;
+  taskRunId?: string | null;
   scenario: "chat" | "task";
   stopScope: "conversation" | "session";
   chatId: string;
@@ -298,6 +336,7 @@ export function createLarkMessageReceiveHandler(input: {
     installationId: string;
     messageId: string;
   }) => Promise<LarkQuotedMessage | null>;
+  taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
 }): (data: unknown) => Promise<void> {
   return async (data: unknown) => {
     const normalized = normalizeLarkTextMessage(data);
@@ -347,6 +386,7 @@ export function createLarkMessageReceiveHandler(input: {
       installationId: input.installationId,
       mainSurface,
       normalized: hydrated,
+      ...(input.taskThreads == null ? {} : { taskThreads: input.taskThreads }),
       ...(input.quoteMessageFetcher == null
         ? {}
         : { quoteMessageFetcher: input.quoteMessageFetcher }),
@@ -513,7 +553,7 @@ export function createLarkMessageReceiveHandler(input: {
     }
 
     try {
-      await input.ingress.submitMessage({
+      const submitResult = await input.ingress.submitMessage({
         sessionId: route.sessionId,
         scenario: route.scenario,
         content,
@@ -525,7 +565,38 @@ export function createLarkMessageReceiveHandler(input: {
           : { channelParentMessageId: hydrated.parentMessageId }),
         ...(hydrated.threadId == null ? {} : { channelThreadId: hydrated.threadId }),
         ...(hydrated.createdAt == null ? {} : { createdAt: hydrated.createdAt }),
+        ...(route.taskRunId == null || input.taskThreads == null
+          ? {}
+          : {
+              afterToolResultHook: {
+                afterToolResult: ({ toolCall, result }) => {
+                  const completion = extractTaskCompletionSignal({
+                    toolName: toolCall.name,
+                    result,
+                  });
+                  if (completion == null) {
+                    return { kind: "continue" } as const;
+                  }
+
+                  return {
+                    kind: "stop_run",
+                    reason: "task_completion",
+                    payload: {
+                      taskCompletion: completion,
+                    },
+                  } as const;
+                },
+              },
+            }),
       });
+      if (route.taskRunId != null && input.taskThreads != null) {
+        settleTaskThreadCompletionIfNeeded({
+          taskThreads: input.taskThreads,
+          taskRunId: route.taskRunId,
+          submitResult,
+          finishedAt: hydrated.createdAt ?? new Date(),
+        });
+      }
     } catch (error) {
       if (!isAbortLikeError(error)) {
         await sendLarkRunFailureCard({
@@ -1017,6 +1088,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
                   clients: input.clients,
                 }),
               }),
+          ...(input.taskThreads == null ? {} : { taskThreads: input.taskThreads }),
         });
         const onCardAction = createLarkCardActionHandler({
           installationId: installation.installationId,
@@ -1391,6 +1463,7 @@ async function resolveLarkInboundRoute(input: {
   installationId: string;
   mainSurface: ChannelSurface;
   normalized: NormalizedLarkTextMessage;
+  taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
   quoteMessageFetcher?: (input: {
     installationId: string;
     messageId: string;
@@ -1430,23 +1503,50 @@ async function resolveLarkInboundRoute(input: {
     };
   }
 
-  const ordinaryThread = resolveExistingOrdinaryThreadRoute({
-    db: input.db,
-    installationId: input.installationId,
-    chatId: input.normalized.chatId,
-    threadId: input.normalized.threadId,
+  const allowTaskFollowupCreation = !isLarkThreadControlCommand(input.normalized.text);
+  // channel_threads is the durable source of truth for thread routing. We only
+  // fall back to lark_object_bindings when bootstrapping an older task thread
+  // into that persisted model for the first time.
+  const channelThread = new ChannelThreadsRepo(input.db).getByExternalThread({
+    channelType: LARK_CHANNEL_TYPE,
+    channelInstallationId: input.installationId,
+    externalChatId: input.normalized.chatId,
+    externalThreadId: input.normalized.threadId,
   });
-  if (ordinaryThread != null) {
-    return ordinaryThread;
+  if (channelThread != null) {
+    const routed = resolveStoredChannelThreadRoute({
+      db: input.db,
+      installationId: input.installationId,
+      normalized: input.normalized,
+      channelThread,
+      allowTaskFollowupCreation,
+      taskThreads: input.taskThreads,
+    });
+    if (routed != null) {
+      return routed;
+    }
   }
 
   const taskThread = resolveTaskThreadRoute({
     db: input.db,
     installationId: input.installationId,
     normalized: input.normalized,
+    allowTaskFollowupCreation,
+    taskThreads: input.taskThreads,
   });
   if (taskThread != null) {
     return taskThread;
+  }
+
+  const ordinaryThread = resolveExistingOrdinaryThreadRoute({
+    db: input.db,
+    installationId: input.installationId,
+    chatId: input.normalized.chatId,
+    threadId: input.normalized.threadId,
+    ...(input.normalized.createdAt == null ? {} : { createdAt: input.normalized.createdAt }),
+  });
+  if (ordinaryThread != null) {
+    return ordinaryThread;
   }
 
   return createOrdinaryThreadRoute({
@@ -1465,9 +1565,11 @@ function resolveExistingOrdinaryThreadRoute(input: {
   installationId: string;
   chatId: string;
   threadId: string;
+  createdAt?: Date;
 }): LarkInboundRoute | null {
   const surfacesRepo = new ChannelSurfacesRepo(input.db);
   const sessionsRepo = new SessionsRepo(input.db);
+  const channelThreadsRepo = new ChannelThreadsRepo(input.db);
   const threadSurface = surfacesRepo.getBySurfaceKey({
     channelType: LARK_CHANNEL_TYPE,
     channelInstallationId: input.installationId,
@@ -1497,6 +1599,18 @@ function resolveExistingOrdinaryThreadRoute(input: {
   }
 
   const surfaceObject = parseSurfaceObject(threadSurface.surfaceObjectJson);
+  channelThreadsRepo.upsert({
+    id: randomUUID(),
+    channelType: LARK_CHANNEL_TYPE,
+    channelInstallationId: input.installationId,
+    homeConversationId: threadSurface.conversationId,
+    externalChatId: input.chatId,
+    externalThreadId: input.threadId,
+    subjectKind: "chat",
+    branchId: threadSurface.branchId,
+    openedFromMessageId: readString(surfaceObject.reply_to_message_id),
+    ...(input.createdAt == null ? {} : { createdAt: input.createdAt, updatedAt: input.createdAt }),
+  });
   return {
     kind: "ordinary_thread",
     conversationId: threadSurface.conversationId,
@@ -1513,112 +1627,122 @@ function resolveTaskThreadRoute(input: {
   db: StorageDb;
   installationId: string;
   normalized: NormalizedLarkTextMessage;
+  allowTaskFollowupCreation: boolean;
+  taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
 }): LarkInboundRoute | null {
   const bindingsRepo = new LarkObjectBindingsRepo(input.db);
-  const threadBinding = bindingsRepo.getByThreadRootMessageId({
-    channelInstallationId: input.installationId,
-    threadRootMessageId: input.normalized.threadId ?? "",
-  });
-  const directTaskRoute = buildTaskThreadRouteFromBinding({
-    db: input.db,
-    binding: threadBinding,
-    chatId: input.normalized.chatId,
-    replyToMessageId: input.normalized.parentMessageId,
-  });
-  if (directTaskRoute != null) {
-    return directTaskRoute;
-  }
-
-  if (input.normalized.parentMessageId == null) {
+  const threadId = input.normalized.threadId;
+  if (threadId == null) {
     return null;
   }
 
-  const parentBinding = bindingsRepo.getByLarkMessageId({
-    channelInstallationId: input.installationId,
-    larkMessageId: input.normalized.parentMessageId,
-  });
-  const route = buildTaskThreadRouteFromBinding({
-    db: input.db,
-    binding: parentBinding,
-    chatId: input.normalized.chatId,
-    replyToMessageId: input.normalized.parentMessageId,
-  });
-  if (route == null || parentBinding == null) {
+  const binding =
+    bindingsRepo.getByThreadRootMessageId({
+      channelInstallationId: input.installationId,
+      threadRootMessageId: threadId,
+    }) ??
+    (input.normalized.parentMessageId == null
+      ? null
+      : bindingsRepo.getByLarkMessageId({
+          channelInstallationId: input.installationId,
+          larkMessageId: input.normalized.parentMessageId,
+        }));
+  if (binding == null) {
     return null;
   }
 
-  bindingsRepo.upsert({
-    id: parentBinding.id,
-    channelInstallationId: parentBinding.channelInstallationId,
-    conversationId: parentBinding.conversationId,
-    branchId: parentBinding.branchId,
-    internalObjectKind: parentBinding.internalObjectKind,
-    internalObjectId: parentBinding.internalObjectId,
-    larkMessageId: parentBinding.larkMessageId,
-    larkOpenMessageId: parentBinding.larkOpenMessageId,
-    larkCardId: parentBinding.larkCardId,
-    threadRootMessageId: input.normalized.threadId,
-    cardElementId: parentBinding.cardElementId,
-    lastSequence: parentBinding.lastSequence,
-    status: normalizeBindingStatus(parentBinding.status),
-    metadataJson: parentBinding.metadataJson,
-    createdAt: new Date(parentBinding.createdAt),
-    updatedAt: new Date(),
-  });
-
-  return route;
-}
-
-function buildTaskThreadRouteFromBinding(input: {
-  db: StorageDb;
-  binding: LarkObjectBinding | null;
-  chatId: string;
-  replyToMessageId: string | null;
-}): LarkInboundRoute | null {
-  if (input.binding == null) {
-    return null;
+  if (binding.threadRootMessageId !== threadId) {
+    bindingsRepo.upsert({
+      id: binding.id,
+      channelInstallationId: binding.channelInstallationId,
+      conversationId: binding.conversationId,
+      branchId: binding.branchId,
+      internalObjectKind: binding.internalObjectKind,
+      internalObjectId: binding.internalObjectId,
+      larkMessageId: binding.larkMessageId,
+      larkOpenMessageId: binding.larkOpenMessageId,
+      larkCardId: binding.larkCardId,
+      threadRootMessageId: threadId,
+      cardElementId: binding.cardElementId,
+      lastSequence: binding.lastSequence,
+      status: normalizeBindingStatus(binding.status),
+      metadataJson: binding.metadataJson,
+      createdAt: new Date(binding.createdAt),
+      updatedAt: input.normalized.createdAt ?? new Date(),
+    });
   }
-  const metadata = parseBindingMetadata(input.binding.metadataJson);
-  const sessionId = readString(metadata.sessionId);
+
+  const metadata = parseBindingMetadata(binding.metadataJson);
   const taskRunId = readString(metadata.taskRunId);
-  if (sessionId == null || taskRunId == null) {
+  if (taskRunId == null) {
     return null;
   }
 
-  const session = new SessionsRepo(input.db).getById(sessionId);
-  if (
-    session == null ||
-    session.purpose !== "task" ||
-    (session.status !== "active" && session.status !== "paused") ||
-    session.conversationId !== input.binding.conversationId ||
-    session.branchId !== input.binding.branchId
-  ) {
-    logger.warn("ignoring stale or invalid lark task thread binding", {
-      channelInstallationId: input.binding.channelInstallationId,
-      larkMessageId: input.binding.larkMessageId,
-      threadRootMessageId: input.binding.threadRootMessageId,
-      internalObjectId: input.binding.internalObjectId,
-      boundSessionId: sessionId,
-      sessionPurpose: session?.purpose ?? null,
-      sessionStatus: session?.status ?? null,
-      bindingConversationId: input.binding.conversationId,
-      bindingBranchId: input.binding.branchId,
-      sessionConversationId: session?.conversationId ?? null,
-      sessionBranchId: session?.branchId ?? null,
+  const taskRunsRepo = new TaskRunsRepo(input.db);
+  const taskRun = taskRunsRepo.getById(taskRunId);
+  if (taskRun == null) {
+    logger.warn("ignoring lark task thread binding because task run is missing", {
+      channelInstallationId: binding.channelInstallationId,
+      larkMessageId: binding.larkMessageId,
+      threadRootMessageId: threadId,
+      taskRunId,
     });
     return null;
   }
 
-  return {
-    kind: "task_thread",
-    conversationId: session.conversationId,
-    branchId: session.branchId,
-    sessionId: session.id,
-    scenario: "task",
-    stopScope: "session",
-    chatId: input.chatId,
-    replyToMessageId: input.replyToMessageId,
-  };
+  const workstreamId = ensureTaskRunWorkstream({
+    db: input.db,
+    taskRun,
+    ...(input.normalized.createdAt == null ? {} : { createdAt: input.normalized.createdAt }),
+  });
+  const rootTaskRunId = ensureTaskRunThreadRoot({
+    db: input.db,
+    taskRun,
+  });
+  const rootBinding = bindingsRepo.getByInternalObject({
+    channelInstallationId: input.installationId,
+    internalObjectKind: RUN_CARD_OBJECT_KIND,
+    internalObjectId: buildTaskRunCardObjectId(taskRun.id),
+  });
+  const channelThread = new ChannelThreadsRepo(input.db).upsert({
+    id: randomUUID(),
+    channelType: LARK_CHANNEL_TYPE,
+    channelInstallationId: input.installationId,
+    homeConversationId: taskRun.conversationId,
+    externalChatId: input.normalized.chatId,
+    externalThreadId: threadId,
+    subjectKind: "task",
+    rootTaskRunId,
+    openedFromMessageId:
+      rootBinding?.larkMessageId ??
+      binding.larkMessageId ??
+      input.normalized.parentMessageId ??
+      input.normalized.messageId,
+    ...(input.normalized.createdAt == null
+      ? {}
+      : { createdAt: input.normalized.createdAt, updatedAt: input.normalized.createdAt }),
+  });
+  if (
+    taskRun.initiatorThreadId == null ||
+    taskRun.workstreamId == null ||
+    taskRun.threadRootRunId == null
+  ) {
+    taskRunsRepo.updateWorkstream({
+      id: taskRun.id,
+      workstreamId,
+      threadRootRunId: rootTaskRunId,
+      initiatorThreadId: taskRun.initiatorThreadId ?? channelThread.id,
+    });
+  }
+
+  return resolveStoredChannelThreadRoute({
+    db: input.db,
+    installationId: input.installationId,
+    normalized: input.normalized,
+    channelThread,
+    allowTaskFollowupCreation: input.allowTaskFollowupCreation,
+    taskThreads: input.taskThreads,
+  });
 }
 
 async function createOrdinaryThreadRoute(input: {
@@ -1634,6 +1758,7 @@ async function createOrdinaryThreadRoute(input: {
   const sessionsRepo = new SessionsRepo(input.db);
   const branchesRepo = new ConversationBranchesRepo(input.db);
   const surfacesRepo = new ChannelSurfacesRepo(input.db);
+  const channelThreadsRepo = new ChannelThreadsRepo(input.db);
   const messagesRepo = new MessagesRepo(input.db);
   const now = input.normalized.createdAt ?? new Date();
   const threadId = input.normalized.threadId;
@@ -1719,6 +1844,19 @@ async function createOrdinaryThreadRoute(input: {
     createdAt: now,
     updatedAt: now,
   });
+  channelThreadsRepo.upsert({
+    id: randomUUID(),
+    channelType: LARK_CHANNEL_TYPE,
+    channelInstallationId: input.installationId,
+    homeConversationId: input.mainSurface.conversationId,
+    externalChatId: input.normalized.chatId,
+    externalThreadId: threadId,
+    subjectKind: "chat",
+    branchId,
+    openedFromMessageId: input.normalized.parentMessageId ?? input.normalized.messageId,
+    createdAt: now,
+    updatedAt: now,
+  });
 
   return {
     kind: "ordinary_thread",
@@ -1730,6 +1868,285 @@ async function createOrdinaryThreadRoute(input: {
     chatId: input.normalized.chatId,
     replyToMessageId: input.normalized.parentMessageId ?? input.normalized.messageId,
   };
+}
+
+function resolveStoredChannelThreadRoute(input: {
+  db: StorageDb;
+  installationId: string;
+  normalized: NormalizedLarkTextMessage;
+  channelThread: {
+    id: string;
+    subjectKind: string;
+    branchId: string | null;
+    rootTaskRunId: string | null;
+    homeConversationId: string;
+    openedFromMessageId: string | null;
+  };
+  allowTaskFollowupCreation: boolean;
+  taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
+}): LarkInboundRoute | null {
+  const sessionsRepo = new SessionsRepo(input.db);
+  if (input.channelThread.subjectKind === "chat") {
+    if (input.channelThread.branchId == null) {
+      logger.warn("ignoring invalid stored lark chat thread without branch", {
+        installationId: input.installationId,
+        threadId: input.normalized.threadId,
+        channelThreadId: input.channelThread.id,
+      });
+      return null;
+    }
+
+    const threadSession = sessionsRepo.findLatestByConversationBranch(
+      input.channelThread.homeConversationId,
+      input.channelThread.branchId,
+      {
+        purpose: "chat",
+        statuses: ["active", "paused"],
+      },
+    );
+    if (threadSession == null) {
+      logger.warn("stored lark chat thread has no active chat session", {
+        installationId: input.installationId,
+        threadId: input.normalized.threadId,
+        channelThreadId: input.channelThread.id,
+        conversationId: input.channelThread.homeConversationId,
+        branchId: input.channelThread.branchId,
+      });
+      return null;
+    }
+
+    return {
+      kind: "ordinary_thread",
+      conversationId: input.channelThread.homeConversationId,
+      branchId: input.channelThread.branchId,
+      sessionId: threadSession.id,
+      scenario: "chat",
+      stopScope: "session",
+      chatId: input.normalized.chatId,
+      replyToMessageId: input.channelThread.openedFromMessageId,
+    };
+  }
+
+  if (input.channelThread.rootTaskRunId == null) {
+    logger.warn("ignoring invalid stored lark task thread without root task run", {
+      installationId: input.installationId,
+      threadId: input.normalized.threadId,
+      channelThreadId: input.channelThread.id,
+    });
+    return null;
+  }
+
+  const taskRunsRepo = new TaskRunsRepo(input.db);
+  const activeRun = taskRunsRepo.findActiveByThreadRootRunId(input.channelThread.rootTaskRunId);
+  if (activeRun != null && activeRun.executionSessionId != null) {
+    const activeSession = sessionsRepo.getById(activeRun.executionSessionId);
+    if (
+      activeSession != null &&
+      activeSession.purpose === "task" &&
+      (activeSession.status === "active" || activeSession.status === "paused")
+    ) {
+      return {
+        kind: "task_thread",
+        conversationId: activeRun.conversationId,
+        branchId: activeRun.branchId,
+        sessionId: activeSession.id,
+        taskRunId: activeRun.id,
+        scenario: "task",
+        stopScope: "session",
+        chatId: input.normalized.chatId,
+        replyToMessageId:
+          input.normalized.parentMessageId ?? input.channelThread.openedFromMessageId ?? null,
+      };
+    }
+
+    logger.warn("ignoring stale active task run session for stored lark task thread", {
+      installationId: input.installationId,
+      threadId: input.normalized.threadId,
+      channelThreadId: input.channelThread.id,
+      taskRunId: activeRun.id,
+      executionSessionId: activeRun.executionSessionId,
+      sessionStatus: activeSession?.status ?? null,
+      sessionPurpose: activeSession?.purpose ?? null,
+    });
+  }
+
+  const latestRun = taskRunsRepo.findLatestByThreadRootRunId(input.channelThread.rootTaskRunId);
+  if (latestRun == null) {
+    logger.warn("stored lark task thread has no runs in its lineage", {
+      installationId: input.installationId,
+      threadId: input.normalized.threadId,
+      channelThreadId: input.channelThread.id,
+      rootTaskRunId: input.channelThread.rootTaskRunId,
+    });
+    return null;
+  }
+
+  if (input.allowTaskFollowupCreation && input.taskThreads != null) {
+    const created = input.taskThreads.createFollowupExecution({
+      rootTaskRunId: input.channelThread.rootTaskRunId,
+      initiatorThreadId: input.channelThread.id,
+      ...(input.normalized.createdAt == null ? {} : { createdAt: input.normalized.createdAt }),
+    });
+    return {
+      kind: "task_thread",
+      conversationId: created.conversationId,
+      branchId: created.branchId,
+      sessionId: created.sessionId,
+      taskRunId: created.taskRunId,
+      scenario: "task",
+      stopScope: "session",
+      chatId: input.normalized.chatId,
+      replyToMessageId:
+        input.normalized.parentMessageId ?? input.channelThread.openedFromMessageId ?? null,
+    };
+  }
+
+  if (latestRun.executionSessionId == null) {
+    logger.warn("latest task run for stored lark task thread has no execution session", {
+      installationId: input.installationId,
+      threadId: input.normalized.threadId,
+      channelThreadId: input.channelThread.id,
+      taskRunId: latestRun.id,
+    });
+    return null;
+  }
+
+  const latestSession = sessionsRepo.getById(latestRun.executionSessionId);
+  if (latestSession == null || latestSession.purpose !== "task") {
+    logger.warn("latest task run session for stored lark task thread is missing or invalid", {
+      installationId: input.installationId,
+      threadId: input.normalized.threadId,
+      channelThreadId: input.channelThread.id,
+      taskRunId: latestRun.id,
+      executionSessionId: latestRun.executionSessionId,
+      sessionPurpose: latestSession?.purpose ?? null,
+    });
+    return null;
+  }
+
+  return {
+    kind: "task_thread",
+    conversationId: latestRun.conversationId,
+    branchId: latestRun.branchId,
+    sessionId: latestSession.id,
+    taskRunId: latestRun.id,
+    scenario: "task",
+    stopScope: "session",
+    chatId: input.normalized.chatId,
+    replyToMessageId:
+      input.normalized.parentMessageId ?? input.channelThread.openedFromMessageId ?? null,
+  };
+}
+
+function ensureTaskRunWorkstream(input: {
+  db: StorageDb;
+  taskRun: TaskRun;
+  createdAt?: Date;
+}): string {
+  if (input.taskRun.workstreamId != null) {
+    return input.taskRun.workstreamId;
+  }
+
+  const now = input.createdAt ?? new Date();
+  const workstream = new TaskWorkstreamsRepo(input.db).create({
+    id: randomUUID(),
+    ownerAgentId: input.taskRun.ownerAgentId,
+    conversationId: input.taskRun.conversationId,
+    branchId: input.taskRun.branchId,
+    createdAt: now,
+    updatedAt: now,
+  });
+  new TaskRunsRepo(input.db).updateWorkstream({
+    id: input.taskRun.id,
+    workstreamId: workstream.id,
+  });
+
+  if (input.taskRun.cronJobId != null) {
+    const cronJobsRepo = new CronJobsRepo(input.db);
+    const cronJob = cronJobsRepo.getById(input.taskRun.cronJobId);
+    if (cronJob != null && cronJob.workstreamId == null) {
+      cronJobsRepo.updateWorkstreamId({
+        id: cronJob.id,
+        workstreamId: workstream.id,
+      });
+    }
+  }
+
+  return workstream.id;
+}
+
+function ensureTaskRunThreadRoot(input: { db: StorageDb; taskRun: TaskRun }): string {
+  if (input.taskRun.threadRootRunId != null) {
+    return input.taskRun.threadRootRunId;
+  }
+
+  new TaskRunsRepo(input.db).updateWorkstream({
+    id: input.taskRun.id,
+    workstreamId: input.taskRun.workstreamId ?? null,
+    threadRootRunId: input.taskRun.id,
+  });
+  return input.taskRun.id;
+}
+
+function settleTaskThreadCompletionIfNeeded(input: {
+  taskThreads: NonNullable<CreateLarkInboundRuntimeInput["taskThreads"]>;
+  taskRunId: string;
+  submitResult: unknown;
+  finishedAt: Date;
+}): void {
+  const started = extractStartedSubmitMessageResult(input.submitResult);
+  if (started == null) {
+    return;
+  }
+
+  const completion = extractTaskCompletionSignal({
+    details: started.run.stopSignal?.payload,
+  });
+  if (completion == null) {
+    return;
+  }
+
+  if (completion.status === "completed") {
+    input.taskThreads.completeTaskExecution({
+      taskRunId: input.taskRunId,
+      resultSummary: completion.finalMessage,
+      finishedAt: input.finishedAt,
+    });
+    return;
+  }
+
+  if (completion.status === "blocked") {
+    input.taskThreads.blockTaskExecution({
+      taskRunId: input.taskRunId,
+      resultSummary: completion.finalMessage,
+      finishedAt: input.finishedAt,
+    });
+    return;
+  }
+
+  input.taskThreads.failTaskExecution({
+    taskRunId: input.taskRunId,
+    errorText: completion.finalMessage,
+    resultSummary: completion.finalMessage,
+    finishedAt: input.finishedAt,
+  });
+}
+
+function extractStartedSubmitMessageResult(
+  value: unknown,
+): Extract<SubmitMessageResult, { status: "started" }> | null {
+  if (!isRecord(value) || value.status !== "started" || !isRecord(value.run)) {
+    return null;
+  }
+  return value as Extract<SubmitMessageResult, { status: "started" }>;
+}
+
+function isLarkThreadControlCommand(text: string): boolean {
+  return text === "/stop" || text === "/status" || text === "/model";
+}
+
+function buildTaskRunCardObjectId(taskRunId: string): string {
+  return `task:${taskRunId}`;
 }
 
 async function buildOrdinaryThreadKickoffContent(input: {

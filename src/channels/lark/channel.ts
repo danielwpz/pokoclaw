@@ -67,6 +67,34 @@ export interface CreateLarkChannelRuntimeInput {
       requestId: string,
     ): Promise<ResolveSubagentCreationRequestResult> | ResolveSubagentCreationRequestResult;
   };
+  taskThreads?: {
+    createFollowupExecution(input: {
+      rootTaskRunId: string;
+      initiatorThreadId?: string | null;
+      createdAt?: Date;
+    }): {
+      taskRunId: string;
+      sessionId: string;
+      conversationId: string;
+      branchId: string;
+    };
+    completeTaskExecution(input: {
+      taskRunId: string;
+      resultSummary?: string | null;
+      finishedAt?: Date;
+    }): void;
+    blockTaskExecution(input: {
+      taskRunId: string;
+      resultSummary?: string | null;
+      finishedAt?: Date;
+    }): void;
+    failTaskExecution(input: {
+      taskRunId: string;
+      errorText?: string | null;
+      resultSummary?: string | null;
+      finishedAt?: Date;
+    }): void;
+  };
 }
 
 export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): LarkChannelRuntime {
@@ -83,6 +111,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     clients,
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
     ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
+    ...(input.taskThreads == null ? {} : { taskThreads: input.taskThreads }),
   });
   const outbound = createLarkOutboundRuntime({
     storage: input.storage,

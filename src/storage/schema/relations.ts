@@ -7,6 +7,7 @@ import {
   authEvents,
   channelInstances,
   channelSurfaces,
+  channelThreads,
   conversationBranches,
   conversations,
   cronJobs,
@@ -16,6 +17,7 @@ import {
   sessions,
   subagentCreationRequests,
   taskRuns,
+  taskWorkstreams,
 } from "@/src/storage/schema/tables.js";
 
 export const channelInstancesRelations = relations(channelInstances, ({ many }) => ({
@@ -30,8 +32,10 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   }),
   branches: many(conversationBranches),
   channelSurfaces: many(channelSurfaces),
+  channelThreads: many(channelThreads),
   larkObjectBindings: many(larkObjectBindings),
   sessions: many(sessions),
+  taskWorkstreams: many(taskWorkstreams),
   taskRuns: many(taskRuns),
   harnessEvents: many(harnessEvents),
   subagentCreationRequests: many(subagentCreationRequests),
@@ -43,8 +47,10 @@ export const conversationBranchesRelations = relations(conversationBranches, ({ 
     references: [conversations.id],
   }),
   channelSurfaces: many(channelSurfaces),
+  channelThreads: many(channelThreads),
   larkObjectBindings: many(larkObjectBindings),
   sessions: many(sessions),
+  taskWorkstreams: many(taskWorkstreams),
   taskRuns: many(taskRuns),
   harnessEvents: many(harnessEvents),
 }));
@@ -73,6 +79,7 @@ export const agentsRelations = relations(agents, ({ one, many }) => ({
   managedAgents: many(agents, {
     relationName: "agent_main_agent",
   }),
+  taskWorkstreams: many(taskWorkstreams),
   cronJobs: many(cronJobs),
   taskRuns: many(taskRuns),
   approvals: many(approvalLedger),
@@ -84,6 +91,38 @@ export const agentsRelations = relations(agents, ({ one, many }) => ({
   }),
   createdFromRequests: many(subagentCreationRequests, {
     relationName: "subagent_creation_request_created_agent",
+  }),
+}));
+
+export const taskWorkstreamsRelations = relations(taskWorkstreams, ({ one, many }) => ({
+  ownerAgent: one(agents, {
+    fields: [taskWorkstreams.ownerAgentId],
+    references: [agents.id],
+  }),
+  conversation: one(conversations, {
+    fields: [taskWorkstreams.conversationId],
+    references: [conversations.id],
+  }),
+  branch: one(conversationBranches, {
+    fields: [taskWorkstreams.branchId],
+    references: [conversationBranches.id],
+  }),
+  cronJobs: many(cronJobs),
+  taskRuns: many(taskRuns),
+}));
+
+export const channelThreadsRelations = relations(channelThreads, ({ one }) => ({
+  homeConversation: one(conversations, {
+    fields: [channelThreads.homeConversationId],
+    references: [conversations.id],
+  }),
+  branch: one(conversationBranches, {
+    fields: [channelThreads.branchId],
+    references: [conversationBranches.id],
+  }),
+  rootTaskRun: one(taskRuns, {
+    fields: [channelThreads.rootTaskRunId],
+    references: [taskRuns.id],
   }),
 }));
 
@@ -126,6 +165,10 @@ export const cronJobsRelations = relations(cronJobs, ({ one, many }) => ({
     fields: [cronJobs.targetBranchId],
     references: [conversationBranches.id],
   }),
+  workstream: one(taskWorkstreams, {
+    fields: [cronJobs.workstreamId],
+    references: [taskWorkstreams.id],
+  }),
   taskRuns: many(taskRuns),
   harnessEvents: many(harnessEvents),
 }));
@@ -142,6 +185,18 @@ export const taskRunsRelations = relations(taskRuns, ({ one }) => ({
   branch: one(conversationBranches, {
     fields: [taskRuns.branchId],
     references: [conversationBranches.id],
+  }),
+  workstream: one(taskWorkstreams, {
+    fields: [taskRuns.workstreamId],
+    references: [taskWorkstreams.id],
+  }),
+  threadRootRun: one(taskRuns, {
+    fields: [taskRuns.threadRootRunId],
+    references: [taskRuns.id],
+  }),
+  initiatorThread: one(channelThreads, {
+    fields: [taskRuns.initiatorThreadId],
+    references: [channelThreads.id],
   }),
   cronJob: one(cronJobs, {
     fields: [taskRuns.cronJobId],
