@@ -1,7 +1,28 @@
 {
   "name": "pokoclaw",
   "version": "0.1.0",
+  "description": "Pokoclaw is a personal AI assistant focused on observable, controllable, long-running task execution.",
   "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danielwpz/pokoclaw.git"
+  },
+  "homepage": "https://github.com/danielwpz/pokoclaw#readme",
+  "bugs": {
+    "url": "https://github.com/danielwpz/pokoclaw/issues"
+  },
+  "keywords": [
+    "ai-agent",
+    "assistant",
+    "automation",
+    "lark",
+    "feishu",
+    "typescript"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "packageManager": "pnpm@10.15.0",
   "scripts": {
