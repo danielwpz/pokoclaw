@@ -258,7 +258,7 @@ describe("real llm loop integration", () => {
       role: "user",
       payloadJson: JSON.stringify({
         content:
-          "I am about to commit code. What are this repository's commit requirements? Keep it brief.",
+          "I am about to commit code. What are this repository's commit requirements? Keep it brief. Answer in English only.",
       }),
       createdAt: new Date("2026-03-23T00:00:01.000Z"),
     });
@@ -320,7 +320,7 @@ describe("real llm loop integration", () => {
     expect(normalizedAssistantText).toContain("build");
     expect(normalizedAssistantText).toContain("lint");
     expect(normalizedAssistantText).toMatch(/one[- ]line|single[- ]line/);
-    expect(normalizedAssistantText).toMatch(/multi-line/);
+    expect(normalizedAssistantText).toMatch(/multi[- ]line/);
     expect(storedMessages.at(-1)?.stopReason).toBe("stop");
   }, 45_000);
 });

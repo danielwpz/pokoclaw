@@ -27,13 +27,11 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-// This import intentionally targets pi-ai internals. We need the responses
-// stream parser to preserve event fidelity while overriding usage normalization.
 import {
   convertResponsesMessages,
   convertResponsesTools,
   processResponsesStream,
-} from "../../../node_modules/@mariozechner/pi-ai/dist/providers/openai-responses-shared.js";
+} from "@/src/agent/llm/pi-ai-openai-responses-shared.js";
 
 type CostedModel = Pick<Model<Api>, "api" | "baseUrl" | "cost">;
 
