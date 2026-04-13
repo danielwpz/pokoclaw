@@ -3,6 +3,7 @@ import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import type { TaskRun } from "@/src/storage/schema/types.js";
+import { parseBackgroundTaskPayload } from "@/src/tasks/background-task-payload.js";
 import { toolInternalError, toolRecoverableError } from "@/src/tools/core/errors.js";
 import { defineTool, type ToolExecutionContext, textToolResult } from "@/src/tools/core/types.js";
 
@@ -65,6 +66,7 @@ export function createWaitTaskTool() {
           ownerAgentId: taskRun.ownerAgentId,
         });
       }
+      ensureWaitTaskTargetsCurrentSessionBackgroundTask(taskRun, context.sessionId);
 
       const timeoutSec = args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC;
       const deadlineMs = Date.now() + timeoutSec * 1000;
@@ -136,6 +138,32 @@ function resolveWaitTaskCaller(context: ToolExecutionContext): {
       kind: ownerAgent.kind,
     },
   };
+}
+
+function ensureWaitTaskTargetsCurrentSessionBackgroundTask(
+  taskRun: TaskRun,
+  sessionId: string,
+): void {
+  if (taskRun.runType !== "delegate" || parseBackgroundTaskPayload(taskRun.inputJson) == null) {
+    throw toolRecoverableError(
+      "wait_task only works for background_task runs started from this chat.",
+      {
+        code: "wait_task_not_background_task",
+        taskRunId: taskRun.id,
+        runType: taskRun.runType,
+      },
+    );
+  }
+  if (taskRun.initiatorSessionId !== sessionId) {
+    throw toolRecoverableError(
+      "You can only wait for background tasks started from this chat session.",
+      {
+        code: "wait_task_wrong_initiator_session",
+        taskRunId: taskRun.id,
+        initiatorSessionId: taskRun.initiatorSessionId,
+      },
+    );
+  }
 }
 
 function waitForMs(ms: number, context: ToolExecutionContext): Promise<void> {

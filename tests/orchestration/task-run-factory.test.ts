@@ -94,7 +94,79 @@ describe("task run factory", () => {
     });
   });
 
-  test("preserves initiator, parent, priority, attempt, and context mode", async () => {
+  test("does not fork when only initiatorSessionId is provided", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    handle.storage.sqlite.exec(`
+      UPDATE sessions
+      SET compact_cursor = 1,
+          compact_summary = 'main summary through seq 1',
+          compact_summary_token_total = 42,
+          compact_summary_usage_json = '{"input":30,"output":12,"cacheRead":0,"cacheWrite":0,"totalTokens":42}'
+      WHERE id = 'sess_main';
+    `);
+    messagesRepo.append({
+      id: "msg_main_1",
+      sessionId: "sess_main",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"older context"}',
+      createdAt: new Date("2026-03-26T00:00:00.500Z"),
+    });
+    messagesRepo.append({
+      id: "msg_main_2",
+      sessionId: "sess_main",
+      seq: 2,
+      role: "assistant",
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5",
+      modelApi: "anthropic-messages",
+      stopReason: "stop",
+      payloadJson: '{"content":[{"type":"text","text":"latest visible context"}]}',
+      createdAt: new Date("2026-03-26T00:00:01.000Z"),
+    });
+
+    const created = createTaskExecution({
+      db: handle.storage.db,
+      params: {
+        runType: "delegate",
+        ownerAgentId: "agent_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        initiatorSessionId: "sess_main",
+        contextMode: "isolated",
+        description: "Isolated follow-up task.",
+        inputJson: '{"task":"isolated"}',
+        createdAt: new Date("2026-03-26T00:02:00.000Z"),
+      },
+    });
+
+    expect(created.executionSession).toMatchObject({
+      purpose: "task",
+      contextMode: "isolated",
+      ownerAgentId: "agent_sub",
+      forkedFromSessionId: null,
+      forkSourceSeq: null,
+      compactCursor: 0,
+      compactSummary: null,
+      compactSummaryTokenTotal: null,
+    });
+    expect(created.taskRun).toMatchObject({
+      runType: "delegate",
+      initiatorSessionId: "sess_main",
+      description: "Isolated follow-up task.",
+      inputJson: '{"task":"isolated"}',
+      status: "running",
+    });
+
+    const service = new AgentSessionService(new SessionsRepo(handle.storage.db), messagesRepo);
+    const context = service.getContext(created.executionSession.id);
+    expect(context.compactSummary).toBeNull();
+    expect(context.messages).toHaveLength(0);
+  });
+
+  test("preserves initiator, parent, priority, attempt, and explicit fork source", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
     const messagesRepo = new MessagesRepo(handle.storage.db);
@@ -152,6 +224,7 @@ describe("task run factory", () => {
         conversationId: "conv_sub",
         branchId: "branch_sub",
         initiatorSessionId: "sess_main",
+        forkSourceSessionId: "sess_main",
         parentRunId: "run_parent",
         contextMode: "inherited",
         priority: 5,

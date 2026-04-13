@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, lte, max } from "drizzle-orm";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { messages } from "@/src/storage/schema/tables.js";
@@ -123,15 +123,13 @@ export class MessagesRepo {
   }
 
   getNextSeq(sessionId: string): number {
-    const rows = this.db
-      .select({ seq: messages.seq })
+    const row = this.db
+      .select({ maxSeq: max(messages.seq) })
       .from(messages)
       .where(eq(messages.sessionId, sessionId))
-      .orderBy(asc(messages.seq))
-      .all();
+      .get();
 
-    const lastSeq = rows.at(-1)?.seq ?? 0;
-    return lastSeq + 1;
+    return (row?.maxSeq ?? 0) + 1;
   }
 }
 

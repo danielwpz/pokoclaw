@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import { buildBackgroundTaskPayload } from "@/src/tasks/background-task-payload.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createWaitTaskTool } from "@/src/tools/wait-task.js";
 import {
@@ -46,16 +47,33 @@ describe("wait_task tool", () => {
       INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, created_at, updated_at)
       VALUES
         ('sess_main', 'conv_main', 'branch_main', 'agent_main', 'chat', '2026-04-02T00:00:00.000Z', '2026-04-02T00:00:00.000Z'),
-        ('sess_sub', 'conv_sub', 'branch_sub', 'agent_sub', 'chat', '2026-04-02T00:00:00.000Z', '2026-04-02T00:00:00.000Z');
+        ('sess_sub', 'conv_sub', 'branch_sub', 'agent_sub', 'chat', '2026-04-02T00:00:00.000Z', '2026-04-02T00:00:00.000Z'),
+        ('sess_sub_other', 'conv_sub', 'branch_sub', 'agent_sub', 'chat', '2026-04-02T00:00:00.000Z', '2026-04-02T00:00:00.000Z');
 
       INSERT INTO task_runs (
         id, run_type, owner_agent_id, conversation_id, branch_id,
         initiator_session_id, execution_session_id, status, result_summary,
-        started_at, finished_at, duration_ms
+        input_json, started_at, finished_at, duration_ms
       ) VALUES (
         'task_done_1', 'delegate', 'agent_sub', 'conv_sub', 'branch_sub',
         'sess_sub', NULL, 'completed', 'Background scan done.',
+        '${buildBackgroundTaskPayload("Scan this repo.")}',
         '2026-04-02T00:05:00.000Z', '2026-04-02T00:06:30.000Z', 90000
+      ), (
+        'task_other_session', 'delegate', 'agent_sub', 'conv_sub', 'branch_sub',
+        'sess_sub_other', NULL, 'completed', 'Other session finished.',
+        '${buildBackgroundTaskPayload("Other session task.")}',
+        '2026-04-02T00:07:00.000Z', '2026-04-02T00:08:00.000Z', 60000
+      ), (
+        'task_legacy_delegate', 'delegate', 'agent_sub', 'conv_sub', 'branch_sub',
+        'sess_sub', NULL, 'completed', 'Legacy delegate finished.',
+        '{"task":"legacy"}',
+        '2026-04-02T00:09:00.000Z', '2026-04-02T00:10:00.000Z', 60000
+      ), (
+        'task_non_delegate', 'thread', 'agent_sub', 'conv_sub', 'branch_sub',
+        'sess_sub', NULL, 'completed', 'Thread task finished.',
+        '${buildBackgroundTaskPayload("Thread follow-up.")}',
+        '2026-04-02T00:11:00.000Z', '2026-04-02T00:12:00.000Z', 60000
       );
     `);
   }
@@ -118,5 +136,83 @@ describe("wait_task tool", () => {
         },
       ),
     ).rejects.toThrow("wait_task is only available to subagents.");
+  });
+
+  test("rejects waiting for a background task started from a different chat session", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture();
+    const registry = new ToolRegistry([createWaitTaskTool()]);
+
+    await expect(
+      registry.execute(
+        "wait_task",
+        {
+          sessionId: "sess_sub",
+          conversationId: "conv_sub",
+          ownerAgentId: "agent_sub",
+          agentKind: "sub",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          runtimeControl: {
+            submitApprovalDecision: vi.fn(),
+          },
+        },
+        {
+          taskRunId: "task_other_session",
+        },
+      ),
+    ).rejects.toThrow("You can only wait for background tasks started from this chat session.");
+  });
+
+  test("rejects waiting for delegate runs that were not created by background_task", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture();
+    const registry = new ToolRegistry([createWaitTaskTool()]);
+
+    await expect(
+      registry.execute(
+        "wait_task",
+        {
+          sessionId: "sess_sub",
+          conversationId: "conv_sub",
+          ownerAgentId: "agent_sub",
+          agentKind: "sub",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          runtimeControl: {
+            submitApprovalDecision: vi.fn(),
+          },
+        },
+        {
+          taskRunId: "task_legacy_delegate",
+        },
+      ),
+    ).rejects.toThrow("wait_task only works for background_task runs started from this chat.");
+  });
+
+  test("rejects waiting for non-delegate runs", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture();
+    const registry = new ToolRegistry([createWaitTaskTool()]);
+
+    await expect(
+      registry.execute(
+        "wait_task",
+        {
+          sessionId: "sess_sub",
+          conversationId: "conv_sub",
+          ownerAgentId: "agent_sub",
+          agentKind: "sub",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          runtimeControl: {
+            submitApprovalDecision: vi.fn(),
+          },
+        },
+        {
+          taskRunId: "task_non_delegate",
+        },
+      ),
+    ).rejects.toThrow("wait_task only works for background_task runs started from this chat.");
   });
 });

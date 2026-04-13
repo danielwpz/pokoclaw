@@ -467,6 +467,7 @@ export class AgentLoop {
     const appendedMessageIds: string[] = [];
     let toolExecutions = 0;
     let stopSignal: AgentLoopStopSignal | null = null;
+    let nextSeq = this.deps.messages.getNextSeq(input.sessionId);
     const runId = randomUUID();
     this.deps.control?.beginRun({
       runId,
@@ -722,10 +723,11 @@ export class AgentLoop {
               continue;
             }
 
-            appendPartialStreamedAssistantMessageOnFailure({
+            nextSeq = appendPartialStreamedAssistantMessageOnFailure({
               repo: this.deps.messages,
               sessionId: input.sessionId,
               messageId: assistantMessageId,
+              nextSeq,
               appendedMessageIds,
               messages,
               turn: turn + 1,
@@ -798,6 +800,7 @@ export class AgentLoop {
           repo: this.deps.messages,
           sessionId: input.sessionId,
           messageId: assistantMessageId,
+          seq: nextSeq,
           role: "assistant",
           messageType: "text",
           visibility: "user_visible",
@@ -812,6 +815,7 @@ export class AgentLoop {
           usage: response.usage,
           createdAt: new Date(),
         });
+        nextSeq = assistantMessage.seq + 1;
         messages.push(assistantMessage);
         appendedMessageIds.push(assistantMessageId);
         logger.info("assistant response completed", {
@@ -883,10 +887,12 @@ export class AgentLoop {
               runId,
               events,
               turn: turn + 1,
+              nextSeq,
               messages,
               appendedMessageIds,
               runtimeImagesByMessageId,
             });
+            nextSeq = queuedMessages.nextSeq;
             replaceActiveTurnRuntimeImages({
               activeTurnImageMessageIds,
               runtimeImagesByMessageId,
@@ -949,6 +955,7 @@ export class AgentLoop {
               repo: this.deps.messages,
               sessionId: input.sessionId,
               messageId: toolResultMessageId,
+              seq: nextSeq,
               role: "tool",
               messageType: "tool_result",
               visibility: "hidden_system",
@@ -963,6 +970,7 @@ export class AgentLoop {
               } satisfies AgentToolResultPayload,
               createdAt: new Date(),
             });
+            nextSeq = toolResultMessage.seq + 1;
             messages.push(toolResultMessage);
             appendedMessageIds.push(toolResultMessageId);
             toolExecutions += 1;
@@ -1047,6 +1055,7 @@ export class AgentLoop {
               repo: this.deps.messages,
               sessionId: input.sessionId,
               messageId: toolResultMessageId,
+              seq: nextSeq,
               role: "tool",
               messageType: "tool_result",
               visibility: "hidden_system",
@@ -1059,6 +1068,7 @@ export class AgentLoop {
               } satisfies AgentToolResultPayload,
               createdAt: new Date(),
             });
+            nextSeq = toolResultMessage.seq + 1;
             messages.push(toolResultMessage);
             appendedMessageIds.push(toolResultMessageId);
             toolExecutions += 1;
@@ -1088,10 +1098,12 @@ export class AgentLoop {
             runId,
             events,
             turn: turn + 1,
+            nextSeq,
             messages,
             appendedMessageIds,
             runtimeImagesByMessageId,
           });
+          nextSeq = queuedMessages.nextSeq;
           replaceActiveTurnRuntimeImages({
             activeTurnImageMessageIds,
             runtimeImagesByMessageId,
@@ -1611,10 +1623,12 @@ export class AgentLoop {
     runId: string;
     events: AgentRuntimeEvent[];
     turn: number;
+    nextSeq: number;
     messages: Message[];
     appendedMessageIds: string[];
     runtimeImagesByMessageId: Map<string, AgentUserRuntimeImagePayload[]>;
-  }): { messageIds: string[] } {
+  }): { nextSeq: number; messageIds: string[] } {
+    let nextSeq = input.nextSeq;
     const messageIds: string[] = [];
 
     for (const queued of input.queuedSteer) {
@@ -1623,6 +1637,7 @@ export class AgentLoop {
         repo: this.deps.messages,
         sessionId: input.sessionId,
         messageId,
+        seq: nextSeq,
         role: "user",
         payload:
           queued.userPayload ??
@@ -1650,6 +1665,7 @@ export class AgentLoop {
           })),
         });
       }
+      nextSeq = message.seq + 1;
       messageIds.push(messageId);
       input.messages.push(message);
       input.appendedMessageIds.push(messageId);
@@ -1665,7 +1681,7 @@ export class AgentLoop {
       });
     }
 
-    return { messageIds };
+    return { nextSeq, messageIds };
   }
 
   private recordEvent(events: AgentRuntimeEvent[], event: AgentRuntimeEventInput): void {
@@ -1708,6 +1724,7 @@ function appendMessageAndHydrate(input: {
   repo: MessagesRepo;
   sessionId: string;
   messageId: string;
+  seq?: number;
   role: string;
   messageType: string;
   visibility: string;
@@ -1724,7 +1741,7 @@ function appendMessageAndHydrate(input: {
   createdAt: Date;
 }): Message {
   const payloadJson = JSON.stringify(input.payload);
-  let seq = input.repo.getNextSeq(input.sessionId);
+  let seq = input.seq ?? input.repo.getNextSeq(input.sessionId);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       input.repo.append({
@@ -1828,6 +1845,7 @@ function appendPartialStreamedAssistantMessageOnFailure(input: {
   repo: MessagesRepo;
   sessionId: string;
   messageId: string;
+  nextSeq: number;
   appendedMessageIds: string[];
   messages: Message[];
   turn: number;
@@ -1841,7 +1859,7 @@ function appendPartialStreamedAssistantMessageOnFailure(input: {
   reasoningText: string;
   errorMessage: string;
   recordEvent: (event: AgentRuntimeEventInput) => void;
-}): void {
+}): number {
   const content: AgentAssistantContentBlock[] = [];
   if (input.reasoningText.trim().length > 0) {
     content.push({
@@ -1857,13 +1875,14 @@ function appendPartialStreamedAssistantMessageOnFailure(input: {
   }
 
   if (content.length === 0) {
-    return;
+    return input.nextSeq;
   }
 
   const assistantMessage = appendMessageAndHydrate({
     repo: input.repo,
     sessionId: input.sessionId,
     messageId: input.messageId,
+    seq: input.nextSeq,
     role: "assistant",
     messageType: "text",
     visibility: "user_visible",
@@ -1893,6 +1912,7 @@ function appendPartialStreamedAssistantMessageOnFailure(input: {
     branchId: input.branchId,
     runId: input.runId,
   });
+  return assistantMessage.seq + 1;
 }
 
 function isMessageSeqUniqueConstraintError(error: unknown): boolean {

@@ -321,6 +321,159 @@ describe("agent loop", () => {
     });
   });
 
+  test("reuses a cached next seq across multiple appends in one run", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turns = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        turns += 1;
+        if (turns === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "ping",
+                arguments: {},
+              },
+            ],
+          });
+        }
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const getNextSeqSpy = vi.spyOn(messagesRepo, "getNextSeq");
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry([
+        defineTool({
+          name: "ping",
+          description: "no-op",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("pong");
+          },
+        }),
+      ]),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(getNextSeqSpy).toHaveBeenCalledOnce();
+  });
+
+  test("refreshes next seq and retries after a unique constraint collision", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"hello"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        return makeAssistantResult({
+          content: [{ type: "text", text: "hi there" }],
+        });
+      },
+    };
+
+    const originalAppend = messagesRepo.append.bind(messagesRepo);
+    const getNextSeqSpy = vi.spyOn(messagesRepo, "getNextSeq");
+    let injectedCollision = false;
+    vi.spyOn(messagesRepo, "append").mockImplementation((input) => {
+      if (!injectedCollision && input.sessionId === "sess_1" && input.role === "assistant") {
+        injectedCollision = true;
+        originalAppend({
+          id: "msg_external_notice",
+          sessionId: "sess_1",
+          seq: input.seq,
+          role: "user",
+          messageType: "background_task_completion",
+          visibility: "hidden_system",
+          payloadJson: JSON.stringify({
+            content: '<system_event type="background_task_completion">raced</system_event>',
+          }),
+          createdAt: new Date("2026-03-22T00:00:01.500Z"),
+        });
+        const error = new Error(
+          "UNIQUE constraint failed: messages.session_id, messages.seq",
+        ) as Error & { code?: string };
+        error.code = "SQLITE_CONSTRAINT_UNIQUE";
+        throw error;
+      }
+      return originalAppend(input);
+    });
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(result.events.some((event) => event.type === "run_failed")).toBe(false);
+    expect(getNextSeqSpy).toHaveBeenCalledTimes(2);
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows.map((row) => row.seq)).toEqual([1, 2, 3]);
+    expect(rows[1]?.messageType).toBe("background_task_completion");
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toEqual({
+      content: [{ type: "text", text: "hi there" }],
+    });
+  });
+
   test("keeps image bytes only for the active user turn across multi-request runs", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
