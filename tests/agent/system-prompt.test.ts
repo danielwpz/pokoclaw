@@ -335,6 +335,12 @@ describe("agent system prompt", () => {
     expect(prompt).toContain(
       'After schedule_task action="run" succeeds, you will not directly observe that background run\'s full execution result inside the current run, and you should not manually simulate the same work yourself here.',
     );
+    expect(prompt).toContain("Use background_task for one-shot asynchronous work");
+    expect(prompt).toContain(
+      "Hard requirement: the background task itself must not require additional user interaction",
+    );
+    expect(prompt).toContain('Default to contextMode="isolated"');
+    expect(prompt).toContain("list_background_tasks");
     expect(prompt).toContain(
       "Do not simulate scheduling by waiting in the current run, sleeping in bash, or keeping the agent occupied until later.",
     );
@@ -440,6 +446,10 @@ describe("agent system prompt", () => {
     expect(prompt).toContain(
       'After schedule_task action="run" succeeds, you will not directly observe that background run\'s full execution result inside the current run, and you should not manually simulate the same work yourself here.',
     );
+    expect(prompt).toContain("Use background_task for one-shot asynchronous work");
+    expect(prompt).toContain("list_background_tasks");
+    expect(prompt).toContain("If your current step is blocked on one background task result");
+    expect(prompt).toContain("wait_task");
     expect(prompt).toContain(
       "Do not simulate scheduling by waiting in the current run, sleeping in bash, or keeping the agent occupied until later.",
     );

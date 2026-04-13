@@ -85,6 +85,16 @@ export interface ToolRuntimeControl {
     accepted: boolean;
     cronJobId: string;
   }>;
+  startBackgroundTask?(input: {
+    sourceSessionId: string;
+    description: string;
+    task: string;
+    contextMode?: "isolated" | "group";
+  }): Promise<{
+    accepted: boolean;
+    taskRunId: string;
+  }>;
+  suppressBackgroundTaskCompletionNotice?(input: { taskRunId: string }): void;
 }
 
 export interface ToolExecutionApprovalState {

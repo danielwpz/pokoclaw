@@ -21,6 +21,9 @@ describe("builtin tools", () => {
     expect(registry.has("review_permission_request")).toBe(true);
     expect(registry.has("create_subagent")).toBe(true);
     expect(registry.has("schedule_task")).toBe(true);
+    expect(registry.has("background_task")).toBe(true);
+    expect(registry.has("wait_task")).toBe(true);
+    expect(registry.has("list_background_tasks")).toBe(true);
     expect(registry.has("web_search")).toBe(false);
     expect(registry.has("web_fetch")).toBe(false);
     expect(registry.list().map((tool) => tool.name)).toEqual([
@@ -38,6 +41,9 @@ describe("builtin tools", () => {
       "review_permission_request",
       "create_subagent",
       "schedule_task",
+      "background_task",
+      "wait_task",
+      "list_background_tasks",
     ]);
   });
 

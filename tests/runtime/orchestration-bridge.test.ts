@@ -254,6 +254,11 @@ describe("RuntimeOrchestrationBridge", () => {
           accepted: true,
           cronJobId: "cron_sub_1",
         })),
+        startBackgroundTask: vi.fn(async () => ({
+          accepted: true,
+          taskRunId: "task_bg_1",
+        })),
+        suppressBackgroundTaskCompletionNotice: vi.fn(),
       },
     });
 
@@ -264,6 +269,51 @@ describe("RuntimeOrchestrationBridge", () => {
     ).resolves.toEqual({
       accepted: true,
       cronJobId: "cron_sub_1",
+    });
+  });
+
+  test("forwards background task start and suppress requests to the attached manager", async () => {
+    const startBackgroundTask = vi.fn(async () => ({
+      accepted: true,
+      taskRunId: "task_bg_1",
+    }));
+    const suppressBackgroundTaskCompletionNotice = vi.fn();
+    const bridge = createRuntimeOrchestrationBridge({
+      manager: {
+        emitRuntimeEvent: vi.fn(),
+        submitSubagentCreationRequest: vi.fn(),
+        runCronJobNow: vi.fn(async () => ({
+          accepted: true,
+          cronJobId: "cron_sub_1",
+        })),
+        startBackgroundTask,
+        suppressBackgroundTaskCompletionNotice,
+      },
+    });
+
+    await expect(
+      bridge.runtimeControl.startBackgroundTask?.({
+        sourceSessionId: "sess_sub",
+        description: "Run background checks",
+        task: "Execute checks and summarize findings.",
+        contextMode: "isolated",
+      }),
+    ).resolves.toEqual({
+      accepted: true,
+      taskRunId: "task_bg_1",
+    });
+    expect(startBackgroundTask).toHaveBeenCalledExactlyOnceWith({
+      sourceSessionId: "sess_sub",
+      description: "Run background checks",
+      task: "Execute checks and summarize findings.",
+      contextMode: "isolated",
+    });
+
+    bridge.runtimeControl.suppressBackgroundTaskCompletionNotice?.({
+      taskRunId: "task_bg_1",
+    });
+    expect(suppressBackgroundTaskCompletionNotice).toHaveBeenCalledExactlyOnceWith({
+      taskRunId: "task_bg_1",
     });
   });
 });
