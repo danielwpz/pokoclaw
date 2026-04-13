@@ -36,4 +36,82 @@ describe("session policy", () => {
       }),
     ).toBe(false);
   });
+
+  test("allows background_task only in main or sub chat sessions", () => {
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "main",
+        toolName: "background_task",
+      }),
+    ).toBe(true);
+
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "sub",
+        toolName: "background_task",
+      }),
+    ).toBe(true);
+
+    expect(
+      isToolAllowedForSession({
+        purpose: "task",
+        agentKind: "sub",
+        toolName: "background_task",
+      }),
+    ).toBe(false);
+  });
+
+  test("allows wait_task only in sub chat sessions", () => {
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "sub",
+        toolName: "wait_task",
+      }),
+    ).toBe(true);
+
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "main",
+        toolName: "wait_task",
+      }),
+    ).toBe(false);
+
+    expect(
+      isToolAllowedForSession({
+        purpose: "task",
+        agentKind: "sub",
+        toolName: "wait_task",
+      }),
+    ).toBe(false);
+  });
+
+  test("allows list_background_tasks only in main or sub chat sessions", () => {
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "main",
+        toolName: "list_background_tasks",
+      }),
+    ).toBe(true);
+
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "sub",
+        toolName: "list_background_tasks",
+      }),
+    ).toBe(true);
+
+    expect(
+      isToolAllowedForSession({
+        purpose: "task",
+        agentKind: "sub",
+        toolName: "list_background_tasks",
+      }),
+    ).toBe(false);
+  });
 });

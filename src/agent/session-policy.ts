@@ -35,6 +35,18 @@ export function isToolAllowedForSession(input: {
     return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
   }
 
+  if (input.toolName === "background_task") {
+    return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
+  }
+
+  if (input.toolName === "wait_task") {
+    return input.purpose === "chat" && input.agentKind === "sub";
+  }
+
+  if (input.toolName === "list_background_tasks") {
+    return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
+  }
+
   if (input.toolName === "finish_task") {
     return input.purpose === "task";
   }

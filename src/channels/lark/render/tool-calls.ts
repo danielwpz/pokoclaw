@@ -259,6 +259,12 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
       return summarizeScheduleTask(args);
     case "create_subagent":
       return summarizeCreateSubagent(args);
+    case "background_task":
+      return summarizeBackgroundTask(args);
+    case "wait_task":
+      return summarizeWaitTask(args);
+    case "list_background_tasks":
+      return summarizeListBackgroundTasks(args);
     case "finish_task":
       return summarizeFinishTask(args);
     case "request_permissions":
@@ -323,6 +329,19 @@ function summarizeScheduleTask(args: Record<string, unknown> | null): string {
 
 function summarizeCreateSubagent(args: Record<string, unknown> | null): string {
   return readString(args?.title) ?? "";
+}
+
+function summarizeBackgroundTask(args: Record<string, unknown> | null): string {
+  return summarizeParts("后台任务", readString(args?.description));
+}
+
+function summarizeWaitTask(args: Record<string, unknown> | null): string {
+  return summarizeParts("等待任务", readString(args?.taskRunId));
+}
+
+function summarizeListBackgroundTasks(args: Record<string, unknown> | null): string {
+  const status = readString(args?.status);
+  return status == null ? "后台任务列表" : `后台任务列表 (${status})`;
 }
 
 function summarizeFinishTask(args: Record<string, unknown> | null): string {

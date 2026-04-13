@@ -57,11 +57,16 @@ import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import { TaskWorkstreamsRepo } from "@/src/storage/repos/task-workstreams.repo.js";
-import type { SubagentCreationRequest } from "@/src/storage/schema/types.js";
+import type { SubagentCreationRequest, TaskRun } from "@/src/storage/schema/types.js";
+import {
+  buildBackgroundTaskPayload,
+  parseBackgroundTaskPayload,
+} from "@/src/tasks/background-task-payload.js";
 import { TaskExecutionRunner, type TaskExecutionRunResult } from "@/src/tasks/runner.js";
 
 const logger = createSubsystemLogger("orchestration/agent-manager");
@@ -93,16 +98,33 @@ export interface ResolveSubagentCreationRequestResult {
   shareLink: string | null;
 }
 
+interface PendingBackgroundTaskCompletionNotice {
+  taskRunId: string;
+  sourceSessionId: string;
+  content: string;
+  createdAt: Date;
+}
+
 // AgentManager is the orchestration-facing runtime entrypoint.
 // It sits above session-local runtime ingress and handles cross-session
 // coordination such as delegated approvals without pulling that logic into
 // AgentLoop or session lanes.
 export class AgentManager {
   private readonly inflightRuntimeEventTasks = new Set<Promise<void>>();
+  private readonly suppressedBackgroundTaskCompletionNotices = new Set<string>();
+  private readonly activeSessionRuns = new Set<string>();
+  private readonly pendingBackgroundTaskCompletionNotices = new Map<
+    string,
+    PendingBackgroundTaskCompletionNotice[]
+  >();
 
   constructor(private readonly deps: AgentManagerDependencies) {}
 
   submitUserMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
+    this.flushBackgroundTaskCompletionNoticesForSession({
+      sessionId: input.sessionId,
+      trigger: "submit_user_message",
+    });
     return this.deps.ingress.submitMessage(input);
   }
 
@@ -541,6 +563,93 @@ export class AgentManager {
     }).runJobNow(input.jobId);
   }
 
+  async startBackgroundTask(input: {
+    sourceSessionId: string;
+    description: string;
+    task: string;
+    contextMode?: "isolated" | "group";
+  }): Promise<{
+    accepted: boolean;
+    taskRunId: string;
+  }> {
+    const sessionsRepo = new SessionsRepo(this.deps.storage);
+    const agentsRepo = new AgentsRepo(this.deps.storage);
+    const sourceSession = sessionsRepo.getById(input.sourceSessionId);
+    if (sourceSession == null) {
+      throw new Error(`Cannot start background task from unknown session ${input.sourceSessionId}`);
+    }
+    if (sourceSession.purpose !== "chat") {
+      throw new Error(
+        `Cannot start background task from non-chat session ${sourceSession.id} (${sourceSession.purpose})`,
+      );
+    }
+    if (sourceSession.ownerAgentId == null) {
+      throw new Error(`Cannot start background task from unowned session ${sourceSession.id}`);
+    }
+
+    const ownerAgent = agentsRepo.getById(sourceSession.ownerAgentId);
+    if (ownerAgent == null || (ownerAgent.kind !== "main" && ownerAgent.kind !== "sub")) {
+      throw new Error(
+        `Cannot start background task from unsupported agent kind ${ownerAgent?.kind ?? "unknown"} in session ${sourceSession.id}`,
+      );
+    }
+    const description = input.description.trim();
+    const taskDefinition = input.task.trim();
+    if (description.length === 0 || taskDefinition.length === 0) {
+      throw new Error("Cannot start background task with empty description or task definition.");
+    }
+
+    const contextMode = input.contextMode === "group" ? "group" : "isolated";
+    const created = this.createTaskExecution({
+      runType: "delegate",
+      ownerAgentId: ownerAgent.id,
+      conversationId: sourceSession.conversationId,
+      branchId: sourceSession.branchId,
+      initiatorSessionId: sourceSession.id,
+      forkSourceSessionId: contextMode === "group" ? sourceSession.id : null,
+      contextMode,
+      description,
+      inputJson: buildBackgroundTaskPayload(taskDefinition),
+    });
+
+    logger.info("starting background task run asynchronously", {
+      sourceSessionId: sourceSession.id,
+      ownerAgentId: ownerAgent.id,
+      taskRunId: created.taskRun.id,
+      executionSessionId: created.executionSession.id,
+      contextMode,
+    });
+
+    void this.runCreatedTaskExecution({ created })
+      .then((result) => {
+        logger.info("background task run settled", {
+          sourceSessionId: sourceSession.id,
+          taskRunId: created.taskRun.id,
+          status: result.status,
+        });
+      })
+      .catch((error: unknown) => {
+        logger.error("background task run failed before settlement", {
+          sourceSessionId: sourceSession.id,
+          taskRunId: created.taskRun.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+
+    return {
+      accepted: true,
+      taskRunId: created.taskRun.id,
+    };
+  }
+
+  suppressBackgroundTaskCompletionNotice(input: { taskRunId: string }): void {
+    this.suppressedBackgroundTaskCompletionNotices.add(input.taskRunId);
+    const removedCount = this.removeQueuedBackgroundTaskCompletionNotice(input.taskRunId);
+    if (removedCount > 0) {
+      this.suppressedBackgroundTaskCompletionNotices.delete(input.taskRunId);
+    }
+  }
+
   completeTaskExecution(input: {
     taskRunId: string;
     resultSummary?: string | null;
@@ -554,6 +663,7 @@ export class AgentManager {
     });
     logSettledTaskExecution("completed", settled);
     this.publishTaskRunSettledEvent("task_run_completed", settled);
+    this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
     return settled;
   }
 
@@ -570,6 +680,7 @@ export class AgentManager {
     });
     logSettledTaskExecution("blocked", settled);
     this.publishTaskRunSettledEvent("task_run_blocked", settled);
+    this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
     return settled;
   }
 
@@ -588,6 +699,7 @@ export class AgentManager {
     });
     logSettledTaskExecution("failed", settled);
     this.publishTaskRunSettledEvent("task_run_failed", settled);
+    this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
     return settled;
   }
 
@@ -606,10 +718,12 @@ export class AgentManager {
     });
     logSettledTaskExecution("cancelled", settled);
     this.publishTaskRunSettledEvent("task_run_cancelled", settled);
+    this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
     return settled;
   }
 
   emitRuntimeEvent(event: AgentRuntimeEvent): void {
+    this.trackSessionRunLifecycle(event);
     this.publishOutboundEvent(this.projectRuntimeEvent(event));
     const task: Promise<void> = this.handleRuntimeEvent(event)
       .then(() => undefined)
@@ -841,6 +955,161 @@ export class AgentManager {
       }),
     );
   }
+
+  private appendBackgroundTaskCompletionNoticeIfNeeded(taskRun: TaskRun): void {
+    const backgroundPayload = parseBackgroundTaskPayload(taskRun.inputJson);
+    if (taskRun.runType !== "delegate" || backgroundPayload == null) {
+      return;
+    }
+    if (taskRun.initiatorSessionId == null) {
+      return;
+    }
+
+    if (this.suppressedBackgroundTaskCompletionNotices.has(taskRun.id)) {
+      this.suppressedBackgroundTaskCompletionNotices.delete(taskRun.id);
+      logger.debug("skipped background task completion notice because it was suppressed", {
+        taskRunId: taskRun.id,
+      });
+      return;
+    }
+
+    const sessionsRepo = new SessionsRepo(this.deps.storage);
+    const sourceSession = sessionsRepo.getById(taskRun.initiatorSessionId);
+    if (sourceSession == null || sourceSession.purpose !== "chat") {
+      return;
+    }
+
+    const finishedAtDate =
+      taskRun.finishedAt == null || Number.isNaN(Date.parse(taskRun.finishedAt))
+        ? new Date()
+        : new Date(taskRun.finishedAt);
+    const content = renderBackgroundTaskCompletionNotice({
+      taskRun,
+      taskDefinition: backgroundPayload.taskDefinition,
+    });
+
+    this.enqueueBackgroundTaskCompletionNotice({
+      taskRunId: taskRun.id,
+      sourceSessionId: sourceSession.id,
+      content,
+      createdAt: finishedAtDate,
+    });
+    this.flushBackgroundTaskCompletionNoticesForSession({
+      sessionId: sourceSession.id,
+      trigger: "task_settled",
+    });
+  }
+
+  private trackSessionRunLifecycle(event: AgentRuntimeEvent): void {
+    if (event.type === "run_started") {
+      this.activeSessionRuns.add(event.sessionId);
+      return;
+    }
+    if (
+      event.type === "run_completed" ||
+      event.type === "run_failed" ||
+      event.type === "run_cancelled"
+    ) {
+      this.activeSessionRuns.delete(event.sessionId);
+      this.flushBackgroundTaskCompletionNoticesForSession({
+        sessionId: event.sessionId,
+        trigger: event.type,
+      });
+    }
+  }
+
+  private enqueueBackgroundTaskCompletionNotice(
+    input: PendingBackgroundTaskCompletionNotice,
+  ): void {
+    const current = this.pendingBackgroundTaskCompletionNotices.get(input.sourceSessionId) ?? [];
+    current.push(input);
+    current.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+    this.pendingBackgroundTaskCompletionNotices.set(input.sourceSessionId, current);
+    logger.info("queued hidden background task completion notice", {
+      taskRunId: input.taskRunId,
+      sourceSessionId: input.sourceSessionId,
+      pendingCount: current.length,
+    });
+  }
+
+  private removeQueuedBackgroundTaskCompletionNotice(taskRunId: string): number {
+    let removed = 0;
+    for (const [sessionId, notices] of this.pendingBackgroundTaskCompletionNotices.entries()) {
+      const next = notices.filter((notice) => notice.taskRunId !== taskRunId);
+      const removedInSession = notices.length - next.length;
+      if (removedInSession === 0) {
+        continue;
+      }
+      removed += removedInSession;
+      if (next.length === 0) {
+        this.pendingBackgroundTaskCompletionNotices.delete(sessionId);
+      } else {
+        this.pendingBackgroundTaskCompletionNotices.set(sessionId, next);
+      }
+    }
+
+    if (removed > 0) {
+      logger.debug("removed queued background task completion notice", {
+        taskRunId,
+        removedCount: removed,
+      });
+    }
+
+    return removed;
+  }
+
+  private flushBackgroundTaskCompletionNoticesForSession(input: {
+    sessionId: string;
+    trigger: string;
+  }): void {
+    const pending = this.pendingBackgroundTaskCompletionNotices.get(input.sessionId);
+    if (pending == null || pending.length === 0) {
+      return;
+    }
+    if (this.activeSessionRuns.has(input.sessionId)) {
+      logger.debug("deferred background task completion notice flush due to active run", {
+        sourceSessionId: input.sessionId,
+        pendingCount: pending.length,
+        trigger: input.trigger,
+      });
+      return;
+    }
+
+    const sourceSession = new SessionsRepo(this.deps.storage).getById(input.sessionId);
+    if (sourceSession == null || sourceSession.purpose !== "chat") {
+      this.pendingBackgroundTaskCompletionNotices.delete(input.sessionId);
+      return;
+    }
+
+    const messagesRepo = new MessagesRepo(this.deps.storage);
+    let appendedCount = 0;
+    for (const notice of pending) {
+      if (this.suppressedBackgroundTaskCompletionNotices.has(notice.taskRunId)) {
+        this.suppressedBackgroundTaskCompletionNotices.delete(notice.taskRunId);
+        continue;
+      }
+      messagesRepo.append({
+        id: randomUUID(),
+        sessionId: sourceSession.id,
+        seq: messagesRepo.getNextSeq(sourceSession.id),
+        role: "user",
+        messageType: "background_task_completion",
+        visibility: "hidden_system",
+        payloadJson: JSON.stringify({ content: notice.content }),
+        createdAt: notice.createdAt,
+      });
+      appendedCount += 1;
+    }
+    this.pendingBackgroundTaskCompletionNotices.delete(input.sessionId);
+
+    if (appendedCount > 0) {
+      logger.info("flushed hidden background task completion notices", {
+        sourceSessionId: sourceSession.id,
+        count: appendedCount,
+        trigger: input.trigger,
+      });
+    }
+  }
 }
 
 function logSettledTaskExecution(
@@ -899,4 +1168,39 @@ function toResolvedDenyOutcome(
   status: string,
 ): "already_created" | "already_denied" | "already_failed" | "already_expired" {
   return toResolvedApproveOutcome(status);
+}
+
+function renderBackgroundTaskCompletionNotice(input: {
+  taskRun: TaskRun;
+  taskDefinition: string;
+}): string {
+  const lines = [
+    '<system_event type="background_task_completion">',
+    `task_run_id: ${input.taskRun.id}`,
+    `status: ${input.taskRun.status}`,
+  ];
+
+  if (input.taskRun.description != null && input.taskRun.description.trim().length > 0) {
+    lines.push(`description: ${input.taskRun.description.trim()}`);
+  }
+  if (input.taskRun.resultSummary != null && input.taskRun.resultSummary.trim().length > 0) {
+    lines.push(`result_summary: ${input.taskRun.resultSummary.trim()}`);
+  }
+  if (input.taskRun.errorText != null && input.taskRun.errorText.trim().length > 0) {
+    lines.push(`error: ${input.taskRun.errorText.trim()}`);
+  }
+  if (input.taskRun.cancelledBy != null && input.taskRun.cancelledBy.trim().length > 0) {
+    lines.push(`cancelled_by: ${input.taskRun.cancelledBy.trim()}`);
+  }
+  if (input.taskRun.finishedAt != null && input.taskRun.finishedAt.trim().length > 0) {
+    lines.push(`finished_at: ${input.taskRun.finishedAt}`);
+  }
+
+  lines.push("task_definition:");
+  lines.push(input.taskDefinition);
+  lines.push(
+    "This is a system completion notice for a background task you started. Do not echo this raw block to the user.",
+  );
+  lines.push("</system_event>");
+  return lines.join("\n");
 }

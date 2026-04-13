@@ -45,6 +45,18 @@ function buildScheduledTaskSharedGuidance(): string[] {
   ];
 }
 
+function buildBackgroundTaskSharedGuidance(): string[] {
+  return [
+    "- Use background_task for one-shot asynchronous work that can run unattended and finish independently.",
+    "- Hard requirement: the background task itself must not require additional user interaction to proceed.",
+    "- If you expect the task still needs user back-and-forth decisions, do not use background_task; keep it in the current chat turn instead.",
+    '- Default to contextMode="isolated" for lower token cost and better isolation.',
+    '- Use contextMode="group" only when the task truly depends on current chat history (for example, explicit references to recent constraints or decisions).',
+    "- Good candidates: independent repo exploration, long-running checks, multi-source web research, batch file processing, and other standalone execution units.",
+    "- Use list_background_tasks to inspect running tasks and recent settled results launched from this chat session.",
+  ];
+}
+
 export interface WorkspaceRuntimePromptContext {
   currentDate?: string | null;
   timezone?: string | null;
@@ -104,6 +116,7 @@ export function buildMainAgentOperatingModelSection(): string {
     "- When you create a SubAgent, give it a clear title, a durable description, a precise kickoff task, and the smallest reasonable working scope.",
     "- If create_subagent returns a pending confirmation result, tell the user the request is waiting for confirmation instead of claiming the SubAgent already exists.",
     "- When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
+    ...buildBackgroundTaskSharedGuidance(),
     ...buildVisibleReplyContinuationGuidance(),
   ]);
 }
@@ -184,6 +197,9 @@ export function buildSubagentOperatingModelSection(): string {
     "- Use the configured workdir as your default project root unless the user clearly redirects you.",
     "- Keep your replies grounded in the actual work you have done in this task context.",
     "- When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
+    ...buildBackgroundTaskSharedGuidance(),
+    "- If your current step is blocked on one background task result and wait_task is available, use wait_task for that specific run.",
+    "- If immediate waiting is unnecessary, keep progressing and check later with list_background_tasks.",
     ...buildVisibleReplyContinuationGuidance(),
   ]);
 }

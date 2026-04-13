@@ -68,6 +68,16 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+async function waitForCondition(condition: () => boolean, attempts = 40): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for condition.");
+}
+
 function createDeferredPromise<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -629,6 +639,245 @@ describe("AgentManager", () => {
         purpose: "task",
         status: "completed",
       });
+    });
+  });
+
+  test("starts background tasks asynchronously and appends a hidden completion notice", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(
+            async (input: SubmitMessageInput): Promise<SubmitMessageResult> =>
+              createStartedTaskRunResult({
+                sessionId: input.sessionId,
+                scenario: "task",
+                summary: "Background task finished.",
+                finalMessage: "Background task finished.",
+              }),
+          ),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const started = await manager.startBackgroundTask({
+        sourceSessionId: "sess_main",
+        description: "Run background analysis",
+        task: "Analyze runtime logs and summarize issues.",
+        contextMode: "isolated",
+      });
+
+      expect(started.accepted).toBe(true);
+
+      await waitForCondition(() => {
+        const taskRun = manager.getTaskRunLiveState(started.taskRunId)?.taskRun;
+        return taskRun?.status === "completed";
+      });
+
+      const hiddenNotices = messagesRepo
+        .listBySession("sess_main")
+        .filter(
+          (message) =>
+            message.messageType === "background_task_completion" &&
+            message.visibility === "hidden_system",
+        );
+      expect(hiddenNotices).toHaveLength(1);
+      expect(JSON.parse(hiddenNotices[0]?.payloadJson ?? "{}")).toEqual({
+        content: expect.stringContaining('<system_event type="background_task_completion">'),
+      });
+      expect(JSON.parse(hiddenNotices[0]?.payloadJson ?? "{}").content).toContain(
+        started.taskRunId,
+      );
+    });
+  });
+
+  test("defers hidden completion notice while caller run is active and flushes after run completion", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(
+            async (input: SubmitMessageInput): Promise<SubmitMessageResult> =>
+              createStartedTaskRunResult({
+                sessionId: input.sessionId,
+                scenario: "task",
+                summary: "Background task finished.",
+                finalMessage: "Background task finished.",
+              }),
+          ),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      manager.emitRuntimeEvent({
+        type: "run_started",
+        eventId: "evt_run_started_1",
+        createdAt: "2026-03-25T00:00:02.000Z",
+        sessionId: "sess_main",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        runId: "run_main_1",
+        scenario: "chat",
+        modelId: "test-model",
+      });
+
+      const started = await manager.startBackgroundTask({
+        sourceSessionId: "sess_main",
+        description: "Run background analysis",
+        task: "Analyze runtime logs and summarize issues.",
+        contextMode: "isolated",
+      });
+
+      await waitForCondition(() => {
+        const taskRun = manager.getTaskRunLiveState(started.taskRunId)?.taskRun;
+        return taskRun?.status === "completed";
+      });
+
+      const beforeFlush = messagesRepo
+        .listBySession("sess_main")
+        .filter((message) => message.messageType === "background_task_completion");
+      expect(beforeFlush).toHaveLength(0);
+
+      manager.emitRuntimeEvent({
+        type: "run_completed",
+        eventId: "evt_run_completed_1",
+        createdAt: "2026-03-25T00:00:05.000Z",
+        sessionId: "sess_main",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        runId: "run_main_1",
+        scenario: "chat",
+        modelId: "test-model",
+        appendedMessageIds: [],
+        toolExecutions: 0,
+        compactionRequested: false,
+      });
+
+      const hiddenNotices = messagesRepo
+        .listBySession("sess_main")
+        .filter((message) => message.messageType === "background_task_completion");
+      expect(hiddenNotices).toHaveLength(1);
+      expect(JSON.parse(hiddenNotices[0]?.payloadJson ?? "{}").content).toContain(
+        started.taskRunId,
+      );
+    });
+  });
+
+  test("suppresses hidden completion notice when requested for a background task run", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
+      const submitGate = createDeferredPromise<SubmitMessageResult>();
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async (_input: SubmitMessageInput): Promise<SubmitMessageResult> => {
+            return submitGate.promise;
+          }),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const started = await manager.startBackgroundTask({
+        sourceSessionId: "sess_main",
+        description: "Run background analysis",
+        task: "Analyze runtime logs and summarize issues.",
+        contextMode: "isolated",
+      });
+      manager.suppressBackgroundTaskCompletionNotice({
+        taskRunId: started.taskRunId,
+      });
+
+      submitGate.resolve(
+        createStartedTaskRunResult({
+          sessionId: "sess_main",
+          scenario: "task",
+          summary: "Background task finished.",
+          finalMessage: "Background task finished.",
+        }),
+      );
+      await waitForCondition(() => {
+        const taskRun = manager.getTaskRunLiveState(started.taskRunId)?.taskRun;
+        return taskRun?.status === "completed";
+      });
+
+      const hiddenNotices = messagesRepo
+        .listBySession("sess_main")
+        .filter((message) => message.messageType === "background_task_completion");
+      expect(hiddenNotices).toHaveLength(0);
+    });
+  });
+
+  test("suppression removes queued hidden completion notice before caller run completes", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(
+            async (input: SubmitMessageInput): Promise<SubmitMessageResult> =>
+              createStartedTaskRunResult({
+                sessionId: input.sessionId,
+                scenario: "task",
+                summary: "Background task finished.",
+                finalMessage: "Background task finished.",
+              }),
+          ),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      manager.emitRuntimeEvent({
+        type: "run_started",
+        eventId: "evt_run_started_2",
+        createdAt: "2026-03-25T00:00:02.000Z",
+        sessionId: "sess_main",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        runId: "run_main_2",
+        scenario: "chat",
+        modelId: "test-model",
+      });
+
+      const started = await manager.startBackgroundTask({
+        sourceSessionId: "sess_main",
+        description: "Run background analysis",
+        task: "Analyze runtime logs and summarize issues.",
+        contextMode: "isolated",
+      });
+
+      await waitForCondition(() => {
+        const taskRun = manager.getTaskRunLiveState(started.taskRunId)?.taskRun;
+        return taskRun?.status === "completed";
+      });
+      manager.suppressBackgroundTaskCompletionNotice({
+        taskRunId: started.taskRunId,
+      });
+
+      manager.emitRuntimeEvent({
+        type: "run_completed",
+        eventId: "evt_run_completed_2",
+        createdAt: "2026-03-25T00:00:06.000Z",
+        sessionId: "sess_main",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        runId: "run_main_2",
+        scenario: "chat",
+        modelId: "test-model",
+        appendedMessageIds: [],
+        toolExecutions: 0,
+        compactionRequested: false,
+      });
+
+      const hiddenNotices = messagesRepo
+        .listBySession("sess_main")
+        .filter((message) => message.messageType === "background_task_completion");
+      expect(hiddenNotices).toHaveLength(0);
     });
   });
 

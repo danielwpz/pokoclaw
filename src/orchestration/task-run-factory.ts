@@ -50,7 +50,7 @@ export function createTaskExecution(input: {
   return input.db.transaction((tx) => {
     const sessionsRepo = new SessionsRepo(tx);
     const taskRunsRepo = new TaskRunsRepo(tx);
-    const forkSourceSessionId = input.params.forkSourceSessionId ?? input.params.initiatorSessionId;
+    const forkSourceSessionId = input.params.forkSourceSessionId ?? null;
 
     if (forkSourceSessionId != null) {
       materializeForkedSessionSnapshotInStorage({

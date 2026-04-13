@@ -815,7 +815,7 @@ export class AgentLoop {
           usage: response.usage,
           createdAt: new Date(),
         });
-        nextSeq += 1;
+        nextSeq = assistantMessage.seq + 1;
         messages.push(assistantMessage);
         appendedMessageIds.push(assistantMessageId);
         logger.info("assistant response completed", {
@@ -970,7 +970,7 @@ export class AgentLoop {
               } satisfies AgentToolResultPayload,
               createdAt: new Date(),
             });
-            nextSeq += 1;
+            nextSeq = toolResultMessage.seq + 1;
             messages.push(toolResultMessage);
             appendedMessageIds.push(toolResultMessageId);
             toolExecutions += 1;
@@ -1068,7 +1068,7 @@ export class AgentLoop {
               } satisfies AgentToolResultPayload,
               createdAt: new Date(),
             });
-            nextSeq += 1;
+            nextSeq = toolResultMessage.seq + 1;
             messages.push(toolResultMessage);
             appendedMessageIds.push(toolResultMessageId);
             toolExecutions += 1;
@@ -1665,7 +1665,7 @@ export class AgentLoop {
           })),
         });
       }
-      nextSeq += 1;
+      nextSeq = message.seq + 1;
       messageIds.push(messageId);
       input.messages.push(message);
       input.appendedMessageIds.push(messageId);
@@ -1724,7 +1724,7 @@ function appendMessageAndHydrate(input: {
   repo: MessagesRepo;
   sessionId: string;
   messageId: string;
-  seq: number;
+  seq?: number;
   role: string;
   messageType: string;
   visibility: string;
@@ -1741,30 +1741,42 @@ function appendMessageAndHydrate(input: {
   createdAt: Date;
 }): Message {
   const payloadJson = JSON.stringify(input.payload);
-  input.repo.append({
-    id: input.messageId,
-    sessionId: input.sessionId,
-    seq: input.seq,
-    role: input.role,
-    messageType: input.messageType,
-    visibility: input.visibility,
-    channelMessageId: input.channelMessageId ?? null,
-    channelParentMessageId: input.channelParentMessageId ?? null,
-    channelThreadId: input.channelThreadId ?? null,
-    provider: input.provider ?? null,
-    model: input.model ?? null,
-    modelApi: input.modelApi ?? null,
-    stopReason: input.stopReason ?? null,
-    errorMessage: input.errorMessage ?? null,
-    payloadJson,
-    usage: input.usage ?? null,
-    createdAt: input.createdAt,
-  });
+  let seq = input.seq ?? input.repo.getNextSeq(input.sessionId);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      input.repo.append({
+        id: input.messageId,
+        sessionId: input.sessionId,
+        seq,
+        role: input.role,
+        messageType: input.messageType,
+        visibility: input.visibility,
+        channelMessageId: input.channelMessageId ?? null,
+        channelParentMessageId: input.channelParentMessageId ?? null,
+        channelThreadId: input.channelThreadId ?? null,
+        provider: input.provider ?? null,
+        model: input.model ?? null,
+        modelApi: input.modelApi ?? null,
+        stopReason: input.stopReason ?? null,
+        errorMessage: input.errorMessage ?? null,
+        payloadJson,
+        usage: input.usage ?? null,
+        createdAt: input.createdAt,
+      });
+      break;
+    } catch (error) {
+      if (attempt === 0 && isMessageSeqUniqueConstraintError(error)) {
+        seq = input.repo.getNextSeq(input.sessionId);
+        continue;
+      }
+      throw error;
+    }
+  }
 
   return {
     id: input.messageId,
     sessionId: input.sessionId,
-    seq: input.seq,
+    seq,
     role: input.role,
     messageType: input.messageType,
     visibility: input.visibility,
@@ -1900,8 +1912,22 @@ function appendPartialStreamedAssistantMessageOnFailure(input: {
     branchId: input.branchId,
     runId: input.runId,
   });
+  return assistantMessage.seq + 1;
+}
 
-  return input.nextSeq + 1;
+function isMessageSeqUniqueConstraintError(error: unknown): boolean {
+  if (typeof error !== "object" || error == null) {
+    return false;
+  }
+  const maybeCode = "code" in error ? error.code : undefined;
+  if (maybeCode === "SQLITE_CONSTRAINT_UNIQUE") {
+    return true;
+  }
+  const maybeMessage = "message" in error ? error.message : undefined;
+  return (
+    typeof maybeMessage === "string" &&
+    maybeMessage.includes("UNIQUE constraint failed: messages.session_id, messages.seq")
+  );
 }
 
 function collectAssistantText(content: AgentAssistantContentBlock[]): string {

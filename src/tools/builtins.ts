@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
+import { createBackgroundTaskTool } from "@/src/tools/background-task.js";
 import { createBashTool } from "@/src/tools/bash.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createCreateSubagentTool } from "@/src/tools/create-subagent.js";
@@ -8,12 +9,14 @@ import { createEditTool } from "@/src/tools/edit.js";
 import { createFinishTaskTool } from "@/src/tools/finish-task.js";
 import { createGetRuntimeStatusTool } from "@/src/tools/get-runtime-status.js";
 import { createGrepTool } from "@/src/tools/grep.js";
+import { createListBackgroundTasksTool } from "@/src/tools/list-background-tasks.js";
 import { createListDirTool } from "@/src/tools/list-dir.js";
 import { createLsTool } from "@/src/tools/ls.js";
 import { createQuerySystemDbTool } from "@/src/tools/query-system-db.js";
 import { createReadTool } from "@/src/tools/read.js";
 import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
 import { createReviewPermissionRequestTool } from "@/src/tools/review-permission-request.js";
+import { createWaitTaskTool } from "@/src/tools/wait-task.js";
 import { createWebFetchTool } from "@/src/tools/web/fetch.js";
 import { createWebSearchTool } from "@/src/tools/web/search.js";
 import { createWriteTool } from "@/src/tools/write.js";
@@ -38,6 +41,9 @@ export function createBuiltinToolRegistry(
   registry.register(createReviewPermissionRequestTool());
   registry.register(createCreateSubagentTool());
   registry.register(createScheduleTaskTool());
+  registry.register(createBackgroundTaskTool());
+  registry.register(createWaitTaskTool());
+  registry.register(createListBackgroundTasksTool());
   if (toolsConfig.web.search.enabled) {
     const providerId = toolsConfig.web.search.provider;
     const providerConfig = providerId == null ? null : (providers[providerId] ?? null);

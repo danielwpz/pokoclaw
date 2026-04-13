@@ -14,7 +14,11 @@ const logger = createSubsystemLogger("runtime-orchestration-bridge");
 
 type RuntimeOrchestrationTarget = Pick<
   AgentManager,
-  "emitRuntimeEvent" | "submitSubagentCreationRequest" | "runCronJobNow"
+  | "emitRuntimeEvent"
+  | "submitSubagentCreationRequest"
+  | "runCronJobNow"
+  | "startBackgroundTask"
+  | "suppressBackgroundTaskCompletionNotice"
 >;
 
 export class RuntimeOrchestrationBridge {
@@ -49,6 +53,22 @@ export class RuntimeOrchestrationBridge {
       });
 
       return result;
+    },
+    startBackgroundTask: async (input) => {
+      const result = await this.requireManager("startBackgroundTask").startBackgroundTask(input);
+
+      logger.info("submitted background task through runtime bridge", {
+        sourceSessionId: input.sourceSessionId,
+        taskRunId: result.taskRunId,
+        accepted: result.accepted,
+      });
+
+      return result;
+    },
+    suppressBackgroundTaskCompletionNotice: (input) => {
+      this.requireManager(
+        "suppressBackgroundTaskCompletionNotice",
+      ).suppressBackgroundTaskCompletionNotice(input);
     },
   };
 
