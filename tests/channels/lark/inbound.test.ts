@@ -11,6 +11,7 @@ import {
   createLarkQuoteMessageFetcher,
   normalizeLarkTextMessage,
 } from "@/src/channels/lark/inbound.js";
+import { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
 import type { RuntimeStatusService } from "@/src/runtime/status.js";
@@ -234,6 +235,68 @@ describe("lark inbound message handling", () => {
         content: "hello from lark",
         channelMessageId: "om_msg_1",
         createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+    });
+  });
+
+  test("adds a pending reaction when ingress reports a steered message", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+      surfacesRepo.upsert({
+        id: "surface_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "steered" as const }));
+      const reactionCreate = vi.fn(async () => ({ data: { reaction_id: "react_pending_1" } }));
+      const clients = {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                messageReaction: {
+                  create: reactionCreate,
+                },
+              },
+            },
+          }) as never,
+      };
+      const steerReactionState = new LarkSteerReactionState();
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        clients,
+        steerReactionState,
+      });
+
+      await handler(makeTextEvent("queue this message"));
+
+      expect(reactionCreate).toHaveBeenCalledExactlyOnceWith({
+        path: {
+          message_id: "om_msg_1",
+        },
+        data: {
+          reaction_type: {
+            emoji_type: "Typing",
+          },
+        },
+      });
+      expect(
+        steerReactionState.takePendingReaction({
+          installationId: "default",
+          messageId: "om_msg_1",
+        }),
+      ).toMatchObject({
+        reactionId: "react_pending_1",
+        emojiType: "Typing",
       });
     });
   });

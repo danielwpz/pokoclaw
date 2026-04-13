@@ -19,10 +19,12 @@ import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { AgentLoopAfterToolResultHook } from "@/src/agent/loop.js";
 import { buildSlashCommandHelpPresentation } from "@/src/channels/help.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
+import { addLarkMessageReaction } from "@/src/channels/lark/reactions.js";
 import {
   buildLarkRenderedModelSwitchCard,
   type LarkModelSwitchCardState,
 } from "@/src/channels/lark/render.js";
+import type { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
 import type { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
@@ -59,6 +61,7 @@ const LARK_INTERACTIVE_TEXT_NODE_LIMIT = 48;
 const LARK_INTERACTIVE_TEXT_CHAR_LIMIT = 4_000;
 const LARK_INTERACTIVE_TEXT_TRUNCATED_NOTICE = "[卡片内容过长，引用文本已截断]";
 const RUN_CARD_OBJECT_KIND = "run_card";
+const STEER_PENDING_REACTION_EMOJI = "Typing";
 
 export interface LarkInboundIngress {
   submitMessage(input: {
@@ -129,6 +132,7 @@ export interface CreateLarkInboundRuntimeInput {
       finishedAt?: Date;
     }): void;
   };
+  steerReactionState?: LarkSteerReactionState;
 }
 
 export interface LarkInboundRuntimeStatus {
@@ -338,6 +342,7 @@ export function createLarkMessageReceiveHandler(input: {
     messageId: string;
   }) => Promise<LarkQuotedMessage | null>;
   taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
+  steerReactionState?: LarkSteerReactionState;
 }): (data: unknown) => Promise<void> {
   return async (data: unknown) => {
     const normalized = normalizeLarkTextMessage(data);
@@ -616,6 +621,29 @@ export function createLarkMessageReceiveHandler(input: {
           submitResult,
           finishedAt: hydrated.createdAt ?? new Date(),
         });
+      }
+      if (
+        submitResult != null &&
+        typeof submitResult === "object" &&
+        "status" in submitResult &&
+        submitResult.status === "steered" &&
+        input.clients != null &&
+        input.steerReactionState != null
+      ) {
+        const client = input.clients.getOrCreate(input.installationId);
+        const reactionId = await addLarkMessageReaction({
+          client,
+          messageId: hydrated.messageId,
+          emojiType: STEER_PENDING_REACTION_EMOJI,
+        });
+        if (reactionId != null) {
+          input.steerReactionState.rememberPendingReaction({
+            installationId: input.installationId,
+            messageId: hydrated.messageId,
+            reactionId,
+            emojiType: STEER_PENDING_REACTION_EMOJI,
+          });
+        }
       }
     } catch (error) {
       if (!isAbortLikeError(error)) {
@@ -1109,6 +1137,9 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
                 }),
               }),
           ...(input.taskThreads == null ? {} : { taskThreads: input.taskThreads }),
+          ...(input.steerReactionState == null
+            ? {}
+            : { steerReactionState: input.steerReactionState }),
         });
         const onCardAction = createLarkCardActionHandler({
           installationId: installation.installationId,

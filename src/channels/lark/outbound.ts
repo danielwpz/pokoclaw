@@ -14,6 +14,10 @@ import {
 } from "@/src/channels/lark/approval-state.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
+  addLarkMessageReaction,
+  removeLarkMessageReaction,
+} from "@/src/channels/lark/reactions.js";
+import {
   buildLarkRenderedApprovalCard,
   buildLarkRenderedRunCardPages,
   buildLarkRenderedSubagentCreationRequestCard,
@@ -31,6 +35,7 @@ import {
   shouldHandleLarkRuntimeEvent,
   shouldHandleLarkTaskRunEvent,
 } from "@/src/channels/lark/run-state.js";
+import type { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
 import type {
   OrchestratedOutboundEventEnvelope,
   OrchestratedRuntimeEventEnvelope,
@@ -53,6 +58,7 @@ const APPROVAL_CARD_OBJECT_KIND = "approval_card";
 const SUBAGENT_REQUEST_CARD_OBJECT_KIND = "subagent_creation_request_card";
 const LARK_CARD_LOG_PREVIEW_MAX_LENGTH = 600;
 const TASK_STATUS_DELIVERY_PREFIX = "task_status:";
+const STEER_CONFIRMED_REACTION_EMOJI = "OK";
 
 interface LarkCardCreateResponse {
   data?: {
@@ -116,6 +122,7 @@ export interface CreateLarkOutboundRuntimeInput {
   clients: {
     getOrCreate(installationId: string): LarkSdkClient;
   };
+  steerReactionState?: LarkSteerReactionState;
 }
 
 export function createLarkOutboundRuntime(
@@ -1190,6 +1197,48 @@ export function createLarkOutboundRuntime(
     }
   };
 
+  const handleSteerConsumedReactionUpdate = async (
+    envelope: OrchestratedRuntimeEventEnvelope,
+  ): Promise<void> => {
+    if (envelope.event.type !== "steer_message_consumed") {
+      return;
+    }
+    const sourceMessageId = envelope.event.channelMessageId;
+    if (sourceMessageId == null || sourceMessageId.length === 0) {
+      return;
+    }
+
+    const deliveryTargets = listLarkDeliveryTargets(input.storage, {
+      conversationId: envelope.target.conversationId,
+      branchId: envelope.target.branchId,
+      taskRunId: envelope.taskRun.taskRunId,
+    });
+
+    for (const target of deliveryTargets) {
+      const client = input.clients.getOrCreate(target.channelInstallationId);
+      await addLarkMessageReaction({
+        client,
+        messageId: sourceMessageId,
+        emojiType: STEER_CONFIRMED_REACTION_EMOJI,
+      });
+      if (input.steerReactionState == null) {
+        continue;
+      }
+      const pending = input.steerReactionState.takePendingReaction({
+        installationId: target.channelInstallationId,
+        messageId: sourceMessageId,
+      });
+      if (pending == null) {
+        continue;
+      }
+      await removeLarkMessageReaction({
+        client,
+        messageId: sourceMessageId,
+        reactionId: pending.reactionId,
+      });
+    }
+  };
+
   return {
     start() {
       if (unsubscribe != null) {
@@ -1287,6 +1336,11 @@ export function createLarkOutboundRuntime(
 
         if (shouldHandleLarkApprovalRuntimeEvent(envelope)) {
           handleApprovalEvent(envelope);
+          return;
+        }
+
+        if (envelope.event.type === "steer_message_consumed") {
+          void handleSteerConsumedReactionUpdate(envelope);
           return;
         }
 

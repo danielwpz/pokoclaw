@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createLarkOutboundRuntime } from "@/src/channels/lark/outbound.js";
 import { buildLarkAssistantElementId } from "@/src/channels/lark/run-state.js";
+import { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
 import type {
   OrchestratedOutboundEventEnvelope,
   OrchestratedRuntimeEventEnvelope,
@@ -393,6 +394,96 @@ describe("lark outbound runtime", () => {
     expect(updateCard).toHaveBeenCalledOnce();
     expect(updateCard.mock.calls.at(0)?.[0]).toMatchObject({
       path: { card_id: "card_1" },
+    });
+
+    await runtime.shutdown();
+  });
+
+  test("updates steer reactions when a queued steer message is consumed", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_1', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_1', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const reactionCreate = vi.fn(async () => ({ data: { reaction_id: "react_ok_1" } }));
+    const reactionDelete = vi.fn(async () => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const steerReactionState = new LarkSteerReactionState();
+    steerReactionState.rememberPendingReaction({
+      installationId: "default",
+      messageId: "om_source_1",
+      reactionId: "react_typing_1",
+      emojiType: "Typing",
+    });
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                messageReaction: {
+                  create: reactionCreate,
+                  delete: reactionDelete,
+                },
+              },
+            },
+          }) as never,
+      },
+      steerReactionState,
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "steer_message_consumed",
+        eventId: "evt_steer_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_steer_1",
+        channelMessageId: "om_source_1",
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(reactionCreate).toHaveBeenCalledExactlyOnceWith({
+      path: {
+        message_id: "om_source_1",
+      },
+      data: {
+        reaction_type: {
+          emoji_type: "OK",
+        },
+      },
+    });
+    expect(reactionDelete).toHaveBeenCalledExactlyOnceWith({
+      path: {
+        message_id: "om_source_1",
+        reaction_id: "react_typing_1",
+      },
     });
 
     await runtime.shutdown();

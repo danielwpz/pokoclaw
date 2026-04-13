@@ -179,6 +179,13 @@ export interface ApprovalResolvedEvent extends AgentRuntimeEventBase {
   rawInput: string | null;
 }
 
+export interface SteerMessageConsumedEvent extends AgentRuntimeEventBase {
+  type: "steer_message_consumed";
+  turn: number;
+  messageId: string;
+  channelMessageId: string | null;
+}
+
 export type AgentRuntimeEvent =
   | RunStartedEvent
   | RunCompletedEvent
@@ -198,7 +205,8 @@ export type AgentRuntimeEvent =
   | CompactionCompletedEvent
   | CompactionFailedEvent
   | ApprovalRequestedEvent
-  | ApprovalResolvedEvent;
+  | ApprovalResolvedEvent
+  | SteerMessageConsumedEvent;
 
 export type AgentRuntimeEventInput =
   | Omit<RunStartedEvent, "eventId" | "createdAt">
@@ -219,4 +227,5 @@ export type AgentRuntimeEventInput =
   | Omit<CompactionCompletedEvent, "eventId" | "createdAt">
   | Omit<CompactionFailedEvent, "eventId" | "createdAt">
   | Omit<ApprovalRequestedEvent, "eventId" | "createdAt">
-  | Omit<ApprovalResolvedEvent, "eventId" | "createdAt">;
+  | Omit<ApprovalResolvedEvent, "eventId" | "createdAt">
+  | Omit<SteerMessageConsumedEvent, "eventId" | "createdAt">;

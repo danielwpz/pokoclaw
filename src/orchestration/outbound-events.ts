@@ -298,6 +298,7 @@ function extractRuntimeObjectAnchors(event: AgentRuntimeEvent): OutboundEventCon
     case "assistant_message_delta":
     case "assistant_reasoning_delta":
     case "assistant_message_completed":
+    case "steer_message_consumed":
       return {
         messageId: event.messageId,
         toolCallId: null,

@@ -16,6 +16,7 @@ import {
   createLarkOutboundRuntime,
   type LarkOutboundRuntime,
 } from "@/src/channels/lark/outbound.js";
+import { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
 import {
   type ConfiguredLarkInstallation,
   isConfiguredLarkInstallation,
@@ -101,6 +102,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
   const enabledInstallations = listEnabledLarkInstallations(input.config);
   const configuredInstallations = listConfiguredLarkInstallations(input.config);
   const clients = input.clients ?? new LarkClientRegistry(configuredInstallations);
+  const steerReactionState = new LarkSteerReactionState();
   const inbound = createLarkInboundRuntime({
     installations: configuredInstallations,
     storage: input.storage,
@@ -112,11 +114,13 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
     ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
     ...(input.taskThreads == null ? {} : { taskThreads: input.taskThreads }),
+    steerReactionState,
   });
   const outbound = createLarkOutboundRuntime({
     storage: input.storage,
     outboundEventBus: input.outboundEventBus,
     clients,
+    steerReactionState,
   });
   let started = false;
 

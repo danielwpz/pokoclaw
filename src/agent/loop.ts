@@ -882,6 +882,11 @@ export class AgentLoop {
             const queuedMessages = this.appendQueuedSteerMessages({
               queuedSteer,
               sessionId: input.sessionId,
+              conversationId: context.session.conversationId,
+              branchId: context.session.branchId,
+              runId,
+              events,
+              turn: turn + 1,
               nextSeq,
               messages,
               appendedMessageIds,
@@ -1088,6 +1093,11 @@ export class AgentLoop {
           const queuedMessages = this.appendQueuedSteerMessages({
             queuedSteer,
             sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            runId,
+            events,
+            turn: turn + 1,
             nextSeq,
             messages,
             appendedMessageIds,
@@ -1608,6 +1618,11 @@ export class AgentLoop {
   private appendQueuedSteerMessages(input: {
     queuedSteer: SteerInput[];
     sessionId: string;
+    conversationId: string;
+    branchId: string;
+    runId: string;
+    events: AgentRuntimeEvent[];
+    turn: number;
     nextSeq: number;
     messages: Message[];
     appendedMessageIds: string[];
@@ -1654,6 +1669,16 @@ export class AgentLoop {
       messageIds.push(messageId);
       input.messages.push(message);
       input.appendedMessageIds.push(messageId);
+      this.recordEvent(input.events, {
+        type: "steer_message_consumed",
+        turn: input.turn,
+        messageId,
+        channelMessageId: queued.channelMessageId ?? null,
+        sessionId: input.sessionId,
+        conversationId: input.conversationId,
+        branchId: input.branchId,
+        runId: input.runId,
+      });
     }
 
     return { nextSeq, messageIds };
