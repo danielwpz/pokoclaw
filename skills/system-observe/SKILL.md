@@ -14,6 +14,7 @@ Use this skill to inspect pokoclaw itself.
 - System database: durable facts such as sessions, messages, task runs, cron jobs, approvals, permission grants, and delegated approval history.
 - Runtime log: host-side operational evidence such as failures, routing decisions, retries, crashes, and subsystem errors.
 - Source code and references: authoritative schema definitions and implementation behavior.
+- Meditation self-harness: a background self-optimization flow. It is not part of the core live run-status surface, but when the question is specifically about whether Meditation ran, why it skipped or failed, or where its artifacts and outputs live, use `references/meditation.md`.
 
 Choose one or more channels based on the question. Do not force a fixed order for every task.
 
@@ -33,6 +34,8 @@ Choose one or more channels based on the question. Do not force a fixed order fo
   - Read `references/runtime-status.md` first.
 - If the task involves runtime logs:
   - Read `references/log-recipes.md` first.
+- If the task explicitly involves Meditation or self-harness background runs:
+  - Read `references/meditation.md` first.
 - If the task is really about implementation behavior:
   - Read the relevant source files first, then use DB facts or logs as supporting evidence.
 
@@ -53,6 +56,7 @@ Choose one or more channels based on the question. Do not force a fixed order fo
 - `references/query-recipes.md`
 - `references/log-recipes.md`
 - `references/runtime-status.md`
+- `references/meditation.md`
 
 Do not skip the required first reads above when they directly apply.
 

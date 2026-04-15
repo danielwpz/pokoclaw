@@ -111,7 +111,11 @@ export function buildMeditationConsolidationRewritePromptInput(input: {
       const approvedPrivateFindings: MeditationApprovedFinding[] = packet.currentFindings.flatMap(
         (finding) => {
           const evaluation = evaluationByFindingId.get(finding.findingId);
-          if (evaluation == null || evaluation.promotion_decision === "keep_in_meditation") {
+          if (
+            evaluation == null ||
+            evaluation.promotion_decision === "keep_in_meditation" ||
+            !isEligibleForMemoryPromotion(evaluation)
+          ) {
             return [];
           }
           const approvedFinding: MeditationApprovedFinding = {
@@ -159,6 +163,12 @@ export function buildMeditationConsolidationRewritePromptInput(input: {
     approvedSharedFindings,
     bucketPackets,
   };
+}
+
+function isEligibleForMemoryPromotion(
+  evaluation: ConsolidationEvaluationSubmit["evaluations"][number],
+): boolean {
+  return evaluation.priority === "high" && evaluation.durability === "durable";
 }
 
 export function validateConsolidationEvaluations(input: {

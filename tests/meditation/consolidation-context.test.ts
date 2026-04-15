@@ -209,8 +209,8 @@ describe("meditation consolidation context", () => {
           },
           {
             finding_id: "bucket_main_1/finding-1",
-            priority: "medium",
-            durability: "recurring",
+            priority: "high",
+            durability: "durable",
             promotion_decision: "shared_memory",
             reason: "This should influence shared coordination behavior.",
           },
@@ -403,5 +403,58 @@ describe("meditation consolidation context", () => {
         },
       }),
     ).toThrow("cannot target private_memory for non-sub packet");
+  });
+
+  test("keeps medium recurring promotions out of rewrite input", () => {
+    const rewritePromptInput = buildMeditationConsolidationRewritePromptInput({
+      evaluationPromptInput: {
+        currentDate: "2026-04-08",
+        timezone: "UTC",
+        sharedMemoryCurrent: "# Shared Memory\n",
+        bucketPackets: [
+          {
+            bucketId: "bucket_sub_1",
+            agentId: "agent_sub_1",
+            agentKind: "sub",
+            displayName: "Atlas Frontend",
+            description: null,
+            workdir: null,
+            compactSummary: null,
+            privateMemoryCurrent: "# Private Memory\n",
+            bucketNote: "note",
+            currentFindings: [
+              {
+                findingId: "bucket_sub_1/finding-1",
+                summary: "first",
+                issueType: "tool_or_source_quirk",
+                scopeHint: "subagent",
+                clusterIds: [],
+                evidenceSummary: "e1",
+              },
+            ],
+            recentHistory: [],
+            recentHistoryStats: {
+              daysWithFindings: 0,
+              totalFindings: 0,
+              countsByIssueType: {},
+            },
+          },
+        ],
+      },
+      evaluation: {
+        evaluations: [
+          {
+            finding_id: "bucket_sub_1/finding-1",
+            priority: "medium",
+            durability: "recurring",
+            promotion_decision: "private_memory",
+            reason: "not strong enough yet",
+          },
+        ],
+      },
+    });
+
+    expect(rewritePromptInput.approvedSharedFindings).toEqual([]);
+    expect(rewritePromptInput.bucketPackets).toEqual([]);
   });
 });

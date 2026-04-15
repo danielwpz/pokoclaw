@@ -61,6 +61,8 @@ describe("meditation prompts", () => {
 
     expect(systemPrompt).toContain("reduce future user friction");
     expect(systemPrompt).toContain("## Product Context");
+    expect(systemPrompt).toContain("Do not turn the note into root-cause analysis");
+    expect(systemPrompt).toContain("Do not prescribe fixes or say what should be changed");
     expect(systemPrompt).toContain('"note": "string"');
     expect(systemPrompt).toContain('"findings": [');
     expect(userPrompt).toContain("<subagent_profile>");
@@ -146,6 +148,9 @@ describe("meditation prompts", () => {
     });
 
     expect(systemPrompt).toContain("This evaluation step is the judgment layer.");
+    expect(systemPrompt).toContain(
+      "Only treat a finding as promotion-worthy when the evidence is strong enough",
+    );
     expect(systemPrompt).toContain(
       '"promotion_decision": "shared_memory | private_memory | keep_in_meditation"',
     );
