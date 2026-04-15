@@ -4,7 +4,10 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vitest";
 
-import { loadMeditationConsolidationPromptInput } from "@/src/meditation/consolidation-context.js";
+import {
+  buildMeditationConsolidationRewritePromptInput,
+  loadMeditationConsolidationEvaluationPromptInput,
+} from "@/src/meditation/consolidation-context.js";
 
 describe("meditation consolidation context", () => {
   let tempDir: string | null = null;
@@ -16,12 +19,13 @@ describe("meditation consolidation context", () => {
     }
   });
 
-  test("loads touched private memory, shared memory, and recent meditation excerpts", async () => {
+  test("loads touched private memory, shared memory, and same-agent recent history", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-consolidation-"));
     const workspaceDir = path.join(tempDir, "workspace");
-    const meditationDir = path.join(workspaceDir, "meditation");
+    const logsDir = path.join(tempDir, "logs");
+    const previousRunDir = path.join(logsDir, "meditation", "2026-04-07--run_prev");
     const privateWorkspaceDir = path.join(workspaceDir, "subagents", "agentsub");
-    await mkdir(meditationDir, { recursive: true });
+    await mkdir(previousRunDir, { recursive: true });
     await mkdir(privateWorkspaceDir, { recursive: true });
 
     await writeFile(
@@ -35,22 +39,40 @@ describe("meditation consolidation context", () => {
       "utf8",
     );
     await writeFile(
-      path.join(meditationDir, "2026-04-07.md"),
-      "# Meditation 2026-04-07\n\nObserved the same diagnosis-first friction.\n",
+      path.join(previousRunDir, "bucket-inputs.json"),
+      JSON.stringify([{ bucketId: "bucket_prev_1", agentId: "agent_sub_1" }], null, 2),
       "utf8",
     );
     await writeFile(
-      path.join(meditationDir, "2026-03-20.md"),
-      "# Meditation 2026-03-20\n\nToo old and should be ignored.\n",
+      path.join(previousRunDir, "bucket-bucket_prev_1.submit.json"),
+      JSON.stringify(
+        {
+          note: "Observed the same diagnosis-first friction.",
+          findings: [
+            {
+              summary: "The same diagnosis-first friction happened yesterday.",
+              issue_type: "user_preference_signal",
+              scope_hint: "subagent",
+              cluster_ids: ["stop:prev"],
+              evidence_summary: "The user redirected the response style in yesterday's run.",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
       "utf8",
     );
 
-    const promptInput = await loadMeditationConsolidationPromptInput({
+    const promptInput = await loadMeditationConsolidationEvaluationPromptInput({
       currentDate: "2026-04-08",
+      currentRunId: "run_current",
       timezone: "UTC",
       workspaceDir,
+      logsDir,
       buckets: [
         {
+          bucketId: "bucket_current_1",
           agentId: "agent_sub_1",
           profile: {
             agentId: "agent_sub_1",
@@ -61,11 +83,18 @@ describe("meditation consolidation context", () => {
             compactSummary: "Recently fixing frontend regressions.",
           },
           note: "The user clearly wanted diagnosis before explanation.",
-          memoryCandidates: [
-            "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+          findings: [
+            {
+              summary: "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+              issue_type: "user_preference_signal",
+              scope_hint: "subagent",
+              cluster_ids: ["stop:1"],
+              evidence_summary: "The user stopped the run and asked for diagnosis first.",
+            },
           ],
         },
         {
+          bucketId: "bucket_main_1",
           agentId: "agent_main_1",
           profile: {
             agentId: "agent_main_1",
@@ -76,46 +105,118 @@ describe("meditation consolidation context", () => {
             compactSummary: null,
           },
           note: "The main agent also hit repeated permission loops.",
-          memoryCandidates: ["Avoid repeating the same denied permission request."],
+          findings: [
+            {
+              summary: "Avoid repeating the same denied permission request.",
+              issue_type: "agent_workflow_issue",
+              scope_hint: "shared",
+              cluster_ids: ["tool_repeat:1"],
+              evidence_summary: "The main agent repeated the same permission request.",
+            },
+          ],
         },
         {
+          bucketId: "bucket_shared_1",
           agentId: null,
           profile: null,
           note: "Shared user friction around long explanations.",
-          memoryCandidates: ["Lead with the likely diagnosis before a long explanation."],
+          findings: [],
         },
       ],
     });
 
     expect(promptInput.sharedMemoryCurrent).toContain("Prefer concise updates.");
-    expect(promptInput.agentContexts).toEqual(
+    expect(promptInput.bucketPackets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          bucketId: "bucket_current_1",
           agentId: "agent_sub_1",
           agentKind: "sub",
           displayName: "Atlas Frontend",
           privateMemoryCurrent: expect.stringContaining("atlas-web frontend"),
           bucketNote: "The user clearly wanted diagnosis before explanation.",
-          memoryCandidates: [
-            "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+          currentFindings: [
+            expect.objectContaining({
+              findingId: "bucket_current_1/finding-1",
+              summary: "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+            }),
           ],
+          recentHistory: [
+            expect.objectContaining({
+              date: "2026-04-07",
+              runId: "run_prev",
+              summary: "The same diagnosis-first friction happened yesterday.",
+            }),
+          ],
+          recentHistoryStats: {
+            daysWithFindings: 1,
+            totalFindings: 1,
+            countsByIssueType: {
+              user_preference_signal: 1,
+            },
+          },
         }),
         expect.objectContaining({
+          bucketId: "bucket_main_1",
           agentId: "agent_main_1",
           agentKind: "main",
           displayName: "Pokoclaw Main Agent",
           privateMemoryCurrent: null,
           bucketNote: "The main agent also hit repeated permission loops.",
-          memoryCandidates: ["Avoid repeating the same denied permission request."],
+          currentFindings: [
+            expect.objectContaining({
+              findingId: "bucket_main_1/finding-1",
+              summary: "Avoid repeating the same denied permission request.",
+            }),
+          ],
         }),
       ]),
     );
-    expect(promptInput.recentMeditationExcerpts).toEqual([
-      expect.objectContaining({
-        date: "2026-04-07",
-        text: expect.stringContaining("diagnosis-first friction"),
-      }),
-    ]);
+
+    const rewritePromptInput = buildMeditationConsolidationRewritePromptInput({
+      evaluationPromptInput: promptInput,
+      evaluation: {
+        evaluations: [
+          {
+            finding_id: "bucket_current_1/finding-1",
+            priority: "high",
+            durability: "durable",
+            promotion_decision: "private_memory",
+            reason: "This keeps repeating in atlas-web frontend work.",
+          },
+          {
+            finding_id: "bucket_main_1/finding-1",
+            priority: "medium",
+            durability: "recurring",
+            promotion_decision: "shared_memory",
+            reason: "This should influence shared coordination behavior.",
+          },
+        ],
+      },
+    });
+
+    expect(rewritePromptInput.bucketPackets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          bucketId: "bucket_current_1",
+          approvedFindings: [
+            expect.objectContaining({
+              findingId: "bucket_current_1/finding-1",
+              promotionDecision: "private_memory",
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          bucketId: "bucket_main_1",
+          approvedFindings: [
+            expect.objectContaining({
+              findingId: "bucket_main_1/finding-1",
+              promotionDecision: "shared_memory",
+            }),
+          ],
+        }),
+      ]),
+    );
   });
 
   test("skips buckets whose agent profile cannot be resolved", async () => {
@@ -129,20 +230,30 @@ describe("meditation consolidation context", () => {
       "utf8",
     );
 
-    const promptInput = await loadMeditationConsolidationPromptInput({
+    const promptInput = await loadMeditationConsolidationEvaluationPromptInput({
       currentDate: "2026-04-08",
+      currentRunId: "run_current",
       timezone: "UTC",
       workspaceDir,
       buckets: [
         {
+          bucketId: "bucket_unknown_1",
           agentId: "agent_unknown_1",
           profile: null,
           note: "Repeated friction with missing agent profile.",
-          memoryCandidates: ["Do not repeat the same denied permission request."],
+          findings: [
+            {
+              summary: "Do not repeat the same denied permission request.",
+              issue_type: "agent_workflow_issue",
+              scope_hint: "shared",
+              cluster_ids: ["tool_repeat:1"],
+              evidence_summary: "The same permission request repeated in one run.",
+            },
+          ],
         },
       ],
     });
 
-    expect(promptInput.agentContexts).toEqual([]);
+    expect(promptInput.bucketPackets).toEqual([]);
   });
 });

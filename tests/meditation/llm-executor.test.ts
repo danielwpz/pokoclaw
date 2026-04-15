@@ -87,8 +87,15 @@ describe("runMeditationSubmitLoop", () => {
           calls.push(input.messages.at(-1)?.payloadJson ?? "");
           return createSubmitResult({
             note: "Strong recurring permission friction.",
-            memory_candidates: [
-              "Request narrow permission earlier when repeated protected-path reads fail.",
+            findings: [
+              {
+                summary:
+                  "Repeated protected-path reads suggest earlier narrow permission requests.",
+                issue_type: "user_preference_signal",
+                scope_hint: "shared",
+                cluster_ids: ["tool_repeat:1"],
+                evidence_summary: "The same permission-denied pattern repeated in one session.",
+              },
             ],
           });
         },
@@ -108,8 +115,14 @@ describe("runMeditationSubmitLoop", () => {
     expect(calls).toHaveLength(1);
     expect(submitted).toEqual({
       note: "Strong recurring permission friction.",
-      memory_candidates: [
-        "Request narrow permission earlier when repeated protected-path reads fail.",
+      findings: [
+        {
+          summary: "Repeated protected-path reads suggest earlier narrow permission requests.",
+          issue_type: "user_preference_signal",
+          scope_hint: "shared",
+          cluster_ids: ["tool_repeat:1"],
+          evidence_summary: "The same permission-denied pattern repeated in one session.",
+        },
       ],
     });
     expect(result.submission).toEqual(submitted);
@@ -153,7 +166,7 @@ describe("runMeditationSubmitLoop", () => {
 
           return createSubmitResult({
             note: "Recovered on second turn.",
-            memory_candidates: [],
+            findings: [],
           });
         },
       },
@@ -173,7 +186,7 @@ describe("runMeditationSubmitLoop", () => {
     expect(calls[1]).toContain("You must call the submit tool");
     expect(submitted).toEqual({
       note: "Recovered on second turn.",
-      memory_candidates: [],
+      findings: [],
     });
     expect(result.turns).toHaveLength(2);
   });
@@ -192,13 +205,13 @@ describe("runMeditationSubmitLoop", () => {
           if (invocation === 1) {
             return createSubmitResult({
               note: 123,
-              memory_candidates: ["valid string"],
+              findings: [],
             });
           }
 
           return createSubmitResult({
             note: "Valid after tool validation error.",
-            memory_candidates: [],
+            findings: [],
           });
         },
       },
@@ -216,7 +229,7 @@ describe("runMeditationSubmitLoop", () => {
 
     expect(submitted).toEqual({
       note: "Valid after tool validation error.",
-      memory_candidates: [],
+      findings: [],
     });
     expect(result.turns).toHaveLength(2);
     expect(result.messages.some((message) => message.role === "tool")).toBe(true);
@@ -264,7 +277,18 @@ describe("runMeditationSubmitLoop", () => {
             inputSchema: Type.Object(
               {
                 note: Type.String(),
-                memory_candidates: Type.Array(Type.String()),
+                findings: Type.Array(
+                  Type.Object(
+                    {
+                      summary: Type.String(),
+                      issue_type: Type.String(),
+                      scope_hint: Type.String(),
+                      cluster_ids: Type.Array(Type.String()),
+                      evidence_summary: Type.String(),
+                    },
+                    { additionalProperties: false },
+                  ),
+                ),
               },
               { additionalProperties: false },
             ),

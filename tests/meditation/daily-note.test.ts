@@ -35,8 +35,15 @@ describe("meditation daily note", () => {
           agentId: "agent_sub_1",
           displayName: "Atlas Frontend",
           note: "The user clearly wanted diagnosis before explanation.",
-          memoryCandidates: [
-            "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+          findings: [
+            {
+              summary:
+                "For atlas-web frontend debugging, the user wanted diagnosis before explanation.",
+              issue_type: "user_preference_signal",
+              scope_hint: "subagent",
+              cluster_ids: ["stop:1"],
+              evidence_summary: "The user stopped the run and asked for diagnosis first.",
+            },
           ],
         },
       ],
@@ -50,6 +57,7 @@ describe("meditation daily note", () => {
     expect(block).toContain("## Run run_test");
     expect(block).toContain("Atlas Frontend");
     expect(block).toContain("diagnosis before explanation");
+    expect(block).toContain("user_preference_signal");
     expect(block).toContain("Shared memory rewritten: yes");
     expect(block).toContain("Private memory rewrites:");
   });

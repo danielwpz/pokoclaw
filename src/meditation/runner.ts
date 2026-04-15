@@ -4,8 +4,9 @@
  * Order:
  * 1) harvest + cluster
  * 2) per-bucket LLM synthesis
- * 3) consolidation rewrite
- * 4) artifact + daily note write
+ * 3) consolidation evaluation
+ * 4) consolidation rewrite
+ * 5) artifact + daily note write
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -18,11 +19,15 @@ import {
 import type { SecurityConfig, SelfHarnessConfig } from "@/src/config/schema.js";
 import {
   runMeditationBucketAgent,
-  runMeditationConsolidationAgent,
+  runMeditationConsolidationEvaluationAgent,
+  runMeditationConsolidationRewriteAgent,
 } from "@/src/meditation/agent-runner.js";
 import { prepareMeditationBucketInput } from "@/src/meditation/bucket-prep.js";
 import { buildMeditationBuckets } from "@/src/meditation/clustering.js";
-import { loadMeditationConsolidationPromptInput } from "@/src/meditation/consolidation-context.js";
+import {
+  buildMeditationConsolidationRewritePromptInput,
+  loadMeditationConsolidationEvaluationPromptInput,
+} from "@/src/meditation/consolidation-context.js";
 import {
   appendMeditationDailyRunBlock,
   buildMeditationDailyRunBlock,
@@ -33,7 +38,7 @@ import {
 } from "@/src/meditation/files.js";
 import type { MeditationTurnBridge } from "@/src/meditation/llm-executor.js";
 import { maybeResolveMeditationModels, resolveMeditationModels } from "@/src/meditation/models.js";
-import type { MeditationConsolidationAgentContext } from "@/src/meditation/prompts.js";
+import type { MeditationApprovedFinding } from "@/src/meditation/prompts.js";
 import {
   type MeditationBucketProfile,
   type MeditationFailedToolResultFact,
@@ -46,7 +51,10 @@ import type {
   MeditationRunRequest,
   MeditationRunResult,
 } from "@/src/meditation/scheduler.js";
-import type { ConsolidationMemoryRewrite } from "@/src/meditation/submit-tools.js";
+import type {
+  ConsolidationMemoryRewrite,
+  MeditationFinding,
+} from "@/src/meditation/submit-tools.js";
 import { resolveMeditationWindow } from "@/src/meditation/window.js";
 import {
   buildPrivateWorkspaceMemoryPath,
@@ -94,7 +102,7 @@ interface CompletedMeditationBucket {
   agentId: string | null;
   profile: MeditationBucketProfile | null;
   note: string;
-  memoryCandidates: string[];
+  findings: MeditationFinding[];
 }
 
 export class MeditationPipelineRunner implements MeditationRunner {
@@ -249,13 +257,13 @@ export class MeditationPipelineRunner implements MeditationRunner {
           agentId: bucketInput.agentId,
           profile: bucketInput.profile,
           note: execution.submission.note,
-          memoryCandidates: execution.submission.memory_candidates,
+          findings: execution.submission.findings,
         });
         logger.info("meditation bucket completed", {
           runId,
           bucketId: bucketInput.bucketId,
           agentId: bucketInput.agentId ?? "shared",
-          memoryCandidates: execution.submission.memory_candidates.length,
+          findings: execution.submission.findings.length,
           turnCount: execution.turns.length,
         });
         await Promise.all([
@@ -286,110 +294,148 @@ export class MeditationPipelineRunner implements MeditationRunner {
         privateRewrittenAgentIds: [] as string[],
       };
       if (completedBuckets.length > 0) {
-        logger.info("meditation consolidation started", {
+        logger.info("meditation consolidation evaluation started", {
           runId,
           bucketCount: completedBuckets.length,
-          candidateCount: completedBuckets.reduce(
-            (sum, bucket) => sum + bucket.memoryCandidates.length,
-            0,
-          ),
+          findingCount: completedBuckets.reduce((sum, bucket) => sum + bucket.findings.length, 0),
         });
-        const consolidationPromptInput = await loadMeditationConsolidationPromptInput({
-          currentDate: window.localDate,
-          timezone: window.timezone,
-          workspaceDir,
-          buckets: completedBuckets,
-        });
-        const consolidation = await runMeditationConsolidationAgent({
+        const consolidationEvaluationPromptInput =
+          await loadMeditationConsolidationEvaluationPromptInput({
+            currentDate: window.localDate,
+            currentRunId: runId,
+            timezone: window.timezone,
+            workspaceDir,
+            ...(this.deps.logsDir == null ? {} : { logsDir: this.deps.logsDir }),
+            buckets: completedBuckets,
+          });
+        const consolidationEvaluation = await runMeditationConsolidationEvaluationAgent({
           bridge: this.deps.bridge,
           model: resolvedModels.consolidation,
           storage: this.deps.storage,
           securityConfig: this.deps.securityConfig,
-          promptInput: consolidationPromptInput,
+          promptInput: consolidationEvaluationPromptInput,
         });
         await Promise.all([
           writeMeditationTextFileAtomic(
-            path.join(artifactDir, "consolidation.prompt.md"),
+            path.join(artifactDir, "consolidation-eval.prompt.md"),
             formatPromptArtifact({
-              systemPrompt: consolidation.systemPrompt,
-              userPrompt: consolidation.prompt,
+              systemPrompt: consolidationEvaluation.systemPrompt,
+              userPrompt: consolidationEvaluation.prompt,
             }),
           ),
           writeJsonArtifact(
-            path.join(artifactDir, "consolidation.submit.json"),
-            consolidation.submission,
-          ),
-          writeJsonArtifact(
-            path.join(artifactDir, "consolidation.turns.json"),
-            consolidation.turns,
-          ),
-          writeJsonArtifact(
-            path.join(artifactDir, "consolidation.messages.json"),
-            consolidation.messages,
+            path.join(artifactDir, "consolidation-eval.submit.json"),
+            consolidationEvaluation.submission,
           ),
         ]);
 
-        const sharedMemoryRewrite = normalizeNonEmptyMeditationRewrite(
-          consolidation.submission.shared_memory_rewrite,
-        );
-        if (sharedMemoryRewrite != null) {
-          const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
+        logger.info("meditation consolidation evaluation completed", {
+          runId,
+          evaluationCount: consolidationEvaluation.submission.evaluations.length,
+          turnCount: consolidationEvaluation.turns.length,
+        });
+
+        const consolidationRewritePromptInput = buildMeditationConsolidationRewritePromptInput({
+          evaluationPromptInput: consolidationEvaluationPromptInput,
+          evaluation: consolidationEvaluation.submission,
+        });
+        if (hasApprovedFindings(consolidationRewritePromptInput.bucketPackets)) {
+          logger.info("meditation consolidation rewrite started", {
+            runId,
+            bucketCount: consolidationRewritePromptInput.bucketPackets.length,
+            approvedFindingCount: countApprovedFindings(
+              consolidationRewritePromptInput.bucketPackets,
+            ),
+          });
+          const consolidationRewrite = await runMeditationConsolidationRewriteAgent({
+            bridge: this.deps.bridge,
+            model: resolvedModels.consolidation,
+            storage: this.deps.storage,
+            securityConfig: this.deps.securityConfig,
+            promptInput: consolidationRewritePromptInput,
+          });
           await Promise.all([
             writeMeditationTextFileAtomic(
-              path.join(artifactDir, "rewrite-preview", "shared.md"),
-              sharedMemoryRewrite,
+              path.join(artifactDir, "consolidation-rewrite.prompt.md"),
+              formatPromptArtifact({
+                systemPrompt: consolidationRewrite.systemPrompt,
+                userPrompt: consolidationRewrite.prompt,
+              }),
             ),
-            writeMeditationTextFileAtomic(sharedPath, sharedMemoryRewrite),
+            writeJsonArtifact(
+              path.join(artifactDir, "consolidation-rewrite.submit.json"),
+              consolidationRewrite.submission,
+            ),
           ]);
+
+          const sharedMemoryRewrite = normalizeNonEmptyMeditationRewrite(
+            consolidationRewrite.submission.shared_memory_rewrite,
+          );
+          if (sharedMemoryRewrite != null) {
+            const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
+            await Promise.all([
+              writeMeditationTextFileAtomic(
+                path.join(artifactDir, "rewrite-preview", "shared.md"),
+                sharedMemoryRewrite,
+              ),
+              writeMeditationTextFileAtomic(sharedPath, sharedMemoryRewrite),
+            ]);
+            consolidationSummary = {
+              ...consolidationSummary,
+              sharedRewritten: true,
+            };
+          }
+
+          const eligiblePrivateRewrites = filterEligiblePrivateMemoryRewrites({
+            bucketPackets: consolidationRewritePromptInput.bucketPackets,
+            privateMemoryRewrites: consolidationRewrite.submission.private_memory_rewrites,
+          });
+          const droppedPrivateRewriteAgentIds =
+            consolidationRewrite.submission.private_memory_rewrites
+              .map((rewrite) => rewrite.agent_id)
+              .filter(
+                (agentId) =>
+                  !eligiblePrivateRewrites.some((rewrite) => rewrite.agent_id === agentId),
+              );
+          if (droppedPrivateRewriteAgentIds.length > 0) {
+            logger.warn("meditation consolidation dropped ineligible private rewrites", {
+              runId,
+              droppedPrivateRewriteAgentIds,
+            });
+          }
+
+          for (const rewrite of eligiblePrivateRewrites) {
+            const privateWorkspaceDir = buildSubagentWorkspaceDir(
+              rewrite.agent_id,
+              path.join(workspaceDir, "subagents"),
+            );
+            await Promise.all([
+              writeMeditationTextFileAtomic(
+                path.join(artifactDir, "rewrite-preview", `private-${rewrite.agent_id}.md`),
+                rewrite.content,
+              ),
+              writeMeditationTextFileAtomic(
+                buildPrivateWorkspaceMemoryPath(privateWorkspaceDir),
+                rewrite.content,
+              ),
+            ]);
+          }
           consolidationSummary = {
             ...consolidationSummary,
-            sharedRewritten: true,
+            privateRewrittenAgentIds: eligiblePrivateRewrites.map((rewrite) => rewrite.agent_id),
           };
-        }
-
-        const eligiblePrivateRewrites = filterEligiblePrivateMemoryRewrites({
-          agentContexts: consolidationPromptInput.agentContexts,
-          privateMemoryRewrites: consolidation.submission.private_memory_rewrites,
-        });
-        const droppedPrivateRewriteAgentIds = consolidation.submission.private_memory_rewrites
-          .map((rewrite) => rewrite.agent_id)
-          .filter(
-            (agentId) => !eligiblePrivateRewrites.some((rewrite) => rewrite.agent_id === agentId),
-          );
-        if (droppedPrivateRewriteAgentIds.length > 0) {
-          logger.warn("meditation consolidation dropped ineligible private rewrites", {
+          logger.info("meditation consolidation rewrite completed", {
             runId,
-            droppedPrivateRewriteAgentIds,
+            sharedRewritten: consolidationSummary.sharedRewritten,
+            privateRewriteCount: consolidationSummary.privateRewrittenAgentIds.length,
+            privateRewriteAgentIds: consolidationSummary.privateRewrittenAgentIds,
+            turnCount: consolidationRewrite.turns.length,
+          });
+        } else {
+          logger.info("meditation consolidation rewrite skipped because nothing was approved", {
+            runId,
           });
         }
-
-        for (const rewrite of eligiblePrivateRewrites) {
-          const privateWorkspaceDir = buildSubagentWorkspaceDir(
-            rewrite.agent_id,
-            path.join(workspaceDir, "subagents"),
-          );
-          await Promise.all([
-            writeMeditationTextFileAtomic(
-              path.join(artifactDir, "rewrite-preview", `private-${rewrite.agent_id}.md`),
-              rewrite.content,
-            ),
-            writeMeditationTextFileAtomic(
-              buildPrivateWorkspaceMemoryPath(privateWorkspaceDir),
-              rewrite.content,
-            ),
-          ]);
-        }
-        consolidationSummary = {
-          ...consolidationSummary,
-          privateRewrittenAgentIds: eligiblePrivateRewrites.map((rewrite) => rewrite.agent_id),
-        };
-        logger.info("meditation consolidation completed", {
-          runId,
-          sharedRewritten: consolidationSummary.sharedRewritten,
-          privateRewriteCount: consolidationSummary.privateRewrittenAgentIds.length,
-          privateRewriteAgentIds: consolidationSummary.privateRewrittenAgentIds,
-          turnCount: consolidation.turns.length,
-        });
       } else {
         logger.info("meditation consolidation skipped because no bucket produced output", {
           runId,
@@ -410,7 +456,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
           agentId: bucket.agentId,
           displayName: bucket.profile?.displayName ?? null,
           note: bucket.note,
-          memoryCandidates: bucket.memoryCandidates,
+          findings: bucket.findings,
         })),
         consolidationSummary,
       });
@@ -464,16 +510,28 @@ async function writeJsonArtifact(filePath: string, payload: unknown): Promise<vo
 }
 
 export function filterEligiblePrivateMemoryRewrites(input: {
-  agentContexts: MeditationConsolidationAgentContext[];
+  bucketPackets: Array<{ agentId: string; agentKind: "main" | "sub" }>;
   privateMemoryRewrites: ConsolidationMemoryRewrite[];
 }): ConsolidationMemoryRewrite[] {
   const eligibleAgentIds = new Set(
-    input.agentContexts
-      .filter((context) => context.agentKind === "sub")
-      .map((context) => context.agentId),
+    input.bucketPackets
+      .filter((packet) => packet.agentKind === "sub")
+      .map((packet) => packet.agentId),
   );
 
   return input.privateMemoryRewrites.filter((rewrite) => eligibleAgentIds.has(rewrite.agent_id));
+}
+
+function hasApprovedFindings(
+  bucketPackets: Array<{ approvedFindings: MeditationApprovedFinding[] }>,
+): boolean {
+  return bucketPackets.some((packet) => packet.approvedFindings.length > 0);
+}
+
+function countApprovedFindings(
+  bucketPackets: Array<{ approvedFindings: MeditationApprovedFinding[] }>,
+): number {
+  return bucketPackets.reduce((sum, packet) => sum + packet.approvedFindings.length, 0);
 }
 
 function formatPromptArtifact(input: { systemPrompt: string; userPrompt: string }): string {

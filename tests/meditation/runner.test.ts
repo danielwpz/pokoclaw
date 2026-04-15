@@ -188,8 +188,29 @@ describe("MeditationPipelineRunner", () => {
           if (bridgeCall === 1) {
             return createSubmitTurnResult({
               note: "The user clearly wanted diagnosis before explanation.",
-              memory_candidates: [
-                "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+              findings: [
+                {
+                  summary:
+                    "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+                  issue_type: "user_preference_signal",
+                  scope_hint: "subagent",
+                  cluster_ids: ["stop:1"],
+                  evidence_summary: "The user explicitly redirected the response style.",
+                },
+              ],
+            });
+          }
+
+          if (bridgeCall === 2) {
+            return createSubmitTurnResult({
+              evaluations: [
+                {
+                  finding_id: "agent_sub_1/finding-1",
+                  priority: "high",
+                  durability: "durable",
+                  promotion_decision: "private_memory",
+                  reason: "This keeps repeating in atlas-web frontend work.",
+                },
               ],
             });
           }
@@ -238,15 +259,19 @@ describe("MeditationPipelineRunner", () => {
     const bucketTurns = JSON.parse(
       await readFile(path.join(artifactDir, "bucket-agent_sub_1.turns.json"), "utf8"),
     );
-    const consolidationPrompt = await readFile(
-      path.join(artifactDir, "consolidation.prompt.md"),
+    const consolidationEvalPrompt = await readFile(
+      path.join(artifactDir, "consolidation-eval.prompt.md"),
       "utf8",
     );
-    const consolidationSubmit = JSON.parse(
-      await readFile(path.join(artifactDir, "consolidation.submit.json"), "utf8"),
+    const consolidationEvalSubmit = JSON.parse(
+      await readFile(path.join(artifactDir, "consolidation-eval.submit.json"), "utf8"),
     );
-    const consolidationTurns = JSON.parse(
-      await readFile(path.join(artifactDir, "consolidation.turns.json"), "utf8"),
+    const consolidationRewritePrompt = await readFile(
+      path.join(artifactDir, "consolidation-rewrite.prompt.md"),
+      "utf8",
+    );
+    const consolidationRewriteSubmit = JSON.parse(
+      await readFile(path.join(artifactDir, "consolidation-rewrite.submit.json"), "utf8"),
     );
     const rewritePreviewShared = await readFile(
       path.join(artifactDir, "rewrite-preview", "shared.md"),
@@ -313,16 +338,34 @@ describe("MeditationPipelineRunner", () => {
     expect(bucketPrompt).toContain("reduce future user friction");
     expect(bucketSubmit).toEqual({
       note: "The user clearly wanted diagnosis before explanation.",
-      memory_candidates: [
-        "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+      findings: [
+        {
+          summary: "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+          issue_type: "user_preference_signal",
+          scope_hint: "subagent",
+          cluster_ids: ["stop:1"],
+          evidence_summary: "The user explicitly redirected the response style.",
+        },
       ],
     });
     expect(bucketTurns[0]?.content[0]).toMatchObject({
       type: "thinking",
       thinking: "Internal reasoning should stay in debug artifacts only.",
     });
-    expect(consolidationPrompt).toContain("# Preferences");
-    expect(consolidationSubmit).toEqual({
+    expect(consolidationEvalPrompt).toContain("# Preferences");
+    expect(consolidationEvalSubmit).toEqual({
+      evaluations: [
+        {
+          finding_id: "agent_sub_1/finding-1",
+          priority: "high",
+          durability: "durable",
+          promotion_decision: "private_memory",
+          reason: "This keeps repeating in atlas-web frontend work.",
+        },
+      ],
+    });
+    expect(consolidationRewritePrompt).toContain("Approved Findings");
+    expect(consolidationRewriteSubmit).toEqual({
       shared_memory_rewrite:
         "# Preferences\n\n- Prefer concise updates.\n\n# Working Conventions\n\n- Lead with diagnosis before explanation during debugging.\n",
       private_memory_rewrites: [
@@ -332,10 +375,6 @@ describe("MeditationPipelineRunner", () => {
             "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
         },
       ],
-    });
-    expect(consolidationTurns[0]?.content[0]).toMatchObject({
-      type: "thinking",
-      thinking: "Internal reasoning should stay in debug artifacts only.",
     });
     expect(rewritePreviewShared).toContain(
       "Lead with diagnosis before explanation during debugging.",
@@ -390,13 +429,12 @@ describe("MeditationPipelineRunner", () => {
           if (bridgeCall % 2 === 1) {
             return createSubmitTurnResult({
               note: `bucket note ${bridgeCall}`,
-              memory_candidates: [],
+              findings: [],
             });
           }
 
           return createSubmitTurnResult({
-            shared_memory_rewrite: "# Shared\n",
-            private_memory_rewrites: [],
+            evaluations: [],
           });
         },
       },
@@ -607,7 +645,29 @@ describe("MeditationPipelineRunner", () => {
           if (bridgeCall === 1) {
             return createSubmitTurnResult({
               note: "A permission burst happened.",
-              memory_candidates: ["Pause after burst permission failures."],
+              findings: [
+                {
+                  summary: "Pause after burst permission failures.",
+                  issue_type: "agent_workflow_issue",
+                  scope_hint: "subagent",
+                  cluster_ids: ["tool_burst:1"],
+                  evidence_summary: "A burst of permission failures happened in one run.",
+                },
+              ],
+            });
+          }
+
+          if (bridgeCall === 2) {
+            return createSubmitTurnResult({
+              evaluations: [
+                {
+                  finding_id: "agent_sub_1/finding-1",
+                  priority: "high",
+                  durability: "durable",
+                  promotion_decision: "private_memory",
+                  reason: "This should update only private memory.",
+                },
+              ],
             });
           }
 
@@ -642,11 +702,11 @@ describe("MeditationPipelineRunner", () => {
       "utf8",
     );
     const sharedMemory = await readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
-    const consolidationSubmit = JSON.parse(
-      await readFile(path.join(artifactDir, "consolidation.submit.json"), "utf8"),
+    const consolidationRewriteSubmit = JSON.parse(
+      await readFile(path.join(artifactDir, "consolidation-rewrite.submit.json"), "utf8"),
     );
 
-    expect(consolidationSubmit).toMatchObject({
+    expect(consolidationRewriteSubmit).toMatchObject({
       shared_memory_rewrite: "   \n\t  ",
     });
     expect(dailyNote).toContain("Shared memory rewritten: no");
@@ -658,28 +718,14 @@ describe("MeditationPipelineRunner", () => {
 
   test("drops private rewrites for non-sub agents at the host layer", () => {
     const filtered = filterEligiblePrivateMemoryRewrites({
-      agentContexts: [
+      bucketPackets: [
         {
           agentId: "agent_main_1",
           agentKind: "main",
-          displayName: "Main",
-          description: null,
-          workdir: null,
-          compactSummary: null,
-          privateMemoryCurrent: null,
-          bucketNote: "main note",
-          memoryCandidates: ["shared lesson"],
         },
         {
           agentId: "agent_sub_1",
           agentKind: "sub",
-          displayName: "Sub",
-          description: null,
-          workdir: null,
-          compactSummary: null,
-          privateMemoryCurrent: "# Scope\n",
-          bucketNote: "sub note",
-          memoryCandidates: ["private lesson"],
         },
       ],
       privateMemoryRewrites: [
