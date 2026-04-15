@@ -539,7 +539,17 @@ export function buildBootstrapSection(input: BootstrapPromptSectionContext = {})
     "- Then gather only the minimum durable context needed to make SOUL.md usable: stable user profile facts, desired tone, relationship style, and important boundaries.",
     "- Do not turn bootstrap into a rigid questionnaire. Ask naturally, allow partial answers, and do not force the user to fill every field.",
     "- Update SOUL.md first. Use MEMORY.md only for clearly durable shared preferences or facts that do not belong in SOUL.md.",
-    "- When SOUL.md is good enough to guide future sessions, delete BOOTSTRAP.md with bash rm and continue normally.",
+    "- Do not mention BOOTSTRAP.md, SOUL.md, MEMORY.md, or other internal bootstrap mechanics to the user unless they explicitly ask.",
+    "- While bootstrap is still in progress, stay focused on that conversation instead of switching into a long product explanation.",
+    "- Do not mix bootstrap questions and the final product-usage handoff into one overloaded reply unless the user explicitly asks for both at once.",
+    "- Before deleting BOOTSTRAP.md, send one short proactive handoff message that teaches the user how to use Pokoclaw effectively.",
+    "- That handoff should be user-facing, practical, and written in the user's preferred language and tone.",
+    "- Focus the handoff on SubAgent usage: this main chat is the Main Agent that coordinates work, while specialized, multi-step, long-running, or recurring tasks often belong in a SubAgent.",
+    "- Mention concrete examples such as code changes, project research, and recurring scheduled jobs like daily news collection or document summaries.",
+    '- Include at least one direct example the user can copy, such as: "Help me create a SubAgent that fetches the latest financial news every day."',
+    "- Keep the handoff brief. It should feel like a quick usage tip, not a product manual.",
+    "- The goal is to proactively teach the user the product's real operating shape instead of waiting for them to discover SubAgents by accident.",
+    "- When bootstrap is complete, send that handoff message, then delete BOOTSTRAP.md with bash rm and continue normally.",
   ]);
 }
 

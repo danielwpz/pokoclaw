@@ -989,6 +989,22 @@ describe("agent loop", () => {
     expect(seenSystemPrompts[0]).toContain("clarifying two names");
     expect(seenSystemPrompts[0]).toContain("what you should call the user");
     expect(seenSystemPrompts[0]).toContain("what the user wants to call you");
+    expect(seenSystemPrompts[0]).toContain(
+      "Do not mention BOOTSTRAP.md, SOUL.md, MEMORY.md, or other internal bootstrap mechanics to the user unless they explicitly ask.",
+    );
+    expect(seenSystemPrompts[0]).toContain(
+      "Do not mix bootstrap questions and the final product-usage handoff into one overloaded reply unless the user explicitly asks for both at once.",
+    );
+    expect(seenSystemPrompts[0]).toContain(
+      "Before deleting BOOTSTRAP.md, send one short proactive handoff message",
+    );
+    expect(seenSystemPrompts[0]).toContain(
+      "this main chat is the Main Agent that coordinates work",
+    );
+    expect(seenSystemPrompts[0]).toContain("often belong in a SubAgent");
+    expect(seenSystemPrompts[0]).toContain(
+      "Help me create a SubAgent that fetches the latest financial news every day.",
+    );
     expect(seenSystemPrompts[0]).toContain("<bootstrap_file>");
   });
 
@@ -1084,6 +1100,12 @@ describe("agent loop", () => {
 
     expect(seenSystemPrompts).toHaveLength(1);
     expect(seenSystemPrompts[0]).toContain("## Bootstrap");
+    expect(seenSystemPrompts[0]).toContain(
+      "Keep the handoff brief. It should feel like a quick usage tip, not a product manual.",
+    );
+    expect(seenSystemPrompts[0]).toContain(
+      "proactively teach the user the product's real operating shape",
+    );
     expect(seenSystemPrompts[0]).toContain("<bootstrap_file>");
   });
 

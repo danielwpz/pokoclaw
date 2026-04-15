@@ -105,6 +105,21 @@ describe("agent memory resolver", () => {
     expect(soul).toContain("# User Profile");
     expect(shared).toContain("# Working Conventions");
     expect(bootstrap).toContain("Your first priority is to create a usable SOUL.md.");
+    expect(bootstrap).toContain(
+      "Do not mention BOOTSTRAP.md, SOUL.md, MEMORY.md, or other internal file mechanics to the user.",
+    );
+    expect(bootstrap).toContain(
+      "Do not mix bootstrap questions and the final product-usage handoff into one overloaded reply unless the user explicitly asks for both at once.",
+    );
+    expect(bootstrap).toContain(
+      "Before finishing bootstrap, proactively teach the user how to use Pokoclaw well.",
+    );
+    expect(bootstrap).toContain(
+      "specialized, multi-step, long-running, or recurring work often belongs in a SubAgent.",
+    );
+    expect(bootstrap).toContain(
+      "Help me create a SubAgent that fetches the latest financial news every day.",
+    );
   });
 
   test("resolver seeds subagent private memory before reading it", async () => {
