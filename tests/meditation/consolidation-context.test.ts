@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   buildMeditationConsolidationRewritePromptInput,
   loadMeditationConsolidationEvaluationPromptInput,
+  validateConsolidationEvaluations,
 } from "@/src/meditation/consolidation-context.js";
 
 describe("meditation consolidation context", () => {
@@ -19,7 +20,7 @@ describe("meditation consolidation context", () => {
     }
   });
 
-  test("loads touched private memory, shared memory, and same-agent recent history", async () => {
+  test("loads touched private memory, shared memory, same-agent recent history, and shared bucket packets", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-consolidation-"));
     const workspaceDir = path.join(tempDir, "workspace");
     const logsDir = path.join(tempDir, "logs");
@@ -120,7 +121,16 @@ describe("meditation consolidation context", () => {
           agentId: null,
           profile: null,
           note: "Shared user friction around long explanations.",
-          findings: [],
+          findings: [
+            {
+              summary: "Lead with the likely diagnosis before a long explanation.",
+              issue_type: "user_preference_signal",
+              scope_hint: "shared",
+              cluster_ids: ["stop:shared-1"],
+              evidence_summary:
+                "A shared user-facing friction showed up outside one specific subagent.",
+            },
+          ],
         },
       ],
     });
@@ -170,6 +180,19 @@ describe("meditation consolidation context", () => {
             }),
           ],
         }),
+        expect.objectContaining({
+          bucketId: "bucket_shared_1",
+          agentId: "shared",
+          agentKind: "shared",
+          displayName: "Shared Findings",
+          privateMemoryCurrent: null,
+          currentFindings: [
+            expect.objectContaining({
+              findingId: "bucket_shared_1/finding-1",
+              scopeHint: "shared",
+            }),
+          ],
+        }),
       ]),
     );
 
@@ -191,27 +214,37 @@ describe("meditation consolidation context", () => {
             promotion_decision: "shared_memory",
             reason: "This should influence shared coordination behavior.",
           },
+          {
+            finding_id: "bucket_shared_1/finding-1",
+            priority: "high",
+            durability: "durable",
+            promotion_decision: "shared_memory",
+            reason: "This is clearly shared behavior guidance.",
+          },
         ],
       },
     });
 
+    expect(rewritePromptInput.approvedSharedFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          findingId: "bucket_main_1/finding-1",
+          promotionDecision: "shared_memory",
+        }),
+        expect.objectContaining({
+          findingId: "bucket_shared_1/finding-1",
+          promotionDecision: "shared_memory",
+        }),
+      ]),
+    );
     expect(rewritePromptInput.bucketPackets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           bucketId: "bucket_current_1",
-          approvedFindings: [
+          approvedPrivateFindings: [
             expect.objectContaining({
               findingId: "bucket_current_1/finding-1",
               promotionDecision: "private_memory",
-            }),
-          ],
-        }),
-        expect.objectContaining({
-          bucketId: "bucket_main_1",
-          approvedFindings: [
-            expect.objectContaining({
-              findingId: "bucket_main_1/finding-1",
-              promotionDecision: "shared_memory",
             }),
           ],
         }),
@@ -219,7 +252,7 @@ describe("meditation consolidation context", () => {
     );
   });
 
-  test("skips buckets whose agent profile cannot be resolved", async () => {
+  test("keeps buckets even when the agent profile cannot be resolved", async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-consolidation-"));
     const workspaceDir = path.join(tempDir, "workspace");
     await mkdir(workspaceDir, { recursive: true });
@@ -254,6 +287,121 @@ describe("meditation consolidation context", () => {
       ],
     });
 
-    expect(promptInput.bucketPackets).toEqual([]);
+    expect(promptInput.bucketPackets).toEqual([
+      expect.objectContaining({
+        bucketId: "bucket_unknown_1",
+        agentId: "agent_unknown_1",
+        agentKind: "unknown",
+        displayName: null,
+        privateMemoryCurrent: null,
+        currentFindings: [
+          expect.objectContaining({
+            findingId: "bucket_unknown_1/finding-1",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  test("requires evaluation coverage for every current finding", async () => {
+    expect(() =>
+      validateConsolidationEvaluations({
+        bucketPackets: [
+          {
+            bucketId: "bucket_sub_1",
+            agentId: "agent_sub_1",
+            agentKind: "sub",
+            displayName: "Atlas Frontend",
+            description: null,
+            workdir: null,
+            compactSummary: null,
+            privateMemoryCurrent: null,
+            bucketNote: "note",
+            currentFindings: [
+              {
+                findingId: "bucket_sub_1/finding-1",
+                summary: "first",
+                issueType: "user_preference_signal",
+                scopeHint: "subagent",
+                clusterIds: [],
+                evidenceSummary: "e1",
+              },
+              {
+                findingId: "bucket_sub_1/finding-2",
+                summary: "second",
+                issueType: "agent_workflow_issue",
+                scopeHint: "subagent",
+                clusterIds: [],
+                evidenceSummary: "e2",
+              },
+            ],
+            recentHistory: [],
+            recentHistoryStats: {
+              daysWithFindings: 0,
+              totalFindings: 0,
+              countsByIssueType: {},
+            },
+          },
+        ],
+        evaluation: {
+          evaluations: [
+            {
+              finding_id: "bucket_sub_1/finding-1",
+              priority: "high",
+              durability: "durable",
+              promotion_decision: "private_memory",
+              reason: "ok",
+            },
+          ],
+        },
+      }),
+    ).toThrow("did not cover all current findings");
+  });
+
+  test("rejects private promotion decisions for non-sub packets", async () => {
+    expect(() =>
+      validateConsolidationEvaluations({
+        bucketPackets: [
+          {
+            bucketId: "bucket_shared_1",
+            agentId: "shared",
+            agentKind: "shared",
+            displayName: "Shared Findings",
+            description: null,
+            workdir: null,
+            compactSummary: null,
+            privateMemoryCurrent: null,
+            bucketNote: "note",
+            currentFindings: [
+              {
+                findingId: "bucket_shared_1/finding-1",
+                summary: "shared finding",
+                issueType: "user_preference_signal",
+                scopeHint: "shared",
+                clusterIds: [],
+                evidenceSummary: "e1",
+              },
+            ],
+            recentHistory: [],
+            recentHistoryStats: {
+              daysWithFindings: 0,
+              totalFindings: 0,
+              countsByIssueType: {},
+            },
+          },
+        ],
+        evaluation: {
+          evaluations: [
+            {
+              finding_id: "bucket_shared_1/finding-1",
+              priority: "high",
+              durability: "durable",
+              promotion_decision: "private_memory",
+              reason: "not allowed",
+            },
+          ],
+        },
+      }),
+    ).toThrow("cannot target private_memory for non-sub packet");
   });
 });

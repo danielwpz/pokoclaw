@@ -273,10 +273,6 @@ describe("MeditationPipelineRunner", () => {
     const consolidationRewriteSubmit = JSON.parse(
       await readFile(path.join(artifactDir, "consolidation-rewrite.submit.json"), "utf8"),
     );
-    const rewritePreviewShared = await readFile(
-      path.join(artifactDir, "rewrite-preview", "shared.md"),
-      "utf8",
-    );
     const rewritePreviewPrivate = await readFile(
       path.join(artifactDir, "rewrite-preview", "private-agent_sub_1.md"),
       "utf8",
@@ -364,7 +360,8 @@ describe("MeditationPipelineRunner", () => {
         },
       ],
     });
-    expect(consolidationRewritePrompt).toContain("Approved Findings");
+    expect(consolidationRewritePrompt).toContain("Approved Shared Findings");
+    expect(consolidationRewritePrompt).toContain("Approved Private Findings By Bucket");
     expect(consolidationRewriteSubmit).toEqual({
       shared_memory_rewrite:
         "# Preferences\n\n- Prefer concise updates.\n\n# Working Conventions\n\n- Lead with diagnosis before explanation during debugging.\n",
@@ -376,18 +373,16 @@ describe("MeditationPipelineRunner", () => {
         },
       ],
     });
-    expect(rewritePreviewShared).toContain(
-      "Lead with diagnosis before explanation during debugging.",
-    );
+    await expect(
+      readFile(path.join(artifactDir, "rewrite-preview", "shared.md"), "utf8"),
+    ).rejects.toThrow();
     expect(rewritePreviewPrivate).toContain(
       "Lead with diagnosis before explanation during atlas-web frontend debugging.",
     );
     expect(dailyNote).toContain("## Run run_test");
     expect(dailyNote).toContain("The user clearly wanted diagnosis before explanation.");
     expect(dailyNote).not.toContain("Internal reasoning should stay in debug artifacts only.");
-    expect(sharedMemory).toBe(
-      "# Preferences\n\n- Prefer concise updates.\n\n# Working Conventions\n\n- Lead with diagnosis before explanation during debugging.\n",
-    );
+    expect(sharedMemory).not.toContain("Lead with diagnosis before explanation during debugging.");
     expect(privateMemory).toBe(
       "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
     );
@@ -612,7 +607,7 @@ describe("MeditationPipelineRunner", () => {
     expect(clusters).toHaveLength(1);
   });
 
-  test("ignores empty shared memory rewrites during consolidation", async () => {
+  test("drops shared rewrites that were not approved by evaluation", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-empty-shared-"));
@@ -672,7 +667,7 @@ describe("MeditationPipelineRunner", () => {
           }
 
           return createSubmitTurnResult({
-            shared_memory_rewrite: "   \n\t  ",
+            shared_memory_rewrite: "# Shared\n\n- This should be dropped.\n",
             private_memory_rewrites: [
               {
                 agent_id: "agent_sub_1",
@@ -707,7 +702,7 @@ describe("MeditationPipelineRunner", () => {
     );
 
     expect(consolidationRewriteSubmit).toMatchObject({
-      shared_memory_rewrite: "   \n\t  ",
+      shared_memory_rewrite: "# Shared\n\n- This should be dropped.\n",
     });
     expect(dailyNote).toContain("Shared memory rewritten: no");
     expect(sharedMemory).toBe(initialSharedMemory);
@@ -722,10 +717,26 @@ describe("MeditationPipelineRunner", () => {
         {
           agentId: "agent_main_1",
           agentKind: "main",
+          approvedPrivateFindings: [],
         },
         {
           agentId: "agent_sub_1",
           agentKind: "sub",
+          approvedPrivateFindings: [
+            {
+              findingId: "bucket_sub_1/finding-1",
+              agentId: "agent_sub_1",
+              agentKind: "sub",
+              priority: "high",
+              durability: "durable",
+              promotionDecision: "private_memory",
+              reason: "ok",
+              summary: "summary",
+              issueType: "agent_workflow_issue",
+              scopeHint: "subagent",
+              evidenceSummary: "evidence",
+            },
+          ],
         },
       ],
       privateMemoryRewrites: [
@@ -746,6 +757,26 @@ describe("MeditationPipelineRunner", () => {
         content: "# Scope\n- should stay\n",
       },
     ]);
+  });
+
+  test("drops private rewrites for sub agents without private-approved findings", () => {
+    const filtered = filterEligiblePrivateMemoryRewrites({
+      bucketPackets: [
+        {
+          agentId: "agent_sub_1",
+          agentKind: "sub",
+          approvedPrivateFindings: [],
+        },
+      ],
+      privateMemoryRewrites: [
+        {
+          agent_id: "agent_sub_1",
+          content: "# Scope\n- should be dropped\n",
+        },
+      ],
+    });
+
+    expect(filtered).toEqual([]);
   });
 });
 

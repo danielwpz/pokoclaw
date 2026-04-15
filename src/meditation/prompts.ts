@@ -43,7 +43,7 @@ export interface MeditationBucketHistoryStats {
 export interface MeditationConsolidationBucketPacket {
   bucketId: string;
   agentId: string;
-  agentKind: "main" | "sub";
+  agentKind: "main" | "sub" | "shared" | "unknown";
   displayName: string | null;
   description: string | null;
   workdir: string | null;
@@ -65,7 +65,7 @@ export interface MeditationConsolidationEvaluationPromptInput {
 export interface MeditationApprovedFinding {
   findingId: string;
   agentId: string;
-  agentKind: "main" | "sub";
+  agentKind: "main" | "sub" | "shared" | "unknown";
   priority: ConsolidationPriority;
   durability: ConsolidationDurability;
   promotionDecision: Extract<ConsolidationPromotionDecision, "shared_memory" | "private_memory">;
@@ -79,19 +79,20 @@ export interface MeditationApprovedFinding {
 export interface MeditationConsolidationRewriteBucketPacket {
   bucketId: string;
   agentId: string;
-  agentKind: "main" | "sub";
+  agentKind: "main" | "sub" | "shared" | "unknown";
   displayName: string | null;
   description: string | null;
   workdir: string | null;
   compactSummary: string | null;
   privateMemoryCurrent: string | null;
-  approvedFindings: MeditationApprovedFinding[];
+  approvedPrivateFindings: MeditationApprovedFinding[];
 }
 
 export interface MeditationConsolidationRewritePromptInput {
   currentDate: string;
   timezone: string;
   sharedMemoryCurrent: string;
+  approvedSharedFindings: MeditationApprovedFinding[];
   bucketPackets: MeditationConsolidationRewriteBucketPacket[];
 }
 
@@ -256,6 +257,8 @@ export function buildMeditationConsolidationRewriteSystemPrompt(): string {
     "",
     "## Routing Policy",
     "- Only SubAgents may receive private memory rewrites.",
+    "- Shared-approved findings may influence only shared memory.",
+    "- Private-approved findings may influence only the matching SubAgent private memory.",
     "- The main agent has no private memory target.",
     "- Main-agent approved findings may still influence shared memory.",
     "",
@@ -291,7 +294,10 @@ export function buildMeditationConsolidationRewriteUserPrompt(
     input.sharedMemoryCurrent.trimEnd(),
     "</shared_memory_current>",
     "",
-    "## Approved Findings By Bucket",
+    "## Approved Shared Findings",
+    ...renderApprovedFindings(input.approvedSharedFindings),
+    "",
+    "## Approved Private Findings By Bucket",
     ...input.bucketPackets.flatMap(renderRewriteBucketPacket),
   ];
 
@@ -393,7 +399,11 @@ function renderEvaluationBucketPacket(packet: MeditationConsolidationBucketPacke
     "",
     "### Private Memory Current",
     ...(packet.privateMemoryCurrent == null
-      ? ["- This agent has no private memory target in this step."]
+      ? [
+          packet.agentKind === "sub"
+            ? "- This SubAgent currently has no loaded private memory content."
+            : "- This agent has no private memory target in this step.",
+        ]
       : ["```md", packet.privateMemoryCurrent.trimEnd(), "```"]),
     "",
     "### Bucket Note",
@@ -423,7 +433,7 @@ function renderRewriteBucketPacket(packet: MeditationConsolidationRewriteBucketP
       : ["```md", packet.privateMemoryCurrent.trimEnd(), "```"]),
     "",
     "### Approved Findings",
-    ...renderApprovedFindings(packet.approvedFindings),
+    ...renderApprovedFindings(packet.approvedPrivateFindings),
     "</bucket_packet>",
   ];
 }

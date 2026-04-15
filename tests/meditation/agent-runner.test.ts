@@ -279,6 +279,7 @@ describe("meditation agent runner", () => {
       currentDate: "2026-04-08",
       timezone: "UTC",
       sharedMemoryCurrent: "# Preferences\n\n- Prefer concise updates.\n",
+      approvedSharedFindings: [],
       bucketPackets: [
         {
           bucketId: "bucket_sub_1",
@@ -289,7 +290,7 @@ describe("meditation agent runner", () => {
           workdir: "/repo/atlas-web",
           compactSummary: "Recently fixing frontend regressions.",
           privateMemoryCurrent: "# Scope\n\n- atlas-web frontend.\n",
-          approvedFindings: [
+          approvedPrivateFindings: [
             {
               findingId: "bucket_sub_1/finding-1",
               agentId: "agent_sub_1",

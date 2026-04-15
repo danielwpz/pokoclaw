@@ -339,13 +339,11 @@ export class MeditationPipelineRunner implements MeditationRunner {
           evaluationPromptInput: consolidationEvaluationPromptInput,
           evaluation: consolidationEvaluation.submission,
         });
-        if (hasApprovedFindings(consolidationRewritePromptInput.bucketPackets)) {
+        if (hasApprovedFindings(consolidationRewritePromptInput)) {
           logger.info("meditation consolidation rewrite started", {
             runId,
             bucketCount: consolidationRewritePromptInput.bucketPackets.length,
-            approvedFindingCount: countApprovedFindings(
-              consolidationRewritePromptInput.bucketPackets,
-            ),
+            approvedFindingCount: countApprovedFindings(consolidationRewritePromptInput),
           });
           const consolidationRewrite = await runMeditationConsolidationRewriteAgent({
             bridge: this.deps.bridge,
@@ -371,7 +369,10 @@ export class MeditationPipelineRunner implements MeditationRunner {
           const sharedMemoryRewrite = normalizeNonEmptyMeditationRewrite(
             consolidationRewrite.submission.shared_memory_rewrite,
           );
-          if (sharedMemoryRewrite != null) {
+          if (
+            sharedMemoryRewrite != null &&
+            consolidationRewritePromptInput.approvedSharedFindings.length > 0
+          ) {
             const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
             await Promise.all([
               writeMeditationTextFileAtomic(
@@ -384,6 +385,13 @@ export class MeditationPipelineRunner implements MeditationRunner {
               ...consolidationSummary,
               sharedRewritten: true,
             };
+          } else if (
+            sharedMemoryRewrite != null &&
+            consolidationRewritePromptInput.approvedSharedFindings.length === 0
+          ) {
+            logger.warn("meditation consolidation dropped ineligible shared rewrite", {
+              runId,
+            });
           }
 
           const eligiblePrivateRewrites = filterEligiblePrivateMemoryRewrites({
@@ -510,28 +518,42 @@ async function writeJsonArtifact(filePath: string, payload: unknown): Promise<vo
 }
 
 export function filterEligiblePrivateMemoryRewrites(input: {
-  bucketPackets: Array<{ agentId: string; agentKind: "main" | "sub" }>;
+  bucketPackets: Array<{
+    agentId: string;
+    agentKind: "main" | "sub" | "shared" | "unknown";
+    approvedPrivateFindings?: MeditationApprovedFinding[];
+  }>;
   privateMemoryRewrites: ConsolidationMemoryRewrite[];
 }): ConsolidationMemoryRewrite[] {
   const eligibleAgentIds = new Set(
     input.bucketPackets
-      .filter((packet) => packet.agentKind === "sub")
+      .filter(
+        (packet) => packet.agentKind === "sub" && (packet.approvedPrivateFindings?.length ?? 0) > 0,
+      )
       .map((packet) => packet.agentId),
   );
 
   return input.privateMemoryRewrites.filter((rewrite) => eligibleAgentIds.has(rewrite.agent_id));
 }
 
-function hasApprovedFindings(
-  bucketPackets: Array<{ approvedFindings: MeditationApprovedFinding[] }>,
-): boolean {
-  return bucketPackets.some((packet) => packet.approvedFindings.length > 0);
+function hasApprovedFindings(input: {
+  approvedSharedFindings: MeditationApprovedFinding[];
+  bucketPackets: Array<{ approvedPrivateFindings: MeditationApprovedFinding[] }>;
+}): boolean {
+  return (
+    input.approvedSharedFindings.length > 0 ||
+    input.bucketPackets.some((packet) => packet.approvedPrivateFindings.length > 0)
+  );
 }
 
-function countApprovedFindings(
-  bucketPackets: Array<{ approvedFindings: MeditationApprovedFinding[] }>,
-): number {
-  return bucketPackets.reduce((sum, packet) => sum + packet.approvedFindings.length, 0);
+function countApprovedFindings(input: {
+  approvedSharedFindings: MeditationApprovedFinding[];
+  bucketPackets: Array<{ approvedPrivateFindings: MeditationApprovedFinding[] }>;
+}): number {
+  return (
+    input.approvedSharedFindings.length +
+    input.bucketPackets.reduce((sum, packet) => sum + packet.approvedPrivateFindings.length, 0)
+  );
 }
 
 function formatPromptArtifact(input: { systemPrompt: string; userPrompt: string }): string {

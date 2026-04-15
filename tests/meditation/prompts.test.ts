@@ -165,6 +165,21 @@ describe("meditation prompts", () => {
       currentDate: "2026-04-08",
       timezone: "Asia/Shanghai",
       sharedMemoryCurrent: "# Shared Memory\n- Ask for narrow permissions first.\n",
+      approvedSharedFindings: [
+        {
+          findingId: "bucket_main_1/finding-1",
+          agentId: "agent_main_1",
+          agentKind: "main",
+          priority: "high",
+          durability: "durable",
+          promotionDecision: "shared_memory",
+          reason: "This should affect shared coordination behavior.",
+          summary: "Lead with the likely diagnosis before a long explanation.",
+          issueType: "user_preference_signal",
+          scopeHint: "shared",
+          evidenceSummary: "The user repeatedly redirected the response style.",
+        },
+      ],
       bucketPackets: [
         {
           bucketId: "bucket_sub_1",
@@ -175,7 +190,7 @@ describe("meditation prompts", () => {
           workdir: "/repo/atlas-web",
           compactSummary: "Recent atlas summary",
           privateMemoryCurrent: "# Private Memory\n- Check design tokens first.\n",
-          approvedFindings: [
+          approvedPrivateFindings: [
             {
               findingId: "bucket_sub_1/finding-1",
               agentId: "agent_sub_1",
@@ -196,7 +211,9 @@ describe("meditation prompts", () => {
 
     expect(systemPrompt).toContain("Do not reevaluate the world from scratch.");
     expect(systemPrompt).toContain('"shared_memory_rewrite": "string | null"');
-    expect(userPrompt).toContain("Approved Findings");
+    expect(userPrompt).toContain("Approved Shared Findings");
+    expect(userPrompt).toContain("Approved Private Findings By Bucket");
+    expect(userPrompt).toContain("shared_memory");
     expect(userPrompt).toContain("private_memory");
     expect(userPrompt).toContain("This keeps repeating in atlas-web work.");
   });

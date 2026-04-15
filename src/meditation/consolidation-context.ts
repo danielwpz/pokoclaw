@@ -95,42 +95,48 @@ export function buildMeditationConsolidationRewritePromptInput(input: {
   evaluationPromptInput: MeditationConsolidationEvaluationPromptInput;
   evaluation: ConsolidationEvaluationSubmit;
 }): MeditationConsolidationRewritePromptInput {
+  validateConsolidationEvaluations({
+    bucketPackets: input.evaluationPromptInput.bucketPackets,
+    evaluation: input.evaluation,
+  });
+
   type RewriteBucketPacket = MeditationConsolidationRewritePromptInput["bucketPackets"][number];
   const evaluationByFindingId = new Map(
     input.evaluation.evaluations.map((evaluation) => [evaluation.finding_id, evaluation] as const),
   );
 
+  const approvedSharedFindings: MeditationApprovedFinding[] = [];
   const bucketPackets = input.evaluationPromptInput.bucketPackets
     .map((packet) => {
-      const approvedFindings: MeditationApprovedFinding[] = packet.currentFindings.flatMap(
+      const approvedPrivateFindings: MeditationApprovedFinding[] = packet.currentFindings.flatMap(
         (finding) => {
           const evaluation = evaluationByFindingId.get(finding.findingId);
           if (evaluation == null || evaluation.promotion_decision === "keep_in_meditation") {
             return [];
           }
-          if (evaluation.promotion_decision === "private_memory" && packet.agentKind !== "sub") {
+          const approvedFinding: MeditationApprovedFinding = {
+            findingId: finding.findingId,
+            agentId: packet.agentId,
+            agentKind: packet.agentKind,
+            priority: evaluation.priority,
+            durability: evaluation.durability,
+            promotionDecision: evaluation.promotion_decision,
+            reason: evaluation.reason,
+            summary: finding.summary,
+            issueType: finding.issueType,
+            scopeHint: finding.scopeHint,
+            evidenceSummary: finding.evidenceSummary,
+          };
+          if (evaluation.promotion_decision === "shared_memory") {
+            approvedSharedFindings.push(approvedFinding);
             return [];
           }
 
-          return [
-            {
-              findingId: finding.findingId,
-              agentId: packet.agentId,
-              agentKind: packet.agentKind,
-              priority: evaluation.priority,
-              durability: evaluation.durability,
-              promotionDecision: evaluation.promotion_decision,
-              reason: evaluation.reason,
-              summary: finding.summary,
-              issueType: finding.issueType,
-              scopeHint: finding.scopeHint,
-              evidenceSummary: finding.evidenceSummary,
-            },
-          ];
+          return [approvedFinding];
         },
       );
 
-      return approvedFindings.length === 0
+      return approvedPrivateFindings.length === 0
         ? null
         : {
             bucketId: packet.bucketId,
@@ -141,7 +147,7 @@ export function buildMeditationConsolidationRewritePromptInput(input: {
             workdir: packet.workdir,
             compactSummary: packet.compactSummary,
             privateMemoryCurrent: packet.privateMemoryCurrent,
-            approvedFindings,
+            approvedPrivateFindings,
           };
     })
     .filter((packet): packet is RewriteBucketPacket => packet != null);
@@ -150,8 +156,50 @@ export function buildMeditationConsolidationRewritePromptInput(input: {
     currentDate: input.evaluationPromptInput.currentDate,
     timezone: input.evaluationPromptInput.timezone,
     sharedMemoryCurrent: input.evaluationPromptInput.sharedMemoryCurrent,
+    approvedSharedFindings,
     bucketPackets,
   };
+}
+
+export function validateConsolidationEvaluations(input: {
+  bucketPackets: MeditationConsolidationEvaluationPromptInput["bucketPackets"];
+  evaluation: ConsolidationEvaluationSubmit;
+}): void {
+  const findingToPacket = new Map(
+    input.bucketPackets.flatMap((packet) =>
+      packet.currentFindings.map((finding) => [finding.findingId, packet] as const),
+    ),
+  );
+  const seenFindingIds = new Set<string>();
+
+  for (const evaluation of input.evaluation.evaluations) {
+    const packet = findingToPacket.get(evaluation.finding_id);
+    if (packet == null) {
+      throw new Error(
+        `Meditation consolidation evaluation referenced unknown finding_id: ${evaluation.finding_id}`,
+      );
+    }
+    if (seenFindingIds.has(evaluation.finding_id)) {
+      throw new Error(
+        `Meditation consolidation evaluation duplicated finding_id: ${evaluation.finding_id}`,
+      );
+    }
+    if (evaluation.promotion_decision === "private_memory" && packet.agentKind !== "sub") {
+      throw new Error(
+        `Meditation consolidation evaluation cannot target private_memory for non-sub packet: ${evaluation.finding_id}`,
+      );
+    }
+    seenFindingIds.add(evaluation.finding_id);
+  }
+
+  const missingFindingIds = [...findingToPacket.keys()].filter(
+    (findingId) => !seenFindingIds.has(findingId),
+  );
+  if (missingFindingIds.length > 0) {
+    throw new Error(
+      `Meditation consolidation evaluation did not cover all current findings: ${missingFindingIds.join(", ")}`,
+    );
+  }
 }
 
 async function loadBucketPackets(input: {
@@ -167,28 +215,26 @@ async function loadBucketPackets(input: {
 }): Promise<MeditationConsolidationEvaluationPromptInput["bucketPackets"]> {
   const packets: MeditationConsolidationEvaluationPromptInput["bucketPackets"] = [];
   for (const bucket of input.buckets) {
-    if (bucket.agentId == null || bucket.profile == null) {
-      continue;
-    }
-
-    const agentKind: MeditationConsolidationEvaluationPromptInput["bucketPackets"][number]["agentKind"] =
-      bucket.profile.kind === "main" ? "main" : "sub";
+    const agentKind = resolveBucketAgentKind(bucket);
+    const packetAgentId = bucket.agentId ?? "shared";
     const privateMemoryCurrent =
       agentKind === "sub"
         ? await loadPrivateMemoryCurrent({
             workspaceDir: input.workspaceDir,
-            agentId: bucket.agentId,
+            agentId: packetAgentId,
           })
         : null;
-    const recentHistory = input.recentHistoryByAgentId.get(bucket.agentId);
+    const recentHistory =
+      bucket.agentId == null ? null : input.recentHistoryByAgentId.get(bucket.agentId);
     packets.push({
       bucketId: bucket.bucketId,
-      agentId: bucket.agentId,
+      agentId: packetAgentId,
       agentKind,
-      displayName: bucket.profile.displayName,
-      description: bucket.profile.description,
-      workdir: bucket.profile.workdir,
-      compactSummary: bucket.profile.compactSummary,
+      displayName:
+        bucket.profile?.displayName ?? (bucket.agentId == null ? "Shared Findings" : null),
+      description: bucket.profile?.description ?? null,
+      workdir: bucket.profile?.workdir ?? null,
+      compactSummary: bucket.profile?.compactSummary ?? null,
       privateMemoryCurrent,
       bucketNote: bucket.note,
       currentFindings: toMeditationBucketFindingContext(bucket.bucketId, bucket.findings),
@@ -202,6 +248,18 @@ async function loadBucketPackets(input: {
   }
 
   return packets;
+}
+
+function resolveBucketAgentKind(
+  bucket: MeditationConsolidationBucketResult,
+): MeditationConsolidationEvaluationPromptInput["bucketPackets"][number]["agentKind"] {
+  if (bucket.agentId == null) {
+    return "shared";
+  }
+  if (bucket.profile == null) {
+    return "unknown";
+  }
+  return bucket.profile.kind === "main" ? "main" : "sub";
 }
 
 async function loadRecentFindingHistory(input: {
