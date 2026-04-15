@@ -24,6 +24,7 @@ export interface MeditationFinding {
   scope_hint: MeditationFindingScopeHint;
   cluster_ids: string[];
   evidence_summary: string;
+  examples: string[];
 }
 
 export interface BucketMeditationSubmit {
@@ -79,6 +80,7 @@ const MEDITATION_FINDING_SCHEMA = Type.Object(
     ]),
     cluster_ids: Type.Array(Type.String()),
     evidence_summary: Type.String(),
+    examples: Type.Array(Type.String()),
   },
   { additionalProperties: false },
 );

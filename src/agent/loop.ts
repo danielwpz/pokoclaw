@@ -1267,6 +1267,9 @@ export class AgentLoop {
         modelId: model.id,
         errorKind: normalizedError.kind,
         errorMessage: normalizedError.message,
+        ...(normalizedError.rawMessage == null
+          ? {}
+          : { rawErrorMessage: normalizedError.rawMessage }),
         retryable: normalizedError.retryable,
         sessionId: input.sessionId,
         conversationId: context.session.conversationId,
@@ -1283,6 +1286,9 @@ export class AgentLoop {
         runId,
         errorKind: normalizedError.kind,
         errorMessage: normalizedError.message,
+        ...(normalizedError.rawMessage == null
+          ? {}
+          : { rawErrorMessage: normalizedError.rawMessage }),
       });
       throw error;
     } finally {
@@ -2088,12 +2094,14 @@ function toRunFailure(error: unknown): {
     | import("@/src/tools/core/errors.js").ToolFailureKind
     | "unknown";
   message: string;
+  rawMessage?: string | null;
   retryable: boolean;
 } {
   if (isAgentLlmError(error)) {
     return {
       kind: error.kind,
       message: error.message,
+      rawMessage: error.rawMessage ?? null,
       retryable: error.retryable,
     };
   }

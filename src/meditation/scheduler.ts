@@ -6,8 +6,11 @@ import type { MeditationStateRepo } from "@/src/storage/repos/meditation-state.r
 const logger = createSubsystemLogger("meditation/scheduler");
 const DEFAULT_STALE_RUNNING_MS = 2 * 60 * 60 * 1000;
 
+import type { MeditationWindow } from "@/src/meditation/window.js";
+
 export interface MeditationRunRequest {
   tickAt: Date;
+  windowOverride?: MeditationWindow;
 }
 
 export interface MeditationRunResult {

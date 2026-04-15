@@ -12,6 +12,7 @@ import type {
   MeditationConsolidationEvaluationPromptInput,
   MeditationConsolidationRewritePromptInput,
 } from "@/src/meditation/prompts.js";
+import { buildMeditationFindingId } from "@/src/meditation/prompts.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -141,6 +142,7 @@ describe("meditation agent runner", () => {
                 scope_hint: "subagent",
                 cluster_ids: ["stop:1"],
                 evidence_summary: "The user message redirected the response style.",
+                examples: ["user quote: lead with the diagnosis first"],
               },
             ],
           });
@@ -171,6 +173,7 @@ describe("meditation agent runner", () => {
           scope_hint: "subagent",
           cluster_ids: ["stop:1"],
           evidence_summary: "The user message redirected the response style.",
+          examples: ["user quote: lead with the diagnosis first"],
         },
       ],
     });
@@ -200,12 +203,13 @@ describe("meditation agent runner", () => {
           bucketNote: "This SubAgent repeatedly delayed the diagnosis and frustrated the user.",
           currentFindings: [
             {
-              findingId: "bucket_sub_1/finding-1",
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
               summary: "For atlas-web frontend debugging, lead with diagnosis before explanation.",
               issueType: "user_preference_signal",
               scopeHint: "subagent",
               clusterIds: ["stop:1"],
               evidenceSummary: "The user interrupted the run and asked for diagnosis first.",
+              examples: ["user quote: lead with the diagnosis first"],
             },
           ],
           recentHistory: [
@@ -238,7 +242,7 @@ describe("meditation agent runner", () => {
           return createTurnResult({
             evaluations: [
               {
-                finding_id: "bucket_sub_1/finding-1",
+                finding_id: buildMeditationFindingId("bucket_sub_1", 0),
                 priority: "high",
                 durability: "durable",
                 promotion_decision: "private_memory",
@@ -259,7 +263,7 @@ describe("meditation agent runner", () => {
     expect(result.submission).toEqual({
       evaluations: [
         {
-          finding_id: "bucket_sub_1/finding-1",
+          finding_id: buildMeditationFindingId("bucket_sub_1", 0),
           priority: "high",
           durability: "durable",
           promotion_decision: "private_memory",
@@ -292,7 +296,7 @@ describe("meditation agent runner", () => {
           privateMemoryCurrent: "# Scope\n\n- atlas-web frontend.\n",
           approvedPrivateFindings: [
             {
-              findingId: "bucket_sub_1/finding-1",
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
               agentId: "agent_sub_1",
               agentKind: "sub",
               priority: "high",
@@ -303,6 +307,7 @@ describe("meditation agent runner", () => {
               issueType: "user_preference_signal",
               scopeHint: "subagent",
               evidenceSummary: "The user interrupted the run and asked for diagnosis first.",
+              examples: ["user quote: lead with the diagnosis first"],
             },
           ],
         },

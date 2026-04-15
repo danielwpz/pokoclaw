@@ -456,7 +456,7 @@ function finalizeRun(
     terminalErrorKind: event.type === "run_failed" ? event.errorKind : null,
     terminalMessage:
       event.type === "run_failed"
-        ? event.errorMessage
+        ? (event.rawErrorMessage ?? event.errorMessage)
         : event.type === "run_cancelled"
           ? event.reason
           : null,

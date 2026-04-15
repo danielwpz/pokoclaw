@@ -27,6 +27,7 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import { buildAgentLlmRawErrorPayload } from "@/src/agent/llm/errors.js";
 import {
   convertResponsesMessages,
   convertResponsesTools,
@@ -83,6 +84,9 @@ interface ParsedActualCost {
 type ResponsesInput = Exclude<ResponseCreateParamsStreaming["input"], undefined>;
 type AssistantContentItem = AssistantMessage["content"][number];
 type AssistantToolCallContent = Extract<AssistantContentItem, { type: "toolCall" }>;
+type AssistantMessageWithRawError = AssistantMessage & {
+  pokoclawRawError?: ReturnType<typeof buildAgentLlmRawErrorPayload>;
+};
 
 interface UpstreamCostParser {
   supports(model: Pick<Model<Api>, "baseUrl">): boolean;
@@ -475,6 +479,8 @@ function streamOpenAICompletionsWithUpstreamUsage(
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      (output as AssistantMessageWithRawError).pokoclawRawError =
+        buildAgentLlmRawErrorPayload(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     }
@@ -561,6 +567,8 @@ function streamOpenAIResponsesWithUpstreamUsage(
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      (output as AssistantMessageWithRawError).pokoclawRawError =
+        buildAgentLlmRawErrorPayload(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     }

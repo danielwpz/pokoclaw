@@ -95,6 +95,7 @@ describe("runMeditationSubmitLoop", () => {
                 scope_hint: "shared",
                 cluster_ids: ["tool_repeat:1"],
                 evidence_summary: "The same permission-denied pattern repeated in one session.",
+                examples: ["tool error: Permission request denied."],
               },
             ],
           });
@@ -122,6 +123,7 @@ describe("runMeditationSubmitLoop", () => {
           scope_hint: "shared",
           cluster_ids: ["tool_repeat:1"],
           evidence_summary: "The same permission-denied pattern repeated in one session.",
+          examples: ["tool error: Permission request denied."],
         },
       ],
     });
@@ -285,6 +287,7 @@ describe("runMeditationSubmitLoop", () => {
                       scope_hint: Type.String(),
                       cluster_ids: Type.Array(Type.String()),
                       evidence_summary: Type.String(),
+                      examples: Type.Array(Type.String()),
                     },
                     { additionalProperties: false },
                   ),

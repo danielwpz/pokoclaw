@@ -7,6 +7,7 @@ import {
   buildMeditationConsolidationEvaluationUserPrompt,
   buildMeditationConsolidationRewriteSystemPrompt,
   buildMeditationConsolidationRewriteUserPrompt,
+  buildMeditationFindingId,
 } from "@/src/meditation/prompts.js";
 
 describe("meditation prompts", () => {
@@ -55,20 +56,84 @@ describe("meditation prompts", () => {
               },
             ],
           },
+          {
+            id: "tool_burst:1",
+            kind: "tool_burst",
+            startedAt: "2026-04-07T12:21:00.000Z",
+            endedAt: "2026-04-07T12:22:00.000Z",
+            count: 2,
+            signatures: ["bash:permission_denied"],
+            episodeTimeline: {
+              id: "sess_1-ep1",
+              sessionId: "sess_1",
+              startSeq: 9,
+              endSeq: 12,
+              triggerStartSeq: 10,
+              triggerEndSeq: 11,
+              triggerKinds: ["consecutive_failures"],
+              totalToolResults: 2,
+              failedToolResults: 2,
+              events: [
+                {
+                  seq: 9,
+                  createdAt: "2026-04-07T12:20:30.000Z",
+                  role: "user",
+                  messageType: "text",
+                  summary: "please use the browser flow only",
+                },
+                {
+                  seq: 10,
+                  createdAt: "2026-04-07T12:21:00.000Z",
+                  role: "tool",
+                  messageType: "tool_result",
+                  summary:
+                    'tool=bash | status=error | code=permission_denied | request={"scopes":[{"kind":"bash.full_access"}],"prefix":["lark-cli"]} | output="Permission request denied."',
+                },
+              ],
+            },
+          },
         ],
       },
     });
 
     expect(systemPrompt).toContain("reduce future user friction");
     expect(systemPrompt).toContain("## Product Context");
+    expect(systemPrompt).toContain("## Facts Vs Judgments");
+    expect(systemPrompt).toContain(
+      "A fact is something directly supported by the bucket evidence.",
+    );
+    expect(systemPrompt).toContain("A judgment is an opinion about importance");
+    expect(systemPrompt).toContain("## How To Work");
+    expect(systemPrompt).toContain("1. Read the bucket evidence");
+    expect(systemPrompt).toContain("## Repeated Failure And Later Recovery");
+    expect(systemPrompt).toContain(
+      "repeated failed attempts -> user correction or agent method change -> later successful attempts.",
+    );
+    expect(systemPrompt).toContain("For each finding, include 1 to 3 short factual examples");
+    expect(systemPrompt).toContain("## Issue Type Guide");
+    expect(systemPrompt).toContain("user_preference_signal:");
+    expect(systemPrompt).toContain("agent_workflow_issue:");
+    expect(systemPrompt).toContain("tool_or_source_quirk:");
+    expect(systemPrompt).toContain("## Scope Hint Guide");
     expect(systemPrompt).toContain("Do not turn the note into root-cause analysis");
     expect(systemPrompt).toContain("Do not prescribe fixes or say what should be changed");
+    expect(systemPrompt).toContain("Prefer wording like 'X happened'");
+    expect(systemPrompt).toContain(
+      "avoid judgment-heavy verbs such as 'captures', 'shows', 'indicates'",
+    );
+    expect(systemPrompt).toContain("## Style Contract");
+    expect(systemPrompt).toContain("factual incident digest, not an analysis report");
+    expect(systemPrompt).toContain('"examples": ["string"]');
     expect(systemPrompt).toContain('"note": "string"');
     expect(systemPrompt).toContain('"findings": [');
     expect(userPrompt).toContain("<subagent_profile>");
     expect(userPrompt).toContain("Atlas Frontend");
     expect(userPrompt).toContain("Recent atlas summary");
     expect(userPrompt).toContain("stop:1");
+    expect(userPrompt).toContain('kind="tool_burst" id="tool_burst:1"');
+    expect(userPrompt).toContain("Trigger kinds: consecutive_failures");
+    expect(userPrompt).toContain("please use the browser flow only");
+    expect(userPrompt).toContain("tool=bash | status=error | code=permission_denied");
     expect(userPrompt).toContain("## Current Run");
   });
 
@@ -91,12 +156,16 @@ describe("meditation prompts", () => {
           bucketNote: "This bucket kept showing avoidable permission friction.",
           currentFindings: [
             {
-              findingId: "bucket_sub_1/finding-1",
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
               summary: "Repeated protected-path reads suggest earlier narrow permission requests.",
               issueType: "tool_or_source_quirk",
               scopeHint: "subagent",
               clusterIds: ["tool_repeat:1"],
               evidenceSummary: "The same permission-denied pattern repeated in one session.",
+              examples: [
+                "user: please use narrower permissions first",
+                "tool error: Permission request denied.",
+              ],
             },
           ],
           recentHistory: [
@@ -129,12 +198,13 @@ describe("meditation prompts", () => {
           bucketNote: "The main agent also saw repeated permission friction.",
           currentFindings: [
             {
-              findingId: "bucket_main_1/finding-1",
+              findingId: buildMeditationFindingId("bucket_main_1", 0),
               summary: "The user repeatedly wanted the likely diagnosis first.",
               issueType: "user_preference_signal",
               scopeHint: "shared",
               clusterIds: ["stop:1"],
               evidenceSummary: "The user stopped the run and redirected the response style.",
+              examples: ["user quote: lead with the diagnosis first"],
             },
           ],
           recentHistory: [],
@@ -151,6 +221,15 @@ describe("meditation prompts", () => {
     expect(systemPrompt).toContain(
       "Only treat a finding as promotion-worthy when the evidence is strong enough",
     );
+    expect(systemPrompt).toContain("## What Good Durable Memory Looks Like");
+    expect(systemPrompt).toContain("A good durable memory is a short future-facing rule.");
+    expect(systemPrompt).toContain("Bad memory shape");
+    expect(systemPrompt).toContain(
+      "Copy each finding_id exactly as it appears in Current Findings.",
+    );
+    expect(systemPrompt).toContain(
+      "Before submit, verify that every current finding_id appears exactly once",
+    );
     expect(systemPrompt).toContain(
       '"promotion_decision": "shared_memory | private_memory | keep_in_meditation"',
     );
@@ -162,6 +241,8 @@ describe("meditation prompts", () => {
     expect(userPrompt).toContain("- This agent has no private memory target in this step.");
     expect(userPrompt).toContain("This bucket kept showing avoidable permission friction.");
     expect(userPrompt).toContain("run_prev");
+    expect(userPrompt).toContain("examples:");
+    expect(userPrompt).toContain("tool error: Permission request denied.");
   });
 
   test("builds consolidation rewrite prompts with approved findings only", () => {
@@ -172,7 +253,7 @@ describe("meditation prompts", () => {
       sharedMemoryCurrent: "# Shared Memory\n- Ask for narrow permissions first.\n",
       approvedSharedFindings: [
         {
-          findingId: "bucket_main_1/finding-1",
+          findingId: buildMeditationFindingId("bucket_main_1", 0),
           agentId: "agent_main_1",
           agentKind: "main",
           priority: "high",
@@ -183,6 +264,7 @@ describe("meditation prompts", () => {
           issueType: "user_preference_signal",
           scopeHint: "shared",
           evidenceSummary: "The user repeatedly redirected the response style.",
+          examples: ["user quote: lead with the diagnosis first"],
         },
       ],
       bucketPackets: [
@@ -197,7 +279,7 @@ describe("meditation prompts", () => {
           privateMemoryCurrent: "# Private Memory\n- Check design tokens first.\n",
           approvedPrivateFindings: [
             {
-              findingId: "bucket_sub_1/finding-1",
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
               agentId: "agent_sub_1",
               agentKind: "sub",
               priority: "high",
@@ -208,6 +290,7 @@ describe("meditation prompts", () => {
               issueType: "tool_or_source_quirk",
               scopeHint: "subagent",
               evidenceSummary: "The same permission-denied pattern repeated in one session.",
+              examples: ["tool error: Permission request denied."],
             },
           ],
         },
@@ -215,11 +298,25 @@ describe("meditation prompts", () => {
     });
 
     expect(systemPrompt).toContain("Do not reevaluate the world from scratch.");
+    expect(systemPrompt).toContain("Write durable future-facing rules, not incident reports.");
+    expect(systemPrompt).toContain("Avoid timestamps, session ids, occurrence counts");
+    expect(systemPrompt).toContain("## Learn The Strategy, Not The Incident");
+    expect(systemPrompt).toContain("Generalize one level above the incident:");
+    expect(systemPrompt).toContain(
+      "When shell-wide permissions are denied, switch earlier to narrower browser-specific or split-command execution.",
+    );
+    expect(systemPrompt).toContain("## Rewrite Style");
+    expect(systemPrompt).toContain(
+      "If an approved finding cannot be rewritten as a short future-facing rule, leave that target unchanged.",
+    );
+    expect(systemPrompt).toContain("## Good Rewrite Examples");
+    expect(systemPrompt).toContain("## Bad Rewrite Examples");
     expect(systemPrompt).toContain('"shared_memory_rewrite": "string | null"');
     expect(userPrompt).toContain("Approved Shared Findings");
     expect(userPrompt).toContain("Approved Private Findings By Bucket");
     expect(userPrompt).toContain("shared_memory");
     expect(userPrompt).toContain("private_memory");
     expect(userPrompt).toContain("This keeps repeating in atlas-web work.");
+    expect(userPrompt).toContain("tool error: Permission request denied.");
   });
 });

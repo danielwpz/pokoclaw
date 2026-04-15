@@ -1,7 +1,7 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AgentLlmError } from "@/src/agent/llm/errors.js";
+import { AgentLlmError, buildAgentLlmRawErrorPayload } from "@/src/agent/llm/errors.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import { PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import type { Message } from "@/src/storage/schema/types.js";
@@ -769,6 +769,79 @@ describe("pi bridge", () => {
         responseStatus: 529,
         causeName: "Error",
         causeMessage: "upstream socket closed",
+        serializedError: expect.stringContaining("upstream socket closed"),
+      }),
+    );
+  });
+
+  test("preserves structured assistant error payloads through normalization", async () => {
+    const rawPayload = buildAgentLlmRawErrorPayload(
+      Object.assign(new Error("terminated"), {
+        response: { status: 529 },
+        cause: Object.assign(new Error("upstream socket closed"), {
+          code: "UND_ERR_SOCKET",
+        }),
+      }),
+    );
+
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream(
+        [],
+        Object.assign(
+          {
+            role: "assistant" as const,
+            api: "anthropic-messages" as const,
+            provider: "anthropic_main",
+            model: "claude-sonnet-4-5-20250929",
+            stopReason: "error" as const,
+            content: [],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            errorMessage: "terminated",
+            timestamp: Date.now(),
+          } satisfies AssistantMessage,
+          { pokoclawRawError: rawPayload },
+        ),
+      ),
+    );
+
+    const bridge = new PiBridge();
+    const error = await bridge
+      .streamTurn({
+        model: createResolvedModel(),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(AgentLlmError);
+    expect(error).toMatchObject({
+      kind: "overloaded",
+      message: "terminated",
+      rawMessage: "terminated | upstream socket closed",
+      rawDetails: expect.objectContaining({
+        responseStatus: 529,
+        causeMessage: "upstream socket closed",
+      }),
+    });
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      "raw llm failure before normalization",
+      expect.objectContaining({
+        phase: "stream",
+        errorName: "AgentLlmError",
+        errorMessage: "terminated",
+        rawMessage: "terminated | upstream socket closed",
+        responseStatus: 529,
+        causeMessage: "upstream socket closed",
+        serializedError: expect.stringContaining("upstream socket closed"),
       }),
     );
   });

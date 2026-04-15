@@ -48,8 +48,52 @@ Guidance for coding agents working in this repository.
 - `pnpm preflight` - build + format + lint + test
 - `pnpm start` - run the app once
 - `pnpm dev` - run the app with watch mode
+- `pnpm meditation:backtest -- --tick-at <iso> [--lookback-days N | --start-at <iso> --end-at <iso>] [--label name]` - run the normal meditation pipeline against a sandbox copy of the live DB/workspace for replay/backtest without mutating live meditation state
+- `pnpm meditation:episode-study -- --tick-at <iso> [--lookback-days N | --start-at <iso> --end-at <iso>] [--session-id <id>]... [--top-sessions N] [--label name]` - compare multiple candidate friction-episode extraction strategies against real historical session data and write reports under `.tmp/meditation-episode-study/`
 
 Prefer the narrowest relevant test command first. Run `pnpm preflight` for larger or user-facing changes.
+
+## Meditation Backtest
+
+- The manual replay entrypoint is [src/script/meditation-backtest.ts](src/script/meditation-backtest.ts).
+- It reuses the same `MeditationPipelineRunner` as production cron runs.
+- It prepares an isolated sandbox under `.tmp/meditation-backtests/<label>/` with:
+  - a copied SQLite database
+  - copied shared/private memory files
+  - isolated meditation logs and daily notes
+- The backtest runner also hard-denies the live `~/.pokoclaw` data tree at the meditation security layer so the replay cannot read or write live runtime data during the run.
+- Use this when iterating on meditation prompts, clustering, evaluation, or rewrite behavior so you do not need to wait for the live cron schedule or clean live state between runs.
+- Prefer explicit `--start-at/--end-at` when you want deterministic replay of one known window.
+- Prefer `--lookback-days` when you want a quick sandboxed approximation of the normal production lookback behavior.
+- Common usage:
+  - `pnpm meditation:backtest -- --tick-at 2026-04-15T12:30:00.000Z --lookback-days 7`
+  - `pnpm meditation:backtest -- --tick-at 2026-04-15T12:30:00.000Z --start-at 2026-04-14T00:00:00.000Z --end-at 2026-04-15T00:00:00.000Z --label github-task-window`
+  - `pnpm meditation:backtest -- --tick-at 2026-04-15T12:30:00.000Z --lookback-days 7 --last-success-at null`
+- Important flags:
+  - `--tick-at`: logical run time for the replay; defaults to now when omitted
+  - `--start-at` / `--end-at`: explicit UTC window bounds for deterministic replay
+  - `--lookback-days`: fallback lookback horizon when `--start-at` is omitted
+  - `--last-success-at`: override production `last_success_at` semantics without touching live state; pass `null` to force lookback mode
+  - `--label`: names the sandbox folder under `.tmp/meditation-backtests/`
+- The script logs the sandbox paths it used at the end of the run so you can inspect the replay outputs directly.
+
+## Meditation Episode Study
+
+- The episode-study entrypoint is [src/script/meditation-episode-study.ts](src/script/meditation-episode-study.ts).
+- It is a read-only research tool for improving harvest / bucket-prep extraction on real historical data before changing production logic.
+- It compares multiple candidate extraction strategies on the same window and writes:
+  - `overview.txt`
+  - one markdown report per strategy
+  - one JSON report per strategy
+- Output root:
+  - `.tmp/meditation-episode-study/<label>/`
+- Current intent:
+  - compare how much "failure -> later context" each strategy preserves
+  - inspect whether the extracted episode is rich enough for meditation to learn a future-facing rule
+- Common usage:
+  - `pnpm meditation:episode-study -- --tick-at 2026-04-15T12:30:00.000Z --lookback-days 7`
+  - `pnpm meditation:episode-study -- --tick-at 2026-04-15T12:30:00.000Z --start-at 2026-04-14T00:00:00.000Z --end-at 2026-04-15T00:00:00.000Z --top-sessions 4`
+  - `pnpm meditation:episode-study -- --tick-at 2026-04-15T12:30:00.000Z --session-id <session-id>`
 
 ## Code Quality
 

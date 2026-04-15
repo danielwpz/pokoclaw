@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
+import { buildAgentLlmRawErrorPayload, normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
 
 describe("normalizeAgentLlmError", () => {
   test("prefers structured http status over generic message matching", () => {
@@ -86,6 +86,37 @@ describe("normalizeAgentLlmError", () => {
     expect(normalizeAgentLlmError({ error })).toMatchObject({
       kind: "overloaded",
       retryable: true,
+    });
+  });
+
+  test("preserves structured upstream raw error payloads during normalization", () => {
+    const payload = buildAgentLlmRawErrorPayload(
+      Object.assign(new Error("terminated"), {
+        response: { status: 529 },
+        cause: Object.assign(new Error("upstream socket closed"), {
+          code: "UND_ERR_SOCKET",
+        }),
+      }),
+    );
+
+    const error = normalizeAgentLlmError({
+      error: payload,
+      provider: "openrouter",
+      model: "openrouter-qwen3.5-122b",
+    });
+
+    expect(error.message).toBe("terminated");
+    expect(error).toMatchObject({
+      kind: "overloaded",
+      rawMessage: "terminated | upstream socket closed",
+      retryable: true,
+      provider: "openrouter",
+      model: "openrouter-qwen3.5-122b",
+      rawDetails: expect.objectContaining({
+        responseStatus: 529,
+        causeMessage: "upstream socket closed",
+        code: "UND_ERR_SOCKET",
+      }),
     });
   });
 });

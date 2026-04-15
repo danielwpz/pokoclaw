@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+
 import type { PreparedMeditationBucket } from "@/src/meditation/bucket-prep.js";
+import { summarizeMeditationContextMessage } from "@/src/meditation/message-context.js";
 import type {
   ConsolidationDurability,
   ConsolidationPriority,
@@ -23,6 +26,7 @@ export interface MeditationBucketFindingContext {
   scopeHint: MeditationFindingScopeHint;
   clusterIds: string[];
   evidenceSummary: string;
+  examples: string[];
 }
 
 export interface MeditationRecentFindingHistory {
@@ -74,6 +78,7 @@ export interface MeditationApprovedFinding {
   issueType: MeditationFindingIssueType;
   scopeHint: MeditationFindingScopeHint;
   evidenceSummary: string;
+  examples: string[];
 }
 
 export interface MeditationConsolidationRewriteBucketPacket {
@@ -116,6 +121,74 @@ export function buildMeditationBucketSystemPrompt(): string {
     "- You must not decide priority, durability, or whether something should enter durable memory.",
     "- You must not rewrite any memory file here.",
     "",
+    "## Facts Vs Judgments",
+    "- A fact is something directly supported by the bucket evidence.",
+    "- A judgment is an opinion about importance, long-term value, root cause, what should change, or what should be remembered.",
+    "- This step is for facts, not judgments.",
+    "",
+    "### Facts: allowed",
+    '- "The agent hit 3 permission_denied tool results in one session."',
+    '- "The user stopped the run twice within 2 minutes."',
+    '- "The task ended blocked after the agent reported tool-environment issues."',
+    '- "The same schedule_task_not_found error appeared across 4 sessions."',
+    '- "The agent repeated one method several times, then switched to a different method and later tool calls succeeded."',
+    "",
+    "### Judgments: not allowed here",
+    '- "This is the core problem."',
+    '- "This should go into memory."',
+    '- "This is durable."',
+    '- "The agent should switch strategy earlier."',
+    '- "This needs to be fixed by changing X."',
+    '- "The successful later step proves the root cause was Y."',
+    "",
+    "## Issue Type Guide",
+    "- user_preference_signal:",
+    "  Use when the evidence shows a stable user preference or stable user-facing collaboration constraint.",
+    '  Example: the user repeatedly redirects the assistant to "lead with diagnosis first" across runs.',
+    "  Not this: one frustrated stop in a single session.",
+    "- user_intent_shift:",
+    "  Use when the user changed direction or stopped this specific run, but there is not enough evidence that it is a durable preference.",
+    "  Example: the user stops a run and moves to a different task.",
+    "  Not this: the same preference or constraint repeated across sessions.",
+    "- agent_workflow_issue:",
+    "  Use when the agent itself repeatedly follows a poor method, wrong procedure, wrong naming, or overly broad permission strategy.",
+    "  Example: repeatedly requesting bash.full_access for a browsing task.",
+    "  Example: repeatedly using the wrong scheduled task name.",
+    "  Not this: a website or external tool has an inherent limitation.",
+    "- tool_or_source_quirk:",
+    "  Use when a tool, website, data source, browser environment, or external system has its own limitation or special behavior.",
+    "  Example: a path truly does not exist.",
+    "  Example: a source returns 404 or a site blocks scraping.",
+    "  Not this: the agent keeps choosing the wrong tool or keeps requesting the wrong permission scope.",
+    "- system_or_config_issue:",
+    "  Use when the evidence points to Pokoclaw configuration, task registration, platform setup, or product wiring problems.",
+    "  Example: a registered task name does not match what the agent is invoking.",
+    "  Example: a required local tool is missing from the environment.",
+    "- uncertain_or_mixed:",
+    "  Use when the evidence could fit multiple categories or is too weak to classify confidently.",
+    "",
+    "## Scope Hint Guide",
+    "- shared: the finding is not specific to one subagent and would plausibly matter across the system.",
+    "- subagent: the finding is mainly about one specific subagent's work style, local tooling, or task domain.",
+    "- session_only: the finding appears local to this run or session and should not be generalized yet.",
+    "- uncertain: use when the scope cannot be determined confidently from the evidence.",
+    "",
+    "## How To Work",
+    "1. Read the bucket evidence and identify the strongest repeated or user-visible friction signals.",
+    "2. Rewrite those signals as plain factual observations.",
+    "3. Classify each finding conservatively using issue_type and scope_hint.",
+    "4. Stop before value judgment. Do not say what should be remembered, prioritized, fixed, or changed.",
+    "5. If the evidence shows a repeated-failure pattern followed by a later change in method, include both the repeated failure pattern and the later changed action as facts.",
+    "6. For each finding, include 1 to 3 short factual examples from the evidence.",
+    "",
+    "## Repeated Failure And Later Recovery",
+    "- In many good buckets, the useful pattern is not only the failure itself.",
+    "- It is often: repeated failed attempts -> user correction or agent method change -> later successful attempts.",
+    "- Treat that full sequence as factual evidence.",
+    "- Record what repeated, what changed later, and what later succeeded.",
+    "- Do not over-claim. Later success does not automatically prove a root cause.",
+    "- You may say that a different action happened later and later tool calls succeeded. Do not say that this fully explains why the earlier errors happened unless the evidence directly proves it.",
+    "",
     "## What Counts As Success",
     "- Keep only the strongest user-friction signals.",
     "- Produce a concise factual note for later review.",
@@ -128,8 +201,21 @@ export function buildMeditationBucketSystemPrompt(): string {
     "- Do not turn the note into root-cause analysis, durable lessons, or a repair plan.",
     "- Do not prescribe fixes or say what should be changed.",
     "- Keep findings anchored to observable facts: what happened, where, how often, and with what evidence.",
+    "- For each finding, examples should make the evidence concrete: a short user quote, a short error snippet, or a short later-success snippet.",
+    "- Examples are evidence, not lessons.",
+    "- Prefer wording like 'X happened', 'Y repeated', 'Z was observed' over wording like 'therefore', 'the problem is', 'this means', or 'should'.",
+    "- In both note and findings, avoid judgment-heavy verbs such as 'captures', 'shows', 'indicates', 'proves', 'demonstrates', 'reveals', or 'core problem'.",
+    "- In both note and findings, avoid incident-summary phrasing such as 'this bucket captures friction', 'the task failed because', or 'the agent learned'.",
+    "- Prefer concrete factual phrasing such as 'X repeated N times', 'the user said ...', 'later the agent switched to ...', or 'later tool calls succeeded'.",
     "- If a finding cannot be confidently classified, use uncertain_or_mixed.",
     "- Do not output priority, durability, or any memory promotion decision.",
+    "",
+    "## Style Contract",
+    "- The note should read like a factual incident digest, not an analysis report.",
+    "- The note may mention sessions, counts, quoted user corrections, and later successful actions.",
+    "- The findings summary should be one factual sentence each.",
+    "- Each finding should include 1 to 3 short factual examples.",
+    "- If a finding includes later success, phrase it as observed sequence, not as a lesson.",
     "",
     "## Output Contract",
     "You must finish by calling submit with this exact schema:",
@@ -142,7 +228,8 @@ export function buildMeditationBucketSystemPrompt(): string {
     '      "issue_type": "user_preference_signal | user_intent_shift | agent_workflow_issue | tool_or_source_quirk | system_or_config_issue | uncertain_or_mixed",',
     '      "scope_hint": "shared | subagent | session_only | uncertain",',
     '      "cluster_ids": ["string"],',
-    '      "evidence_summary": "string"',
+    '      "evidence_summary": "string",',
+    '      "examples": ["string"]',
     "    }",
     "  ]",
     "}",
@@ -200,6 +287,27 @@ export function buildMeditationConsolidationEvaluationSystemPrompt(): string {
     "- Use current shared/private memory to avoid promoting content that is already adequately covered.",
     "- Only treat a finding as promotion-worthy when the evidence is strong enough for both high priority and durable memory value.",
     "- If a finding is only medium priority, still situational, or still too environment-specific, keep it in meditation.",
+    '- If you cannot imagine rewriting the finding as a short future-facing rule such as "Before X, verify Y" or "Do not Z; use A instead", keep it in meditation.',
+    "- Use the finding examples to check whether the evidence is concrete enough to trust.",
+    "- Strong findings usually have examples that show repeated failure, user correction, or a later method change.",
+    "- Copy each finding_id exactly as it appears in Current Findings.",
+    "- Do not reconstruct, shorten, or paraphrase a finding_id.",
+    "- Before submit, verify that every current finding_id appears exactly once in your evaluations array.",
+    "",
+    "## What Good Durable Memory Looks Like",
+    "- A good durable memory is a short future-facing rule.",
+    "- It helps future behavior without retelling the incident.",
+    "- It should usually fit in 1 to 3 bullets.",
+    "- It should say what to check, avoid, or do next time.",
+    "",
+    "### Good memory shape",
+    '- "Before scheduling this task, verify the exact registered task name."',
+    '- "For this browsing task, request narrow browser permissions before asking for full shell access."',
+    "",
+    "### Bad memory shape",
+    '- "This failed 4 times across sessions a and b on 2026-04-15T05:33:03Z."',
+    '- "The task was blocked because..."',
+    '- "This affects the primary function..."',
     "",
     "## Output Contract",
     "You must finish by calling submit with this exact schema:",
@@ -259,6 +367,41 @@ export function buildMeditationConsolidationRewriteSystemPrompt(): string {
     "- You may merge overlap, tighten wording, and improve organization slightly.",
     "- You must not delete the substance of existing memory.",
     "- Preserve useful concrete details when they make the memory more actionable.",
+    "- Write durable future-facing rules, not incident reports.",
+    "- Keep new durable lessons short and reusable.",
+    "- New lessons should usually fit in 1 to 3 bullets total for the approved findings in that target memory file.",
+    "- Prefer rules such as 'Before X, verify Y', 'Do not Z; use A instead', or 'When X happens, check Y first.'",
+    "- Avoid timestamps, session ids, occurrence counts, and long retellings of what happened in one incident.",
+    "",
+    "## Learn The Strategy, Not The Incident",
+    "- Durable memory is for future behavior, not for replaying past runs.",
+    "- If the evidence shows repeated failure followed by a later method change, write the future-facing strategy implied by that change.",
+    "- Use the approved finding examples as anchors. They show the concrete failure, user correction, or later successful change.",
+    "- Do not memorize the exact incident path unless that exact path is the durable rule.",
+    "- Do not memorize exact seq numbers, exact sessions, or exact counts.",
+    "- Generalize one level above the incident:",
+    '  - Good: "For browser tasks, use simple approved command prefixes instead of full executable paths when requesting bash permissions."',
+    '  - Bad: "The user rejected full path prefixes 4 times on 2026-04-15 and later accepted agent-browser --help."',
+    '  - Good: "When shell-wide permissions are denied, switch earlier to narrower browser-specific or split-command execution."',
+    "  - Bad: \"After asking '有必要用 python 吗', the agent switched to web_fetch and grep and then bash succeeded.\"",
+    "",
+    "## Rewrite Style",
+    "- Prefer one clean rule over three explanatory bullets.",
+    "- Prefer imperative or check-style wording.",
+    "- Keep each new lesson self-contained and short.",
+    "- Avoid phrases like 'this affects', 'the task was blocked because', 'across sessions', or 'the agent later learned'.",
+    "- If an approved finding cannot be rewritten as a short future-facing rule, leave that target unchanged.",
+    "",
+    "## Good Rewrite Examples",
+    '- Good: "Before scheduling this summary task, verify the exact registered task name."',
+    '- Good: "For browsing tasks, request narrow browser permissions before shell-wide permissions."',
+    '- Good: "When bash.full_access is repeatedly denied for a browsing workflow, switch to simpler approved prefixes or narrower browser commands instead of retrying the same broad request."',
+    "",
+    "## Bad Rewrite Examples",
+    '- Bad: "The scheduled task failed 4 times across sessions 7d3e814c and aec91bc2 on 2026-04-15T05:33:03Z."',
+    '- Bad: "This affects the subagent\'s primary function..."',
+    '- Bad: "The task was blocked because the agent-browser was missing and Chrome profile was locked..."',
+    '- Bad: "After seq 18 the user said X, then seq 29 succeeded, so remember this exact command string."',
     "",
     "## Routing Policy",
     "- Only SubAgents may receive private memory rewrites.",
@@ -360,7 +503,9 @@ function renderClusterEvidence(cluster: PreparedMeditationBucket["clusters"][num
         `<cluster_evidence kind="tool_burst" id="${cluster.id}">`,
         `- Failure count: ${cluster.count}`,
         `- Signatures: ${cluster.signatures.join(", ")}`,
-        ...renderMessageWindow(cluster.contextMessages),
+        ...(cluster.episodeTimeline == null
+          ? ["- Episode timeline: (none)"]
+          : renderEpisodeTimeline(cluster.episodeTimeline)),
         "</cluster_evidence>",
       ].join("\n");
     case "tool_repeat":
@@ -368,6 +513,12 @@ function renderClusterEvidence(cluster: PreparedMeditationBucket["clusters"][num
         `<cluster_evidence kind="tool_repeat" id="${cluster.id}">`,
         `- Signature: ${cluster.signature}`,
         `- Repeat count: ${cluster.count}`,
+        ...(cluster.episodes.length === 0
+          ? []
+          : cluster.episodes.flatMap((episode, index) => [
+              `- Episode ${index + 1}: session=${episode.sessionId} seq=${episode.startSeq}-${episode.endSeq} trigger=${episode.triggerStartSeq}-${episode.triggerEndSeq} failedToolResults=${episode.failedToolResults}/${episode.totalToolResults}`,
+              ...renderEpisodeTimeline(episode, "  "),
+            ])),
         ...cluster.examples.flatMap((example, index) => [
           `- Example ${index + 1}: fact=${example.factId} session=${example.sessionId} seq=${example.seq} createdAt=${example.createdAt}`,
           ...renderMessageWindow(example.messageWindow),
@@ -378,7 +529,13 @@ function renderClusterEvidence(cluster: PreparedMeditationBucket["clusters"][num
 }
 
 function renderMessageWindow(
-  messages: Array<{ id: string; role: string; messageType: string; createdAt: string }>,
+  messages: Array<{
+    id: string;
+    role: string;
+    messageType: string;
+    createdAt: string;
+    payloadJson?: string;
+  }>,
 ): string[] {
   if (messages.length === 0) {
     return ["- Context messages: (none)"];
@@ -386,9 +543,52 @@ function renderMessageWindow(
 
   return [
     "- Context messages:",
-    ...messages.map(
-      (message) =>
-        `  - [${message.createdAt}] ${message.role}/${message.messageType} id=${message.id}`,
+    ...messages.map((message) => {
+      const summary =
+        typeof message.payloadJson === "string"
+          ? summarizeMeditationContextMessage({
+              seq: 0,
+              createdAt: message.createdAt,
+              role: message.role,
+              messageType: message.messageType,
+              payloadJson: message.payloadJson,
+            })
+          : null;
+      return `  - [${message.createdAt}] ${message.role}/${message.messageType} id=${message.id}${summary == null || summary.length === 0 ? "" : ` :: ${summary}`}`;
+    }),
+  ];
+}
+
+function renderEpisodeTimeline(
+  episode: {
+    sessionId: string;
+    startSeq: number;
+    endSeq: number;
+    triggerStartSeq: number;
+    triggerEndSeq: number;
+    triggerKinds: string[];
+    failedToolResults: number;
+    totalToolResults: number;
+    events: Array<{
+      seq: number;
+      createdAt: string;
+      role: string;
+      messageType: string;
+      summary: string;
+    }>;
+  },
+  prefix = "",
+): string[] {
+  return [
+    `${prefix}- Episode session: ${episode.sessionId}`,
+    `${prefix}- Episode seq range: ${episode.startSeq}-${episode.endSeq}`,
+    `${prefix}- Trigger seq range: ${episode.triggerStartSeq}-${episode.triggerEndSeq}`,
+    `${prefix}- Trigger kinds: ${episode.triggerKinds.join(", ")}`,
+    `${prefix}- Tool results in episode: ${episode.failedToolResults}/${episode.totalToolResults} failed`,
+    `${prefix}- Event timeline:`,
+    ...episode.events.map(
+      (event) =>
+        `${prefix}  - [${event.seq}] ${event.createdAt} ${event.role}/${event.messageType}: ${event.summary}`,
     ),
   ];
 }
@@ -455,6 +655,10 @@ function renderCurrentFindings(findings: MeditationBucketFindingContext[]): stri
     `  - scope_hint: ${finding.scopeHint}`,
     `  - cluster_ids: ${finding.clusterIds.join(", ") || "(none)"}`,
     `  - evidence_summary: ${finding.evidenceSummary}`,
+    "  - examples:",
+    ...(finding.examples.length === 0
+      ? ["    - (none)"]
+      : finding.examples.map((example) => `    - ${example}`)),
   ]);
 }
 
@@ -502,6 +706,10 @@ function renderApprovedFindings(findings: MeditationApprovedFinding[]): string[]
     `  - promotion_decision: ${finding.promotionDecision}`,
     `  - reason: ${finding.reason}`,
     `  - evidence_summary: ${finding.evidenceSummary}`,
+    "  - examples:",
+    ...(finding.examples.length === 0
+      ? ["    - (none)"]
+      : finding.examples.map((example) => `    - ${example}`)),
   ]);
 }
 
@@ -517,7 +725,8 @@ function renderIssueTypeCounts(
 }
 
 export function buildMeditationFindingId(bucketId: string, findingIndex: number): string {
-  return `${bucketId}/finding-${findingIndex + 1}`;
+  const bucketKey = createHash("sha1").update(bucketId).digest("hex").slice(0, 8);
+  return `${bucketKey}-f${findingIndex + 1}`;
 }
 
 export function toMeditationBucketFindingContext(
@@ -531,5 +740,6 @@ export function toMeditationBucketFindingContext(
     scopeHint: finding.scope_hint,
     clusterIds: [...finding.cluster_ids],
     evidenceSummary: finding.evidence_summary,
+    examples: [...finding.examples],
   }));
 }

@@ -18,7 +18,12 @@ import type {
   CompactionModelRunnerInput,
   CompactionModelRunnerResult,
 } from "@/src/agent/compaction.js";
-import { normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
+import {
+  buildAgentLlmRawErrorPayload,
+  isAgentLlmError,
+  normalizeAgentLlmError,
+  readAgentLlmRawErrorPayload,
+} from "@/src/agent/llm/errors.js";
 import { type AgentAssistantContentBlock, buildPiMessages } from "@/src/agent/llm/messages.js";
 import { isGptFamilyResolvedModel } from "@/src/agent/llm/model-family.js";
 import type { ResolvedModel, ResolvedProvider } from "@/src/agent/llm/models.js";
@@ -483,8 +488,14 @@ function normalizeAssistantResult(
   mode: "stream" | "complete",
 ): PiBridgeRunTurnResult {
   if (message.stopReason === "error" || message.stopReason === "aborted") {
+    const rawPayload = readAgentLlmRawErrorPayload(
+      (message as AssistantMessage & { pokoclawRawError?: unknown }).pokoclawRawError,
+    );
     throw normalizeAgentLlmError({
-      error: message.errorMessage ?? `pi ${mode} failed with stopReason=${message.stopReason}`,
+      error:
+        rawPayload ??
+        message.errorMessage ??
+        `pi ${mode} failed with stopReason=${message.stopReason}`,
       provider: message.provider,
       model: message.model,
     });
@@ -577,11 +588,26 @@ function logRawLlmFailure(
 }
 
 function summarizeRawLlmError(error: unknown): Record<string, unknown> {
+  if (isAgentLlmError(error) && error.rawDetails != null) {
+    const { format: _format, ...rawDetails } = error.rawDetails;
+    return {
+      ...rawDetails,
+      errorName: error.name,
+      errorMessage: error.message,
+      ...(error.rawMessage == null ? {} : { rawMessage: error.rawMessage }),
+    };
+  }
+
   if (error instanceof Error) {
+    const rawPayload = buildAgentLlmRawErrorPayload(error);
     const cause = error.cause;
     return {
       errorName: error.name,
       errorMessage: error.message,
+      ...(rawPayload.rawMessage === error.message ? {} : { rawMessage: rawPayload.rawMessage }),
+      ...(rawPayload.serializedError == null
+        ? {}
+        : { serializedError: rawPayload.serializedError }),
       ...(typeof error.stack === "string"
         ? { stackTop: error.stack.split("\n").slice(0, 3).join(" | ") }
         : {}),

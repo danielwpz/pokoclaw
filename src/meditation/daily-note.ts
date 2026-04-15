@@ -101,6 +101,10 @@ function renderBucketBlock(bucket: MeditationDailyBucketBlock): string[] {
           `  - scope_hint: ${finding.scope_hint}`,
           `  - cluster_ids: ${finding.cluster_ids.join(", ") || "(none)"}`,
           `  - evidence_summary: ${finding.evidence_summary}`,
+          "  - examples:",
+          ...(finding.examples.length === 0
+            ? ["    - (none)"]
+            : finding.examples.map((example) => `    - ${example}`)),
         ])),
     "",
   ];

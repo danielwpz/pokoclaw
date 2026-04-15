@@ -115,11 +115,13 @@ export class MeditationPipelineRunner implements MeditationRunner {
   async runOnce(input: MeditationRunRequest): Promise<MeditationRunResult> {
     const state = this.deps.state.getOrCreateDefault(input.tickAt);
     const calendarContext = this.deps.resolveCalendarContext?.(input.tickAt);
-    const window = resolveMeditationWindow({
-      tickAt: input.tickAt,
-      lastSuccessAt: state.lastSuccessAt,
-      ...(calendarContext == null ? {} : { calendarContext }),
-    });
+    const window =
+      input.windowOverride ??
+      resolveMeditationWindow({
+        tickAt: input.tickAt,
+        lastSuccessAt: state.lastSuccessAt,
+        ...(calendarContext == null ? {} : { calendarContext }),
+      });
     const runId = this.deps.createRunId?.() ?? randomUUID();
     const artifactDir = await ensureMeditationRunArtifactDir(
       window.localDate,
@@ -371,6 +373,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
           );
           if (
             sharedMemoryRewrite != null &&
+            isMeditationRewriteQualityAcceptable(sharedMemoryRewrite) &&
             consolidationRewritePromptInput.approvedSharedFindings.length > 0
           ) {
             const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
@@ -391,6 +394,14 @@ export class MeditationPipelineRunner implements MeditationRunner {
           ) {
             logger.warn("meditation consolidation dropped ineligible shared rewrite", {
               runId,
+            });
+          } else if (
+            sharedMemoryRewrite != null &&
+            !isMeditationRewriteQualityAcceptable(sharedMemoryRewrite)
+          ) {
+            logger.warn("meditation consolidation dropped low-quality shared rewrite", {
+              runId,
+              issues: summarizeMeditationRewriteQualityIssues(sharedMemoryRewrite),
             });
           }
 
@@ -533,7 +544,11 @@ export function filterEligiblePrivateMemoryRewrites(input: {
       .map((packet) => packet.agentId),
   );
 
-  return input.privateMemoryRewrites.filter((rewrite) => eligibleAgentIds.has(rewrite.agent_id));
+  return input.privateMemoryRewrites.filter(
+    (rewrite) =>
+      eligibleAgentIds.has(rewrite.agent_id) &&
+      isMeditationRewriteQualityAcceptable(rewrite.content),
+  );
 }
 
 function hasApprovedFindings(input: {
@@ -567,4 +582,41 @@ function formatPromptArtifact(input: { systemPrompt: string; userPrompt: string 
     input.userPrompt.trimEnd(),
     "",
   ].join("\n");
+}
+
+const MEDITATION_REWRITE_QUALITY_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
+  {
+    name: "timestamp",
+    pattern: /\b20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}/,
+  },
+  {
+    name: "session_reference",
+    pattern: /\bacross sessions?\b/i,
+  },
+  {
+    name: "occurrence_count",
+    pattern: /\b\d+\s+occurrences?\b/i,
+  },
+  {
+    name: "incident_count",
+    pattern: /\b\d+\s+(?:times|repeats?)\b/i,
+  },
+  {
+    name: "uuid",
+    pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i,
+  },
+  {
+    name: "incident_narration",
+    pattern: /\b(this affects|the task was blocked because|occurred between|occurred at)\b/i,
+  },
+];
+
+export function summarizeMeditationRewriteQualityIssues(content: string): string[] {
+  return MEDITATION_REWRITE_QUALITY_PATTERNS.filter(({ pattern }) => pattern.test(content)).map(
+    ({ name }) => name,
+  );
+}
+
+export function isMeditationRewriteQualityAcceptable(content: string): boolean {
+  return summarizeMeditationRewriteQualityIssues(content).length === 0;
 }

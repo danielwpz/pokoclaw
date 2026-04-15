@@ -43,6 +43,7 @@ describe("meditation daily note", () => {
               scope_hint: "subagent",
               cluster_ids: ["stop:1"],
               evidence_summary: "The user stopped the run and asked for diagnosis first.",
+              examples: ["user quote: lead with the diagnosis first"],
             },
           ],
         },
@@ -58,6 +59,7 @@ describe("meditation daily note", () => {
     expect(block).toContain("Atlas Frontend");
     expect(block).toContain("diagnosis before explanation");
     expect(block).toContain("user_preference_signal");
+    expect(block).toContain("user quote: lead with the diagnosis first");
     expect(block).toContain("Shared memory rewritten: yes");
     expect(block).toContain("Private memory rewrites:");
   });

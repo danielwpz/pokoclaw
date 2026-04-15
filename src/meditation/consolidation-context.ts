@@ -114,7 +114,11 @@ export function buildMeditationConsolidationRewritePromptInput(input: {
           if (
             evaluation == null ||
             evaluation.promotion_decision === "keep_in_meditation" ||
-            !isEligibleForMemoryPromotion(evaluation)
+            !isEligibleForMemoryPromotion({
+              evaluation,
+              finding,
+              packet,
+            })
           ) {
             return [];
           }
@@ -130,6 +134,7 @@ export function buildMeditationConsolidationRewritePromptInput(input: {
             issueType: finding.issueType,
             scopeHint: finding.scopeHint,
             evidenceSummary: finding.evidenceSummary,
+            examples: [...finding.examples],
           };
           if (evaluation.promotion_decision === "shared_memory") {
             approvedSharedFindings.push(approvedFinding);
@@ -165,10 +170,45 @@ export function buildMeditationConsolidationRewritePromptInput(input: {
   };
 }
 
-function isEligibleForMemoryPromotion(
-  evaluation: ConsolidationEvaluationSubmit["evaluations"][number],
-): boolean {
-  return evaluation.priority === "high" && evaluation.durability === "durable";
+function isEligibleForMemoryPromotion(input: {
+  evaluation: ConsolidationEvaluationSubmit["evaluations"][number];
+  finding: MeditationConsolidationEvaluationPromptInput["bucketPackets"][number]["currentFindings"][number];
+  packet: MeditationConsolidationEvaluationPromptInput["bucketPackets"][number];
+}): boolean {
+  const { evaluation, finding, packet } = input;
+  if (evaluation.priority !== "high" || evaluation.durability !== "durable") {
+    return false;
+  }
+
+  if (
+    finding.issueType === "user_intent_shift" ||
+    finding.issueType === "system_or_config_issue" ||
+    finding.issueType === "uncertain_or_mixed"
+  ) {
+    return false;
+  }
+
+  if (evaluation.promotion_decision === "shared_memory") {
+    if (finding.scopeHint !== "shared") {
+      return false;
+    }
+    return (
+      finding.issueType === "user_preference_signal" || finding.issueType === "agent_workflow_issue"
+    );
+  }
+
+  if (evaluation.promotion_decision === "private_memory") {
+    if (packet.agentKind !== "sub" || finding.scopeHint !== "subagent") {
+      return false;
+    }
+    return (
+      finding.issueType === "user_preference_signal" ||
+      finding.issueType === "agent_workflow_issue" ||
+      finding.issueType === "tool_or_source_quirk"
+    );
+  }
+
+  return false;
 }
 
 export function validateConsolidationEvaluations(input: {

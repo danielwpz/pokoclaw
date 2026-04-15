@@ -28,6 +28,8 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
+    "meditation:backtest": "tsx src/script/meditation-backtest.ts",
+    "meditation:episode-study": "tsx src/script/meditation-episode-study.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "lint": "biome check --error-on-warnings .",

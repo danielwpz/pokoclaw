@@ -8,9 +8,12 @@ import type { PiBridgeRunTurnResult } from "@/src/agent/llm/pi-bridge.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
+import { buildMeditationFindingId } from "@/src/meditation/prompts.js";
 import {
   filterEligiblePrivateMemoryRewrites,
+  isMeditationRewriteQualityAcceptable,
   MeditationPipelineRunner,
+  summarizeMeditationRewriteQualityIssues,
 } from "@/src/meditation/runner.js";
 import { MeditationStateRepo } from "@/src/storage/repos/meditation-state.repo.js";
 import {
@@ -196,6 +199,7 @@ describe("MeditationPipelineRunner", () => {
                   scope_hint: "subagent",
                   cluster_ids: ["stop:1"],
                   evidence_summary: "The user explicitly redirected the response style.",
+                  examples: ["user quote: lead with the diagnosis first"],
                 },
               ],
             });
@@ -205,7 +209,7 @@ describe("MeditationPipelineRunner", () => {
             return createSubmitTurnResult({
               evaluations: [
                 {
-                  finding_id: "agent_sub_1/finding-1",
+                  finding_id: buildMeditationFindingId("agent_sub_1", 0),
                   priority: "high",
                   durability: "durable",
                   promotion_decision: "private_memory",
@@ -341,6 +345,7 @@ describe("MeditationPipelineRunner", () => {
           scope_hint: "subagent",
           cluster_ids: ["stop:1"],
           evidence_summary: "The user explicitly redirected the response style.",
+          examples: ["user quote: lead with the diagnosis first"],
         },
       ],
     });
@@ -352,7 +357,7 @@ describe("MeditationPipelineRunner", () => {
     expect(consolidationEvalSubmit).toEqual({
       evaluations: [
         {
-          finding_id: "agent_sub_1/finding-1",
+          finding_id: buildMeditationFindingId("agent_sub_1", 0),
           priority: "high",
           durability: "durable",
           promotion_decision: "private_memory",
@@ -607,6 +612,88 @@ describe("MeditationPipelineRunner", () => {
     expect(clusters).toHaveLength(1);
   });
 
+  test("uses a provided window override instead of state-derived meditation window", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-window-override-"));
+
+    const state = new MeditationStateRepo(handle.storage.db);
+    state.markFinished({
+      status: "completed",
+      finishedAt: new Date("2026-04-07T23:59:00.000Z"),
+      markSuccess: true,
+    });
+
+    let bridgeCall = 0;
+    const runner = new MeditationPipelineRunner({
+      storage: handle.storage.db,
+      state,
+      config: {
+        meditation: {
+          enabled: true,
+          cron: "0 0 * * *",
+        },
+      },
+      models: createRegistry(),
+      bridge: {
+        async completeTurn() {
+          bridgeCall += 1;
+          if (bridgeCall === 1) {
+            return createSubmitTurnResult({
+              note: "A permission burst happened.",
+              findings: [
+                {
+                  summary: "Pause after burst permission failures.",
+                  issue_type: "agent_workflow_issue",
+                  scope_hint: "subagent",
+                  cluster_ids: ["tool_burst:1"],
+                  evidence_summary: "A burst of permission failures happened in one run.",
+                  examples: ["tool error: Permission request denied."],
+                },
+              ],
+            });
+          }
+
+          return createSubmitTurnResult({
+            evaluations: [
+              {
+                finding_id: buildMeditationFindingId("agent_sub_1", 0),
+                priority: "low",
+                durability: "transient",
+                promotion_decision: "keep_in_meditation",
+                reason: "Not durable.",
+              },
+            ],
+          });
+        },
+      },
+      securityConfig: DEFAULT_CONFIG.security,
+      workspaceDir: path.join(tempDir, "workspace"),
+      logsDir: tempDir,
+      createRunId: () => "run_override",
+    });
+
+    await runner.runOnce({
+      tickAt: new Date("2026-04-08T00:00:00.000Z"),
+      windowOverride: {
+        startAt: "2026-04-01T00:00:00.000Z",
+        endAt: "2026-04-02T00:00:00.000Z",
+        lastSuccessAt: null,
+        localDate: "2026-04-08",
+        timezone: "UTC",
+        clippedByLookback: false,
+      },
+    });
+
+    const artifactDir = path.join(tempDir, "meditation", "2026-04-08--run_override");
+    const meta = JSON.parse(await readFile(path.join(artifactDir, "meta.json"), "utf8"));
+    expect(meta.window).toMatchObject({
+      startAt: "2026-04-01T00:00:00.000Z",
+      endAt: "2026-04-02T00:00:00.000Z",
+      clippedByLookback: false,
+    });
+  });
+
   test("drops shared rewrites that were not approved by evaluation", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
@@ -647,6 +734,7 @@ describe("MeditationPipelineRunner", () => {
                   scope_hint: "subagent",
                   cluster_ids: ["tool_burst:1"],
                   evidence_summary: "A burst of permission failures happened in one run.",
+                  examples: ["tool error: Permission request denied."],
                 },
               ],
             });
@@ -656,7 +744,7 @@ describe("MeditationPipelineRunner", () => {
             return createSubmitTurnResult({
               evaluations: [
                 {
-                  finding_id: "agent_sub_1/finding-1",
+                  finding_id: buildMeditationFindingId("agent_sub_1", 0),
                   priority: "high",
                   durability: "durable",
                   promotion_decision: "private_memory",
@@ -724,7 +812,7 @@ describe("MeditationPipelineRunner", () => {
           agentKind: "sub",
           approvedPrivateFindings: [
             {
-              findingId: "bucket_sub_1/finding-1",
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
               agentId: "agent_sub_1",
               agentKind: "sub",
               priority: "high",
@@ -735,6 +823,7 @@ describe("MeditationPipelineRunner", () => {
               issueType: "agent_workflow_issue",
               scopeHint: "subagent",
               evidenceSummary: "evidence",
+              examples: ["tool error: Permission request denied."],
             },
           ],
         },
@@ -777,6 +866,52 @@ describe("MeditationPipelineRunner", () => {
     });
 
     expect(filtered).toEqual([]);
+  });
+
+  test("drops incident-style private rewrites at the host layer", () => {
+    const filtered = filterEligiblePrivateMemoryRewrites({
+      bucketPackets: [
+        {
+          agentId: "agent_sub_1",
+          agentKind: "sub",
+          approvedPrivateFindings: [
+            {
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
+              agentId: "agent_sub_1",
+              agentKind: "sub",
+              priority: "high",
+              durability: "durable",
+              promotionDecision: "private_memory",
+              reason: "ok",
+              summary: "summary",
+              issueType: "agent_workflow_issue",
+              scopeHint: "subagent",
+              evidenceSummary: "evidence",
+              examples: ["tool error: Permission request denied."],
+            },
+          ],
+        },
+      ],
+      privateMemoryRewrites: [
+        {
+          agent_id: "agent_sub_1",
+          content:
+            "# Durable Local Facts\n\n- The scheduled task failed 4 times across sessions 7d3e814c and aec91bc2 on 2026-04-15T05:33:03.602Z.\n",
+        },
+      ],
+    });
+
+    expect(filtered).toEqual([]);
+    expect(
+      summarizeMeditationRewriteQualityIssues(
+        "# Durable Local Facts\n\n- Failed 4 times across sessions a and b on 2026-04-15T05:33:03.602Z.\n",
+      ),
+    ).toEqual(expect.arrayContaining(["timestamp", "session_reference", "incident_count"]));
+    expect(
+      isMeditationRewriteQualityAcceptable(
+        "# Durable Local Facts\n\n- Before scheduling this task, verify the exact registered task name.\n",
+      ),
+    ).toBe(true);
   });
 });
 
