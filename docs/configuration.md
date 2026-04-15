@@ -83,6 +83,8 @@ For first-run onboarding, write:
 
 The provider and model templates below cover the LLM side first. Complete the required channel separately in `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
 
+If the user wants web search or web fetch, also configure a Tavily provider plus `[tools.web.search]` and `[tools.web.fetch]`.
+
 The five scenario keys are:
 
 - `chat`
@@ -97,6 +99,16 @@ Default mapping rule:
 
 - if the user only has one model, use the same model in all five scenarios
 - if the user has two useful models, use the stronger model for `chat` and `task`, and the cheaper or smaller model for `compaction`, `meditationBucket`, and `meditationConsolidation`
+
+## Model recommendation during onboarding
+
+Say this clearly instead of treating all models as equal:
+
+- Best experience: GPT-5 or Claude Sonnet.
+- Acceptable floor: a strong mainstream model such as MiniMax 2.7 class.
+- Weak models are a false economy for this product. They often do not actually save effort or tokens; they mostly create more retries, more steering, and more frustration.
+
+If importing or selecting models, steer the user toward a good main model for `chat` and `task`. Pokoclaw's workflow quality depends heavily on tool use, multi-step execution, and judgment under uncertainty, so poor models degrade the whole product, not just wording quality.
 
 ## Minimal templates
 
@@ -182,6 +194,47 @@ Matching `secrets.toml`:
 ```toml
 [channels.lark.default]
 appSecret = "paste-your-feishu-or-lark-app-secret-here"
+```
+
+### Template C: Tavily for web search and web fetch
+
+Use this when the user wants Pokoclaw to search the web or fetch web pages during normal use.
+
+Tavily is the current practical path here. Tell the user it can be registered with a free account at `https://www.tavily.com/`, then help them get an API key and wire it through `env://...` or `secret://...`.
+
+Explain the difference clearly:
+
+- `web search` is for finding current information or locating relevant pages on the internet.
+- `web fetch` is for opening a specific page and reading its contents.
+- Example: use `web search` to find the latest official changelog for a tool, then use `web fetch` to read that changelog page and summarize the important changes.
+
+```toml
+[providers.tavily]
+api = "tavily"
+apiKey_ref = "env://TAVILY_API_KEY"
+
+[tools.web.search]
+enabled = true
+provider = "tavily"
+
+[tools.web.fetch]
+enabled = true
+provider = "tavily"
+```
+
+If the user prefers file-based secrets:
+
+```toml
+[providers.tavily]
+api = "tavily"
+apiKey_ref = "secret://tools/tavily/apiKey"
+```
+
+Matching `secrets.toml`:
+
+```toml
+[tools.tavily]
+apiKey = "paste-your-tavily-api-key-here"
 ```
 
 ### If the user prefers file-based secrets

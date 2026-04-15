@@ -57,6 +57,9 @@ Keep these rules:
 - generate placeholder `secrets.toml` entries when file-based secrets are needed
 - do not guess low-confidence secret resolution paths
 - produce understandable Pokoclaw config, not a 1:1 clone of OpenClaw internals
+- do not treat every imported model as equally suitable; if the visible model set is weak, say so clearly and recommend a stronger main model
+- best experience: GPT-5 or Claude Sonnet; acceptable floor: a strong mainstream model such as MiniMax 2.7 class
+- if the user expects web search or web fetch, import or add a Tavily provider during onboarding instead of leaving web tools unconfigured
 
 ### 5. Validate like a normal Pokoclaw setup
 

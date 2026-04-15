@@ -19,6 +19,14 @@ Finish with a valid config under `~/.pokoclaw/system/`, including Feishu/Lark ch
 - Feishu/Lark is currently the only supported channel and is required before startup.
 - Run Feishu/Lark as an independent required phase: `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
 - For Feishu/Lark, warn that current support is for one personal assistant, not a shared team bot.
+- Ask early whether the user expects web search or web fetch. If yes, guide them to configure Tavily during onboarding.
+- Tell the user Tavily can be registered with a free account at `https://www.tavily.com/`, then help them get an API key and wire it into Pokoclaw config.
+- Explain the difference briefly:
+- `web search` finds current information or relevant pages on the internet.
+- `web fetch` opens a known page and reads its contents.
+- Example: use `web search` to find an official docs page, then use `web fetch` to read and summarize it.
+- During model choice, actively recommend a strong model. Best experience: GPT-5 or Claude Sonnet. Minimum acceptable floor: a strong mainstream model such as MiniMax 2.7 class.
+- Do not present obviously weak models as a neutral default. Explain briefly that weak models often do not really save tokens or time; they mostly buy more retries, more steering, and more blood pressure.
 
 ## Phase 1: Repository setup
 
@@ -122,6 +130,14 @@ Do not stop at "please configure a provider". Help the user pick one path first:
 - an OpenAI-compatible API provider
 - an Anthropic-compatible API provider
 
+If the user wants web search or web fetch during normal use, also plan a Tavily provider during onboarding instead of leaving it for later.
+
+Say the model recommendation clearly:
+
+- Best experience: GPT-5 or Claude Sonnet.
+- Acceptable floor: a strong mainstream model such as MiniMax 2.7 class.
+- Friendly warning: trying to save money with a weak model often does not actually save trouble. It usually just turns "wow" into "why is my blood pressure up?"
+
 ### 2. Create the minimal runnable config
 
 Write config under:
@@ -134,6 +150,12 @@ For initial setup, always write:
 - at least one provider
 - at least one `[[models.catalog]]` entry
 - all five scenario lists in `[models.scenarios]`
+
+If the user wants web search or web fetch, also write:
+
+- a Tavily provider
+- `[tools.web.search]`
+- `[tools.web.fetch]`
 
 This phase is for LLM configuration. Complete channel setup separately in Phase 3C: Required Feishu/Lark setup.
 
@@ -196,13 +218,4 @@ When something is unclear, explain the gap and ask the user for a decision inste
 
 ## Feishu/Lark
 
-Feishu/Lark is not optional in the current product. It is the required channel for startup, so every runnable onboarding flow must complete `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
-
-Give this warning clearly before that flow:
-
-- current Feishu/Lark support is for a single personal assistant
-- the user should connect a personal Feishu/Lark account, or another account fully under their personal control
-- shared team accounts are not a valid normal setup target right now
-- current design does not provide proper multi-user isolation for a shared bot account, so conversations can mix
-
-Then follow `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup, and return to Phase 4: Validation and first run.
+Feishu/Lark is not optional in the current product. Every runnable onboarding flow must complete `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup, then return here for Phase 4: Validation and first run.
