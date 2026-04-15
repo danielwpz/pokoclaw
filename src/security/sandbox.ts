@@ -87,7 +87,7 @@ const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /_?(API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|SECRET)$/i,
 ];
 const BASH_SANDBOX_ESCALATION_GUIDANCE =
-  "Review whether running this bash command with full access is necessary and legitimate for the current user request.\nIf it is necessary, rerun the bash tool with full-access approval fields.\nIf it is not necessary, do not request escalation.";
+  'Decide whether this bash failure is really a shell-execution problem or whether the task should use structured tools plus request_permissions instead.\nIf the real need is access to business files or directories, prefer structured tools plus request_permissions.\nIf the real need is broader shell execution, command-supporting files, config, metadata, or other execution-layer dependencies, rerun bash with sandboxMode="full_access".\nA full-access bash retry must include justification.\nIf you expect repeated use of the same simple command family, consider adding prefix so the user does not need to re-approve similar bash calls.\nDo not use prefix for compound shell commands.\nIf full access is not necessary, do not request escalation.';
 
 // This adapter is the only place that should know how Pokoclaw's permission
 // model maps onto sandbox-runtime's config surface.

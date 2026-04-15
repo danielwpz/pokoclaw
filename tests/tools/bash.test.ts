@@ -339,29 +339,38 @@ describe("bash tool", () => {
 
     const registry = new ToolRegistry([createBashTool()]);
 
-    await expect(
-      registry.execute(
-        "bash",
-        {
-          sessionId: "sess_1",
-          conversationId: "conv_1",
-          ownerAgentId: "agent_1",
-          cwd: "/tmp/work",
-          securityConfig: DEFAULT_CONFIG.security,
-          storage: handle.storage.db,
-        },
-        {
-          command: "npm run dev",
-          sandboxMode: "full_access",
-        },
-      ),
-    ).rejects.toMatchObject({
+    const failure = registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "npm run dev",
+        sandboxMode: "full_access",
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
       details: {
         code: "bash_full_access_requires_justification",
       },
     } satisfies Partial<ToolFailure>);
+
+    const message = await failure.catch((error) => (error instanceof Error ? error.message : ""));
+    expect(message).toMatch(/bash full_access requires `justification`\./);
+    expect(message).toMatch(/Use this exact bash argument object on the next retry:/);
+    expect(message).toMatch(/"command": "npm run dev"/);
+    expect(message).toMatch(/"sandboxMode": "full_access"/);
+    expect(message).toMatch(
+      /"justification": "<one short sentence explaining why this exact command needs full access for the current user request>"/,
+    );
   });
 
   test("rejects bash timeouts over 60 seconds for main chat agents", async () => {
@@ -407,30 +416,40 @@ describe("bash tool", () => {
 
     const registry = new ToolRegistry([createBashTool()]);
 
-    await expect(
-      registry.execute(
-        "bash",
-        {
-          sessionId: "sess_1",
-          conversationId: "conv_1",
-          ownerAgentId: "agent_1",
-          cwd: "/tmp/work",
-          securityConfig: DEFAULT_CONFIG.security,
-          storage: handle.storage.db,
-        },
-        {
-          command: "npm run dev",
-          justification: "Need to run the dev server.",
-          prefix: ["npm", "run"],
-        },
-      ),
-    ).rejects.toMatchObject({
+    const failure = registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "npm run dev",
+        justification: "Need to run the dev server.",
+        prefix: ["npm", "run"],
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
       details: {
         code: "bash_full_access_args_require_full_access_mode",
       },
     } satisfies Partial<ToolFailure>);
+
+    const message = await failure.catch((error) => (error instanceof Error ? error.message : ""));
+    expect(message).toMatch(
+      /`justification` and `prefix` are only valid when `sandboxMode` is `"full_access"`\./,
+    );
+    expect(message).toMatch(/If you want a sandboxed call, use:/);
+    expect(message).toMatch(/If you want a full-access call, use:/);
+    expect(message).toMatch(/"command": "npm run dev"/);
+    expect(message).toMatch(/"justification": "Need to run the dev server\."/);
+    expect(message).toMatch(/"prefix": \[\n\s+"npm",\n\s+"run"\n\s+\]/);
   });
 
   test("uses an existing bash full-access prefix grant for a simple command", async () => {
@@ -484,31 +503,83 @@ describe("bash tool", () => {
 
     const registry = new ToolRegistry([createBashTool()]);
 
-    await expect(
-      registry.execute(
-        "bash",
-        {
-          sessionId: "sess_1",
-          conversationId: "conv_1",
-          ownerAgentId: "agent_1",
-          cwd: "/tmp/work",
-          securityConfig: DEFAULT_CONFIG.security,
-          storage: handle.storage.db,
-        },
-        {
-          command: "npm run dev | tee out.log",
-          sandboxMode: "full_access",
-          justification: "Need to run the requested dev server and inspect output.",
-          prefix: ["npm", "run"],
-        },
-      ),
-    ).rejects.toMatchObject({
+    const failure = registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "npm run dev | tee out.log",
+        sandboxMode: "full_access",
+        justification: "Need to run the requested dev server and inspect output.",
+        prefix: ["npm", "run"],
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
       details: {
         code: "bash_full_access_prefix_requires_simple_command",
       },
     } satisfies Partial<ToolFailure>);
+
+    const message = await failure.catch((error) => (error instanceof Error ? error.message : ""));
+    expect(message).toMatch(
+      /`prefix` can only be used for a single simple command\. This command is compound\./,
+    );
+    expect(message).toMatch(/Use this exact bash argument object on the next retry:/);
+    expect(message).toMatch(/"command": "npm run dev \| tee out\.log"/);
+    expect(message).toMatch(/"sandboxMode": "full_access"/);
+    expect(message).toMatch(
+      /"justification": "Need to run the requested dev server and inspect output\."/,
+    );
+    expect(message).not.toMatch(/"prefix"/);
+  });
+
+  test("rejects non-matching reusable full-access prefixes with a one-shot repair object", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    const failure = registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "npm run dev",
+        sandboxMode: "full_access",
+        justification: "Need to start the requested dev server.",
+        prefix: ["git", "status"],
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_full_access_prefix_not_command_prefix",
+      },
+    } satisfies Partial<ToolFailure>);
+
+    const message = await failure.catch((error) => (error instanceof Error ? error.message : ""));
+    expect(message).toMatch(/`prefix` must match the start of the command's normalized argv\./);
+    expect(message).toMatch(/"command": "npm run dev"/);
+    expect(message).toMatch(/"sandboxMode": "full_access"/);
+    expect(message).toMatch(/"justification": "Need to start the requested dev server\."/);
+    expect(message).not.toMatch(/"prefix"/);
   });
 
   test("requests one-shot full access for complex commands without a prefix", async () => {

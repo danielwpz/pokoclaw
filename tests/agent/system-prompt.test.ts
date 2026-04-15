@@ -39,7 +39,7 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("## SubAgent Creation");
     expect(prompt).toContain("## Tool Usage");
     expect(prompt).toContain("## Permissions");
-    expect(prompt).toContain("## Bash Full Access");
+    expect(prompt).toContain("## Bash Tool");
     expect(prompt).toContain("## Safety");
 
     expect(prompt).not.toContain("## Workspace & Runtime");
@@ -171,7 +171,7 @@ describe("agent system prompt", () => {
     const subagentIndex = prompt.indexOf("## SubAgent Creation");
     const toolUsageIndex = prompt.indexOf("## Tool Usage");
     const permissionsIndex = prompt.indexOf("## Permissions");
-    const bashIndex = prompt.indexOf("## Bash Full Access");
+    const bashIndex = prompt.indexOf("## Bash Tool");
     const safetyIndex = prompt.indexOf("## Safety");
     const runtimeIndex = prompt.indexOf("## Workspace & Runtime");
 
@@ -283,16 +283,27 @@ describe("agent system prompt", () => {
       agentKind: "main",
     });
 
-    expect(prompt).toContain("call request_permissions");
+    expect(prompt).toContain("Prefer the narrower model that matches the real need.");
+    expect(prompt).toContain("code directories, docs folders, data folders");
     expect(prompt).toContain("retryToolCallId");
-    expect(prompt).toContain("Bash runs in a sandbox by default.");
-    expect(prompt).toContain("Do not use request_permissions for bash sandbox failures.");
-    expect(prompt).toContain('rerun bash with sandboxMode="full_access"');
-    expect(prompt).toContain("short human-readable justification");
-    expect(prompt).toContain("prefer a reusable prefix");
-    expect(prompt).toContain("git is often the first prefix to consider");
-    expect(prompt).toContain("pnpm, npm, pytest, cargo");
-    expect(prompt).toContain("Only provide a reusable prefix");
+    expect(prompt).toContain("Bash has two execution modes");
+    expect(prompt).toContain(
+      "Do not use `request_permissions` to recover a bash sandbox failure directly.",
+    );
+    expect(prompt).toContain(
+      'Use `sandboxMode: "full_access"` only when running outside the sandbox is genuinely necessary',
+    );
+    expect(prompt).toContain(
+      "one short sentence explaining why this exact command needs broader execution right now",
+    );
+    expect(prompt).toContain("reduces manual approval friction");
+    expect(prompt).toContain("materially improves system usability");
+    expect(prompt).toContain("Do not be unnecessarily conservative");
+    expect(prompt).toContain("`npm`, `node`, `git`, and `gh`");
+    expect(prompt).toContain(
+      'Example: `["npm"]` can fit `npm install`, `npm test`, or `npm run dev` in a Node project.',
+    );
+    expect(prompt).toContain("Not suitable: `curl ... && bash ...`");
     expect(prompt).toContain("do not use unmanaged backgrounding like &, nohup, setsid, or disown");
     expect(prompt).toContain("Do not bypass approval or permission mechanisms.");
   });
@@ -387,7 +398,7 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("review_permission_request");
     expect(prompt).toContain("You must finish by calling review_permission_request");
     expect(prompt).not.toContain("## Permissions");
-    expect(prompt).not.toContain("## Bash Full Access");
+    expect(prompt).not.toContain("## Bash Tool");
     expect(prompt).not.toContain("call request_permissions");
     expect(prompt).not.toContain('sandboxMode="full_access"');
   });
@@ -461,10 +472,14 @@ describe("agent system prompt", () => {
     expect(prompt).toContain(
       "When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
     );
-    expect(prompt).toContain("Bash runs in a sandbox by default.");
-    expect(prompt).toContain("Do not use request_permissions for bash sandbox failures.");
-    expect(prompt).toContain('rerun bash with sandboxMode="full_access"');
-    expect(prompt).toContain("git is often the first prefix to consider");
+    expect(prompt).toContain("Bash has two execution modes");
+    expect(prompt).toContain(
+      "Do not use `request_permissions` to recover a bash sandbox failure directly.",
+    );
+    expect(prompt).toContain('retry with `sandboxMode: "full_access"` and `justification`.');
+    expect(prompt).toContain(
+      'Example: `["git"]` can fit common repository commands in a git-centric task.',
+    );
   });
 
   test("current filled section builders remain non-empty", () => {
@@ -492,6 +507,7 @@ describe("agent system prompt", () => {
     expect(buildPermissionsSection()).not.toBe("");
     expect(buildApprovalReviewSection()).not.toBe("");
     expect(buildBashFullAccessSection()).not.toBe("");
+    expect(buildBashFullAccessSection()).toContain("## Bash Tool");
     expect(buildSafetySection()).not.toBe("");
     expect(
       buildBootstrapSection({

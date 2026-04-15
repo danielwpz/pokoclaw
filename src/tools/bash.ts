@@ -39,14 +39,14 @@ export const BASH_TOOL_SCHEMA = Type.Object(
       Type.Union([Type.Literal("sandboxed"), Type.Literal("full_access")], {
         default: "sandboxed",
         description:
-          "Use sandboxed for normal execution. Use full_access only when this command genuinely needs to run outside the sandbox.",
+          "Execution mode. Use sandboxed by default. Use full_access only when this command genuinely needs broader shell execution outside the sandbox.",
       }),
     ),
     justification: Type.Optional(
       Type.String({
         minLength: 1,
         description:
-          "Required when requesting full_access. Keep it short and explain why full access is necessary for the current user request.",
+          "Required for full_access. Keep it short and explain why this exact command needs broader execution for the current user request.",
       }),
     ),
     prefix: Type.Optional(
@@ -54,7 +54,7 @@ export const BASH_TOOL_SCHEMA = Type.Object(
         minItems: 1,
         maxItems: 16,
         description:
-          'Optional reusable command prefix for long-lived full-access approval. Only use this for a single simple command shape such as ["npm","run"] or ["python","-m","agent_browser_cli"]. Do not use it for compound shell commands.',
+          'Optional reusable approval scope for a simple stable command family. Good task-aligned prefixes such as ["npm"], ["git"], ["node"], or ["gh"] can reduce repeated manual approvals. Do not use it for compound shell commands.',
       }),
     ),
   },
@@ -74,11 +74,14 @@ export interface BashToolDetails {
   outputTruncated: boolean;
 }
 
+const FULL_ACCESS_JUSTIFICATION_PLACEHOLDER =
+  "<one short sentence explaining why this exact command needs full access for the current user request>";
+
 export function createBashTool() {
   return defineTool({
     name: "bash",
     description:
-      "Run a shell command. By default it runs in the sandbox and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. The default timeout is 10 seconds. You may override it with timeoutSec, but main chat agents cannot request more than 60 seconds; use a subagent for longer work. If sandboxed execution is blocked but the command is genuinely necessary, rerun bash with sandboxMode=full_access and a short justification. Optional prefix enables a reusable long-lived approval, but only for a single simple command shape.",
+      "Run a shell command in sandboxed or full_access mode. By default it runs sandboxed and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. The default timeout is 10 seconds. You may override it with timeoutSec, but main chat agents cannot request more than 60 seconds; use a subagent for longer work. If broader shell execution is genuinely necessary, rerun with sandboxMode=full_access and justification. When repeated simple task-aligned command families are likely, consider prefix so similar bash calls can reuse approval.",
     inputSchema: BASH_TOOL_SCHEMA,
     getInvocationTimeoutMs: getBashInvocationTimeoutMs,
     async execute(context, args) {
@@ -97,10 +100,9 @@ export function createBashTool() {
       const timeoutMs = getBashInvocationTimeoutMs(context, args);
       const sandboxMode = args.sandboxMode ?? "sandboxed";
       if (sandboxMode !== "full_access" && (args.justification != null || args.prefix != null)) {
-        throw toolRecoverableError(
-          "bash justification and prefix are only valid when sandboxMode is full_access.",
-          { code: "bash_full_access_args_require_full_access_mode" },
-        );
+        throw toolRecoverableError(buildFullAccessArgsRequireModeMessage(args), {
+          code: "bash_full_access_args_require_full_access_mode",
+        });
       }
       const security = new SecurityService(
         context.storage,
@@ -168,10 +170,9 @@ async function executeBashWithFullAccessIfAllowed(input: {
 }) {
   const justification = input.args.justification?.trim();
   if (justification == null || justification.length === 0) {
-    throw toolRecoverableError(
-      "bash full_access requires a short justification that explains why full access is necessary.",
-      { code: "bash_full_access_requires_justification" },
-    );
+    throw toolRecoverableError(buildRequiresJustificationMessage(input.args), {
+      code: "bash_full_access_requires_justification",
+    });
   }
 
   const ownerAgentId = input.context.ownerAgentId;
@@ -183,17 +184,15 @@ async function executeBashWithFullAccessIfAllowed(input: {
 
   if (input.args.prefix != null) {
     if (input.normalizedCommandPrefix == null) {
-      throw toolRecoverableError(
-        "A reusable bash full-access prefix is only allowed for a single simple command. Complex shell commands can only request one-shot full access.",
-        { code: "bash_full_access_prefix_requires_simple_command" },
-      );
+      throw toolRecoverableError(buildPrefixRequiresSimpleCommandMessage(input.args), {
+        code: "bash_full_access_prefix_requires_simple_command",
+      });
     }
 
     if (!bashPrefixMatchesCommand(input.args.prefix, input.normalizedCommandPrefix)) {
-      throw toolRecoverableError(
-        "The requested bash full-access prefix must match the start of the command's normalized argv.",
-        { code: "bash_full_access_prefix_not_command_prefix" },
-      );
+      throw toolRecoverableError(buildPrefixNotCommandPrefixMessage(input.args), {
+        code: "bash_full_access_prefix_not_command_prefix",
+      });
     }
   }
 
@@ -260,6 +259,148 @@ function detectUnsupportedBackgroundSyntax(command: string): string | null {
   }
 
   return null;
+}
+
+function buildFullAccessArgsRequireModeMessage(args: BashToolArgs): string {
+  const sandboxedRetry = renderBashArgsJson(selectBashArgs(args, { mode: "sandboxed" }));
+  const fullAccessRetry = renderBashArgsJson(selectBashArgs(args, { mode: "full_access" }));
+
+  return [
+    '`justification` and `prefix` are only valid when `sandboxMode` is `"full_access"`.',
+    "",
+    'These fields describe a full-access approval request. If you want to stay sandboxed, remove them. If you intend to request broader execution, set `sandboxMode` to `"full_access"`.',
+    "",
+    "If you want a sandboxed call, use:",
+    "```json",
+    sandboxedRetry,
+    "```",
+    "",
+    "If you want a full-access call, use:",
+    "```json",
+    fullAccessRetry,
+    "```",
+  ].join("\n");
+}
+
+function buildRequiresJustificationMessage(args: BashToolArgs): string {
+  const retryJson = renderBashArgsJson(
+    selectBashArgs(args, { mode: "full_access", requireJustification: true }),
+  );
+
+  return [
+    "bash full_access requires `justification`.",
+    "",
+    "`justification` is required because full access runs outside the sandbox. It should briefly explain why this exact command is necessary for the current user request.",
+    "",
+    "Use this exact bash argument object on the next retry:",
+    "```json",
+    retryJson,
+    "```",
+  ].join("\n");
+}
+
+function buildPrefixRequiresSimpleCommandMessage(args: BashToolArgs): string {
+  const retryJson = renderBashArgsJson(
+    selectBashArgs(args, {
+      mode: "full_access",
+      dropPrefix: true,
+      requireJustification: true,
+    }),
+  );
+
+  return [
+    "`prefix` can only be used for a single simple command. This command is compound.",
+    "",
+    "`prefix` defines a reusable approval scope, so it must describe a stable simple command shape. Compound shell commands should use one-shot full access instead.",
+    "",
+    "Use this exact bash argument object on the next retry:",
+    "```json",
+    retryJson,
+    "```",
+  ].join("\n");
+}
+
+function buildPrefixNotCommandPrefixMessage(args: BashToolArgs): string {
+  const retryJson = renderBashArgsJson(
+    selectBashArgs(args, {
+      mode: "full_access",
+      dropPrefix: true,
+      requireJustification: true,
+    }),
+  );
+
+  return [
+    "`prefix` must match the start of the command's normalized argv.",
+    "",
+    "`prefix` defines the reusable approval scope, so it must accurately describe the command family being approved. If you are unsure, request one-shot full access without `prefix`.",
+    "",
+    "Use this exact bash argument object on the next retry:",
+    "```json",
+    retryJson,
+    "```",
+  ].join("\n");
+}
+
+function selectBashArgs(
+  args: BashToolArgs,
+  options: {
+    mode: "sandboxed" | "full_access";
+    dropPrefix?: boolean;
+    requireJustification?: boolean;
+  },
+): Partial<BashToolArgs> {
+  const selected: Partial<BashToolArgs> = {
+    command: args.command,
+  };
+
+  if (args.cwd != null) {
+    selected.cwd = args.cwd;
+  }
+  if (args.timeoutSec != null) {
+    selected.timeoutSec = args.timeoutSec;
+  }
+
+  if (options.mode === "full_access") {
+    selected.sandboxMode = "full_access";
+    const justification = args.justification?.trim();
+    const resolvedJustification =
+      options.requireJustification && (justification == null || justification.length === 0)
+        ? FULL_ACCESS_JUSTIFICATION_PLACEHOLDER
+        : justification;
+    if (resolvedJustification != null) {
+      selected.justification = resolvedJustification;
+    }
+    if (!options.dropPrefix && args.prefix != null) {
+      selected.prefix = args.prefix;
+    }
+  }
+
+  return selected;
+}
+
+function renderBashArgsJson(args: Partial<BashToolArgs>): string {
+  const ordered: Record<string, unknown> = {};
+
+  if (args.command != null) {
+    ordered.command = args.command;
+  }
+  if (args.cwd != null) {
+    ordered.cwd = args.cwd;
+  }
+  if (args.timeoutSec != null) {
+    ordered.timeoutSec = args.timeoutSec;
+  }
+  if (args.sandboxMode != null) {
+    ordered.sandboxMode = args.sandboxMode;
+  }
+  if (args.justification != null) {
+    ordered.justification = args.justification;
+  }
+  if (args.prefix != null) {
+    ordered.prefix = args.prefix;
+  }
+
+  return JSON.stringify(ordered, null, 2);
 }
 
 function stripQuotedShellContent(command: string): string {

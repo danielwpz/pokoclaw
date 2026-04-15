@@ -204,7 +204,7 @@ describe("agent loop bash approval flow", () => {
         failedToolCallId: "tool_1",
         summary: "Write access is missing for /tmp/notes.txt",
         guidance:
-          "Review whether running this bash command with full access is necessary and legitimate for the current user request.\nIf it is necessary, rerun the bash tool with full-access approval fields.\nIf it is not necessary, do not request escalation.",
+          'Decide whether this bash failure is really a shell-execution problem or whether the task should use structured tools plus request_permissions instead.\nIf the real need is access to business files or directories, prefer structured tools plus request_permissions.\nIf the real need is broader shell execution, command-supporting files, config, metadata, or other execution-layer dependencies, rerun bash with sandboxMode="full_access".\nA full-access bash retry must include justification.\nIf you expect repeated use of the same simple command family, consider adding prefix so the user does not need to re-approve similar bash calls.\nDo not use prefix for compound shell commands.\nIf full access is not necessary, do not request escalation.',
         entries: [
           {
             resource: "filesystem",
@@ -381,7 +381,7 @@ describe("agent loop bash approval flow", () => {
         failedToolCallId: "tool_1",
         summary: "Read access is missing for /tmp/one",
         guidance:
-          "Review whether running this bash command with full access is necessary and legitimate for the current user request.\nIf it is necessary, rerun the bash tool with full-access approval fields.\nIf it is not necessary, do not request escalation.",
+          'Decide whether this bash failure is really a shell-execution problem or whether the task should use structured tools plus request_permissions instead.\nIf the real need is access to business files or directories, prefer structured tools plus request_permissions.\nIf the real need is broader shell execution, command-supporting files, config, metadata, or other execution-layer dependencies, rerun bash with sandboxMode="full_access".\nA full-access bash retry must include justification.\nIf you expect repeated use of the same simple command family, consider adding prefix so the user does not need to re-approve similar bash calls.\nDo not use prefix for compound shell commands.\nIf full access is not necessary, do not request escalation.',
         entries: [
           {
             resource: "filesystem",
@@ -407,7 +407,7 @@ describe("agent loop bash approval flow", () => {
         failedToolCallId: "tool_2",
         summary: "Read access is missing for /tmp/two",
         guidance:
-          "Review whether running this bash command with full access is necessary and legitimate for the current user request.\nIf it is necessary, rerun the bash tool with full-access approval fields.\nIf it is not necessary, do not request escalation.",
+          'Decide whether this bash failure is really a shell-execution problem or whether the task should use structured tools plus request_permissions instead.\nIf the real need is access to business files or directories, prefer structured tools plus request_permissions.\nIf the real need is broader shell execution, command-supporting files, config, metadata, or other execution-layer dependencies, rerun bash with sandboxMode="full_access".\nA full-access bash retry must include justification.\nIf you expect repeated use of the same simple command family, consider adding prefix so the user does not need to re-approve similar bash calls.\nDo not use prefix for compound shell commands.\nIf full access is not necessary, do not request escalation.',
         entries: [
           {
             resource: "filesystem",
