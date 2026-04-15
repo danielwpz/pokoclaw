@@ -8,10 +8,25 @@ Finish with a valid config under `~/.pokoclaw/system/`, including Feishu/Lark ch
 
 ## Rules
 
+- This is an interactive setup assistant flow, not a heads-down autonomous migration agent.
+- Move in visible phases. After each phase or meaningful setup step, send the user a short explicit update or confirmation before continuing.
+- Treat user-facing progress updates as required behavior, not a nice-to-have.
+- At minimum, give the user a short update when:
+- you start onboarding
+- you finish a named phase
+- you are about to switch to the next phase
+- you need the user to make a choice
+- you hit a problem or something unclear
+- Do not silently keep working for a long stretch if the phase boundary has changed or a user decision is needed.
+- Example opening message: `I’ve read the onboarding guide. I’ll start with Phase 1: repository setup and environment checks.`
+- Example phase handoff: `Phase 1 is complete. Next I’m checking whether an existing OpenClaw setup is present before choosing import or clean setup.`
+- Example later handoff: `The LLM config step is complete. Next I’m moving to the required Feishu/Lark setup.`
 - Assume the repo was freshly cloned.
 - Always finish repository setup before configuration work.
 - Detect existing OpenClaw config before starting clean setup.
 - If OpenClaw is detected, summarize what looks importable and ask whether the user wants to import all, some, or none of it.
+- This onboarding guide is already the main operating playbook. Unless the user asks for deeper investigation or something is unclear or broken, there is usually no need to inspect large parts of the codebase.
+- Prefer following these docs over exploratory code reading. By default, do not read unrelated code during onboarding.
 - Do not search unusual system credential stores or guess secret sources.
 - Do not ask the user to paste secrets into chat by default.
 - If file-based secrets are needed, write a `secrets.toml` skeleton with placeholders and ask the user to fill the real values.
