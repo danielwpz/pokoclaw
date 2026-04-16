@@ -31,5 +31,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install ripgrep
+        run: |
+          if command -v rg >/dev/null 2>&1; then
+            rg --version
+          else
+            brew install ripgrep
+            rg --version
+          fi
+
       - name: Run preflight
         run: pnpm preflight
