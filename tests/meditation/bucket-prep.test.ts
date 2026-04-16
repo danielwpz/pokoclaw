@@ -156,15 +156,43 @@ describe("prepareMeditationBucketInput", () => {
     ]);
 
     expect(toolBurstCluster).toBeDefined();
-    expect(toolBurstCluster?.contextMessages.map((message) => message.id)).toEqual([
-      "msg_tool_before",
-      "msg_tool_fail_1",
-      "msg_tool_fail_2",
-      "msg_tool_after",
-    ]);
+    expect(toolBurstCluster?.episodeTimeline).toMatchObject({
+      sessionId: "sess_1",
+      endSeq: 12,
+      triggerStartSeq: 10,
+      triggerEndSeq: 11,
+      failedToolResults: 2,
+      totalToolResults: 2,
+    });
+    expect(toolBurstCluster?.episodeTimeline?.startSeq).toBeLessThanOrEqual(9);
+    expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(9);
+    expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(10);
+    expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(11);
+    expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(12);
+    expect(
+      toolBurstCluster?.episodeTimeline?.events.some((event) =>
+        event.summary.includes("before tool burst"),
+      ),
+    ).toBe(true);
+    expect(
+      toolBurstCluster?.episodeTimeline?.events.some(
+        (event) =>
+          event.summary.includes("tool=bash") && event.summary.includes("code=permission_denied"),
+      ),
+    ).toBe(true);
 
     expect(toolRepeatCluster).toBeDefined();
     expect(toolRepeatCluster?.examples).toHaveLength(2);
+    expect(toolRepeatCluster?.episodes).toHaveLength(1);
+    expect(toolRepeatCluster?.episodes[0]).toMatchObject({
+      sessionId: "sess_1",
+      endSeq: 12,
+      triggerStartSeq: 10,
+      triggerEndSeq: 11,
+      failedToolResults: 2,
+      totalToolResults: 2,
+    });
+    expect(toolRepeatCluster?.episodes[0]?.startSeq).toBeLessThanOrEqual(9);
     expect(
       toolRepeatCluster?.examples[0]?.messageWindow.some(
         (message) => message.id === "msg_tool_fail_1",

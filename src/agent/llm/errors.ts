@@ -21,6 +21,24 @@ export interface AgentLlmErrorShape {
   provider?: string;
   model?: string;
   rawMessage?: string;
+  rawDetails?: AgentLlmRawErrorPayload;
+}
+
+const AGENT_LLM_RAW_ERROR_PAYLOAD_FORMAT = "pokoclaw.agent-llm-error.v1";
+
+export interface AgentLlmRawErrorPayload {
+  format: typeof AGENT_LLM_RAW_ERROR_PAYLOAD_FORMAT;
+  message: string;
+  rawMessage: string;
+  serializedError?: string;
+  errorName?: string;
+  status?: number;
+  statusCode?: number;
+  responseStatus?: number;
+  code?: string;
+  responseErrorMessage?: string;
+  causeName?: string;
+  causeMessage?: string;
 }
 
 export class AgentLlmError extends Error {
@@ -29,6 +47,7 @@ export class AgentLlmError extends Error {
   readonly provider?: string;
   readonly model?: string;
   readonly rawMessage?: string;
+  readonly rawDetails?: AgentLlmRawErrorPayload;
 
   constructor(shape: AgentLlmErrorShape) {
     super(shape.message);
@@ -44,6 +63,9 @@ export class AgentLlmError extends Error {
     if (shape.rawMessage !== undefined) {
       this.rawMessage = shape.rawMessage;
     }
+    if (shape.rawDetails !== undefined) {
+      this.rawDetails = shape.rawDetails;
+    }
   }
 }
 
@@ -58,9 +80,11 @@ export function normalizeAgentLlmError(input: NormalizeAgentLlmErrorInput): Agen
     return input.error;
   }
 
-  const rawMessage = getErrorMessage(input.error);
-  const message = rawMessage.trim().length > 0 ? rawMessage : "Unknown upstream error";
-  const httpStatus = getHttpStatusCode(input.error, message);
+  const rawDetails = readAgentLlmRawErrorPayload(input.error);
+  const rawMessage = rawDetails?.rawMessage ?? getErrorMessage(input.error);
+  const message =
+    rawDetails?.message ?? (rawMessage.trim().length > 0 ? rawMessage : "Unknown upstream error");
+  const httpStatus = getHttpStatusCode(input.error, rawMessage);
   const shape = classifyAgentLlmError({
     message,
     ...(httpStatus !== undefined ? { httpStatus } : {}),
@@ -68,7 +92,11 @@ export function normalizeAgentLlmError(input: NormalizeAgentLlmErrorInput): Agen
     ...(input.model !== undefined ? { model: input.model } : {}),
   });
 
-  return new AgentLlmError(shape);
+  return new AgentLlmError({
+    ...shape,
+    rawMessage,
+    ...(rawDetails == null ? {} : { rawDetails }),
+  });
 }
 
 export function isAgentLlmError(error: unknown): error is AgentLlmError {
@@ -194,6 +222,11 @@ function classifyAgentLlmError(input: {
 }
 
 function getErrorMessage(error: unknown): string {
+  const rawPayload = readAgentLlmRawErrorPayload(error);
+  if (rawPayload != null) {
+    return rawPayload.rawMessage;
+  }
+
   if (error instanceof Error) {
     return error.message;
   }
@@ -202,6 +235,11 @@ function getErrorMessage(error: unknown): string {
 }
 
 function getHttpStatusCode(error: unknown, message: string): number | undefined {
+  const rawPayload = readAgentLlmRawErrorPayload(error);
+  if (rawPayload != null) {
+    return rawPayload.status ?? rawPayload.statusCode ?? rawPayload.responseStatus;
+  }
+
   const structuredStatus =
     readNumericField(error, ["status"]) ??
     readNumericField(error, ["statusCode"]) ??
@@ -346,6 +384,190 @@ function readNumericField(value: unknown, path: string[]): number | undefined {
   }
 
   return typeof current === "number" && Number.isInteger(current) ? current : undefined;
+}
+
+function readStringField(value: unknown, path: string[]): string | undefined {
+  if (value == null || typeof value !== "object") {
+    return undefined;
+  }
+
+  let current: unknown = value;
+  for (const key of path) {
+    if (current == null || typeof current !== "object" || !(key in current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+
+  return typeof current === "string" && current.trim().length > 0 ? current : undefined;
+}
+
+function appendUniqueMessage(messages: string[], candidate: string | undefined): void {
+  if (candidate == null) {
+    return;
+  }
+
+  const normalized = candidate.trim();
+  if (normalized.length === 0) {
+    return;
+  }
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const existing = messages[index];
+    if (existing == null) {
+      continue;
+    }
+    if (existing === normalized || existing.includes(normalized)) {
+      return;
+    }
+    if (normalized.includes(existing)) {
+      messages[index] = normalized;
+      return;
+    }
+  }
+
+  messages.push(normalized);
+}
+
+function collectRawErrorMessages(error: unknown): string[] {
+  const messages: string[] = [];
+  appendUniqueMessage(messages, readStringField(error, ["message"]));
+  appendUniqueMessage(messages, readStringField(error, ["response", "error", "message"]));
+  appendUniqueMessage(messages, readStringField(error, ["response", "data", "error", "message"]));
+  appendUniqueMessage(messages, readStringField(error, ["response", "data", "message"]));
+  appendUniqueMessage(messages, readStringField(error, ["response", "body", "error", "message"]));
+  appendUniqueMessage(messages, readStringField(error, ["error", "message"]));
+  appendUniqueMessage(messages, readStringField(error, ["cause", "message"]));
+
+  if (messages.length === 0 && typeof error === "string" && error.trim().length > 0) {
+    messages.push(error.trim());
+  }
+
+  return messages;
+}
+
+export function buildAgentLlmRawErrorPayload(error: unknown): AgentLlmRawErrorPayload {
+  const messages = collectRawErrorMessages(error);
+  const primaryMessage = messages[0] ?? getErrorMessage(error);
+  const rawMessage = messages.length > 0 ? messages.join(" | ") : primaryMessage;
+  const serializedError = serializeUnknownError(error);
+  const errorName = readStringField(error, ["name"]);
+  const status = readNumericField(error, ["status"]);
+  const statusCode = readNumericField(error, ["statusCode"]);
+  const responseStatus = readNumericField(error, ["response", "status"]);
+  const code = readStringField(error, ["code"]) ?? readStringField(error, ["cause", "code"]);
+  const responseErrorMessage = readStringField(error, ["response", "error", "message"]);
+  const causeName = readStringField(error, ["cause", "name"]);
+  const causeMessage = readStringField(error, ["cause", "message"]);
+
+  const payload: AgentLlmRawErrorPayload = {
+    format: AGENT_LLM_RAW_ERROR_PAYLOAD_FORMAT,
+    message: primaryMessage,
+    rawMessage,
+  };
+  if (serializedError != null) {
+    payload.serializedError = JSON.stringify(serializedError);
+  }
+  if (errorName !== undefined) {
+    payload.errorName = errorName;
+  }
+  if (status !== undefined) {
+    payload.status = status;
+  }
+  if (statusCode !== undefined) {
+    payload.statusCode = statusCode;
+  }
+  if (responseStatus !== undefined) {
+    payload.responseStatus = responseStatus;
+  }
+  if (code !== undefined) {
+    payload.code = code;
+  }
+  if (responseErrorMessage !== undefined) {
+    payload.responseErrorMessage = responseErrorMessage;
+  }
+  if (causeName !== undefined) {
+    payload.causeName = causeName;
+  }
+  if (causeMessage !== undefined) {
+    payload.causeMessage = causeMessage;
+  }
+
+  return payload;
+}
+
+export function readAgentLlmRawErrorPayload(error: unknown): AgentLlmRawErrorPayload | null {
+  if (error == null || typeof error !== "object") {
+    return null;
+  }
+
+  const maybePayload = error as Partial<AgentLlmRawErrorPayload>;
+  if (
+    maybePayload.format !== AGENT_LLM_RAW_ERROR_PAYLOAD_FORMAT ||
+    typeof maybePayload.message !== "string" ||
+    typeof maybePayload.rawMessage !== "string"
+  ) {
+    return null;
+  }
+
+  return maybePayload as AgentLlmRawErrorPayload;
+}
+
+function serializeUnknownError(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet(),
+  depth: number = 0,
+): unknown {
+  if (
+    value == null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (depth >= 6) {
+    return "[MaxDepth]";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeUnknownError(item, seen, depth + 1));
+  }
+
+  if (typeof value !== "object") {
+    return String(value);
+  }
+
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+
+  if (value instanceof Error) {
+    const serialized: Record<string, unknown> = {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+    for (const key of Object.getOwnPropertyNames(value)) {
+      if (key === "name" || key === "message" || key === "stack") {
+        continue;
+      }
+      serialized[key] = serializeUnknownError(
+        (value as unknown as Record<string, unknown>)[key],
+        seen,
+        depth + 1,
+      );
+    }
+    return serialized;
+  }
+
+  const serialized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    serialized[key] = serializeUnknownError(nested, seen, depth + 1);
+  }
+  return serialized;
 }
 
 function parseHttpStatusCodeFromMessage(message: string): number | undefined {

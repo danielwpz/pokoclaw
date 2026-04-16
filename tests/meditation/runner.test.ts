@@ -8,6 +8,7 @@ import type { PiBridgeRunTurnResult } from "@/src/agent/llm/pi-bridge.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
+import { buildMeditationFindingId } from "@/src/meditation/prompts.js";
 import {
   filterEligiblePrivateMemoryRewrites,
   MeditationPipelineRunner,
@@ -188,20 +189,49 @@ describe("MeditationPipelineRunner", () => {
           if (bridgeCall === 1) {
             return createSubmitTurnResult({
               note: "The user clearly wanted diagnosis before explanation.",
-              memory_candidates: [
-                "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+              findings: [
+                {
+                  summary:
+                    "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+                  issue_type: "user_preference_signal",
+                  scope_hint: "subagent",
+                  cluster_ids: ["stop:1"],
+                  evidence_summary: "The user explicitly redirected the response style.",
+                  examples: ["user quote: lead with the diagnosis first"],
+                },
+              ],
+            });
+          }
+
+          if (bridgeCall === 2) {
+            return createSubmitTurnResult({
+              evaluations: [
+                {
+                  finding_id: buildMeditationFindingId("agent_sub_1", 0),
+                  priority: "high",
+                  durability: "durable",
+                  promotion_decision: "private_memory",
+                  reason: "This keeps repeating in atlas-web frontend work.",
+                },
               ],
             });
           }
 
           return createSubmitTurnResult({
-            shared_memory_rewrite:
-              "# Preferences\n\n- Prefer concise updates.\n\n# Working Conventions\n\n- Lead with diagnosis before explanation during debugging.\n",
-            private_memory_rewrites: [
+            shared_repeat_use_lessons: null,
+            private_repeat_use_lessons: [
               {
                 agent_id: "agent_sub_1",
-                content:
-                  "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+                lessons: [
+                  {
+                    rule_text:
+                      "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+                    supported_finding_ids: [buildMeditationFindingId("agent_sub_1", 0)],
+                    why_generalizable:
+                      "This is a stable future-facing collaboration rule for this subagent.",
+                    evidence_examples: ["user quote: lead with the diagnosis first"],
+                  },
+                ],
               },
             ],
           });
@@ -238,19 +268,19 @@ describe("MeditationPipelineRunner", () => {
     const bucketTurns = JSON.parse(
       await readFile(path.join(artifactDir, "bucket-agent_sub_1.turns.json"), "utf8"),
     );
-    const consolidationPrompt = await readFile(
-      path.join(artifactDir, "consolidation.prompt.md"),
+    const consolidationEvalPrompt = await readFile(
+      path.join(artifactDir, "consolidation-eval.prompt.md"),
       "utf8",
     );
-    const consolidationSubmit = JSON.parse(
-      await readFile(path.join(artifactDir, "consolidation.submit.json"), "utf8"),
+    const consolidationEvalSubmit = JSON.parse(
+      await readFile(path.join(artifactDir, "consolidation-eval.submit.json"), "utf8"),
     );
-    const consolidationTurns = JSON.parse(
-      await readFile(path.join(artifactDir, "consolidation.turns.json"), "utf8"),
-    );
-    const rewritePreviewShared = await readFile(
-      path.join(artifactDir, "rewrite-preview", "shared.md"),
+    const consolidationRewritePrompt = await readFile(
+      path.join(artifactDir, "consolidation-rewrite.prompt.md"),
       "utf8",
+    );
+    const consolidationRewriteSubmit = JSON.parse(
+      await readFile(path.join(artifactDir, "consolidation-rewrite.submit.json"), "utf8"),
     );
     const rewritePreviewPrivate = await readFile(
       path.join(artifactDir, "rewrite-preview", "private-agent_sub_1.md"),
@@ -313,44 +343,65 @@ describe("MeditationPipelineRunner", () => {
     expect(bucketPrompt).toContain("reduce future user friction");
     expect(bucketSubmit).toEqual({
       note: "The user clearly wanted diagnosis before explanation.",
-      memory_candidates: [
-        "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+      findings: [
+        {
+          summary: "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+          issue_type: "user_preference_signal",
+          scope_hint: "subagent",
+          cluster_ids: ["stop:1"],
+          evidence_summary: "The user explicitly redirected the response style.",
+          examples: ["user quote: lead with the diagnosis first"],
+        },
       ],
     });
     expect(bucketTurns[0]?.content[0]).toMatchObject({
       type: "thinking",
       thinking: "Internal reasoning should stay in debug artifacts only.",
     });
-    expect(consolidationPrompt).toContain("# Preferences");
-    expect(consolidationSubmit).toEqual({
-      shared_memory_rewrite:
-        "# Preferences\n\n- Prefer concise updates.\n\n# Working Conventions\n\n- Lead with diagnosis before explanation during debugging.\n",
-      private_memory_rewrites: [
+    expect(consolidationEvalPrompt).toContain("# Preferences");
+    expect(consolidationEvalSubmit).toEqual({
+      evaluations: [
         {
-          agent_id: "agent_sub_1",
-          content:
-            "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+          finding_id: buildMeditationFindingId("agent_sub_1", 0),
+          priority: "high",
+          durability: "durable",
+          promotion_decision: "private_memory",
+          reason: "This keeps repeating in atlas-web frontend work.",
         },
       ],
     });
-    expect(consolidationTurns[0]?.content[0]).toMatchObject({
-      type: "thinking",
-      thinking: "Internal reasoning should stay in debug artifacts only.",
+    expect(consolidationRewritePrompt).toContain("Approved Shared Findings");
+    expect(consolidationRewritePrompt).toContain("Approved Private Findings By Bucket");
+    expect(consolidationRewriteSubmit).toEqual({
+      shared_repeat_use_lessons: null,
+      private_repeat_use_lessons: [
+        {
+          agent_id: "agent_sub_1",
+          lessons: [
+            {
+              rule_text:
+                "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+              supported_finding_ids: [buildMeditationFindingId("agent_sub_1", 0)],
+              why_generalizable:
+                "This is a stable future-facing collaboration rule for this subagent.",
+              evidence_examples: ["user quote: lead with the diagnosis first"],
+            },
+          ],
+        },
+      ],
     });
-    expect(rewritePreviewShared).toContain(
-      "Lead with diagnosis before explanation during debugging.",
-    );
+    await expect(
+      readFile(path.join(artifactDir, "rewrite-preview", "shared.md"), "utf8"),
+    ).rejects.toThrow();
     expect(rewritePreviewPrivate).toContain(
       "Lead with diagnosis before explanation during atlas-web frontend debugging.",
     );
     expect(dailyNote).toContain("## Run run_test");
     expect(dailyNote).toContain("The user clearly wanted diagnosis before explanation.");
     expect(dailyNote).not.toContain("Internal reasoning should stay in debug artifacts only.");
-    expect(sharedMemory).toBe(
-      "# Preferences\n\n- Prefer concise updates.\n\n# Working Conventions\n\n- Lead with diagnosis before explanation during debugging.\n",
-    );
+    expect(sharedMemory).not.toContain("Lead with diagnosis before explanation during debugging.");
     expect(privateMemory).toBe(
-      "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+      "# Scope\n\n# Durable Local Facts\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
     );
   });
 
@@ -390,13 +441,12 @@ describe("MeditationPipelineRunner", () => {
           if (bridgeCall % 2 === 1) {
             return createSubmitTurnResult({
               note: `bucket note ${bridgeCall}`,
-              memory_candidates: [],
+              findings: [],
             });
           }
 
           return createSubmitTurnResult({
-            shared_memory_rewrite: "# Shared\n",
-            private_memory_rewrites: [],
+            evaluations: [],
           });
         },
       },
@@ -574,7 +624,89 @@ describe("MeditationPipelineRunner", () => {
     expect(clusters).toHaveLength(1);
   });
 
-  test("ignores empty shared memory rewrites during consolidation", async () => {
+  test("uses a provided window override instead of state-derived meditation window", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-window-override-"));
+
+    const state = new MeditationStateRepo(handle.storage.db);
+    state.markFinished({
+      status: "completed",
+      finishedAt: new Date("2026-04-07T23:59:00.000Z"),
+      markSuccess: true,
+    });
+
+    let bridgeCall = 0;
+    const runner = new MeditationPipelineRunner({
+      storage: handle.storage.db,
+      state,
+      config: {
+        meditation: {
+          enabled: true,
+          cron: "0 0 * * *",
+        },
+      },
+      models: createRegistry(),
+      bridge: {
+        async completeTurn() {
+          bridgeCall += 1;
+          if (bridgeCall === 1) {
+            return createSubmitTurnResult({
+              note: "A permission burst happened.",
+              findings: [
+                {
+                  summary: "Pause after burst permission failures.",
+                  issue_type: "agent_workflow_issue",
+                  scope_hint: "subagent",
+                  cluster_ids: ["tool_burst:1"],
+                  evidence_summary: "A burst of permission failures happened in one run.",
+                  examples: ["tool error: Permission request denied."],
+                },
+              ],
+            });
+          }
+
+          return createSubmitTurnResult({
+            evaluations: [
+              {
+                finding_id: buildMeditationFindingId("agent_sub_1", 0),
+                priority: "low",
+                durability: "transient",
+                promotion_decision: "keep_in_meditation",
+                reason: "Not durable.",
+              },
+            ],
+          });
+        },
+      },
+      securityConfig: DEFAULT_CONFIG.security,
+      workspaceDir: path.join(tempDir, "workspace"),
+      logsDir: tempDir,
+      createRunId: () => "run_override",
+    });
+
+    await runner.runOnce({
+      tickAt: new Date("2026-04-08T00:00:00.000Z"),
+      windowOverride: {
+        startAt: "2026-04-01T00:00:00.000Z",
+        endAt: "2026-04-02T00:00:00.000Z",
+        lastSuccessAt: null,
+        localDate: "2026-04-08",
+        timezone: "UTC",
+        clippedByLookback: false,
+      },
+    });
+
+    const artifactDir = path.join(tempDir, "meditation", "2026-04-08--run_override");
+    const meta = JSON.parse(await readFile(path.join(artifactDir, "meta.json"), "utf8"));
+    expect(meta.window).toMatchObject({
+      startAt: "2026-04-01T00:00:00.000Z",
+      endAt: "2026-04-02T00:00:00.000Z",
+      clippedByLookback: false,
+    });
+  });
+
+  test("drops shared rewrites that were not approved by evaluation", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-meditation-empty-shared-"));
@@ -607,16 +739,53 @@ describe("MeditationPipelineRunner", () => {
           if (bridgeCall === 1) {
             return createSubmitTurnResult({
               note: "A permission burst happened.",
-              memory_candidates: ["Pause after burst permission failures."],
+              findings: [
+                {
+                  summary: "Pause after burst permission failures.",
+                  issue_type: "agent_workflow_issue",
+                  scope_hint: "subagent",
+                  cluster_ids: ["tool_burst:1"],
+                  evidence_summary: "A burst of permission failures happened in one run.",
+                  examples: ["tool error: Permission request denied."],
+                },
+              ],
+            });
+          }
+
+          if (bridgeCall === 2) {
+            return createSubmitTurnResult({
+              evaluations: [
+                {
+                  finding_id: buildMeditationFindingId("agent_sub_1", 0),
+                  priority: "high",
+                  durability: "durable",
+                  promotion_decision: "private_memory",
+                  reason: "This should update only private memory.",
+                },
+              ],
             });
           }
 
           return createSubmitTurnResult({
-            shared_memory_rewrite: "   \n\t  ",
-            private_memory_rewrites: [
+            shared_repeat_use_lessons: [
+              {
+                rule_text: "This should be dropped.",
+                supported_finding_ids: [],
+                why_generalizable: "",
+                evidence_examples: [],
+              },
+            ],
+            private_repeat_use_lessons: [
               {
                 agent_id: "agent_sub_1",
-                content: "# Scope\n\n- atlas-web frontend.\n",
+                lessons: [
+                  {
+                    rule_text: "Keep the private rewrite.",
+                    supported_finding_ids: [buildMeditationFindingId("agent_sub_1", 0)],
+                    why_generalizable: "This is still a future-facing subagent rule.",
+                    evidence_examples: ["tool error: Permission request denied."],
+                  },
+                ],
               },
             ],
           });
@@ -642,15 +811,33 @@ describe("MeditationPipelineRunner", () => {
       "utf8",
     );
     const sharedMemory = await readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
-    const consolidationSubmit = JSON.parse(
-      await readFile(path.join(artifactDir, "consolidation.submit.json"), "utf8"),
+    const consolidationRewriteSubmit = JSON.parse(
+      await readFile(path.join(artifactDir, "consolidation-rewrite.submit.json"), "utf8"),
+    );
+    const rewriteRejections = JSON.parse(
+      await readFile(path.join(artifactDir, "rewrite-rejections.json"), "utf8"),
     );
 
-    expect(consolidationSubmit).toMatchObject({
-      shared_memory_rewrite: "   \n\t  ",
+    expect(consolidationRewriteSubmit).toMatchObject({
+      shared_repeat_use_lessons: [
+        {
+          rule_text: "This should be dropped.",
+        },
+      ],
     });
     expect(dailyNote).toContain("Shared memory rewritten: no");
+    expect(dailyNote).toContain("Rewrite rejections:");
     expect(sharedMemory).toBe(initialSharedMemory);
+    expect(rewriteRejections).toEqual([
+      {
+        target: "shared",
+        reasons: expect.arrayContaining([
+          "missing_supported_finding_ids",
+          "missing_generalization_reason",
+          "missing_evidence_examples",
+        ]),
+      },
+    ]);
     await expect(
       readFile(path.join(artifactDir, "rewrite-preview", "shared.md"), "utf8"),
     ).rejects.toThrow();
@@ -658,48 +845,141 @@ describe("MeditationPipelineRunner", () => {
 
   test("drops private rewrites for non-sub agents at the host layer", () => {
     const filtered = filterEligiblePrivateMemoryRewrites({
-      agentContexts: [
+      bucketPackets: [
         {
           agentId: "agent_main_1",
           agentKind: "main",
-          displayName: "Main",
-          description: null,
-          workdir: null,
-          compactSummary: null,
-          privateMemoryCurrent: null,
-          bucketNote: "main note",
-          memoryCandidates: ["shared lesson"],
+          approvedPrivateFindings: [],
         },
         {
           agentId: "agent_sub_1",
           agentKind: "sub",
-          displayName: "Sub",
-          description: null,
-          workdir: null,
-          compactSummary: null,
-          privateMemoryCurrent: "# Scope\n",
-          bucketNote: "sub note",
-          memoryCandidates: ["private lesson"],
+          approvedPrivateFindings: [
+            {
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
+              agentId: "agent_sub_1",
+              agentKind: "sub",
+              priority: "high",
+              durability: "durable",
+              promotionDecision: "private_memory",
+              reason: "ok",
+              summary: "summary",
+              issueType: "agent_workflow_issue",
+              scopeHint: "subagent",
+              evidenceSummary: "evidence",
+              examples: ["tool error: Permission request denied."],
+            },
+          ],
         },
       ],
       privateMemoryRewrites: [
         {
           agent_id: "agent_main_1",
-          content: "# Scope\n- should be dropped\n",
+          lessons: [
+            {
+              rule_text: "should be dropped",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "nope",
+              evidence_examples: ["example"],
+            },
+          ],
         },
         {
           agent_id: "agent_sub_1",
-          content: "# Scope\n- should stay\n",
+          lessons: [
+            {
+              rule_text: "should stay",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "ok",
+              evidence_examples: ["example"],
+            },
+          ],
         },
       ],
     });
 
     expect(filtered).toEqual([
       {
-        agent_id: "agent_sub_1",
-        content: "# Scope\n- should stay\n",
+        agentId: "agent_sub_1",
+        lessons: [
+          {
+            rule_text: "should stay",
+            supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+            why_generalizable: "ok",
+            evidence_examples: ["example"],
+          },
+        ],
       },
     ]);
+  });
+
+  test("drops private rewrites for sub agents without private-approved findings", () => {
+    const filtered = filterEligiblePrivateMemoryRewrites({
+      bucketPackets: [
+        {
+          agentId: "agent_sub_1",
+          agentKind: "sub",
+          approvedPrivateFindings: [],
+        },
+      ],
+      privateMemoryRewrites: [
+        {
+          agent_id: "agent_sub_1",
+          lessons: [
+            {
+              rule_text: "should be dropped",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "nope",
+              evidence_examples: ["example"],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(filtered).toEqual([]);
+  });
+
+  test("drops structurally invalid private rewrites at the host layer", () => {
+    const filtered = filterEligiblePrivateMemoryRewrites({
+      bucketPackets: [
+        {
+          agentId: "agent_sub_1",
+          agentKind: "sub",
+          approvedPrivateFindings: [
+            {
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
+              agentId: "agent_sub_1",
+              agentKind: "sub",
+              priority: "high",
+              durability: "durable",
+              promotionDecision: "private_memory",
+              reason: "ok",
+              summary: "summary",
+              issueType: "agent_workflow_issue",
+              scopeHint: "subagent",
+              evidenceSummary: "evidence",
+              examples: ["tool error: Permission request denied."],
+            },
+          ],
+        },
+      ],
+      privateMemoryRewrites: [
+        {
+          agent_id: "agent_sub_1",
+          lessons: [
+            {
+              rule_text: "",
+              supported_finding_ids: [],
+              why_generalizable: "",
+              evidence_examples: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(filtered).toEqual([]);
   });
 });
 

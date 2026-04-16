@@ -10,18 +10,24 @@ import {
   buildMeditationDailyNotePath,
   writeMeditationTextFileAtomic,
 } from "@/src/meditation/files.js";
+import type { MeditationFinding } from "@/src/meditation/submit-tools.js";
 
 export interface MeditationDailyBucketBlock {
   bucketId: string;
   agentId: string | null;
   displayName: string | null;
   note: string;
-  memoryCandidates: string[];
+  findings: MeditationFinding[];
 }
 
 export interface MeditationConsolidationSummary {
   sharedRewritten: boolean;
   privateRewrittenAgentIds: string[];
+  rewriteRejections: Array<{
+    target: "shared" | "private";
+    agentId?: string;
+    reasons: string[];
+  }>;
 }
 
 export interface BuildMeditationDailyRunBlockInput {
@@ -66,6 +72,14 @@ export function buildMeditationDailyRunBlock(input: BuildMeditationDailyRunBlock
     ...(input.consolidationSummary.privateRewrittenAgentIds.length === 0
       ? ["  - (none)"]
       : input.consolidationSummary.privateRewrittenAgentIds.map((agentId) => `  - ${agentId}`)),
+    "- Rewrite rejections:",
+    ...(input.consolidationSummary.rewriteRejections.length === 0
+      ? ["  - (none)"]
+      : input.consolidationSummary.rewriteRejections.map((rejection) => {
+          const target =
+            rejection.target === "shared" ? "shared" : `private:${rejection.agentId ?? "unknown"}`;
+          return `  - ${target} :: ${rejection.reasons.join(", ")}`;
+        })),
   ];
 
   return `${lines.join("\n").trimEnd()}\n`;
@@ -91,10 +105,20 @@ function renderBucketBlock(bucket: MeditationDailyBucketBlock): string[] {
     "",
     bucket.note.trim().length === 0 ? "(empty note)" : bucket.note.trimEnd(),
     "",
-    "#### Memory Candidates",
-    ...(bucket.memoryCandidates.length === 0
+    "#### Findings",
+    ...(bucket.findings.length === 0
       ? ["- (none)"]
-      : bucket.memoryCandidates.map((candidate) => `- ${candidate}`)),
+      : bucket.findings.flatMap((finding) => [
+          `- ${finding.summary}`,
+          `  - issue_type: ${finding.issue_type}`,
+          `  - scope_hint: ${finding.scope_hint}`,
+          `  - cluster_ids: ${finding.cluster_ids.join(", ") || "(none)"}`,
+          `  - evidence_summary: ${finding.evidence_summary}`,
+          "  - examples:",
+          ...(finding.examples.length === 0
+            ? ["    - (none)"]
+            : finding.examples.map((example) => `    - ${example}`)),
+        ])),
     "",
   ];
 }

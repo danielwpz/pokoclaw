@@ -677,7 +677,10 @@ export async function processResponsesStream<TApi extends Api>(
         output.stopReason = "toolUse";
       }
     } else if (event.type === "error") {
-      throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+      throw Object.assign(
+        new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error"),
+        event.code == null ? {} : { code: event.code },
+      );
     } else if (event.type === "response.failed") {
       const error = event.response?.error;
       const details = event.response?.incomplete_details;
@@ -686,7 +689,13 @@ export async function processResponsesStream<TApi extends Api>(
         : details?.reason
           ? `incomplete: ${details.reason}`
           : "Unknown error (no error details in response)";
-      throw new Error(message);
+      throw Object.assign(new Error(message), {
+        ...(error?.code == null ? {} : { code: error.code }),
+        response: {
+          ...(error == null ? {} : { error }),
+          ...(details == null ? {} : { incompleteDetails: details }),
+        },
+      });
     }
   }
 }

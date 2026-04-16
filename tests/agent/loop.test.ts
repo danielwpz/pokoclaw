@@ -2044,7 +2044,7 @@ describe("agent loop", () => {
         sequence: 2,
         status: "finished",
         startedAt: expect.any(String),
-        ttftMs: 0,
+        ttftMs: expect.any(Number),
       }),
       responseSummary: {
         requestCount: 2,
@@ -2053,7 +2053,7 @@ describe("agent loop", () => {
         firstResponseAt: expect.any(String),
         lastResponseAt: expect.any(String),
         lastRespondedRequestSequence: 2,
-        lastRespondedRequestTtftMs: 0,
+        lastRespondedRequestTtftMs: expect.any(Number),
       },
     });
     expect(control.listActiveRunObservability()).toEqual([]);
@@ -3387,11 +3387,17 @@ describe("agent loop", () => {
           retryable: true,
           provider: "anthropic_main",
           model: "anthropic_main/claude-sonnet-4-5",
+          rawMessage: "API rate limit reached | x-request-id=req_123",
         });
       },
     };
 
-    const emittedEvents: Array<{ type: string; errorKind?: string; retryable?: boolean }> = [];
+    const emittedEvents: Array<{
+      type: string;
+      errorKind?: string;
+      retryable?: boolean;
+      rawErrorMessage?: string | null;
+    }> = [];
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
       messages: messagesRepo,
@@ -3415,6 +3421,7 @@ describe("agent loop", () => {
       type: "run_failed",
       errorKind: "rate_limit",
       retryable: true,
+      rawErrorMessage: "API rate limit reached | x-request-id=req_123",
     });
   });
 

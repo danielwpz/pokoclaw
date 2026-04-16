@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 const { chatCompletionsCreateMock, responsesCreateMock } = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ vi.mock("openai", () => ({
   },
 }));
 
+import type { buildAgentLlmRawErrorPayload } from "@/src/agent/llm/errors.js";
 import { streamWithNormalizedUpstreamUsage } from "@/src/agent/llm/upstream-openai.js";
 
 function createAsyncIterable<T>(items: T[]): AsyncIterable<T> {
@@ -589,5 +591,15 @@ describe("upstream openai responses streaming", () => {
     const result = await stream.result();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("provider_error: upstream exploded");
+    expect(
+      (
+        result as AssistantMessage & {
+          pokoclawRawError?: ReturnType<typeof buildAgentLlmRawErrorPayload>;
+        }
+      ).pokoclawRawError,
+    ).toMatchObject({
+      message: "provider_error: upstream exploded",
+      rawMessage: "provider_error: upstream exploded",
+    });
   });
 });

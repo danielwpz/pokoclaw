@@ -48,6 +48,7 @@ export interface RunFailedEvent extends AgentRuntimeEventBase {
   modelId: string;
   errorKind: AgentLlmErrorKind | ToolFailureKind | "unknown";
   errorMessage: string;
+  rawErrorMessage?: string | null;
   retryable: boolean;
 }
 
@@ -157,6 +158,7 @@ export interface CompactionFailedEvent extends AgentRuntimeEventBase {
   modelId: string;
   errorKind: AgentLlmErrorKind | "unknown";
   errorMessage: string;
+  rawErrorMessage?: string | null;
   retryable: boolean;
 }
 

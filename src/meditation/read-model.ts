@@ -228,6 +228,26 @@ export class MeditationReadModel {
       .all();
   }
 
+  listSessionMessages(sessionId: string): MeditationMessageWindowEntry[] {
+    return this.db
+      .select({
+        id: messages.id,
+        sessionId: messages.sessionId,
+        seq: messages.seq,
+        role: messages.role,
+        messageType: messages.messageType,
+        visibility: messages.visibility,
+        stopReason: messages.stopReason,
+        errorMessage: messages.errorMessage,
+        createdAt: messages.createdAt,
+        payloadJson: messages.payloadJson,
+      })
+      .from(messages)
+      .where(eq(messages.sessionId, sessionId))
+      .orderBy(asc(messages.seq))
+      .all();
+  }
+
   listSessionMessageWindowByTime(
     sessionId: string,
     aroundCreatedAt: string,

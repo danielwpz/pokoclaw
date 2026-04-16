@@ -1698,6 +1698,32 @@ describe("lark run state", () => {
     });
   });
 
+  test("prefers raw run failure messages in terminal cards when available", () => {
+    const state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "run_failed",
+        eventId: "evt_fail_raw_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        errorKind: "upstream",
+        errorMessage: "terminated",
+        rawErrorMessage: "terminated | upstream socket closed | 529 overload",
+        retryable: true,
+      }),
+    );
+
+    const rendered = buildLarkRenderedRunCard(state);
+    const cardText = JSON.stringify(rendered.card);
+    expect(cardText).toContain("执行失败");
+    expect(cardText).toContain("terminated | upstream socket closed | 529 overload");
+  });
+
   test("renders terminal cancellation details even when no transcript blocks exist", () => {
     let state = reduceLarkRunState(
       null,

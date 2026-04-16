@@ -15,21 +15,27 @@ import {
 import {
   buildMeditationBucketSystemPrompt,
   buildMeditationBucketUserPrompt,
-  buildMeditationConsolidationSystemPrompt,
-  buildMeditationConsolidationUserPrompt,
+  buildMeditationConsolidationEvaluationSystemPrompt,
+  buildMeditationConsolidationEvaluationUserPrompt,
+  buildMeditationConsolidationRewriteSystemPrompt,
+  buildMeditationConsolidationRewriteUserPrompt,
   type MeditationBucketPromptInput,
-  type MeditationConsolidationPromptInput,
+  type MeditationConsolidationEvaluationPromptInput,
+  type MeditationConsolidationRewritePromptInput,
 } from "@/src/meditation/prompts.js";
 import {
   type BucketMeditationSubmit,
-  type ConsolidationMeditationSubmit,
+  type ConsolidationEvaluationSubmit,
+  type ConsolidationRewriteSubmit,
   createBucketSubmitTool,
-  createConsolidationSubmitTool,
+  createConsolidationEvaluationSubmitTool,
+  createConsolidationRewriteSubmitTool,
 } from "@/src/meditation/submit-tools.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 
 export const MAX_BUCKET_SUBMIT_TURNS = 2;
-export const MAX_CONSOLIDATION_SUBMIT_TURNS = 2;
+export const MAX_CONSOLIDATION_EVALUATION_SUBMIT_TURNS = 2;
+export const MAX_CONSOLIDATION_REWRITE_SUBMIT_TURNS = 2;
 
 export interface MeditationAgentExecution<TSubmission>
   extends MeditationSubmitLoopResult<TSubmission> {
@@ -45,10 +51,19 @@ export interface RunMeditationBucketAgentInput extends MeditationBucketPromptInp
   now?: () => Date;
 }
 
-export interface RunMeditationConsolidationAgentInput {
+export interface RunMeditationConsolidationEvaluationAgentInput {
   bridge: MeditationTurnBridge;
   model: ResolvedModel;
-  promptInput: MeditationConsolidationPromptInput;
+  promptInput: MeditationConsolidationEvaluationPromptInput;
+  storage: StorageDb;
+  securityConfig: SecurityConfig;
+  now?: () => Date;
+}
+
+export interface RunMeditationConsolidationRewriteAgentInput {
+  bridge: MeditationTurnBridge;
+  model: ResolvedModel;
+  promptInput: MeditationConsolidationRewritePromptInput;
   storage: StorageDb;
   securityConfig: SecurityConfig;
   now?: () => Date;
@@ -89,13 +104,13 @@ export async function runMeditationBucketAgent(
   };
 }
 
-export async function runMeditationConsolidationAgent(
-  input: RunMeditationConsolidationAgentInput,
-): Promise<MeditationAgentExecution<ConsolidationMeditationSubmit>> {
-  const systemPrompt = buildMeditationConsolidationSystemPrompt();
-  const prompt = buildMeditationConsolidationUserPrompt(input.promptInput);
-  let submission: ConsolidationMeditationSubmit | null = null;
-  const result = await runMeditationSubmitLoop<ConsolidationMeditationSubmit>({
+export async function runMeditationConsolidationEvaluationAgent(
+  input: RunMeditationConsolidationEvaluationAgentInput,
+): Promise<MeditationAgentExecution<ConsolidationEvaluationSubmit>> {
+  const systemPrompt = buildMeditationConsolidationEvaluationSystemPrompt();
+  const prompt = buildMeditationConsolidationEvaluationUserPrompt(input.promptInput);
+  let submission: ConsolidationEvaluationSubmit | null = null;
+  const result = await runMeditationSubmitLoop<ConsolidationEvaluationSubmit>({
     bridge: input.bridge,
     model: input.model,
     systemPrompt,
@@ -103,12 +118,42 @@ export async function runMeditationConsolidationAgent(
     storage: input.storage,
     securityConfig: input.securityConfig,
     tools: [
-      createConsolidationSubmitTool((payload) => {
+      createConsolidationEvaluationSubmitTool((payload) => {
         submission = payload;
       }),
     ],
     getSubmission: () => submission,
-    maxTurns: MAX_CONSOLIDATION_SUBMIT_TURNS,
+    maxTurns: MAX_CONSOLIDATION_EVALUATION_SUBMIT_TURNS,
+    ...(input.now == null ? {} : { now: input.now }),
+  });
+
+  return {
+    systemPrompt,
+    prompt,
+    ...result,
+  };
+}
+
+export async function runMeditationConsolidationRewriteAgent(
+  input: RunMeditationConsolidationRewriteAgentInput,
+): Promise<MeditationAgentExecution<ConsolidationRewriteSubmit>> {
+  const systemPrompt = buildMeditationConsolidationRewriteSystemPrompt();
+  const prompt = buildMeditationConsolidationRewriteUserPrompt(input.promptInput);
+  let submission: ConsolidationRewriteSubmit | null = null;
+  const result = await runMeditationSubmitLoop<ConsolidationRewriteSubmit>({
+    bridge: input.bridge,
+    model: input.model,
+    systemPrompt,
+    prompt,
+    storage: input.storage,
+    securityConfig: input.securityConfig,
+    tools: [
+      createConsolidationRewriteSubmitTool((payload) => {
+        submission = payload;
+      }),
+    ],
+    getSubmission: () => submission,
+    maxTurns: MAX_CONSOLIDATION_REWRITE_SUBMIT_TURNS,
     ...(input.now == null ? {} : { now: input.now }),
   });
 

@@ -512,6 +512,9 @@ export class AgentCompactionService {
         modelId: model.id,
         errorKind: isAgentLlmError(error) ? error.kind : "unknown",
         errorMessage: getErrorMessage(error),
+        ...(isAgentLlmError(error) && error.rawMessage != null
+          ? { rawErrorMessage: error.rawMessage }
+          : {}),
         retryable: isAgentLlmError(error) ? error.retryable : false,
         sessionId: input.sessionId,
         conversationId: input.conversationId,

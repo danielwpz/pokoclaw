@@ -4,8 +4,9 @@
  * Order:
  * 1) harvest + cluster
  * 2) per-bucket LLM synthesis
- * 3) consolidation rewrite
- * 4) artifact + daily note write
+ * 3) consolidation evaluation
+ * 4) consolidation rewrite
+ * 5) artifact + daily note write
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -18,11 +19,15 @@ import {
 import type { SecurityConfig, SelfHarnessConfig } from "@/src/config/schema.js";
 import {
   runMeditationBucketAgent,
-  runMeditationConsolidationAgent,
+  runMeditationConsolidationEvaluationAgent,
+  runMeditationConsolidationRewriteAgent,
 } from "@/src/meditation/agent-runner.js";
 import { prepareMeditationBucketInput } from "@/src/meditation/bucket-prep.js";
 import { buildMeditationBuckets } from "@/src/meditation/clustering.js";
-import { loadMeditationConsolidationPromptInput } from "@/src/meditation/consolidation-context.js";
+import {
+  buildMeditationConsolidationRewritePromptInput,
+  loadMeditationConsolidationEvaluationPromptInput,
+} from "@/src/meditation/consolidation-context.js";
 import {
   appendMeditationDailyRunBlock,
   buildMeditationDailyRunBlock,
@@ -33,7 +38,10 @@ import {
 } from "@/src/meditation/files.js";
 import type { MeditationTurnBridge } from "@/src/meditation/llm-executor.js";
 import { maybeResolveMeditationModels, resolveMeditationModels } from "@/src/meditation/models.js";
-import type { MeditationConsolidationAgentContext } from "@/src/meditation/prompts.js";
+import type {
+  MeditationApprovedFinding,
+  MeditationConsolidationRewritePromptInput,
+} from "@/src/meditation/prompts.js";
 import {
   type MeditationBucketProfile,
   type MeditationFailedToolResultFact,
@@ -46,7 +54,12 @@ import type {
   MeditationRunRequest,
   MeditationRunResult,
 } from "@/src/meditation/scheduler.js";
-import type { ConsolidationMemoryRewrite } from "@/src/meditation/submit-tools.js";
+import type {
+  ConsolidationPrivateLessonsProposal,
+  ConsolidationRewriteSubmit,
+  ConsolidationRuleProposal,
+  MeditationFinding,
+} from "@/src/meditation/submit-tools.js";
 import { resolveMeditationWindow } from "@/src/meditation/window.js";
 import {
   buildPrivateWorkspaceMemoryPath,
@@ -94,8 +107,23 @@ interface CompletedMeditationBucket {
   agentId: string | null;
   profile: MeditationBucketProfile | null;
   note: string;
-  memoryCandidates: string[];
+  findings: MeditationFinding[];
 }
+
+interface MeditationRewriteProposalRejection {
+  target: "shared" | "private";
+  agentId?: string;
+  reasons: string[];
+}
+
+interface EligiblePrivateLessonsRewrite {
+  agentId: string;
+  lessons: ConsolidationRuleProposal[];
+}
+
+const MAX_REPEAT_USE_LESSONS_PER_TARGET = 3;
+const MAX_REPEAT_USE_RULE_TEXT_LENGTH = 240;
+const REPEAT_USE_LESSONS_HEADING = "# Repeat-Use Lessons";
 
 export class MeditationPipelineRunner implements MeditationRunner {
   private readonly readModel: MeditationReadModel;
@@ -107,11 +135,13 @@ export class MeditationPipelineRunner implements MeditationRunner {
   async runOnce(input: MeditationRunRequest): Promise<MeditationRunResult> {
     const state = this.deps.state.getOrCreateDefault(input.tickAt);
     const calendarContext = this.deps.resolveCalendarContext?.(input.tickAt);
-    const window = resolveMeditationWindow({
-      tickAt: input.tickAt,
-      lastSuccessAt: state.lastSuccessAt,
-      ...(calendarContext == null ? {} : { calendarContext }),
-    });
+    const window =
+      input.windowOverride ??
+      resolveMeditationWindow({
+        tickAt: input.tickAt,
+        lastSuccessAt: state.lastSuccessAt,
+        ...(calendarContext == null ? {} : { calendarContext }),
+      });
     const runId = this.deps.createRunId?.() ?? randomUUID();
     const artifactDir = await ensureMeditationRunArtifactDir(
       window.localDate,
@@ -249,13 +279,13 @@ export class MeditationPipelineRunner implements MeditationRunner {
           agentId: bucketInput.agentId,
           profile: bucketInput.profile,
           note: execution.submission.note,
-          memoryCandidates: execution.submission.memory_candidates,
+          findings: execution.submission.findings,
         });
         logger.info("meditation bucket completed", {
           runId,
           bucketId: bucketInput.bucketId,
           agentId: bucketInput.agentId ?? "shared",
-          memoryCandidates: execution.submission.memory_candidates.length,
+          findings: execution.submission.findings.length,
           turnCount: execution.turns.length,
         });
         await Promise.all([
@@ -284,112 +314,167 @@ export class MeditationPipelineRunner implements MeditationRunner {
       let consolidationSummary = {
         sharedRewritten: false,
         privateRewrittenAgentIds: [] as string[],
+        rewriteRejections: [] as MeditationRewriteProposalRejection[],
       };
       if (completedBuckets.length > 0) {
-        logger.info("meditation consolidation started", {
+        logger.info("meditation consolidation evaluation started", {
           runId,
           bucketCount: completedBuckets.length,
-          candidateCount: completedBuckets.reduce(
-            (sum, bucket) => sum + bucket.memoryCandidates.length,
-            0,
-          ),
+          findingCount: completedBuckets.reduce((sum, bucket) => sum + bucket.findings.length, 0),
         });
-        const consolidationPromptInput = await loadMeditationConsolidationPromptInput({
-          currentDate: window.localDate,
-          timezone: window.timezone,
-          workspaceDir,
-          buckets: completedBuckets,
-        });
-        const consolidation = await runMeditationConsolidationAgent({
+        const consolidationEvaluationPromptInput =
+          await loadMeditationConsolidationEvaluationPromptInput({
+            currentDate: window.localDate,
+            currentRunId: runId,
+            timezone: window.timezone,
+            workspaceDir,
+            ...(this.deps.logsDir == null ? {} : { logsDir: this.deps.logsDir }),
+            buckets: completedBuckets,
+          });
+        const consolidationEvaluation = await runMeditationConsolidationEvaluationAgent({
           bridge: this.deps.bridge,
           model: resolvedModels.consolidation,
           storage: this.deps.storage,
           securityConfig: this.deps.securityConfig,
-          promptInput: consolidationPromptInput,
+          promptInput: consolidationEvaluationPromptInput,
         });
         await Promise.all([
           writeMeditationTextFileAtomic(
-            path.join(artifactDir, "consolidation.prompt.md"),
+            path.join(artifactDir, "consolidation-eval.prompt.md"),
             formatPromptArtifact({
-              systemPrompt: consolidation.systemPrompt,
-              userPrompt: consolidation.prompt,
+              systemPrompt: consolidationEvaluation.systemPrompt,
+              userPrompt: consolidationEvaluation.prompt,
             }),
           ),
           writeJsonArtifact(
-            path.join(artifactDir, "consolidation.submit.json"),
-            consolidation.submission,
-          ),
-          writeJsonArtifact(
-            path.join(artifactDir, "consolidation.turns.json"),
-            consolidation.turns,
-          ),
-          writeJsonArtifact(
-            path.join(artifactDir, "consolidation.messages.json"),
-            consolidation.messages,
+            path.join(artifactDir, "consolidation-eval.submit.json"),
+            consolidationEvaluation.submission,
           ),
         ]);
 
-        const sharedMemoryRewrite = normalizeNonEmptyMeditationRewrite(
-          consolidation.submission.shared_memory_rewrite,
-        );
-        if (sharedMemoryRewrite != null) {
-          const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
+        logger.info("meditation consolidation evaluation completed", {
+          runId,
+          evaluationCount: consolidationEvaluation.submission.evaluations.length,
+          turnCount: consolidationEvaluation.turns.length,
+        });
+
+        const consolidationRewritePromptInput = buildMeditationConsolidationRewritePromptInput({
+          evaluationPromptInput: consolidationEvaluationPromptInput,
+          evaluation: consolidationEvaluation.submission,
+        });
+        if (hasApprovedFindings(consolidationRewritePromptInput)) {
+          logger.info("meditation consolidation rewrite started", {
+            runId,
+            bucketCount: consolidationRewritePromptInput.bucketPackets.length,
+            approvedFindingCount: countApprovedFindings(consolidationRewritePromptInput),
+          });
+          const consolidationRewrite = await runMeditationConsolidationRewriteAgent({
+            bridge: this.deps.bridge,
+            model: resolvedModels.consolidation,
+            storage: this.deps.storage,
+            securityConfig: this.deps.securityConfig,
+            promptInput: consolidationRewritePromptInput,
+          });
           await Promise.all([
             writeMeditationTextFileAtomic(
-              path.join(artifactDir, "rewrite-preview", "shared.md"),
-              sharedMemoryRewrite,
+              path.join(artifactDir, "consolidation-rewrite.prompt.md"),
+              formatPromptArtifact({
+                systemPrompt: consolidationRewrite.systemPrompt,
+                userPrompt: consolidationRewrite.prompt,
+              }),
             ),
-            writeMeditationTextFileAtomic(sharedPath, sharedMemoryRewrite),
+            writeJsonArtifact(
+              path.join(artifactDir, "consolidation-rewrite.submit.json"),
+              consolidationRewrite.submission,
+            ),
           ]);
+
+          const rewriteDecision = materializeMeditationRewriteDecision({
+            promptInput: consolidationRewritePromptInput,
+            submission: consolidationRewrite.submission,
+          });
           consolidationSummary = {
             ...consolidationSummary,
-            sharedRewritten: true,
+            rewriteRejections: rewriteDecision.rejections,
           };
-        }
 
-        const eligiblePrivateRewrites = filterEligiblePrivateMemoryRewrites({
-          agentContexts: consolidationPromptInput.agentContexts,
-          privateMemoryRewrites: consolidation.submission.private_memory_rewrites,
-        });
-        const droppedPrivateRewriteAgentIds = consolidation.submission.private_memory_rewrites
-          .map((rewrite) => rewrite.agent_id)
-          .filter(
-            (agentId) => !eligiblePrivateRewrites.some((rewrite) => rewrite.agent_id === agentId),
+          await writeJsonArtifact(
+            path.join(artifactDir, "rewrite-rejections.json"),
+            rewriteDecision.rejections,
           );
-        if (droppedPrivateRewriteAgentIds.length > 0) {
-          logger.warn("meditation consolidation dropped ineligible private rewrites", {
+
+          for (const rejection of rewriteDecision.rejections) {
+            logger.warn("meditation consolidation rejected rewrite proposal", {
+              runId,
+              target: rejection.target,
+              agentId: rejection.agentId ?? null,
+              reasons: rejection.reasons,
+            });
+          }
+
+          if (rewriteDecision.sharedLessons != null) {
+            const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
+            const sharedMemoryRewrite = renderMemoryWithRepeatUseLessons({
+              currentContent: consolidationRewritePromptInput.sharedMemoryCurrent,
+              lessons: rewriteDecision.sharedLessons,
+            });
+            await Promise.all([
+              writeMeditationTextFileAtomic(
+                path.join(artifactDir, "rewrite-preview", "shared.md"),
+                sharedMemoryRewrite,
+              ),
+              writeMeditationTextFileAtomic(sharedPath, sharedMemoryRewrite),
+            ]);
+            consolidationSummary = {
+              ...consolidationSummary,
+              sharedRewritten: true,
+            };
+          }
+
+          for (const rewrite of rewriteDecision.privateLessons) {
+            const privateWorkspaceDir = buildSubagentWorkspaceDir(
+              rewrite.agentId,
+              path.join(workspaceDir, "subagents"),
+            );
+            const packet = consolidationRewritePromptInput.bucketPackets.find(
+              (candidate) => candidate.agentId === rewrite.agentId,
+            );
+            if (packet == null || packet.privateMemoryCurrent == null) {
+              continue;
+            }
+            const privateMemoryRewrite = renderMemoryWithRepeatUseLessons({
+              currentContent: packet.privateMemoryCurrent,
+              lessons: rewrite.lessons,
+            });
+            await Promise.all([
+              writeMeditationTextFileAtomic(
+                path.join(artifactDir, "rewrite-preview", `private-${rewrite.agentId}.md`),
+                privateMemoryRewrite,
+              ),
+              writeMeditationTextFileAtomic(
+                buildPrivateWorkspaceMemoryPath(privateWorkspaceDir),
+                privateMemoryRewrite,
+              ),
+            ]);
+          }
+          consolidationSummary = {
+            ...consolidationSummary,
+            privateRewrittenAgentIds: rewriteDecision.privateLessons.map(
+              (rewrite) => rewrite.agentId,
+            ),
+          };
+          logger.info("meditation consolidation rewrite completed", {
             runId,
-            droppedPrivateRewriteAgentIds,
+            sharedRewritten: consolidationSummary.sharedRewritten,
+            privateRewriteCount: consolidationSummary.privateRewrittenAgentIds.length,
+            privateRewriteAgentIds: consolidationSummary.privateRewrittenAgentIds,
+            turnCount: consolidationRewrite.turns.length,
+          });
+        } else {
+          logger.info("meditation consolidation rewrite skipped because nothing was approved", {
+            runId,
           });
         }
-
-        for (const rewrite of eligiblePrivateRewrites) {
-          const privateWorkspaceDir = buildSubagentWorkspaceDir(
-            rewrite.agent_id,
-            path.join(workspaceDir, "subagents"),
-          );
-          await Promise.all([
-            writeMeditationTextFileAtomic(
-              path.join(artifactDir, "rewrite-preview", `private-${rewrite.agent_id}.md`),
-              rewrite.content,
-            ),
-            writeMeditationTextFileAtomic(
-              buildPrivateWorkspaceMemoryPath(privateWorkspaceDir),
-              rewrite.content,
-            ),
-          ]);
-        }
-        consolidationSummary = {
-          ...consolidationSummary,
-          privateRewrittenAgentIds: eligiblePrivateRewrites.map((rewrite) => rewrite.agent_id),
-        };
-        logger.info("meditation consolidation completed", {
-          runId,
-          sharedRewritten: consolidationSummary.sharedRewritten,
-          privateRewriteCount: consolidationSummary.privateRewrittenAgentIds.length,
-          privateRewriteAgentIds: consolidationSummary.privateRewrittenAgentIds,
-          turnCount: consolidation.turns.length,
-        });
       } else {
         logger.info("meditation consolidation skipped because no bucket produced output", {
           runId,
@@ -410,7 +495,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
           agentId: bucket.agentId,
           displayName: bucket.profile?.displayName ?? null,
           note: bucket.note,
-          memoryCandidates: bucket.memoryCandidates,
+          findings: bucket.findings,
         })),
         consolidationSummary,
       });
@@ -451,12 +536,234 @@ export class MeditationPipelineRunner implements MeditationRunner {
   }
 }
 
-function normalizeNonEmptyMeditationRewrite(content: string | null): string | null {
-  if (content == null) {
-    return null;
+function materializeMeditationRewriteDecision(input: {
+  promptInput: MeditationConsolidationRewritePromptInput;
+  submission: ConsolidationRewriteSubmit;
+}): {
+  sharedLessons: ConsolidationRuleProposal[] | null;
+  privateLessons: EligiblePrivateLessonsRewrite[];
+  rejections: MeditationRewriteProposalRejection[];
+} {
+  const sharedDecision = validateSharedLessonsProposal({
+    approvedSharedFindings: input.promptInput.approvedSharedFindings,
+    sharedRepeatUseLessons: input.submission.shared_repeat_use_lessons,
+  });
+  const privateDecision = validatePrivateLessonsProposals({
+    bucketPackets: input.promptInput.bucketPackets,
+    privateRepeatUseLessons: input.submission.private_repeat_use_lessons,
+  });
+
+  return {
+    sharedLessons: sharedDecision.eligible,
+    privateLessons: privateDecision.eligible,
+    rejections: [...sharedDecision.rejections, ...privateDecision.rejections],
+  };
+}
+
+function validateSharedLessonsProposal(input: {
+  approvedSharedFindings: MeditationApprovedFinding[];
+  sharedRepeatUseLessons: ConsolidationRuleProposal[] | null | "";
+}): {
+  eligible: ConsolidationRuleProposal[] | null;
+  rejections: MeditationRewriteProposalRejection[];
+} {
+  if (input.sharedRepeatUseLessons == null || input.sharedRepeatUseLessons === "") {
+    return {
+      eligible: null,
+      rejections: [],
+    };
   }
 
-  return content.trim().length === 0 ? null : content;
+  const reasons = summarizeRuleProposalIssues({
+    lessons: input.sharedRepeatUseLessons,
+    eligibleFindingIds: new Set(input.approvedSharedFindings.map((finding) => finding.findingId)),
+    hasApprovedFindings: input.approvedSharedFindings.length > 0,
+  });
+  if (reasons.length > 0) {
+    return {
+      eligible: null,
+      rejections: [
+        {
+          target: "shared",
+          reasons,
+        },
+      ],
+    };
+  }
+
+  return {
+    eligible: normalizeRepeatUseLessonProposals(input.sharedRepeatUseLessons),
+    rejections: [],
+  };
+}
+
+function validatePrivateLessonsProposals(input: {
+  bucketPackets: Array<{
+    agentId: string;
+    agentKind: "main" | "sub" | "shared" | "unknown";
+    approvedPrivateFindings?: MeditationApprovedFinding[];
+  }>;
+  privateRepeatUseLessons: ConsolidationPrivateLessonsProposal[];
+}): {
+  eligible: EligiblePrivateLessonsRewrite[];
+  rejections: MeditationRewriteProposalRejection[];
+} {
+  const packetByAgentId = new Map(
+    input.bucketPackets.map((packet) => [packet.agentId, packet] as const),
+  );
+  const seenAgentIds = new Set<string>();
+  const eligible: EligiblePrivateLessonsRewrite[] = [];
+  const rejections: MeditationRewriteProposalRejection[] = [];
+
+  for (const proposal of input.privateRepeatUseLessons) {
+    const rejectionReasons = new Set<string>();
+    const packet = packetByAgentId.get(proposal.agent_id);
+    if (packet == null) {
+      rejectionReasons.add("unknown_private_target");
+    } else {
+      if (seenAgentIds.has(proposal.agent_id)) {
+        rejectionReasons.add("duplicate_private_target");
+      }
+      if (packet.agentKind !== "sub") {
+        rejectionReasons.add("non_sub_private_target");
+      }
+      const proposalIssues = summarizeRuleProposalIssues({
+        lessons: proposal.lessons,
+        eligibleFindingIds: new Set(
+          (packet.approvedPrivateFindings ?? []).map((finding) => finding.findingId),
+        ),
+        hasApprovedFindings: (packet.approvedPrivateFindings?.length ?? 0) > 0,
+      });
+      for (const issue of proposalIssues) {
+        rejectionReasons.add(issue);
+      }
+    }
+
+    if (rejectionReasons.size > 0) {
+      rejections.push({
+        target: "private",
+        agentId: proposal.agent_id,
+        reasons: [...rejectionReasons],
+      });
+      continue;
+    }
+
+    eligible.push({
+      agentId: proposal.agent_id,
+      lessons: normalizeRepeatUseLessonProposals(proposal.lessons),
+    });
+    seenAgentIds.add(proposal.agent_id);
+  }
+
+  return {
+    eligible,
+    rejections,
+  };
+}
+
+function summarizeRuleProposalIssues(input: {
+  lessons: ConsolidationRuleProposal[];
+  eligibleFindingIds: Set<string>;
+  hasApprovedFindings: boolean;
+}): string[] {
+  const issues = new Set<string>();
+
+  if (!input.hasApprovedFindings) {
+    issues.add("no_approved_findings");
+  }
+  if (input.lessons.length === 0) {
+    issues.add("empty_lessons");
+  }
+  if (input.lessons.length > MAX_REPEAT_USE_LESSONS_PER_TARGET) {
+    issues.add("too_many_lessons");
+  }
+
+  for (const lesson of input.lessons) {
+    if (lesson.rule_text.trim().length === 0) {
+      issues.add("empty_rule_text");
+    }
+    if (lesson.rule_text.includes("\n")) {
+      issues.add("multiline_rule_text");
+    }
+    if (lesson.rule_text.trim().length > MAX_REPEAT_USE_RULE_TEXT_LENGTH) {
+      issues.add("rule_too_long");
+    }
+    if (lesson.supported_finding_ids.length === 0) {
+      issues.add("missing_supported_finding_ids");
+    } else if (
+      lesson.supported_finding_ids.some((findingId) => !input.eligibleFindingIds.has(findingId))
+    ) {
+      issues.add("unknown_supported_finding_id");
+    }
+    if (lesson.why_generalizable.trim().length === 0) {
+      issues.add("missing_generalization_reason");
+    }
+    if (!lesson.evidence_examples.some((example) => example.trim().length > 0)) {
+      issues.add("missing_evidence_examples");
+    }
+  }
+
+  return [...issues];
+}
+
+function normalizeRepeatUseLessonProposals(
+  lessons: ConsolidationRuleProposal[],
+): ConsolidationRuleProposal[] {
+  const seenRules = new Set<string>();
+  const normalized: ConsolidationRuleProposal[] = [];
+
+  for (const lesson of lessons) {
+    const ruleText = lesson.rule_text.replace(/\s+/g, " ").trim();
+    const key = ruleText.toLowerCase();
+    if (ruleText.length === 0 || seenRules.has(key)) {
+      continue;
+    }
+    seenRules.add(key);
+    normalized.push({
+      rule_text: ruleText,
+      supported_finding_ids: [
+        ...new Set(lesson.supported_finding_ids.map((id) => id.trim()).filter(Boolean)),
+      ],
+      why_generalizable: lesson.why_generalizable.replace(/\s+/g, " ").trim(),
+      evidence_examples: [
+        ...new Set(lesson.evidence_examples.map((example) => example.trim()).filter(Boolean)),
+      ],
+    });
+  }
+
+  return normalized;
+}
+
+function renderMemoryWithRepeatUseLessons(input: {
+  currentContent: string;
+  lessons: ConsolidationRuleProposal[];
+}): string {
+  const normalizedCurrent = input.currentContent.replace(/\r\n/g, "\n").trimEnd();
+  const lessonLines =
+    input.lessons.length === 0
+      ? ""
+      : input.lessons.map((lesson) => `- ${lesson.rule_text}`).join("\n");
+  const replacementSection = [REPEAT_USE_LESSONS_HEADING, "", lessonLines].join("\n").trimEnd();
+  const lines = normalizedCurrent.length === 0 ? [] : normalizedCurrent.split("\n");
+  const headingIndex = lines.findIndex((line) => line.trim() === REPEAT_USE_LESSONS_HEADING);
+
+  if (headingIndex === -1) {
+    const parts = [normalizedCurrent, replacementSection].filter((part) => part.trim().length > 0);
+    return `${parts.join("\n\n").trimEnd()}\n`;
+  }
+
+  let nextHeadingIndex = lines.length;
+  for (let index = headingIndex + 1; index < lines.length; index += 1) {
+    if (lines[index]?.startsWith("# ")) {
+      nextHeadingIndex = index;
+      break;
+    }
+  }
+
+  const before = lines.slice(0, headingIndex).join("\n").trimEnd();
+  const after = lines.slice(nextHeadingIndex).join("\n").trimStart();
+  const parts = [before, replacementSection, after].filter((part) => part.trim().length > 0);
+  return `${parts.join("\n\n").trimEnd()}\n`;
 }
 
 async function writeJsonArtifact(filePath: string, payload: unknown): Promise<void> {
@@ -464,16 +771,37 @@ async function writeJsonArtifact(filePath: string, payload: unknown): Promise<vo
 }
 
 export function filterEligiblePrivateMemoryRewrites(input: {
-  agentContexts: MeditationConsolidationAgentContext[];
-  privateMemoryRewrites: ConsolidationMemoryRewrite[];
-}): ConsolidationMemoryRewrite[] {
-  const eligibleAgentIds = new Set(
-    input.agentContexts
-      .filter((context) => context.agentKind === "sub")
-      .map((context) => context.agentId),
-  );
+  bucketPackets: Array<{
+    agentId: string;
+    agentKind: "main" | "sub" | "shared" | "unknown";
+    approvedPrivateFindings?: MeditationApprovedFinding[];
+  }>;
+  privateMemoryRewrites: ConsolidationPrivateLessonsProposal[];
+}): EligiblePrivateLessonsRewrite[] {
+  return validatePrivateLessonsProposals({
+    bucketPackets: input.bucketPackets,
+    privateRepeatUseLessons: input.privateMemoryRewrites,
+  }).eligible;
+}
 
-  return input.privateMemoryRewrites.filter((rewrite) => eligibleAgentIds.has(rewrite.agent_id));
+function hasApprovedFindings(input: {
+  approvedSharedFindings: MeditationApprovedFinding[];
+  bucketPackets: Array<{ approvedPrivateFindings: MeditationApprovedFinding[] }>;
+}): boolean {
+  return (
+    input.approvedSharedFindings.length > 0 ||
+    input.bucketPackets.some((packet) => packet.approvedPrivateFindings.length > 0)
+  );
+}
+
+function countApprovedFindings(input: {
+  approvedSharedFindings: MeditationApprovedFinding[];
+  bucketPackets: Array<{ approvedPrivateFindings: MeditationApprovedFinding[] }>;
+}): number {
+  return (
+    input.approvedSharedFindings.length +
+    input.bucketPackets.reduce((sum, packet) => sum + packet.approvedPrivateFindings.length, 0)
+  );
 }
 
 function formatPromptArtifact(input: { systemPrompt: string; userPrompt: string }): string {

@@ -5,6 +5,11 @@ import type {
   ToolBurstCluster,
   ToolRepeatCluster,
 } from "@/src/meditation/clustering.js";
+import {
+  DEFAULT_MEDITATION_EPISODE_EXTRACTION_STRATEGY,
+  type EpisodeStudyMessageRow,
+  extractEpisodeStudyEpisodes,
+} from "@/src/meditation/episode-study.js";
 import type {
   MeditationBucketProfile,
   MeditationMessageWindowEntry,
@@ -18,6 +23,7 @@ const TASK_CONTEXT_AFTER = 1;
 const TOOL_CONTEXT_BEFORE = 1;
 const TOOL_CONTEXT_AFTER = 1;
 const MAX_REPEAT_EXAMPLES = 2;
+const MAX_REPEAT_EPISODES = 2;
 
 export interface PreparedMeditationBucket {
   bucketId: string;
@@ -61,7 +67,7 @@ export interface PreparedToolBurstCluster extends PreparedClusterBase {
   kind: "tool_burst";
   count: number;
   signatures: string[];
-  contextMessages: MeditationMessageWindowEntry[];
+  episodeTimeline: PreparedEpisodeTimeline | null;
 }
 
 export interface PreparedToolRepeatExample {
@@ -77,6 +83,28 @@ export interface PreparedToolRepeatCluster extends PreparedClusterBase {
   signature: string;
   count: number;
   examples: PreparedToolRepeatExample[];
+  episodes: PreparedEpisodeTimeline[];
+}
+
+export interface PreparedEpisodeTimelineEvent {
+  seq: number;
+  createdAt: string;
+  role: string;
+  messageType: string;
+  summary: string;
+}
+
+export interface PreparedEpisodeTimeline {
+  id: string;
+  sessionId: string;
+  startSeq: number;
+  endSeq: number;
+  triggerStartSeq: number;
+  triggerEndSeq: number;
+  triggerKinds: string[];
+  totalToolResults: number;
+  failedToolResults: number;
+  events: PreparedEpisodeTimelineEvent[];
 }
 
 export interface PrepareMeditationBucketInputInput {
@@ -177,12 +205,12 @@ function prepareToolBurstCluster(
   cluster: ToolBurstCluster,
   readModel: MeditationReadModel,
 ): PreparedToolBurstCluster {
-  const contextMessages = readModel.listSessionMessageWindow(
-    cluster.sessionId,
-    cluster.endSeq,
-    cluster.endSeq - cluster.startSeq + TOOL_CONTEXT_BEFORE,
-    TOOL_CONTEXT_AFTER,
-  );
+  const sessionMessages = readModel.listSessionMessages(cluster.sessionId);
+  const episodeTimeline =
+    selectRelevantEpisodes(
+      toEpisodeStudyRows(sessionMessages),
+      cluster.facts.map((fact) => fact.seq),
+    )[0] ?? null;
 
   return {
     id: cluster.id,
@@ -191,7 +219,7 @@ function prepareToolBurstCluster(
     endedAt: cluster.endedAt,
     count: cluster.count,
     signatures: cluster.signatures,
-    contextMessages,
+    episodeTimeline,
   };
 }
 
@@ -211,6 +239,16 @@ function prepareToolRepeatCluster(
       TOOL_CONTEXT_AFTER,
     ),
   }));
+  const episodes = Array.from(new Set(cluster.facts.map((fact) => fact.sessionId)))
+    .flatMap((sessionId) => {
+      const sessionFacts = cluster.facts.filter((fact) => fact.sessionId === sessionId);
+      const sessionMessages = readModel.listSessionMessages(sessionId);
+      return selectRelevantEpisodes(
+        toEpisodeStudyRows(sessionMessages),
+        sessionFacts.map((fact) => fact.seq),
+      );
+    })
+    .slice(0, MAX_REPEAT_EPISODES);
 
   return {
     id: cluster.id,
@@ -220,5 +258,50 @@ function prepareToolRepeatCluster(
     signature: cluster.signature,
     count: cluster.count,
     examples,
+    episodes,
   };
+}
+
+function toEpisodeStudyRows(entries: MeditationMessageWindowEntry[]): EpisodeStudyMessageRow[] {
+  return entries.map((entry) => ({
+    id: entry.id,
+    sessionId: entry.sessionId,
+    seq: entry.seq,
+    role: entry.role,
+    messageType: entry.messageType,
+    visibility: entry.visibility,
+    createdAt: entry.createdAt,
+    payloadJson: entry.payloadJson,
+  }));
+}
+
+function selectRelevantEpisodes(
+  rows: EpisodeStudyMessageRow[],
+  relevantSeqs: number[],
+): PreparedEpisodeTimeline[] {
+  const relevantSeqSet = new Set(relevantSeqs);
+  return extractEpisodeStudyEpisodes(rows, DEFAULT_MEDITATION_EPISODE_EXTRACTION_STRATEGY)
+    .filter(
+      (episode) =>
+        episode.events.some((event) => relevantSeqSet.has(event.seq)) ||
+        relevantSeqs.some((seq) => seq >= episode.triggerStartSeq && seq <= episode.triggerEndSeq),
+    )
+    .map((episode) => ({
+      id: episode.id,
+      sessionId: episode.sessionId,
+      startSeq: episode.startSeq,
+      endSeq: episode.endSeq,
+      triggerStartSeq: episode.triggerStartSeq,
+      triggerEndSeq: episode.triggerEndSeq,
+      triggerKinds: episode.triggerKinds,
+      totalToolResults: episode.totalToolResults,
+      failedToolResults: episode.failedToolResults,
+      events: episode.events.map((event) => ({
+        seq: event.seq,
+        createdAt: event.createdAt,
+        role: event.role,
+        messageType: event.messageType,
+        summary: event.summary,
+      })),
+    }));
 }
