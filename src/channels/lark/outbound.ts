@@ -57,14 +57,21 @@ const RUN_CARD_OBJECT_KIND = "run_card";
 const APPROVAL_CARD_OBJECT_KIND = "approval_card";
 const SUBAGENT_REQUEST_CARD_OBJECT_KIND = "subagent_creation_request_card";
 const LARK_CARD_LOG_PREVIEW_MAX_LENGTH = 600;
+const LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT = 1;
 const TASK_STATUS_DELIVERY_PREFIX = "task_status:";
 const STEER_CONFIRMED_REACTION_EMOJI = "OK";
 
-interface LarkCardCreateResponse {
+interface LarkCardCreateResponse extends LarkCardOperationResponse {
   data?: {
     card_id?: string;
   };
   card_id?: string;
+}
+
+interface LarkCardOperationResponse {
+  code?: number;
+  msg?: string;
+  data?: Record<string, unknown>;
 }
 
 interface LarkCardElementContentInput {
@@ -260,11 +267,16 @@ export function createLarkOutboundRuntime(
     }
 
     if (binding.larkCardId == null) {
-      const createResp = await bindingInput.cardkit.card.create({
-        data: {
-          type: "card_json",
-          data: bindingInput.cardJson,
-        },
+      const createResp = await invokeLarkCardkitCallWithBusinessRetry({
+        operation: "card.create",
+        logContext: bindingInput.logContext,
+        invoke: () =>
+          bindingInput.cardkit.card.create({
+            data: {
+              type: "card_json",
+              data: bindingInput.cardJson,
+            },
+          }),
       });
       const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
       logger.debug("created lark cardkit card response", {
@@ -542,15 +554,32 @@ export function createLarkOutboundRuntime(
             continue;
           }
           const sequence = (existing.lastSequence ?? 0) + 1;
-          await cardkit.cardElement.content({
-            path: {
-              card_id: existing.larkCardId,
-              element_id: elementId,
-            },
-            data: {
-              content: activeAssistantText,
+          const larkCardId = existing.larkCardId;
+          if (larkCardId == null) {
+            continue;
+          }
+          await invokeLarkCardkitCallWithBusinessRetry({
+            operation: "cardElement.content",
+            logContext: {
+              runId: state.runId,
+              runCardObjectId,
+              pageObjectId,
+              pageIndex: renderedPage.pageIndex,
+              channelInstallationId: target.channelInstallationId,
+              larkCardId,
               sequence,
             },
+            invoke: () =>
+              cardkit.cardElement.content({
+                path: {
+                  card_id: larkCardId,
+                  element_id: elementId,
+                },
+                data: {
+                  content: activeAssistantText,
+                  sequence,
+                },
+              }),
           });
           bindingsRepo.updateDeliveryState({
             channelInstallationId: target.channelInstallationId,
@@ -583,15 +612,32 @@ export function createLarkOutboundRuntime(
         }
 
         const sequence = (existing.lastSequence ?? 0) + 1;
-        await cardkit.card.update({
-          path: { card_id: existing.larkCardId },
-          data: {
-            card: {
-              type: "card_json",
-              data: JSON.stringify(renderedPage.card),
-            },
+        const larkCardId = existing.larkCardId;
+        if (larkCardId == null) {
+          continue;
+        }
+        await invokeLarkCardkitCallWithBusinessRetry({
+          operation: "card.update",
+          logContext: {
+            runId: state.runId,
+            runCardObjectId,
+            pageObjectId,
+            pageIndex: renderedPage.pageIndex,
+            channelInstallationId: target.channelInstallationId,
+            larkCardId,
             sequence,
           },
+          invoke: () =>
+            cardkit.card.update({
+              path: { card_id: larkCardId },
+              data: {
+                card: {
+                  type: "card_json",
+                  data: JSON.stringify(renderedPage.card),
+                },
+                sequence,
+              },
+            }),
         });
         bindingsRepo.updateDeliveryState({
           channelInstallationId: target.channelInstallationId,
@@ -628,15 +674,31 @@ export function createLarkOutboundRuntime(
 
         const staleCard = buildStaleRunCardCard();
         const sequence = (binding.lastSequence ?? 0) + 1;
-        await cardkit.card.update({
-          path: { card_id: binding.larkCardId },
-          data: {
-            card: {
-              type: "card_json",
-              data: JSON.stringify(staleCard),
-            },
+        const larkCardId = binding.larkCardId;
+        if (larkCardId == null) {
+          continue;
+        }
+        await invokeLarkCardkitCallWithBusinessRetry({
+          operation: "card.update",
+          logContext: {
+            runId: state.runId,
+            runCardObjectId,
+            stalePageObjectId: binding.internalObjectId,
+            channelInstallationId: target.channelInstallationId,
+            larkCardId,
             sequence,
           },
+          invoke: () =>
+            cardkit.card.update({
+              path: { card_id: larkCardId },
+              data: {
+                card: {
+                  type: "card_json",
+                  data: JSON.stringify(staleCard),
+                },
+                sequence,
+              },
+            }),
         });
         bindingsRepo.updateDeliveryState({
           channelInstallationId: target.channelInstallationId,
@@ -784,15 +846,30 @@ export function createLarkOutboundRuntime(
       }
 
       const sequence = (existing.lastSequence ?? 0) + 1;
-      await cardkit.card.update({
-        path: { card_id: existing.larkCardId },
-        data: {
-          card: {
-            type: "card_json",
-            data: JSON.stringify(rendered.card),
-          },
+      const larkCardId = existing.larkCardId;
+      if (larkCardId == null) {
+        continue;
+      }
+      await invokeLarkCardkitCallWithBusinessRetry({
+        operation: "card.update",
+        logContext: {
+          taskRunId,
+          cardRole: "task_status",
+          channelInstallationId: target.channelInstallationId,
+          larkCardId,
           sequence,
         },
+        invoke: () =>
+          cardkit.card.update({
+            path: { card_id: larkCardId },
+            data: {
+              card: {
+                type: "card_json",
+                data: JSON.stringify(rendered.card),
+              },
+              sequence,
+            },
+          }),
       });
       bindingsRepo.updateDeliveryState({
         channelInstallationId: target.channelInstallationId,
@@ -914,15 +991,30 @@ export function createLarkOutboundRuntime(
       }
 
       const sequence = (existing.lastSequence ?? 0) + 1;
-      await cardkit.card.update({
-        path: { card_id: existing.larkCardId },
-        data: {
-          card: {
-            type: "card_json",
-            data: JSON.stringify(rendered.card),
-          },
+      const larkCardId = existing.larkCardId;
+      if (larkCardId == null) {
+        continue;
+      }
+      await invokeLarkCardkitCallWithBusinessRetry({
+        operation: "card.update",
+        logContext: {
+          approvalId,
+          runId: state.runId,
+          channelInstallationId: target.channelInstallationId,
+          larkCardId,
           sequence,
         },
+        invoke: () =>
+          cardkit.card.update({
+            path: { card_id: larkCardId },
+            data: {
+              card: {
+                type: "card_json",
+                data: JSON.stringify(rendered.card),
+              },
+              sequence,
+            },
+          }),
       });
       bindingsRepo.updateDeliveryState({
         channelInstallationId: target.channelInstallationId,
@@ -1005,15 +1097,30 @@ export function createLarkOutboundRuntime(
       }
 
       const sequence = (existing.lastSequence ?? 0) + 1;
-      await cardkit.card.update({
-        path: { card_id: existing.larkCardId },
-        data: {
-          card: {
-            type: "card_json",
-            data: JSON.stringify(rendered.card),
-          },
+      const larkCardId = existing.larkCardId;
+      if (larkCardId == null) {
+        continue;
+      }
+      await invokeLarkCardkitCallWithBusinessRetry({
+        operation: "card.update",
+        logContext: {
+          requestId,
+          status: entry.state.status,
+          channelInstallationId: surface.channelInstallationId,
+          larkCardId,
           sequence,
         },
+        invoke: () =>
+          cardkit.card.update({
+            path: { card_id: larkCardId },
+            data: {
+              card: {
+                type: "card_json",
+                data: JSON.stringify(rendered.card),
+              },
+              sequence,
+            },
+          }),
       });
       bindingsRepo.updateDeliveryState({
         channelInstallationId: surface.channelInstallationId,
@@ -1945,6 +2052,50 @@ function truncateLogText(text: string, maxLength: number): string {
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
+async function invokeLarkCardkitCallWithBusinessRetry<T extends LarkCardOperationResponse>(input: {
+  operation: "card.create" | "card.update" | "cardElement.content";
+  logContext: Record<string, unknown>;
+  invoke: () => Promise<T>;
+}): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    const response = await input.invoke();
+    const code = response.code;
+    if (code == null || code === 0) {
+      return response;
+    }
+
+    const responsePreview = truncateLogText(safeJson(response), LARK_CARD_LOG_PREVIEW_MAX_LENGTH);
+    if (attempt < LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT) {
+      logger.warn("lark cardkit call returned non-zero code; retrying once", {
+        operation: input.operation,
+        attempt: attempt + 1,
+        retryLimit: LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT,
+        code,
+        msg: response.msg ?? null,
+        responsePreview,
+        ...input.logContext,
+      });
+      attempt += 1;
+      continue;
+    }
+
+    logger.error(
+      "lark cardkit call kept non-zero code after retry; continuing with current logic",
+      {
+        operation: input.operation,
+        attempt: attempt + 1,
+        retryLimit: LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT,
+        code,
+        msg: response.msg ?? null,
+        responsePreview,
+        ...input.logContext,
+      },
+    );
+    return response;
+  }
+}
+
 function getCardkitSdk(client: LarkSdkClient): {
   card: {
     create(input: {
@@ -1953,10 +2104,10 @@ function getCardkitSdk(client: LarkSdkClient): {
         data: string;
       };
     }): Promise<LarkCardCreateResponse>;
-    update(input: LarkCardUpdateInput): Promise<unknown>;
+    update(input: LarkCardUpdateInput): Promise<LarkCardOperationResponse>;
   };
   cardElement: {
-    content(input: LarkCardElementContentInput): Promise<unknown>;
+    content(input: LarkCardElementContentInput): Promise<LarkCardOperationResponse>;
   };
 } {
   const sdk = client.sdk as unknown as {
@@ -1988,10 +2139,10 @@ function getCardkitSdk(client: LarkSdkClient): {
   return {
     card: {
       create,
-      update,
+      update: (input) => update(input) as Promise<LarkCardOperationResponse>,
     },
     cardElement: {
-      content,
+      content: (input) => content(input) as Promise<LarkCardOperationResponse>,
     },
   };
 }
