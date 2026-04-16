@@ -155,6 +155,10 @@ export class SessionApprovalWaitRegistry {
     return true;
   }
 
+  getPendingApprovalId(sessionId: string): number | null {
+    return this.waitsBySessionId.get(sessionId)?.approvalId ?? null;
+  }
+
   cancelSession(input: {
     sessionId: string;
     actor?: string;

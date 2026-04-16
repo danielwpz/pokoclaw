@@ -43,6 +43,7 @@ import type {
   MeditationConsolidationRewritePromptInput,
 } from "@/src/meditation/prompts.js";
 import {
+  type MeditationApprovalInterventionFact,
   type MeditationBucketProfile,
   type MeditationFailedToolResultFact,
   MeditationReadModel,
@@ -90,6 +91,7 @@ interface MeditationPipelineRunnerDependencies {
 interface MeditationHarvestArtifact {
   stops: MeditationStopFact[];
   taskFailures: MeditationTaskFailureFact[];
+  approvalInterventions: MeditationApprovalInterventionFact[];
   failedToolResults: MeditationFailedToolResultFact[];
 }
 
@@ -152,6 +154,10 @@ export class MeditationPipelineRunner implements MeditationRunner {
     const harvest: MeditationHarvestArtifact = {
       stops: this.readModel.listStopFacts(window.startAt, window.endAt),
       taskFailures: this.readModel.listTaskFailureFacts(window.startAt, window.endAt),
+      approvalInterventions: this.readModel.listApprovalInterventionFacts(
+        window.startAt,
+        window.endAt,
+      ),
       failedToolResults: this.readModel.listFailedToolResults(window.startAt, window.endAt),
     };
     const clusteredBuckets = buildMeditationBuckets(harvest);
@@ -195,6 +201,7 @@ export class MeditationPipelineRunner implements MeditationRunner {
         counts: {
           stops: harvest.stops.length,
           taskFailures: harvest.taskFailures.length,
+          approvalInterventions: harvest.approvalInterventions.length,
           failedToolResults: harvest.failedToolResults.length,
           buckets: bucketArtifacts.length,
           executedBuckets: executedBucketInputs.length,

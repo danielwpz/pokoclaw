@@ -46,6 +46,7 @@ import {
 } from "@/src/meditation/episode-study.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { resolveLocalCalendarContext, toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
+import { TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE } from "@/src/shared/tool-result-codes.js";
 import { getProductionDatabasePath } from "@/src/storage/db/paths.js";
 
 const logger = createSubsystemLogger("script/meditation-episode-study");
@@ -295,6 +296,7 @@ function resolveStudySessions(input: {
             AND created_at >= ?
             AND created_at <= ?
             AND json_extract(payload_json, '$.isError') = 1
+            AND COALESCE(json_extract(payload_json, '$.details.code'), '') != ?
           GROUP BY session_id
         ) f ON f.sessionId = s.id
         WHERE s.id IN (${input.requestedSessionIds.map(() => "?").join(",")})
@@ -304,6 +306,7 @@ function resolveStudySessions(input: {
     return stmt.all(
       input.windowStart,
       input.windowEnd,
+      TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE,
       ...input.requestedSessionIds,
     ) as SessionCountRow[];
   }
@@ -322,12 +325,18 @@ function resolveStudySessions(input: {
         AND m.created_at >= ?
         AND m.created_at <= ?
         AND json_extract(m.payload_json, '$.isError') = 1
+        AND COALESCE(json_extract(m.payload_json, '$.details.code'), '') != ?
       GROUP BY m.session_id, s.owner_agent_id, a.display_name
       ORDER BY failedToolResultCount DESC, m.session_id ASC
       LIMIT ?
     `,
   );
-  return stmt.all(input.windowStart, input.windowEnd, input.topSessions) as SessionCountRow[];
+  return stmt.all(
+    input.windowStart,
+    input.windowEnd,
+    TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE,
+    input.topSessions,
+  ) as SessionCountRow[];
 }
 
 function loadSessionMessages(input: {

@@ -1,4 +1,5 @@
 import { summarizeMeditationContextMessage } from "@/src/meditation/message-context.js";
+import { TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE } from "@/src/shared/tool-result-codes.js";
 
 export interface EpisodeStudyMessageRow {
   id: string;
@@ -54,6 +55,9 @@ export interface EpisodeStudyRenderedEvent {
 
 type ParsedToolResultPayload = {
   isError?: unknown;
+  details?: {
+    code?: unknown;
+  };
 };
 
 interface ParsedToolResultEntry {
@@ -125,11 +129,12 @@ export function extractEpisodeStudyEpisodes(
   rows: EpisodeStudyMessageRow[],
   strategy: EpisodeStudyStrategyConfig,
 ): EpisodeStudyEpisode[] {
-  if (rows.length === 0) {
+  const filteredRows = rows.filter((row) => !isHarvestIgnoredToolResultRow(row));
+  if (filteredRows.length === 0) {
     return [];
   }
 
-  const parsedToolResults = collectParsedToolResults(rows);
+  const parsedToolResults = collectParsedToolResults(filteredRows);
   if (parsedToolResults.length === 0) {
     return [];
   }
@@ -145,11 +150,11 @@ export function extractEpisodeStudyEpisodes(
   return triggerRanges.map((trigger, index) => {
     const startIndex = Math.max(0, trigger.startMessageIndex - strategy.preContextMessages);
     const desiredEndIndex = Math.min(
-      rows.length - 1,
+      filteredRows.length - 1,
       trigger.endMessageIndex + strategy.postContextMessages,
     );
     const timeCappedEndIndex = capEndIndexByElapsedMinutes({
-      rows,
+      rows: filteredRows,
       startIndex: trigger.startMessageIndex,
       endIndex: desiredEndIndex,
       maxMinutes: strategy.postContextMaxMinutes,
@@ -158,7 +163,7 @@ export function extractEpisodeStudyEpisodes(
       timeCappedEndIndex,
       startIndex + Math.max(0, strategy.maxEventsPerEpisode - 1),
     );
-    const episodeRows = rows.slice(startIndex, endIndex + 1);
+    const episodeRows = filteredRows.slice(startIndex, endIndex + 1);
     const episodeToolResults = collectParsedToolResults(episodeRows);
     const firstRow = episodeRows[0];
     const lastRow = episodeRows.at(-1);
@@ -171,8 +176,8 @@ export function extractEpisodeStudyEpisodes(
       sessionId: firstRow.sessionId,
       startSeq: firstRow.seq,
       endSeq: lastRow.seq,
-      triggerStartSeq: rows[trigger.startMessageIndex]?.seq ?? firstRow.seq,
-      triggerEndSeq: rows[trigger.endMessageIndex]?.seq ?? lastRow.seq,
+      triggerStartSeq: filteredRows[trigger.startMessageIndex]?.seq ?? firstRow.seq,
+      triggerEndSeq: filteredRows[trigger.endMessageIndex]?.seq ?? lastRow.seq,
       triggerKinds: trigger.triggerKinds,
       totalToolResults: episodeToolResults.length,
       failedToolResults: episodeToolResults.filter((entry) => entry.isError).length,
@@ -260,6 +265,14 @@ function collectParsedToolResults(rows: EpisodeStudyMessageRow[]): ParsedToolRes
       },
     ];
   });
+}
+
+function isHarvestIgnoredToolResultRow(row: EpisodeStudyMessageRow): boolean {
+  if (row.messageType !== "tool_result") {
+    return false;
+  }
+  const payload = parseJson<ParsedToolResultPayload>(row.payloadJson);
+  return payload?.details?.code === TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE;
 }
 
 function buildConsecutiveFailureTriggers(

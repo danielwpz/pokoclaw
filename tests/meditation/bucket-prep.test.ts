@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { prepareMeditationBucketInput } from "@/src/meditation/bucket-prep.js";
 import { buildMeditationBuckets } from "@/src/meditation/clustering.js";
 import { MeditationReadModel } from "@/src/meditation/read-model.js";
+import { TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE } from "@/src/shared/tool-result-codes.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -89,7 +90,12 @@ function seedFixture(handle: TestDatabaseHandle): void {
         '2026-04-07T12:21:30.000Z'
       ),
       (
-        'msg_tool_after', 'sess_1', 12, 'assistant', 'text', 'user_visible',
+        'msg_tool_abort', 'sess_1', 12, 'tool', 'tool_result', 'hidden',
+        '{"toolName":"bash","isError":true,"content":[{"type":"text","text":"Skipped because the user sent a new message and redirected the run before this tool call started."}],"details":{"code":"${TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE}"}}',
+        '2026-04-07T12:21:45.000Z'
+      ),
+      (
+        'msg_tool_after', 'sess_1', 13, 'assistant', 'text', 'user_visible',
         '{"content":[{"type":"text","text":"after tool burst"}]}', '2026-04-07T12:22:00.000Z'
       );
   `);
@@ -158,7 +164,7 @@ describe("prepareMeditationBucketInput", () => {
     expect(toolBurstCluster).toBeDefined();
     expect(toolBurstCluster?.episodeTimeline).toMatchObject({
       sessionId: "sess_1",
-      endSeq: 12,
+      endSeq: 13,
       triggerStartSeq: 10,
       triggerEndSeq: 11,
       failedToolResults: 2,
@@ -168,7 +174,8 @@ describe("prepareMeditationBucketInput", () => {
     expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(9);
     expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(10);
     expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(11);
-    expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(12);
+    expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).toContain(13);
+    expect(toolBurstCluster?.episodeTimeline?.events.map((event) => event.seq)).not.toContain(12);
     expect(
       toolBurstCluster?.episodeTimeline?.events.some((event) =>
         event.summary.includes("before tool burst"),
@@ -186,7 +193,7 @@ describe("prepareMeditationBucketInput", () => {
     expect(toolRepeatCluster?.episodes).toHaveLength(1);
     expect(toolRepeatCluster?.episodes[0]).toMatchObject({
       sessionId: "sess_1",
-      endSeq: 12,
+      endSeq: 13,
       triggerStartSeq: 10,
       triggerEndSeq: 11,
       failedToolResults: 2,
