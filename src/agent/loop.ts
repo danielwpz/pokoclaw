@@ -67,10 +67,16 @@ import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { buildSubagentWorkspaceDir, POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { resolveLocalCalendarContext } from "@/src/shared/time.js";
+import {
+  APPROVAL_DENIED_USER_INTERVENTION_CODE,
+  TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE,
+} from "@/src/shared/tool-result-codes.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
+import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
 import type { MessagesRepo, MessageUsage } from "@/src/storage/repos/messages.repo.js";
-import type { Message } from "@/src/storage/schema/types.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
+import type { ApprovalRecord, Message, Session } from "@/src/storage/schema/types.js";
 import {
   buildToolFailureContent,
   isToolApprovalRequired,
@@ -103,6 +109,8 @@ const UNKNOWN_ASSISTANT_ERROR_USAGE: MessageUsage = {
   cacheWrite: 0,
   totalTokens: 0,
 };
+const APPROVAL_INTERVENTION_REASON_TEXT =
+  "Automatically denied because the user sent a new message to redirect the run.";
 
 // AgentLoop is the execution core for a single session run.
 // It owns model turns, tool execution, compaction hooks, and the runtime-side
@@ -211,6 +219,7 @@ interface ExecutedToolCall {
   result: ToolResult;
   isError: boolean;
   queuedSteer: SteerInput[];
+  stopRemainingToolBatch: boolean;
 }
 
 export class AgentLoop {
@@ -332,8 +341,71 @@ export class AgentLoop {
       return false;
     }
 
+    this.handleApprovalInterventionOnSteer(input);
     this.steerQueue.enqueue(input);
     return true;
+  }
+
+  private handleApprovalInterventionOnSteer(input: {
+    sessionId: string;
+    content: string;
+    createdAt?: Date;
+  }): void {
+    const activeApprovalId = this.approvalWaits.getPendingApprovalId(input.sessionId);
+    if (activeApprovalId == null) {
+      return;
+    }
+
+    const decidedAt = input.createdAt ?? new Date();
+    const sessionContext = this.deps.sessions.getContext(input.sessionId);
+    const activeApproval = this.security.getApprovalById(activeApprovalId);
+    const activeRunId = parseApprovalResumeRunId(activeApproval);
+    const pendingApprovals = this.security.listApprovalsBySession(input.sessionId, {
+      statuses: ["pending"],
+      limit: 100,
+    });
+    const autoRejectedApprovalIds = pendingApprovals
+      .filter(
+        (approval) =>
+          approval.id !== activeApprovalId && approvalBelongsToActiveRound(approval, activeRunId),
+      )
+      .map((approval) => approval.id);
+
+    for (const approvalId of autoRejectedApprovalIds) {
+      const approval = pendingApprovals.find((entry) => entry.id === approvalId) ?? null;
+      if (approval == null) {
+        continue;
+      }
+      this.security.resolveApproval({
+        approvalId,
+        status: "denied",
+        reasonText: APPROVAL_INTERVENTION_REASON_TEXT,
+        decidedAt,
+      });
+      this.emitDetachedApprovalResolvedEvent({
+        session: sessionContext.session,
+        approval,
+        runId: parseApprovalResumeRunId(approval) ?? activeRunId ?? "unknown",
+        actor: "user:intervention",
+        rawInput: input.content,
+      });
+    }
+
+    this.recordApprovalInterventionFact({
+      session: sessionContext.session,
+      runId: activeRunId ?? `approval-intervention:${input.sessionId}`,
+      activeApprovalId,
+      autoRejectedApprovalIds: [activeApprovalId, ...autoRejectedApprovalIds],
+      decidedAt,
+    });
+
+    this.approvalWaits.cancelSession({
+      sessionId: input.sessionId,
+      actor: "user:intervention",
+      rawInput: input.content,
+      reasonText: APPROVAL_INTERVENTION_REASON_TEXT,
+      decidedAt,
+    });
   }
 
   private markRunWaitingForFirstToken(runId: string, assistantMessageId: string): void {
@@ -919,7 +991,11 @@ export class AgentLoop {
         }
 
         const queuedSteerAfterTurn: SteerInput[] = [];
-        for (const toolCall of toolCalls) {
+        for (let toolIndex = 0; toolIndex < toolCalls.length; toolIndex += 1) {
+          const toolCall = toolCalls[toolIndex];
+          if (toolCall == null) {
+            continue;
+          }
           throwIfAborted(handle.signal);
 
           this.recordEvent(events, {
@@ -991,6 +1067,61 @@ export class AgentLoop {
 
             if (executedTool.queuedSteer.length > 0) {
               queuedSteerAfterTurn.push(...executedTool.queuedSteer);
+            }
+
+            if (executedTool.stopRemainingToolBatch) {
+              for (const skippedToolCall of toolCalls.slice(toolIndex + 1)) {
+                const abortedResult = buildAbortedToolBatchResult();
+                const abortedMessage = appendMessageAndHydrate({
+                  repo: this.deps.messages,
+                  sessionId: input.sessionId,
+                  messageId: randomUUID(),
+                  seq: nextSeq,
+                  role: "tool",
+                  messageType: "tool_result",
+                  visibility: "hidden_system",
+                  payload: {
+                    toolCallId: skippedToolCall.id,
+                    toolName: skippedToolCall.name,
+                    content: abortedResult.content,
+                    isError: true,
+                    ...(abortedResult.details !== undefined
+                      ? { details: abortedResult.details }
+                      : {}),
+                  } satisfies AgentToolResultPayload,
+                  createdAt: new Date(),
+                });
+                nextSeq = abortedMessage.seq + 1;
+                messages.push(abortedMessage);
+                appendedMessageIds.push(abortedMessage.id);
+
+                this.recordEvent(events, {
+                  type: "tool_call_started",
+                  turn: turn + 1,
+                  toolCallId: skippedToolCall.id,
+                  toolName: skippedToolCall.name,
+                  args: skippedToolCall.args,
+                  sessionId: input.sessionId,
+                  conversationId: context.session.conversationId,
+                  branchId: context.session.branchId,
+                  runId,
+                });
+                this.recordEvent(events, {
+                  type: "tool_call_failed",
+                  turn: turn + 1,
+                  toolCallId: skippedToolCall.id,
+                  toolName: skippedToolCall.name,
+                  errorKind: "recoverable_error",
+                  errorMessage: extractPrimaryToolResultText(abortedResult),
+                  rawErrorMessage: null,
+                  retryable: false,
+                  sessionId: input.sessionId,
+                  conversationId: context.session.conversationId,
+                  branchId: context.session.branchId,
+                  runId,
+                });
+              }
+              break;
             }
 
             const stopDecision = await input.afterToolResultHook?.afterToolResult({
@@ -1339,6 +1470,7 @@ export class AgentLoop {
           result,
           isError: false,
           queuedSteer,
+          stopRemainingToolBatch: false,
         };
       } catch (error) {
         if (!isToolApprovalRequired(error)) {
@@ -1428,6 +1560,9 @@ export class AgentLoop {
                       : { retryToolCallId: error.retryToolCallId }),
                   }),
                   {
+                    ...(approval.actor === "user:intervention"
+                      ? { code: APPROVAL_DENIED_USER_INTERVENTION_CODE }
+                      : {}),
                     approvalId: approval.approvalId,
                     request: approval.request,
                   },
@@ -1437,12 +1572,16 @@ export class AgentLoop {
                     ? "Permission request denied."
                     : approval.reasonText,
                   {
+                    ...(approval.actor === "user:intervention"
+                      ? { code: APPROVAL_DENIED_USER_INTERVENTION_CODE }
+                      : {}),
                     approvalId: approval.approvalId,
                     request: approval.request,
                   },
                 ),
           isError: true,
           queuedSteer: [...queuedSteer, ...approval.queuedSteer],
+          stopRemainingToolBatch: approval.actor === "user:intervention",
         };
       }
     }
@@ -1484,6 +1623,7 @@ export class AgentLoop {
         ),
         isError: false,
         queuedSteer: input.queuedSteer,
+        stopRemainingToolBatch: false,
       };
     }
 
@@ -1509,6 +1649,7 @@ export class AgentLoop {
         ),
         isError: true,
         queuedSteer: input.queuedSteer,
+        stopRemainingToolBatch: false,
       };
     }
 
@@ -1571,6 +1712,7 @@ export class AgentLoop {
         },
         isError: false,
         queuedSteer: input.queuedSteer,
+        stopRemainingToolBatch: false,
       };
     } catch (error) {
       const failure = normalizeToolFailure(error);
@@ -1617,6 +1759,7 @@ export class AgentLoop {
         },
         isError: true,
         queuedSteer: input.queuedSteer,
+        stopRemainingToolBatch: false,
       };
     }
   }
@@ -1700,6 +1843,99 @@ export class AgentLoop {
     events.push(hydrated);
     this.deps.emitEvent?.(hydrated);
   }
+
+  private emitDetachedApprovalResolvedEvent(input: {
+    session: Session;
+    approval: ApprovalRecord;
+    runId: string;
+    actor: string;
+    rawInput: string;
+  }): void {
+    this.deps.emitEvent?.({
+      type: "approval_resolved",
+      eventId: randomUUID(),
+      createdAt: new Date().toISOString(),
+      approvalId: String(input.approval.id),
+      decision: "deny",
+      actor: input.actor,
+      rawInput: input.rawInput,
+      sessionId: input.session.id,
+      conversationId: input.session.conversationId,
+      branchId: input.session.branchId,
+      runId: input.runId,
+    });
+  }
+
+  private recordApprovalInterventionFact(input: {
+    session: Session;
+    runId: string;
+    activeApprovalId: number;
+    autoRejectedApprovalIds: number[];
+    decidedAt: Date;
+  }): void {
+    const harnessEvents = new HarnessEventsRepo(this.deps.storage);
+    const taskRuns = new TaskRunsRepo(this.deps.storage);
+    const taskRun = taskRuns.getByExecutionSessionId(input.session.id);
+    harnessEvents.create({
+      id: randomUUID(),
+      eventType: "approval_intervened",
+      runId: input.runId,
+      sessionId: input.session.id,
+      conversationId: input.session.conversationId,
+      branchId: input.session.branchId,
+      agentId: input.session.ownerAgentId ?? taskRun?.ownerAgentId ?? null,
+      taskRunId: taskRun?.id ?? null,
+      cronJobId: taskRun?.cronJobId ?? null,
+      actor: "user",
+      sourceKind: "message",
+      requestScope: "approval_round",
+      reasonText: APPROVAL_INTERVENTION_REASON_TEXT,
+      detailsJson: JSON.stringify({
+        activeApprovalId: input.activeApprovalId,
+        rejectedApprovalIds: input.autoRejectedApprovalIds,
+        rejectedApprovalCount: input.autoRejectedApprovalIds.length,
+      }),
+      createdAt: input.decidedAt,
+    });
+  }
+}
+
+function parseApprovalResumeRunId(approval: ApprovalRecord | null): string | null {
+  if (approval?.resumePayloadJson == null || approval.resumePayloadJson.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(approval.resumePayloadJson) as { runId?: unknown };
+    return typeof parsed.runId === "string" && parsed.runId.length > 0 ? parsed.runId : null;
+  } catch {
+    return null;
+  }
+}
+
+function approvalBelongsToActiveRound(
+  approval: ApprovalRecord,
+  activeRunId: string | null,
+): boolean {
+  if (activeRunId == null) {
+    return true;
+  }
+
+  return parseApprovalResumeRunId(approval) === activeRunId;
+}
+
+function buildAbortedToolBatchResult(): ToolResult {
+  return textToolResult(
+    "Skipped because the user sent a new message and redirected the run before this tool call started.",
+    {
+      code: TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE,
+    },
+  );
+}
+
+function extractPrimaryToolResultText(result: ToolResult): string {
+  const firstTextBlock = result.content.find((block) => block.type === "text");
+  return firstTextBlock?.text ?? "Tool call failed.";
 }
 
 function replaceActiveTurnRuntimeImages(input: {

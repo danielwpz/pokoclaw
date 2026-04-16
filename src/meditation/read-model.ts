@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or } from "drizzle-orm";
 
+import { TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE } from "@/src/shared/tool-result-codes.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import {
   agents,
@@ -31,6 +32,20 @@ export interface MeditationTaskFailureFact {
   status: string;
   startedAt: string;
   finishedAt: string | null;
+}
+
+export interface MeditationApprovalInterventionFact {
+  runId: string;
+  sessionId: string | null;
+  agentId: string | null;
+  taskRunId: string | null;
+  conversationId: string | null;
+  branchId: string | null;
+  createdAt: string;
+  sourceKind: string;
+  requestScope: string;
+  reasonText: string | null;
+  detailsJson: string | null;
 }
 
 export interface MeditationFailedToolResultFact {
@@ -140,6 +155,36 @@ export class MeditationReadModel {
       );
   }
 
+  listApprovalInterventionFacts(
+    windowStart: string,
+    windowEnd: string,
+  ): MeditationApprovalInterventionFact[] {
+    return this.db
+      .select({
+        runId: harnessEvents.runId,
+        sessionId: harnessEvents.sessionId,
+        agentId: harnessEvents.agentId,
+        taskRunId: harnessEvents.taskRunId,
+        conversationId: harnessEvents.conversationId,
+        branchId: harnessEvents.branchId,
+        createdAt: harnessEvents.createdAt,
+        sourceKind: harnessEvents.sourceKind,
+        requestScope: harnessEvents.requestScope,
+        reasonText: harnessEvents.reasonText,
+        detailsJson: harnessEvents.detailsJson,
+      })
+      .from(harnessEvents)
+      .where(
+        and(
+          eq(harnessEvents.eventType, "approval_intervened"),
+          gte(harnessEvents.createdAt, windowStart),
+          lte(harnessEvents.createdAt, windowEnd),
+        ),
+      )
+      .orderBy(asc(harnessEvents.createdAt), asc(harnessEvents.id))
+      .all();
+  }
+
   listFailedToolResults(windowStart: string, windowEnd: string): MeditationFailedToolResultFact[] {
     const rows = this.db
       .select({
@@ -171,11 +216,16 @@ export class MeditationReadModel {
       const details = isPlainObject(payload.details)
         ? (payload.details as ToolFailureDetails)
         : null;
+      const detailsCode = typeof details?.code === "string" ? details.code : null;
       const prefix0 = Array.isArray(details?.request?.prefix)
         ? typeof details?.request?.prefix[0] === "string"
           ? (details?.request?.prefix[0] as string)
           : null
         : null;
+
+      if (detailsCode === TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE) {
+        return [];
+      }
 
       return [
         {
@@ -185,7 +235,7 @@ export class MeditationReadModel {
           seq: row.seq,
           createdAt: row.createdAt,
           toolName: typeof payload.toolName === "string" ? payload.toolName : "unknown",
-          detailsCode: typeof details?.code === "string" ? details.code : null,
+          detailsCode,
           requestScopeKind:
             typeof details?.request?.scopes?.[0]?.kind === "string"
               ? details.request.scopes[0]?.kind

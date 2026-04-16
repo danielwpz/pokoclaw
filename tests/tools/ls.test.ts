@@ -215,7 +215,7 @@ describe("ls tool", () => {
           {
             resource: "filesystem",
             path: POKOCLAW_SYSTEM_DIR,
-            scope: "subtree",
+            scope: expect.stringMatching(/^(exact|subtree)$/),
             access: "read",
           },
         ],

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 
 import { MeditationReadModel } from "@/src/meditation/read-model.js";
+import { TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE } from "@/src/shared/tool-result-codes.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -44,6 +45,17 @@ function seedFixture(handle: TestDatabaseHandle): void {
       'button', 'run', '2026-04-08T00:10:00.000Z', 'lark:user'
     );
 
+    INSERT INTO harness_events (
+      id, event_type, run_id, session_id, conversation_id, branch_id, agent_id,
+      task_run_id, source_kind, request_scope, reason_text, details_json, created_at, actor
+    ) VALUES (
+      'evt_approval_intervene_1', 'approval_intervened', 'run_1', 'sess_pref', 'conv_1', 'branch_1',
+      'agent_sub_1', NULL, 'message', 'approval_round',
+      'Automatically denied because the user sent a new message to redirect the run.',
+      '{"activeApprovalId":12,"rejectedApprovalIds":[12,13],"rejectedApprovalCount":2}',
+      '2026-04-08T00:12:00.000Z', 'user'
+    );
+
     INSERT INTO cron_jobs (
       id, owner_agent_id, target_conversation_id, target_branch_id,
       schedule_kind, schedule_value, payload_json, created_at, updated_at
@@ -78,7 +90,15 @@ function seedFixture(handle: TestDatabaseHandle): void {
     INSERT INTO messages (
       id, session_id, seq, role, message_type, visibility, payload_json, created_at
     ) VALUES (
-      'msg_tool_ok_1', 'sess_pref', 3, 'tool', 'tool_result', 'hidden',
+      'msg_tool_abort_1', 'sess_pref', 3, 'tool', 'tool_result', 'hidden',
+      '{"toolName":"bash","isError":true,"content":[{"type":"text","text":"Skipped because the user sent a new message and redirected the run before this tool call started."}],"details":{"code":"${TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE}"}}',
+      '2026-04-08T00:21:30.000Z'
+    );
+
+    INSERT INTO messages (
+      id, session_id, seq, role, message_type, visibility, payload_json, created_at
+    ) VALUES (
+      'msg_tool_ok_1', 'sess_pref', 4, 'tool', 'tool_result', 'hidden',
       '{"toolName":"bash","isError":false,"content":[{"type":"text","text":"ok"}]}',
       '2026-04-08T00:22:00.000Z'
     );
@@ -86,8 +106,15 @@ function seedFixture(handle: TestDatabaseHandle): void {
     INSERT INTO messages (
       id, session_id, seq, role, message_type, visibility, payload_json, created_at
     ) VALUES (
-      'msg_assistant_1', 'sess_pref', 4, 'assistant', 'text', 'user_visible',
+      'msg_assistant_1', 'sess_pref', 5, 'assistant', 'text', 'user_visible',
       '{"content":[{"type":"text","text":"done"}]}', '2026-04-08T00:23:00.000Z'
+    );
+
+    INSERT INTO messages (
+      id, session_id, seq, role, message_type, visibility, payload_json, created_at
+    ) VALUES (
+      'msg_assistant_other', 'sess_fallback', 1, 'assistant', 'text', 'user_visible',
+      '{"content":[{"type":"text","text":"other"}]}', '2026-04-08T00:24:00.000Z'
     );
   `);
 }
@@ -161,6 +188,34 @@ describe("meditation read model", () => {
     ]);
   });
 
+  test("loads approval intervention facts inside a window", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    const readModel = new MeditationReadModel(handle.storage.db);
+
+    expect(
+      readModel.listApprovalInterventionFacts(
+        "2026-04-08T00:00:00.000Z",
+        "2026-04-08T00:59:59.000Z",
+      ),
+    ).toEqual([
+      {
+        runId: "run_1",
+        sessionId: "sess_pref",
+        agentId: "agent_sub_1",
+        taskRunId: null,
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        createdAt: "2026-04-08T00:12:00.000Z",
+        sourceKind: "message",
+        requestScope: "approval_round",
+        reasonText: "Automatically denied because the user sent a new message to redirect the run.",
+        detailsJson:
+          '{"activeApprovalId":12,"rejectedApprovalIds":[12,13],"rejectedApprovalCount":2}',
+      },
+    ]);
+  });
+
   test("loads local message windows around a seq", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedFixture(handle);
@@ -169,7 +224,7 @@ describe("meditation read model", () => {
     expect(readModel.listSessionMessageWindow("sess_pref", 2, 1, 1)).toMatchObject([
       { id: "msg_user_1", seq: 1, role: "user" },
       { id: "msg_tool_fail_1", seq: 2, role: "tool", messageType: "tool_result" },
-      { id: "msg_tool_ok_1", seq: 3, role: "tool", messageType: "tool_result" },
+      { id: "msg_tool_abort_1", seq: 3, role: "tool", messageType: "tool_result" },
     ]);
   });
 

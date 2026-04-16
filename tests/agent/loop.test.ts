@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Type } from "@sinclair/typebox";
 
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { AgentRuntimeEvent } from "@/src/agent/events.js";
 import { AgentLlmError, normalizeAgentLlmError } from "@/src/agent/llm/errors.js";
 import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
 import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
@@ -19,10 +20,16 @@ import {
   POKOCLAW_WORKSPACE_DIR,
 } from "@/src/shared/paths.js";
 import { resolveLocalCalendarContext } from "@/src/shared/time.js";
+import {
+  APPROVAL_DENIED_USER_INTERVENTION_CODE,
+  TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE,
+} from "@/src/shared/tool-result-codes.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
+import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
-import { toolRecoverableError } from "@/src/tools/core/errors.js";
+import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
+import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { defineTool, textToolResult } from "@/src/tools/core/types.js";
 import { createScheduleTaskTool } from "@/src/tools/cron.js";
@@ -2209,7 +2216,7 @@ describe("agent loop", () => {
     expect(emittedEvents.some((event) => event.type === "run_failed")).toBe(false);
   });
 
-  test("request_permissions pauses for approval, retries the blocked tool, and inserts queued steer input", async () => {
+  test("request_permissions pauses for approval and retries the blocked tool after approval", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
 
@@ -2234,9 +2241,8 @@ describe("agent loop", () => {
 
     let modelTurnCount = 0;
     let toolExecuteCount = 0;
-    let secondTurnLastUserContent: string | null = null;
     const runner: AgentModelRunner = {
-      async runTurn({ messages }) {
+      async runTurn() {
         modelTurnCount += 1;
         if (modelTurnCount === 1) {
           return makeAssistantResult({
@@ -2270,8 +2276,6 @@ describe("agent loop", () => {
           });
         }
 
-        secondTurnLastUserContent =
-          JSON.parse(messages.at(-1)?.payloadJson ?? "{}").content ?? null;
         return makeAssistantResult({
           content: [{ type: "text", text: "done" }],
         });
@@ -2328,9 +2332,6 @@ describe("agent loop", () => {
     const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
     const approvalId = Number(await waitForApprovalRequested(emittedEvents));
 
-    expect(loop.enqueueSteerInput({ sessionId: "sess_1", content: "Please keep it short." })).toBe(
-      true,
-    );
     expect(
       loop.submitApprovalResponse({
         approvalId,
@@ -2345,7 +2346,6 @@ describe("agent loop", () => {
     const result = await runPromise;
 
     expect(toolExecuteCount).toBe(2);
-    expect(secondTurnLastUserContent).toBe("Please keep it short.");
     expect(result.events.some((event) => event.type === "approval_requested")).toBe(true);
     expect(
       result.events.some(
@@ -2355,7 +2355,7 @@ describe("agent loop", () => {
     expect(sessionsRepo.getById("sess_1")?.status).toBe("active");
 
     const rows = messagesRepo.listBySession("sess_1");
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(6);
     expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
       toolCallId: "tool_1",
       toolName: "gated",
@@ -2378,9 +2378,347 @@ describe("agent loop", () => {
       toolName: "request_permissions",
       isError: false,
     });
-    expect(JSON.parse(rows[5]?.payloadJson ?? "{}")).toEqual({
-      content: "Please keep it short.",
+    expect(JSON.parse(rows[5]?.payloadJson ?? "{}")).toMatchObject({
+      content: [{ type: "text", text: "done" }],
     });
+  });
+
+  test("auto-rejects the current approval round when a new user message arrives", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    const approvalsRepo = new ApprovalsRepo(handle.storage.db);
+    const harnessEvents = new HarnessEventsRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"update the file"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    let nextTurnLastUserContent: string | null = null;
+    const runner: AgentModelRunner = {
+      async runTurn({ messages }) {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "tool_1", name: "gated", arguments: {} }],
+          });
+        }
+
+        if (modelTurnCount === 2) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_2",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: LOOP_PROTECTED_FILE,
+                      scope: "exact",
+                      access: "write",
+                    },
+                  ],
+                  justification: "Need to write the requested note.",
+                  retryToolCallId: "tool_1",
+                },
+              },
+            ],
+          });
+        }
+
+        nextTurnLastUserContent = JSON.parse(messages.at(-1)?.payloadJson ?? "{}").content ?? null;
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done after intervention" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "gated",
+        description: "Needs approval first",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          throw toolRecoverableError("Write access is missing for workspace notes.", {
+            code: "permission_denied",
+            requestable: true,
+            failedToolCallId: "tool_1",
+            summary: "Write access is missing for workspace notes.",
+            entries: [
+              {
+                resource: "filesystem",
+                path: LOOP_PROTECTED_FILE,
+                scope: "exact",
+                access: "write",
+              },
+            ],
+          });
+        },
+      }),
+    );
+    tools.register(createRequestPermissionsTool());
+
+    const emittedEvents: Array<{ type: string; approvalId?: string; decision?: string }> = [];
+    const control = new RuntimeControlService(new SessionRunAbortRegistry(), {
+      harnessEvents,
+      sessions: sessionsRepo,
+      taskRuns: new TaskRunsRepo(handle.storage.db),
+    });
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      control,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    const currentApprovalId = Number(await waitForApprovalRequested(emittedEvents));
+    const currentApproval = approvalsRepo.getById(currentApprovalId);
+    expect(currentApproval?.status).toBe("pending");
+    approvalsRepo.create({
+      ownerAgentId: "agent_1",
+      requestedBySessionId: "sess_1",
+      requestedScopeJson: currentApproval?.requestedScopeJson ?? '{"scopes":[]}',
+      approvalTarget: "user",
+      status: "pending",
+      reasonText: "Extra pending request in the same approval round.",
+      resumePayloadJson: currentApproval?.resumePayloadJson ?? null,
+      createdAt: new Date("2026-03-22T00:00:05.000Z"),
+    });
+
+    expect(
+      loop.enqueueSteerInput({
+        sessionId: "sess_1",
+        content: "Actually use the simpler browser command path.",
+        createdAt: new Date("2026-03-22T00:00:06.000Z"),
+      }),
+    ).toBe(true);
+
+    const result = await runPromise;
+
+    expect(nextTurnLastUserContent).toBe("Actually use the simpler browser command path.");
+    expect(
+      approvalsRepo
+        .listBySession("sess_1", { statuses: ["denied"], limit: 10 })
+        .map((row) => row.id),
+    ).toEqual(expect.arrayContaining([currentApprovalId]));
+    expect(
+      approvalsRepo.listBySession("sess_1", { statuses: ["pending"], limit: 10 }),
+    ).toHaveLength(0);
+    expect(
+      emittedEvents.filter(
+        (event) => event.type === "approval_resolved" && event.decision === "deny",
+      ),
+    ).toHaveLength(2);
+    expect(harnessEvents.listByRunId(result.runId)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "approval_intervened",
+          sessionId: "sess_1",
+          sourceKind: "message",
+          requestScope: "approval_round",
+        }),
+      ]),
+    );
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(JSON.parse(rows.at(-2)?.payloadJson ?? "{}")).toEqual({
+      content: "Actually use the simpler browser command path.",
+    });
+  });
+
+  test("aborts remaining tool calls in the current batch after user intervention and records synthetic results", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    const approvalsRepo = new ApprovalsRepo(handle.storage.db);
+    const harnessEvents = new HarnessEventsRepo(handle.storage.db);
+    const emittedEvents: AgentRuntimeEvent[] = [];
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"run the whole plan"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turnCount = 0;
+    let executedStepCalls = 0;
+    let nextTurnLastUserContent: string | null = null;
+    const runner: AgentModelRunner = {
+      async runTurn({ messages }) {
+        turnCount += 1;
+        if (turnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              { type: "toolCall", id: "tool_1", name: "step", arguments: { step: 1 } },
+              { type: "toolCall", id: "tool_2", name: "needs_approval", arguments: {} },
+              { type: "toolCall", id: "tool_3", name: "step", arguments: { step: 3 } },
+              { type: "toolCall", id: "tool_4", name: "step", arguments: { step: 4 } },
+            ],
+          });
+        }
+
+        nextTurnLastUserContent = JSON.parse(messages.at(-1)?.payloadJson ?? "{}").content ?? null;
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done after redirect" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "step",
+        description: "Plain step",
+        inputSchema: Type.Object(
+          {
+            step: Type.Integer(),
+          },
+          { additionalProperties: false },
+        ),
+        async execute(_context, args) {
+          executedStepCalls += 1;
+          return textToolResult(`step ${args.step} done`);
+        },
+      }),
+    );
+    tools.register(
+      defineTool({
+        name: "needs_approval",
+        description: "Approval-gated step",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          throw toolApprovalRequired({
+            request: {
+              scopes: [{ kind: "db.read", database: "system" }],
+            },
+            reasonText: "Need full access first",
+          });
+        },
+      }),
+    );
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    await waitForApprovalRequested(emittedEvents);
+
+    expect(
+      loop.enqueueSteerInput({
+        sessionId: "sess_1",
+        content: "Actually stop and summarize.",
+        createdAt: new Date("2026-03-22T00:00:06.000Z"),
+      }),
+    ).toBe(true);
+
+    const result = await runPromise;
+
+    expect(turnCount).toBe(2);
+    expect(executedStepCalls).toBe(1);
+    expect(nextTurnLastUserContent).toBe("Actually stop and summarize.");
+    expect(
+      approvalsRepo.listBySession("sess_1", { statuses: ["pending"], limit: 10 }),
+    ).toHaveLength(0);
+    expect(approvalsRepo.listBySession("sess_1", { statuses: ["denied"], limit: 10 })).toHaveLength(
+      1,
+    );
+    expect(
+      harnessEvents
+        .listByRunId(result.runId)
+        .filter((event) => event.eventType === "approval_intervened"),
+    ).toHaveLength(1);
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(8);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_1",
+      toolName: "step",
+      isError: false,
+    });
+    expect(JSON.parse(rows[3]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_2",
+      toolName: "needs_approval",
+      isError: true,
+      details: { code: APPROVAL_DENIED_USER_INTERVENTION_CODE },
+    });
+    expect(JSON.parse(rows[4]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_3",
+      toolName: "step",
+      isError: true,
+      details: { code: TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE },
+    });
+    expect(JSON.parse(rows[5]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_4",
+      toolName: "step",
+      isError: true,
+      details: { code: TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE },
+    });
+    expect(JSON.parse(rows[6]?.payloadJson ?? "{}")).toEqual({
+      content: "Actually stop and summarize.",
+    });
+    expect(emittedEvents.filter((event) => event.type === "approval_requested")).toHaveLength(1);
+    expect(
+      emittedEvents.filter(
+        (event) =>
+          event.type === "tool_call_failed" &&
+          (event.toolCallId === "tool_3" || event.toolCallId === "tool_4"),
+      ),
+    ).toHaveLength(2);
   });
 
   test("approval_requested events carry the full structured permission request", async () => {
