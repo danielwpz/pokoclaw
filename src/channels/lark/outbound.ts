@@ -2067,6 +2067,9 @@ async function invokeLarkCardkitCallWithBusinessRetry<T extends LarkCardOperatio
 
     const responsePreview = truncateLogText(safeJson(response), LARK_CARD_LOG_PREVIEW_MAX_LENGTH);
     if (attempt < LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT) {
+      // CardKit sequencing is owned by the caller. Retries must replay the exact
+      // same request payload, including the same sequence number, rather than
+      // incrementing local delivery state inside this helper.
       logger.warn("lark cardkit call returned non-zero code; retrying once", {
         operation: input.operation,
         attempt: attempt + 1,
