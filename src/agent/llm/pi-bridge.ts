@@ -19,6 +19,7 @@ import type {
   CompactionModelRunnerResult,
 } from "@/src/agent/compaction.js";
 import {
+  AgentLlmError,
   buildAgentLlmRawErrorPayload,
   isAgentLlmError,
   normalizeAgentLlmError,
@@ -157,9 +158,10 @@ export class PiBridge {
       });
       return normalizeAssistantResult(finalMessage, "stream");
     } catch (error) {
-      logRawLlmFailure("stream", input.model, error);
+      const enrichedError = enrichCodexFetchFailure(error, input.model, "request");
+      logRawLlmFailure("stream", input.model, enrichedError);
       throw normalizeAgentLlmError({
-        error,
+        error: enrichedError,
         provider: input.model.provider.id,
         model: input.model.id,
       });
@@ -211,9 +213,10 @@ export class PiBridge {
       });
       return normalizeAssistantResult(finalMessage, "complete");
     } catch (error) {
-      logRawLlmFailure("complete", input.model, error);
+      const enrichedError = enrichCodexFetchFailure(error, input.model, "request");
+      logRawLlmFailure("complete", input.model, enrichedError);
       throw normalizeAgentLlmError({
-        error,
+        error: enrichedError,
         provider: input.model.provider.id,
         model: input.model.id,
       });
@@ -268,9 +271,10 @@ export class PiBridge {
         usage: normalized.usage,
       };
     } catch (error) {
-      logRawLlmFailure("compaction", input.model, error);
+      const enrichedError = enrichCodexFetchFailure(error, input.model, "request");
+      logRawLlmFailure("compaction", input.model, enrichedError);
       throw normalizeAgentLlmError({
-        error,
+        error: enrichedError,
         provider: input.model.provider.id,
         model: input.model.id,
       });
@@ -383,10 +387,16 @@ async function buildPiStreamOptions(
     sessionId: model.id,
     maxTokens: model.maxOutputTokens,
   };
-  const apiKey =
-    (await providerApiKeyResolver?.resolveApiKey(model.provider)) ??
-    model.provider.apiKey ??
-    undefined;
+  let resolvedApiKey: string | undefined;
+  try {
+    resolvedApiKey =
+      (await providerApiKeyResolver?.resolveApiKey(model.provider)) ??
+      model.provider.apiKey ??
+      undefined;
+  } catch (error) {
+    throw enrichCodexFetchFailure(error, model, "auth");
+  }
+  const apiKey = resolvedApiKey;
   if (apiKey != null) {
     Object.assign(options, {
       apiKey,
@@ -464,6 +474,63 @@ function resolvePiBaseUrl(model: ResolvedModel): string {
         `Provider "${model.provider.id}" is missing baseUrl for api "${model.provider.api}"`,
       );
   }
+}
+
+function enrichCodexFetchFailure(
+  error: unknown,
+  model: ResolvedModel,
+  stage: "auth" | "request",
+): unknown {
+  if (model.provider.api !== "openai-codex-responses") {
+    return error;
+  }
+
+  const normalized = normalizeAgentLlmError({
+    error,
+    provider: model.provider.id,
+    model: model.id,
+  });
+
+  if (normalized.rawDetails?.diagnosticStage != null) {
+    return normalized;
+  }
+
+  if (normalized.message !== "fetch failed") {
+    return normalized;
+  }
+
+  const baseUrl = resolvePiBaseUrl(model);
+  const diagnosticHint =
+    stage === "auth"
+      ? "codex-local auth resolution failed before an HTTP response was received"
+      : "openai_codex backend request failed before an HTTP response was received";
+  const contextParts = [
+    diagnosticHint,
+    `api=${model.provider.api}`,
+    `baseUrl=${baseUrl}`,
+    ...(model.provider.authSource == null ? [] : [`authSource=${model.provider.authSource}`]),
+  ];
+  const basePayload = buildAgentLlmRawErrorPayload(error);
+  const rawMessageParts = [basePayload.rawMessage, ...contextParts];
+  const rawMessage = rawMessageParts.filter((part) => part.trim().length > 0).join(" | ");
+
+  return new AgentLlmError({
+    kind: normalized.kind,
+    message: normalized.message,
+    retryable: normalized.retryable,
+    ...(normalized.provider == null ? {} : { provider: normalized.provider }),
+    ...(normalized.model == null ? {} : { model: normalized.model }),
+    rawMessage,
+    rawDetails: {
+      ...basePayload,
+      rawMessage,
+      providerApi: model.provider.api,
+      baseUrl,
+      ...(model.provider.authSource == null ? {} : { authSource: model.provider.authSource }),
+      diagnosticStage: stage,
+      diagnosticHint,
+    },
+  });
 }
 
 function normalizeUsage(message: { usage: AssistantMessage["usage"] }): MessageUsage {

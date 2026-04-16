@@ -846,6 +846,117 @@ describe("pi bridge", () => {
     );
   });
 
+  test("enriches generic codex fetch failures returned from assistant results", async () => {
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream([], {
+        role: "assistant" as const,
+        api: "openai-codex-responses" as const,
+        provider: "openai_codex",
+        model: "gpt-5.4",
+        stopReason: "error" as const,
+        content: [],
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        errorMessage: "fetch failed",
+        timestamp: Date.now(),
+      } satisfies AssistantMessage),
+    );
+
+    const bridge = new PiBridge();
+    const error = await bridge
+      .streamTurn({
+        model: createResolvedModel({
+          id: "codex-gpt5.4",
+          upstreamId: "gpt-5.4",
+          providerId: "openai_codex",
+          provider: {
+            id: "openai_codex",
+            api: "openai-codex-responses",
+            authSource: "codex-local",
+          },
+        }),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(AgentLlmError);
+    expect(error).toMatchObject({
+      kind: "upstream",
+      message: "fetch failed",
+      rawMessage: expect.stringContaining(
+        "openai_codex backend request failed before an HTTP response was received",
+      ),
+      rawDetails: expect.objectContaining({
+        providerApi: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        authSource: "codex-local",
+        diagnosticStage: "request",
+      }),
+    });
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      "raw llm failure before normalization",
+      expect.objectContaining({
+        provider: "openai_codex",
+        providerApi: "openai-codex-responses",
+        modelId: "codex-gpt5.4",
+        errorMessage: "fetch failed",
+        diagnosticStage: "request",
+        diagnosticHint: "openai_codex backend request failed before an HTTP response was received",
+      }),
+    );
+  });
+
+  test("enriches codex-local auth fetch failures before request dispatch", async () => {
+    const bridge = new PiBridge({
+      async resolveApiKey() {
+        throw new Error("fetch failed");
+      },
+    });
+
+    const error = await bridge
+      .streamTurn({
+        model: createResolvedModel({
+          id: "codex-gpt5.4",
+          upstreamId: "gpt-5.4",
+          providerId: "openai_codex",
+          provider: {
+            id: "openai_codex",
+            api: "openai-codex-responses",
+            authSource: "codex-local",
+          },
+        }),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(AgentLlmError);
+    expect(error).toMatchObject({
+      kind: "upstream",
+      message: "fetch failed",
+      rawMessage: expect.stringContaining(
+        "codex-local auth resolution failed before an HTTP response was received",
+      ),
+      rawDetails: expect.objectContaining({
+        providerApi: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        authSource: "codex-local",
+        diagnosticStage: "auth",
+      }),
+    });
+  });
+
   test("marks regional availability upstream failures as non-retryable", async () => {
     streamSimpleMock.mockImplementation(() => {
       throw new Error("403 This model is not available in your region.");

@@ -39,6 +39,11 @@ export interface AgentLlmRawErrorPayload {
   responseErrorMessage?: string;
   causeName?: string;
   causeMessage?: string;
+  providerApi?: string;
+  baseUrl?: string;
+  authSource?: string;
+  diagnosticStage?: string;
+  diagnosticHint?: string;
 }
 
 export class AgentLlmError extends Error {
