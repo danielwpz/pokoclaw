@@ -63,6 +63,7 @@ Prefer the narrowest relevant test command first. Run `pnpm preflight` for large
   - isolated meditation logs and daily notes
 - The backtest runner also hard-denies the live `~/.pokoclaw` data tree at the meditation security layer so the replay cannot read or write live runtime data during the run.
 - Use this when iterating on meditation prompts, clustering, evaluation, or rewrite behavior so you do not need to wait for the live cron schedule or clean live state between runs.
+- `pnpm meditation:backtest -- --help` prints the full CLI usage from the script itself.
 - Prefer explicit `--start-at/--end-at` when you want deterministic replay of one known window.
 - Prefer `--lookback-days` when you want a quick sandboxed approximation of the normal production lookback behavior.
 - Common usage:
@@ -75,6 +76,11 @@ Prefer the narrowest relevant test command first. Run `pnpm preflight` for large
   - `--lookback-days`: fallback lookback horizon when `--start-at` is omitted
   - `--last-success-at`: override production `last_success_at` semantics without touching live state; pass `null` to force lookback mode
   - `--label`: names the sandbox folder under `.tmp/meditation-backtests/`
+- Typical inspection flow:
+  - run the replay with a stable `--label`
+  - inspect `.tmp/meditation-backtests/<label>/logs/meditation/...`
+  - inspect `.tmp/meditation-backtests/<label>/workspace/meditation/<date>.md`
+  - delete the sandbox folder when the replay is no longer needed
 - The script logs the sandbox paths it used at the end of the run so you can inspect the replay outputs directly.
 
 ## Meditation Episode Study

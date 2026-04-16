@@ -11,9 +11,7 @@ import type { AppConfig } from "@/src/config/schema.js";
 import { buildMeditationFindingId } from "@/src/meditation/prompts.js";
 import {
   filterEligiblePrivateMemoryRewrites,
-  isMeditationRewriteQualityAcceptable,
   MeditationPipelineRunner,
-  summarizeMeditationRewriteQualityIssues,
 } from "@/src/meditation/runner.js";
 import { MeditationStateRepo } from "@/src/storage/repos/meditation-state.repo.js";
 import {
@@ -220,13 +218,20 @@ describe("MeditationPipelineRunner", () => {
           }
 
           return createSubmitTurnResult({
-            shared_memory_rewrite:
-              "# Preferences\n\n- Prefer concise updates.\n\n# Working Conventions\n\n- Lead with diagnosis before explanation during debugging.\n",
-            private_memory_rewrites: [
+            shared_repeat_use_lessons: null,
+            private_repeat_use_lessons: [
               {
                 agent_id: "agent_sub_1",
-                content:
-                  "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+                lessons: [
+                  {
+                    rule_text:
+                      "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+                    supported_finding_ids: [buildMeditationFindingId("agent_sub_1", 0)],
+                    why_generalizable:
+                      "This is a stable future-facing collaboration rule for this subagent.",
+                    evidence_examples: ["user quote: lead with the diagnosis first"],
+                  },
+                ],
               },
             ],
           });
@@ -368,13 +373,20 @@ describe("MeditationPipelineRunner", () => {
     expect(consolidationRewritePrompt).toContain("Approved Shared Findings");
     expect(consolidationRewritePrompt).toContain("Approved Private Findings By Bucket");
     expect(consolidationRewriteSubmit).toEqual({
-      shared_memory_rewrite:
-        "# Preferences\n\n- Prefer concise updates.\n\n# Working Conventions\n\n- Lead with diagnosis before explanation during debugging.\n",
-      private_memory_rewrites: [
+      shared_repeat_use_lessons: null,
+      private_repeat_use_lessons: [
         {
           agent_id: "agent_sub_1",
-          content:
-            "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+          lessons: [
+            {
+              rule_text:
+                "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+              supported_finding_ids: [buildMeditationFindingId("agent_sub_1", 0)],
+              why_generalizable:
+                "This is a stable future-facing collaboration rule for this subagent.",
+              evidence_examples: ["user quote: lead with the diagnosis first"],
+            },
+          ],
         },
       ],
     });
@@ -389,7 +401,7 @@ describe("MeditationPipelineRunner", () => {
     expect(dailyNote).not.toContain("Internal reasoning should stay in debug artifacts only.");
     expect(sharedMemory).not.toContain("Lead with diagnosis before explanation during debugging.");
     expect(privateMemory).toBe(
-      "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+      "# Scope\n\n# Durable Local Facts\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
     );
   });
 
@@ -755,11 +767,25 @@ describe("MeditationPipelineRunner", () => {
           }
 
           return createSubmitTurnResult({
-            shared_memory_rewrite: "# Shared\n\n- This should be dropped.\n",
-            private_memory_rewrites: [
+            shared_repeat_use_lessons: [
+              {
+                rule_text: "This should be dropped.",
+                supported_finding_ids: [],
+                why_generalizable: "",
+                evidence_examples: [],
+              },
+            ],
+            private_repeat_use_lessons: [
               {
                 agent_id: "agent_sub_1",
-                content: "# Scope\n\n- atlas-web frontend.\n",
+                lessons: [
+                  {
+                    rule_text: "Keep the private rewrite.",
+                    supported_finding_ids: [buildMeditationFindingId("agent_sub_1", 0)],
+                    why_generalizable: "This is still a future-facing subagent rule.",
+                    evidence_examples: ["tool error: Permission request denied."],
+                  },
+                ],
               },
             ],
           });
@@ -788,12 +814,30 @@ describe("MeditationPipelineRunner", () => {
     const consolidationRewriteSubmit = JSON.parse(
       await readFile(path.join(artifactDir, "consolidation-rewrite.submit.json"), "utf8"),
     );
+    const rewriteRejections = JSON.parse(
+      await readFile(path.join(artifactDir, "rewrite-rejections.json"), "utf8"),
+    );
 
     expect(consolidationRewriteSubmit).toMatchObject({
-      shared_memory_rewrite: "# Shared\n\n- This should be dropped.\n",
+      shared_repeat_use_lessons: [
+        {
+          rule_text: "This should be dropped.",
+        },
+      ],
     });
     expect(dailyNote).toContain("Shared memory rewritten: no");
+    expect(dailyNote).toContain("Rewrite rejections:");
     expect(sharedMemory).toBe(initialSharedMemory);
+    expect(rewriteRejections).toEqual([
+      {
+        target: "shared",
+        reasons: expect.arrayContaining([
+          "missing_supported_finding_ids",
+          "missing_generalization_reason",
+          "missing_evidence_examples",
+        ]),
+      },
+    ]);
     await expect(
       readFile(path.join(artifactDir, "rewrite-preview", "shared.md"), "utf8"),
     ).rejects.toThrow();
@@ -831,19 +875,40 @@ describe("MeditationPipelineRunner", () => {
       privateMemoryRewrites: [
         {
           agent_id: "agent_main_1",
-          content: "# Scope\n- should be dropped\n",
+          lessons: [
+            {
+              rule_text: "should be dropped",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "nope",
+              evidence_examples: ["example"],
+            },
+          ],
         },
         {
           agent_id: "agent_sub_1",
-          content: "# Scope\n- should stay\n",
+          lessons: [
+            {
+              rule_text: "should stay",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "ok",
+              evidence_examples: ["example"],
+            },
+          ],
         },
       ],
     });
 
     expect(filtered).toEqual([
       {
-        agent_id: "agent_sub_1",
-        content: "# Scope\n- should stay\n",
+        agentId: "agent_sub_1",
+        lessons: [
+          {
+            rule_text: "should stay",
+            supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+            why_generalizable: "ok",
+            evidence_examples: ["example"],
+          },
+        ],
       },
     ]);
   });
@@ -860,7 +925,14 @@ describe("MeditationPipelineRunner", () => {
       privateMemoryRewrites: [
         {
           agent_id: "agent_sub_1",
-          content: "# Scope\n- should be dropped\n",
+          lessons: [
+            {
+              rule_text: "should be dropped",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "nope",
+              evidence_examples: ["example"],
+            },
+          ],
         },
       ],
     });
@@ -868,7 +940,7 @@ describe("MeditationPipelineRunner", () => {
     expect(filtered).toEqual([]);
   });
 
-  test("drops incident-style private rewrites at the host layer", () => {
+  test("drops structurally invalid private rewrites at the host layer", () => {
     const filtered = filterEligiblePrivateMemoryRewrites({
       bucketPackets: [
         {
@@ -895,23 +967,19 @@ describe("MeditationPipelineRunner", () => {
       privateMemoryRewrites: [
         {
           agent_id: "agent_sub_1",
-          content:
-            "# Durable Local Facts\n\n- The scheduled task failed 4 times across sessions 7d3e814c and aec91bc2 on 2026-04-15T05:33:03.602Z.\n",
+          lessons: [
+            {
+              rule_text: "",
+              supported_finding_ids: [],
+              why_generalizable: "",
+              evidence_examples: [],
+            },
+          ],
         },
       ],
     });
 
     expect(filtered).toEqual([]);
-    expect(
-      summarizeMeditationRewriteQualityIssues(
-        "# Durable Local Facts\n\n- Failed 4 times across sessions a and b on 2026-04-15T05:33:03.602Z.\n",
-      ),
-    ).toEqual(expect.arrayContaining(["timestamp", "session_reference", "incident_count"]));
-    expect(
-      isMeditationRewriteQualityAcceptable(
-        "# Durable Local Facts\n\n- Before scheduling this task, verify the exact registered task name.\n",
-      ),
-    ).toBe(true);
   });
 });
 

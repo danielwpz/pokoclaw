@@ -320,12 +320,20 @@ describe("meditation agent runner", () => {
           expect(input.systemPrompt).toContain("Do not reevaluate the world from scratch.");
           expect(input.messages[0]?.payloadJson).toContain("approved findings");
           return createTurnResult({
-            shared_memory_rewrite: null,
-            private_memory_rewrites: [
+            shared_repeat_use_lessons: null,
+            private_repeat_use_lessons: [
               {
                 agent_id: "agent_sub_1",
-                content:
-                  "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+                lessons: [
+                  {
+                    rule_text:
+                      "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+                    supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+                    why_generalizable:
+                      "This is a stable future-facing collaboration rule for this subagent.",
+                    evidence_examples: ["user quote: lead with the diagnosis first"],
+                  },
+                ],
               },
             ],
           });
@@ -338,12 +346,20 @@ describe("meditation agent runner", () => {
     });
 
     expect(result.submission).toEqual({
-      shared_memory_rewrite: null,
-      private_memory_rewrites: [
+      shared_repeat_use_lessons: null,
+      private_repeat_use_lessons: [
         {
           agent_id: "agent_sub_1",
-          content:
-            "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+          lessons: [
+            {
+              rule_text:
+                "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable:
+                "This is a stable future-facing collaboration rule for this subagent.",
+              evidence_examples: ["user quote: lead with the diagnosis first"],
+            },
+          ],
         },
       ],
     });

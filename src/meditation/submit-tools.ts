@@ -32,9 +32,16 @@ export interface BucketMeditationSubmit {
   findings: MeditationFinding[];
 }
 
-export interface ConsolidationMemoryRewrite {
+export interface ConsolidationRuleProposal {
+  rule_text: string;
+  supported_finding_ids: string[];
+  why_generalizable: string;
+  evidence_examples: string[];
+}
+
+export interface ConsolidationPrivateLessonsProposal {
   agent_id: string;
-  content: string;
+  lessons: ConsolidationRuleProposal[];
 }
 
 export type ConsolidationPriority = "low" | "medium" | "high";
@@ -57,8 +64,8 @@ export interface ConsolidationEvaluationSubmit {
 }
 
 export interface ConsolidationRewriteSubmit {
-  shared_memory_rewrite: string | null;
-  private_memory_rewrites: ConsolidationMemoryRewrite[];
+  shared_repeat_use_lessons: ConsolidationRuleProposal[] | null | "";
+  private_repeat_use_lessons: ConsolidationPrivateLessonsProposal[];
 }
 
 const MEDITATION_FINDING_SCHEMA = Type.Object(
@@ -121,12 +128,36 @@ export const CONSOLIDATION_EVALUATION_SUBMIT_SCHEMA = Type.Object(
 
 export const CONSOLIDATION_REWRITE_SUBMIT_SCHEMA = Type.Object(
   {
-    shared_memory_rewrite: Type.Union([Type.String(), Type.Null()]),
-    private_memory_rewrites: Type.Array(
+    shared_repeat_use_lessons: Type.Union([
+      Type.Array(
+        Type.Object(
+          {
+            rule_text: Type.String(),
+            supported_finding_ids: Type.Array(Type.String()),
+            why_generalizable: Type.String(),
+            evidence_examples: Type.Array(Type.String()),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+      Type.Null(),
+      Type.Literal(""),
+    ]),
+    private_repeat_use_lessons: Type.Array(
       Type.Object(
         {
           agent_id: Type.String(),
-          content: Type.String(),
+          lessons: Type.Array(
+            Type.Object(
+              {
+                rule_text: Type.String(),
+                supported_finding_ids: Type.Array(Type.String()),
+                why_generalizable: Type.String(),
+                evidence_examples: Type.Array(Type.String()),
+              },
+              { additionalProperties: false },
+            ),
+          ),
         },
         { additionalProperties: false },
       ),
@@ -171,10 +202,14 @@ export function createConsolidationRewriteSubmitTool(
   return defineTool({
     name: "submit",
     description:
-      "Submit the final consolidation rewrite with canonical rewrites for shared and touched private memory files.",
+      "Submit structured repeat-use lesson proposals for shared and touched private memory targets.",
     inputSchema: CONSOLIDATION_REWRITE_SUBMIT_SCHEMA,
     execute(_context, args) {
-      onSubmit(args);
+      onSubmit({
+        ...args,
+        shared_repeat_use_lessons:
+          args.shared_repeat_use_lessons === "" ? null : args.shared_repeat_use_lessons,
+      });
       return textToolResult("Meditation consolidation rewrite submitted.");
     },
   });

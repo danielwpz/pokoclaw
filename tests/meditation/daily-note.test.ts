@@ -51,6 +51,7 @@ describe("meditation daily note", () => {
       consolidationSummary: {
         sharedRewritten: true,
         privateRewrittenAgentIds: ["agent_sub_1"],
+        rewriteRejections: [],
       },
     });
 
@@ -62,6 +63,7 @@ describe("meditation daily note", () => {
     expect(block).toContain("user quote: lead with the diagnosis first");
     expect(block).toContain("Shared memory rewritten: yes");
     expect(block).toContain("Private memory rewrites:");
+    expect(block).toContain("Rewrite rejections:");
   });
 
   test("appends multiple run blocks into the same daily note file", async () => {

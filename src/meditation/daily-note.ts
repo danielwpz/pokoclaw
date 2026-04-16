@@ -23,6 +23,11 @@ export interface MeditationDailyBucketBlock {
 export interface MeditationConsolidationSummary {
   sharedRewritten: boolean;
   privateRewrittenAgentIds: string[];
+  rewriteRejections: Array<{
+    target: "shared" | "private";
+    agentId?: string;
+    reasons: string[];
+  }>;
 }
 
 export interface BuildMeditationDailyRunBlockInput {
@@ -67,6 +72,14 @@ export function buildMeditationDailyRunBlock(input: BuildMeditationDailyRunBlock
     ...(input.consolidationSummary.privateRewrittenAgentIds.length === 0
       ? ["  - (none)"]
       : input.consolidationSummary.privateRewrittenAgentIds.map((agentId) => `  - ${agentId}`)),
+    "- Rewrite rejections:",
+    ...(input.consolidationSummary.rewriteRejections.length === 0
+      ? ["  - (none)"]
+      : input.consolidationSummary.rewriteRejections.map((rejection) => {
+          const target =
+            rejection.target === "shared" ? "shared" : `private:${rejection.agentId ?? "unknown"}`;
+          return `  - ${target} :: ${rejection.reasons.join(", ")}`;
+        })),
   ];
 
   return `${lines.join("\n").trimEnd()}\n`;

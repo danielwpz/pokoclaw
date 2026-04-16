@@ -299,7 +299,9 @@ describe("meditation prompts", () => {
 
     expect(systemPrompt).toContain("Do not reevaluate the world from scratch.");
     expect(systemPrompt).toContain("Write durable future-facing rules, not incident reports.");
-    expect(systemPrompt).toContain("Avoid timestamps, session ids, occurrence counts");
+    expect(systemPrompt).toContain(
+      "Avoid retelling one incident. Extract the future-facing rule instead.",
+    );
     expect(systemPrompt).toContain("## Learn The Strategy, Not The Incident");
     expect(systemPrompt).toContain("Generalize one level above the incident:");
     expect(systemPrompt).toContain(
@@ -311,7 +313,9 @@ describe("meditation prompts", () => {
     );
     expect(systemPrompt).toContain("## Good Rewrite Examples");
     expect(systemPrompt).toContain("## Bad Rewrite Examples");
-    expect(systemPrompt).toContain('"shared_memory_rewrite": "string | null"');
+    expect(systemPrompt).toContain('"shared_repeat_use_lessons": [');
+    expect(systemPrompt).toContain('"rule_text": "string"');
+    expect(systemPrompt).toContain('"supported_finding_ids": ["string"]');
     expect(userPrompt).toContain("Approved Shared Findings");
     expect(userPrompt).toContain("Approved Private Findings By Bucket");
     expect(userPrompt).toContain("shared_memory");

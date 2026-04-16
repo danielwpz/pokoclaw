@@ -141,14 +141,17 @@ export function parseMeditationBacktestArgs(argv: string[]): ParsedArgs {
   const normalizedArgv = normalizeMeditationBacktestArgv(argv);
   for (let index = 0; index < normalizedArgv.length; index += 1) {
     const token = normalizedArgv[index];
+    if (token === "--help") {
+      printUsageAndExit(0);
+    }
     if (token == null || !token.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${token ?? "(missing)"}`);
+      printUsageAndExit(1, `Unexpected argument: ${token ?? "(missing)"}`);
     }
 
     const key = token.slice(2);
     const value = normalizedArgv[index + 1];
     if (value == null || value.startsWith("--")) {
-      throw new Error(`Missing value for --${key}`);
+      printUsageAndExit(1, `Missing value for --${key}`);
     }
     values.set(key, value);
     index += 1;
@@ -186,7 +189,7 @@ export function normalizeMeditationBacktestArgv(argv: string[]): string[] {
 function parseDate(value: string, flagName: string): Date {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    throw new Error(`Invalid ${flagName} value: ${value}`);
+    printUsageAndExit(1, `Invalid ${flagName} value: ${value}`);
   }
   return parsed;
 }
@@ -194,9 +197,49 @@ function parseDate(value: string, flagName: string): Date {
 function parsePositiveInteger(value: string, flagName: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`Invalid ${flagName} value: ${value}`);
+    printUsageAndExit(1, `Invalid ${flagName} value: ${value}`);
   }
   return parsed;
+}
+
+function printUsageAndExit(exitCode: number, errorMessage?: string): never {
+  const lines = [
+    "Usage:",
+    "  pnpm meditation:backtest -- --tick-at <iso> [--lookback-days N | --start-at <iso> --end-at <iso>]",
+    "                              [--last-success-at <iso|null>] [--label name]",
+    "",
+    "Description:",
+    "  Replays the normal meditation pipeline inside an isolated sandbox under",
+    "  .tmp/meditation-backtests/<label>/ without mutating live meditation state,",
+    "  live logs, or live memory files.",
+    "",
+    "Flags:",
+    "  --tick-at          Logical run time for the replay. Defaults to now when omitted.",
+    "  --start-at         Explicit UTC window start. If omitted, lookback logic is used.",
+    "  --end-at           Explicit UTC window end. Defaults to --tick-at.",
+    "  --lookback-days    Lookback horizon when --start-at is omitted.",
+    "  --last-success-at  Override meditation_state.last_success_at semantics for the replay.",
+    "                     Pass null to force lookback mode without touching live state.",
+    "  --label            Sandbox folder label under .tmp/meditation-backtests/.",
+    "  --help             Show this usage text.",
+    "",
+    "Examples:",
+    "  pnpm meditation:backtest -- --tick-at 2026-04-15T12:30:00.000Z --lookback-days 7",
+    "  pnpm meditation:backtest -- --tick-at 2026-04-15T12:30:00.000Z --start-at 2026-04-14T00:00:00.000Z --end-at 2026-04-15T00:00:00.000Z --label github-task-window",
+    "  pnpm meditation:backtest -- --tick-at 2026-04-15T12:30:00.000Z --lookback-days 7 --last-success-at null",
+    "",
+    "Outputs:",
+    "  The script logs the sandboxRoot, workspaceDir, logsDir, and databasePath so",
+    "  you can inspect the replay outputs directly after the run.",
+  ];
+
+  const output = [errorMessage, ...lines].filter(Boolean).join("\n");
+  if (exitCode === 0) {
+    console.log(output);
+  } else {
+    console.error(output);
+  }
+  process.exit(exitCode);
 }
 
 const isDirectExecution =
