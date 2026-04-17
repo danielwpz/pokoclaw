@@ -783,6 +783,287 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("reconciles run card with a higher sequence after an ambiguous 504 update failure", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: { card_id: "card_1" },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: { message_id: "om_card_1", open_message_id: "om_open_1" },
+    }));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const ambiguous504 = new Error("Request failed with status code 504") as Error & {
+      response?: { status: number };
+    };
+    ambiguous504.response = { status: 504 };
+    const updateCard = vi.fn().mockRejectedValueOnce(ambiguous504).mockResolvedValueOnce({});
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: updateCard,
+                  },
+                  cardElement: {
+                    content: streamContent,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_504_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_504_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+        delta: "hello",
+        accumulatedText: "hello",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_504_3",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+        text: "hello",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(updateCard).toHaveBeenCalledTimes(2);
+    expect(updateCard.mock.calls.at(0)?.[0]).toMatchObject({
+      path: { card_id: "card_1" },
+      data: { sequence: 1 },
+    });
+    expect(updateCard.mock.calls.at(1)?.[0]).toMatchObject({
+      path: { card_id: "card_1" },
+      data: { sequence: 2 },
+    });
+
+    const binding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_1:seg:1",
+    });
+    expect(binding?.lastSequence).toBe(2);
+
+    await runtime.shutdown();
+  });
+
+  test("reconciles run card with a higher sequence after a sequence-compare failure", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: { card_id: "card_1" },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: { message_id: "om_card_1", open_message_id: "om_open_1" },
+    }));
+    const streamContent = vi.fn(async (_input: unknown) => ({}));
+    const updateCard = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 300317, msg: "ErrMsg: sequence number compare failed;" })
+      .mockResolvedValueOnce({});
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: updateCard,
+                  },
+                  cardElement: {
+                    content: streamContent,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_300317_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_300317_2",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+        delta: "hello",
+        accumulatedText: "hello",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_300317_3",
+        createdAt: "2026-03-28T00:00:02.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+        text: "hello",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(updateCard).toHaveBeenCalledTimes(2);
+    expect(updateCard.mock.calls.at(0)?.[0]).toMatchObject({
+      path: { card_id: "card_1" },
+      data: { sequence: 1 },
+    });
+    expect(updateCard.mock.calls.at(1)?.[0]).toMatchObject({
+      path: { card_id: "card_1" },
+      data: { sequence: 2 },
+    });
+
+    const binding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_1:seg:1",
+    });
+    expect(binding?.lastSequence).toBe(2);
+
+    await runtime.shutdown();
+  });
+
   test("updates steer reactions when a queued steer message is consumed", async () => {
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`

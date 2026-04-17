@@ -12,6 +12,16 @@ import {
   reduceLarkApprovalState,
   shouldHandleLarkApprovalRuntimeEvent,
 } from "@/src/channels/lark/approval-state.js";
+import {
+  buildBindingMetadata,
+  getNextCardkitSequence,
+  invokeLarkCardkitCallWithBusinessRetry,
+  invokeSequencedLarkCardkitMutation,
+  type LarkCardCreateResponse,
+  type LarkCardOperationResponse,
+  parseBindingMetadata,
+  setCardkitSequenceFloorInMetadata,
+} from "@/src/channels/lark/cardkit-mutations.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
   addLarkMessageReaction,
@@ -57,22 +67,9 @@ const RUN_CARD_OBJECT_KIND = "run_card";
 const APPROVAL_CARD_OBJECT_KIND = "approval_card";
 const SUBAGENT_REQUEST_CARD_OBJECT_KIND = "subagent_creation_request_card";
 const LARK_CARD_LOG_PREVIEW_MAX_LENGTH = 600;
-const LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT = 1;
+const LARK_CARDKIT_RECONCILE_RETRY_DELAY_MS = 1000;
 const TASK_STATUS_DELIVERY_PREFIX = "task_status:";
 const STEER_CONFIRMED_REACTION_EMOJI = "OK";
-
-interface LarkCardCreateResponse extends LarkCardOperationResponse {
-  data?: {
-    card_id?: string;
-  };
-  card_id?: string;
-}
-
-interface LarkCardOperationResponse {
-  code?: number;
-  msg?: string;
-  data?: Record<string, unknown>;
-}
 
 interface LarkCardElementContentInput {
   path: {
@@ -157,7 +154,10 @@ export function createLarkOutboundRuntime(
   const urgentFlushes = new Set<string>();
   let unsubscribe: (() => void) | null = null;
 
-  const scheduleFlush = (deliveryId: string, options?: { immediate?: boolean }) => {
+  const scheduleFlush = (
+    deliveryId: string,
+    options?: { immediate?: boolean; delayMs?: number },
+  ) => {
     if (options?.immediate === true) {
       urgentFlushes.add(deliveryId);
       const existing = scheduled.get(deliveryId);
@@ -185,13 +185,48 @@ export function createLarkOutboundRuntime(
             error: error instanceof Error ? error.message : String(error),
           });
         });
-      }, DELIVERY_INTERVAL_MS),
+      }, options?.delayMs ?? DELIVERY_INTERVAL_MS),
     );
   };
 
-  const bumpVersionAndSchedule = (deliveryId: string, options?: { immediate?: boolean }) => {
+  const bumpVersionAndSchedule = (
+    deliveryId: string,
+    options?: { immediate?: boolean; delayMs?: number },
+  ) => {
     deliveryVersions.set(deliveryId, (deliveryVersions.get(deliveryId) ?? 0) + 1);
     scheduleFlush(deliveryId, options);
+  };
+
+  const scheduleCardkitSequenceReconcile = (input: {
+    bindingsRepo: LarkObjectBindingsRepo;
+    channelInstallationId: string;
+    internalObjectKind: string;
+    internalObjectId: string;
+    metadataJson: string;
+    nextSequenceFloor: number;
+    deliveryId: string;
+    logContext: Record<string, unknown>;
+    reason: "ambiguous_transport_failure" | "sequence_compare_failed";
+  }) => {
+    const nextMetadataJson = setCardkitSequenceFloorInMetadata(
+      input.metadataJson,
+      input.nextSequenceFloor,
+    );
+    input.bindingsRepo.updateDeliveryState({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+      metadataJson: nextMetadataJson,
+    });
+    logger.warn("scheduled lark cardkit reconcile after sequence uncertainty", {
+      reason: input.reason,
+      nextSequenceFloor: input.nextSequenceFloor,
+      deliveryId: input.deliveryId,
+      ...input.logContext,
+    });
+    bumpVersionAndSchedule(input.deliveryId, {
+      delayMs: LARK_CARDKIT_RECONCILE_RETRY_DELAY_MS,
+    });
   };
 
   const flushDelivery = async (deliveryId: string) => {
@@ -268,6 +303,7 @@ export function createLarkOutboundRuntime(
 
     if (binding.larkCardId == null) {
       const createResp = await invokeLarkCardkitCallWithBusinessRetry({
+        logger,
         operation: "card.create",
         logContext: bindingInput.logContext,
         invoke: () =>
@@ -462,15 +498,18 @@ export function createLarkOutboundRuntime(
           state.terminal === "running" && renderedPage.pageIndex === renderedPage.pageCount
             ? "active"
             : "finalized";
-        const metadataJson = JSON.stringify({
-          activeAssistantBlockId,
-          pageIndex: renderedPage.pageIndex,
-          pageCount: renderedPage.pageCount,
-          runId: state.runId,
-          sessionId: state.sessionId,
-          taskRunId: state.taskRunId,
-          taskRunType: state.taskRunType,
-        });
+        const metadataJson = buildBindingMetadata(
+          {
+            activeAssistantBlockId,
+            pageIndex: renderedPage.pageIndex,
+            pageCount: renderedPage.pageCount,
+            runId: state.runId,
+            sessionId: state.sessionId,
+            taskRunId: state.taskRunId,
+            taskRunType: state.taskRunType,
+          },
+          existing?.metadataJson ?? null,
+        );
 
         logger.debug("computed lark run card delivery decision", {
           runId: state.runId,
@@ -553,13 +592,15 @@ export function createLarkOutboundRuntime(
           if (elementId == null || existing.larkCardId == null) {
             continue;
           }
-          const sequence = (existing.lastSequence ?? 0) + 1;
+          const sequence = getNextCardkitSequence(existing);
           const larkCardId = existing.larkCardId;
           if (larkCardId == null) {
             continue;
           }
-          await invokeLarkCardkitCallWithBusinessRetry({
+          const mutation = await invokeSequencedLarkCardkitMutation({
+            logger,
             operation: "cardElement.content",
+            sequence,
             logContext: {
               runId: state.runId,
               runCardObjectId,
@@ -581,6 +622,28 @@ export function createLarkOutboundRuntime(
                 },
               }),
           });
+          if (mutation.kind === "reconcile") {
+            scheduleCardkitSequenceReconcile({
+              bindingsRepo,
+              channelInstallationId: target.channelInstallationId,
+              internalObjectKind: RUN_CARD_OBJECT_KIND,
+              internalObjectId: pageObjectId,
+              metadataJson,
+              nextSequenceFloor: mutation.nextSequenceFloor,
+              deliveryId: `run:${runCardObjectId}`,
+              logContext: {
+                runId: state.runId,
+                runCardObjectId,
+                pageObjectId,
+                pageIndex: renderedPage.pageIndex,
+                channelInstallationId: target.channelInstallationId,
+                larkCardId,
+                sequence,
+              },
+              reason: mutation.reason,
+            });
+            continue;
+          }
           bindingsRepo.updateDeliveryState({
             channelInstallationId: target.channelInstallationId,
             internalObjectKind: RUN_CARD_OBJECT_KIND,
@@ -611,13 +674,15 @@ export function createLarkOutboundRuntime(
           continue;
         }
 
-        const sequence = (existing.lastSequence ?? 0) + 1;
+        const sequence = getNextCardkitSequence(existing);
         const larkCardId = existing.larkCardId;
         if (larkCardId == null) {
           continue;
         }
-        await invokeLarkCardkitCallWithBusinessRetry({
+        const mutation = await invokeSequencedLarkCardkitMutation({
+          logger,
           operation: "card.update",
+          sequence,
           logContext: {
             runId: state.runId,
             runCardObjectId,
@@ -639,6 +704,28 @@ export function createLarkOutboundRuntime(
               },
             }),
         });
+        if (mutation.kind === "reconcile") {
+          scheduleCardkitSequenceReconcile({
+            bindingsRepo,
+            channelInstallationId: target.channelInstallationId,
+            internalObjectKind: RUN_CARD_OBJECT_KIND,
+            internalObjectId: pageObjectId,
+            metadataJson,
+            nextSequenceFloor: mutation.nextSequenceFloor,
+            deliveryId: `run:${runCardObjectId}`,
+            logContext: {
+              runId: state.runId,
+              runCardObjectId,
+              pageObjectId,
+              pageIndex: renderedPage.pageIndex,
+              channelInstallationId: target.channelInstallationId,
+              larkCardId,
+              sequence,
+            },
+            reason: mutation.reason,
+          });
+          continue;
+        }
         bindingsRepo.updateDeliveryState({
           channelInstallationId: target.channelInstallationId,
           internalObjectKind: RUN_CARD_OBJECT_KIND,
@@ -673,13 +760,22 @@ export function createLarkOutboundRuntime(
         }
 
         const staleCard = buildStaleRunCardCard();
-        const sequence = (binding.lastSequence ?? 0) + 1;
+        const sequence = getNextCardkitSequence(binding);
         const larkCardId = binding.larkCardId;
         if (larkCardId == null) {
           continue;
         }
-        await invokeLarkCardkitCallWithBusinessRetry({
+        const staleMetadataJson = buildBindingMetadata(
+          {
+            pageState: "stale",
+            runId: state.runId,
+          },
+          binding.metadataJson,
+        );
+        const mutation = await invokeSequencedLarkCardkitMutation({
+          logger,
           operation: "card.update",
+          sequence,
           logContext: {
             runId: state.runId,
             runCardObjectId,
@@ -700,16 +796,34 @@ export function createLarkOutboundRuntime(
               },
             }),
         });
+        if (mutation.kind === "reconcile") {
+          scheduleCardkitSequenceReconcile({
+            bindingsRepo,
+            channelInstallationId: target.channelInstallationId,
+            internalObjectKind: RUN_CARD_OBJECT_KIND,
+            internalObjectId: binding.internalObjectId,
+            metadataJson: staleMetadataJson,
+            nextSequenceFloor: mutation.nextSequenceFloor,
+            deliveryId: `run:${runCardObjectId}`,
+            logContext: {
+              runId: state.runId,
+              runCardObjectId,
+              stalePageObjectId: binding.internalObjectId,
+              channelInstallationId: target.channelInstallationId,
+              larkCardId,
+              sequence,
+            },
+            reason: mutation.reason,
+          });
+          continue;
+        }
         bindingsRepo.updateDeliveryState({
           channelInstallationId: target.channelInstallationId,
           internalObjectKind: RUN_CARD_OBJECT_KIND,
           internalObjectId: binding.internalObjectId,
           lastSequence: sequence,
           status: "stale",
-          metadataJson: JSON.stringify({
-            pageState: "stale",
-            runId: state.runId,
-          }),
+          metadataJson: staleMetadataJson,
         });
         deliverySnapshots.set(`${target.channelInstallationId}:run:${binding.internalObjectId}`, {
           structureSignature: JSON.stringify(staleCard),
@@ -770,20 +884,23 @@ export function createLarkOutboundRuntime(
       const snapshot = deliverySnapshots.get(snapshotKey) ?? null;
       const shouldRenderUpdate =
         snapshot == null || snapshot.structureSignature !== rendered.structureSignature;
-      let metadataJson = JSON.stringify({
-        sessionId: state.sessionId,
-        taskRunId: state.taskRunId,
-        taskRunType: state.taskRunType,
-        role: "task_status",
-        ...(taskTitle == null ? {} : { taskTitle }),
-        ...(readStringValue(existingMetadata.fullTerminalMessageSignature) == null
-          ? {}
-          : {
-              fullTerminalMessageSignature: readStringValue(
-                existingMetadata.fullTerminalMessageSignature,
-              ),
-            }),
-      });
+      let metadataJson = buildBindingMetadata(
+        {
+          sessionId: state.sessionId,
+          taskRunId: state.taskRunId,
+          taskRunType: state.taskRunType,
+          role: "task_status",
+          ...(taskTitle == null ? {} : { taskTitle }),
+          ...(readStringValue(existingMetadata.fullTerminalMessageSignature) == null
+            ? {}
+            : {
+                fullTerminalMessageSignature: readStringValue(
+                  existingMetadata.fullTerminalMessageSignature,
+                ),
+              }),
+        },
+        existing?.metadataJson ?? null,
+      );
       const status = state.terminal === "running" ? "active" : "finalized";
 
       if (existing?.larkCardId == null || existing.larkMessageId == null) {
@@ -845,13 +962,15 @@ export function createLarkOutboundRuntime(
         continue;
       }
 
-      const sequence = (existing.lastSequence ?? 0) + 1;
+      const sequence = getNextCardkitSequence(existing);
       const larkCardId = existing.larkCardId;
       if (larkCardId == null) {
         continue;
       }
-      await invokeLarkCardkitCallWithBusinessRetry({
+      const mutation = await invokeSequencedLarkCardkitMutation({
+        logger,
         operation: "card.update",
+        sequence,
         logContext: {
           taskRunId,
           cardRole: "task_status",
@@ -871,6 +990,26 @@ export function createLarkOutboundRuntime(
             },
           }),
       });
+      if (mutation.kind === "reconcile") {
+        scheduleCardkitSequenceReconcile({
+          bindingsRepo,
+          channelInstallationId: target.channelInstallationId,
+          internalObjectKind: RUN_CARD_OBJECT_KIND,
+          internalObjectId,
+          metadataJson,
+          nextSequenceFloor: mutation.nextSequenceFloor,
+          deliveryId: `${TASK_STATUS_DELIVERY_PREFIX}${taskRunId}`,
+          logContext: {
+            taskRunId,
+            cardRole: "task_status",
+            channelInstallationId: target.channelInstallationId,
+            larkCardId,
+            sequence,
+          },
+          reason: mutation.reason,
+        });
+        continue;
+      }
       bindingsRepo.updateDeliveryState({
         channelInstallationId: target.channelInstallationId,
         internalObjectKind: RUN_CARD_OBJECT_KIND,
@@ -990,13 +1129,22 @@ export function createLarkOutboundRuntime(
         continue;
       }
 
-      const sequence = (existing.lastSequence ?? 0) + 1;
+      const sequence = getNextCardkitSequence(existing);
       const larkCardId = existing.larkCardId;
       if (larkCardId == null) {
         continue;
       }
-      await invokeLarkCardkitCallWithBusinessRetry({
+      const metadataJson = buildBindingMetadata(
+        {
+          approvalId,
+          runId: state.runId,
+        },
+        existing.metadataJson,
+      );
+      const mutation = await invokeSequencedLarkCardkitMutation({
+        logger,
         operation: "card.update",
+        sequence,
         logContext: {
           approvalId,
           runId: state.runId,
@@ -1016,16 +1164,33 @@ export function createLarkOutboundRuntime(
             },
           }),
       });
+      if (mutation.kind === "reconcile") {
+        scheduleCardkitSequenceReconcile({
+          bindingsRepo,
+          channelInstallationId: target.channelInstallationId,
+          internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
+          internalObjectId: approvalId,
+          metadataJson,
+          nextSequenceFloor: mutation.nextSequenceFloor,
+          deliveryId: `approval:${approvalId}`,
+          logContext: {
+            approvalId,
+            runId: state.runId,
+            channelInstallationId: target.channelInstallationId,
+            larkCardId,
+            sequence,
+          },
+          reason: mutation.reason,
+        });
+        continue;
+      }
       bindingsRepo.updateDeliveryState({
         channelInstallationId: target.channelInstallationId,
         internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
         internalObjectId: approvalId,
         lastSequence: sequence,
         status: state.resolved ? "finalized" : "active",
-        metadataJson: JSON.stringify({
-          approvalId,
-          runId: state.runId,
-        }),
+        metadataJson,
       });
       logger.debug("updated standalone lark approval card", {
         approvalId,
@@ -1096,13 +1261,22 @@ export function createLarkOutboundRuntime(
         continue;
       }
 
-      const sequence = (existing.lastSequence ?? 0) + 1;
+      const sequence = getNextCardkitSequence(existing);
       const larkCardId = existing.larkCardId;
       if (larkCardId == null) {
         continue;
       }
-      await invokeLarkCardkitCallWithBusinessRetry({
+      const metadataJson = buildBindingMetadata(
+        {
+          requestId,
+          status: entry.state.status,
+        },
+        existing.metadataJson,
+      );
+      const mutation = await invokeSequencedLarkCardkitMutation({
+        logger,
         operation: "card.update",
+        sequence,
         logContext: {
           requestId,
           status: entry.state.status,
@@ -1122,16 +1296,33 @@ export function createLarkOutboundRuntime(
             },
           }),
       });
+      if (mutation.kind === "reconcile") {
+        scheduleCardkitSequenceReconcile({
+          bindingsRepo,
+          channelInstallationId: surface.channelInstallationId,
+          internalObjectKind: SUBAGENT_REQUEST_CARD_OBJECT_KIND,
+          internalObjectId: requestId,
+          metadataJson,
+          nextSequenceFloor: mutation.nextSequenceFloor,
+          deliveryId: `subagent:${requestId}`,
+          logContext: {
+            requestId,
+            status: entry.state.status,
+            channelInstallationId: surface.channelInstallationId,
+            larkCardId,
+            sequence,
+          },
+          reason: mutation.reason,
+        });
+        continue;
+      }
       bindingsRepo.updateDeliveryState({
         channelInstallationId: surface.channelInstallationId,
         internalObjectKind: SUBAGENT_REQUEST_CARD_OBJECT_KIND,
         internalObjectId: requestId,
         lastSequence: sequence,
         status: entry.state.status === "pending" ? "active" : "finalized",
-        metadataJson: JSON.stringify({
-          requestId,
-          status: entry.state.status,
-        }),
+        metadataJson,
       });
     }
   };
@@ -1607,19 +1798,6 @@ function parseSurfaceObject(raw: string): Record<string, unknown> {
   return {};
 }
 
-function parseBindingMetadata(raw: string | null): Record<string, unknown> {
-  if (raw == null || raw.trim().length === 0) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed === "object" && parsed != null && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {}
-  return {};
-}
-
 async function sendLarkInteractiveCardReferenceMessage(input: {
   client: LarkSdkClient;
   chatId: string;
@@ -2050,53 +2228,6 @@ function truncateLogText(text: string, maxLength: number): string {
   }
 
   return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-
-async function invokeLarkCardkitCallWithBusinessRetry<T extends LarkCardOperationResponse>(input: {
-  operation: "card.create" | "card.update" | "cardElement.content";
-  logContext: Record<string, unknown>;
-  invoke: () => Promise<T>;
-}): Promise<T> {
-  let attempt = 0;
-  while (true) {
-    const response = await input.invoke();
-    const code = response.code;
-    if (code == null || code === 0) {
-      return response;
-    }
-
-    const responsePreview = truncateLogText(safeJson(response), LARK_CARD_LOG_PREVIEW_MAX_LENGTH);
-    if (attempt < LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT) {
-      // CardKit sequencing is owned by the caller. Retries must replay the exact
-      // same request payload, including the same sequence number, rather than
-      // incrementing local delivery state inside this helper.
-      logger.warn("lark cardkit call returned non-zero code; retrying once", {
-        operation: input.operation,
-        attempt: attempt + 1,
-        retryLimit: LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT,
-        code,
-        msg: response.msg ?? null,
-        responsePreview,
-        ...input.logContext,
-      });
-      attempt += 1;
-      continue;
-    }
-
-    logger.error(
-      "lark cardkit call kept non-zero code after retry; continuing with current logic",
-      {
-        operation: input.operation,
-        attempt: attempt + 1,
-        retryLimit: LARK_CARDKIT_NONZERO_CODE_RETRY_LIMIT,
-        code,
-        msg: response.msg ?? null,
-        responsePreview,
-        ...input.logContext,
-      },
-    );
-    return response;
-  }
 }
 
 function getCardkitSdk(client: LarkSdkClient): {
