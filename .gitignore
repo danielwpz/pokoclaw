@@ -29,6 +29,8 @@ pnpm-debug.log*
 .vscode/
 .idea/
 .claude/
+.agents/
+skills-lock.json
 
 # runtime temp
 .tmp/
