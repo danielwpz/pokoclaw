@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { createLarkApprovalStateFromRequest } from "@/src/channels/lark/approval-state.js";
+import {
+  createLarkApprovalStateFromRequest,
+  reduceLarkApprovalState,
+} from "@/src/channels/lark/approval-state.js";
 import {
   buildLarkRenderedApprovalCard,
   buildLarkRenderedRunCard,
@@ -1022,12 +1025,43 @@ describe("lark run state", () => {
         messageId: "msg_approval_1",
       }),
     );
-    state = markLarkRunAwaitingApproval(state);
+    state = markLarkRunAwaitingApproval(state, {
+      approvalTarget: "user",
+    });
 
     const cardText = JSON.stringify(renderLarkRunCard(state));
     expect(cardText).toContain("等待授权");
     expect(cardText).toContain("当前执行已暂停");
     expect(cardText).not.toContain("⏹ 停止");
+  });
+
+  test("keeps delegated approval cards in a running state with wait footer and stop button", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeTaskRuntimeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_approval_delegate_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        toolCallId: "tool_perm_1",
+        toolName: "request_permissions",
+        args: { justification: "need access" },
+      }),
+    );
+    state = markLarkRunAwaitingApproval(state, {
+      approvalTarget: "main_agent",
+    });
+
+    const cardText = JSON.stringify(renderLarkRunCard(state));
+    expect(cardText).toContain("等待批复");
+    expect(cardText).toContain("定时任务等待批复");
+    expect(cardText).toContain("等待授权处理");
+    expect(cardText).toContain("⏹ 停止");
+    expect(cardText).not.toContain("当前执行已暂停");
   });
 
   test("marks the prior run card as continued or denied after approval resolution", () => {
@@ -1046,16 +1080,31 @@ describe("lark run state", () => {
           messageId: "msg_approval_2",
         }),
       ),
+      {
+        approvalTarget: "user",
+      },
     );
 
     const approvedText = JSON.stringify(
-      renderLarkRunCard(markLarkRunApprovalResolved(base, "approve")),
+      renderLarkRunCard(
+        markLarkRunApprovalResolved(base, {
+          decision: "approve",
+          actor: "lark:default:user_1",
+        }),
+      ),
     );
     expect(approvedText).toContain("已获授权");
     expect(approvedText).toContain("新的卡片");
     expect(approvedText).not.toContain("⏹ 停止");
 
-    const deniedText = JSON.stringify(renderLarkRunCard(markLarkRunApprovalResolved(base, "deny")));
+    const deniedText = JSON.stringify(
+      renderLarkRunCard(
+        markLarkRunApprovalResolved(base, {
+          decision: "deny",
+          actor: "lark:default:user_1",
+        }),
+      ),
+    );
     expect(deniedText).toContain("已拒绝");
     expect(deniedText).toContain("本次执行已停止");
     expect(deniedText).not.toContain("⏹ 停止");
@@ -1078,7 +1127,9 @@ describe("lark run state", () => {
         args: { reason: "need access" },
       }),
     );
-    state = markLarkRunAwaitingApproval(state);
+    state = markLarkRunAwaitingApproval(state, {
+      approvalTarget: "user",
+    });
 
     const cardText = JSON.stringify(renderLarkRunCard(state));
     expect(cardText).toContain("request_permissions");
@@ -1226,6 +1277,117 @@ describe("lark run state", () => {
     expect(cardText).toContain("拒绝");
   });
 
+  test("reuses one approval flow card across timeout fallback and final delegated approval", () => {
+    let approvalState = reduceLarkApprovalState(
+      null,
+      makeTaskRuntimeEnvelope({
+        type: "approval_requested",
+        eventId: "evt_approval_flow_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        approvalId: "approval_1",
+        approvalFlowId: "flow_1",
+        approvalAttemptIndex: 1,
+        approvalTarget: "user",
+        title: "需要授权",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/tmp/output.txt" }],
+        },
+        reasonText: "需要写入输出文件。",
+        expiresAt: null,
+      }),
+      {
+        sourceRunCardObjectId: "run_task_1:seg:1",
+      },
+    );
+    expect(approvalState).not.toBeNull();
+
+    approvalState = reduceLarkApprovalState(
+      approvalState,
+      makeTaskRuntimeEnvelope({
+        type: "approval_resolved",
+        eventId: "evt_approval_flow_2",
+        createdAt: "2026-03-28T00:00:20.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        approvalId: "approval_1",
+        approvalFlowId: "flow_1",
+        approvalAttemptIndex: 1,
+        decision: "deny",
+        actor: "system:timeout",
+        rawInput: null,
+        flowContinues: true,
+      }),
+    );
+    expect(approvalState).not.toBeNull();
+
+    approvalState = reduceLarkApprovalState(
+      approvalState,
+      makeTaskRuntimeEnvelope({
+        type: "approval_requested",
+        eventId: "evt_approval_flow_3",
+        createdAt: "2026-03-28T00:00:20.100Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        approvalId: "approval_2",
+        approvalFlowId: "flow_1",
+        approvalAttemptIndex: 2,
+        approvalTarget: "main_agent",
+        title: "需要授权",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/tmp/output.txt" }],
+        },
+        reasonText: "需要写入输出文件。",
+        expiresAt: null,
+      }),
+    );
+    expect(approvalState).not.toBeNull();
+    if (approvalState == null) {
+      throw new Error("approvalState should be initialized");
+    }
+
+    const delegatedPendingText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
+    expect(delegatedPendingText).toContain("已转交主 Agent 代批");
+    expect(delegatedPendingText).toContain("等待主 Agent 代批");
+    expect(delegatedPendingText).not.toContain("允许 永久");
+    expect(delegatedPendingText).not.toContain("拒绝");
+
+    approvalState = reduceLarkApprovalState(
+      approvalState,
+      makeTaskRuntimeEnvelope({
+        type: "approval_resolved",
+        eventId: "evt_approval_flow_4",
+        createdAt: "2026-03-28T00:00:23.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        approvalId: "approval_2",
+        approvalFlowId: "flow_1",
+        approvalAttemptIndex: 2,
+        decision: "approve",
+        actor: "main_agent:delegate",
+        rawInput: "approve",
+        flowContinues: false,
+      }),
+    );
+    expect(approvalState).not.toBeNull();
+    if (approvalState == null) {
+      throw new Error("approvalState should resolve");
+    }
+
+    const finalText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
+    expect(finalText).toContain("主 Agent 已批准");
+    expect(finalText).toContain("任务将继续执行");
+  });
+
   test("formats single-path approval titles with bold access and code-wrapped path", () => {
     const approvalState = createLarkApprovalStateFromRequest({
       event: {
@@ -1339,6 +1501,8 @@ describe("lark run state", () => {
 
     const resolved = {
       ...approvalState,
+      currentApprovalId: null,
+      phase: "approved" as const,
       resolved: true as const,
       decision: "approve" as const,
       actor: "user:test",
@@ -1346,7 +1510,7 @@ describe("lark run state", () => {
 
     const cardText = JSON.stringify(buildLarkRenderedApprovalCard(resolved).card);
     expect(cardText).not.toContain("### 已授权");
-    expect(cardText).toContain("授权请求 — 授权成功");
+    expect(cardText).toContain("授权请求 — 已批准");
     expect(cardText).toContain("**权限**");
     expect(cardText).toContain("**Write** `/Users/example/Desktop/test-new-2.js`");
     expect(cardText).not.toContain("**结果**：agent 将继续执行。");
@@ -1382,6 +1546,8 @@ describe("lark run state", () => {
 
     const resolved = {
       ...approvalState,
+      currentApprovalId: null,
+      phase: "approved" as const,
       resolved: true as const,
       decision: "approve" as const,
       actor: "user:test",

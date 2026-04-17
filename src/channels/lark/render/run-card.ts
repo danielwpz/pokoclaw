@@ -590,6 +590,13 @@ function renderEmptyRunStatePlaceholder(
     return null;
   }
 
+  if (state.awaitingApprovalTarget === "main_agent") {
+    return {
+      tag: "markdown",
+      content: "🔐 **正在等待批复**\n\n主 Agent 正在审核当前授权请求。",
+    };
+  }
+
   if (state.terminal === "awaiting_approval") {
     return {
       tag: "markdown",
@@ -730,6 +737,13 @@ function renderFooter(
       text_size: "notation",
     });
   }
+  if (status === "waiting_approval") {
+    elements.push({
+      tag: "markdown",
+      content: "🔐 等待批复",
+      text_size: "notation",
+    });
+  }
   if (terminal === "running" && runId != null && runId.trim().length > 0) {
     elements.push({
       tag: "button",
@@ -766,6 +780,9 @@ function summarizeRunState(state: LarkRunState): string {
     if (state.terminal === "denied") {
       return `${taskKind}已拒绝`;
     }
+    if (state.footerStatus === "waiting_approval") {
+      return `${taskKind}等待批复`;
+    }
     if (state.footerStatus === "thinking") {
       return `${taskKind}正在思考`;
     }
@@ -798,6 +815,9 @@ function summarizeRunState(state: LarkRunState): string {
   }
   if (state.terminal === "denied") {
     return "已拒绝";
+  }
+  if (state.footerStatus === "waiting_approval") {
+    return "等待批复";
   }
   if (state.footerStatus === "thinking") {
     return "正在思考";

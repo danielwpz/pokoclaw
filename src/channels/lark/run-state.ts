@@ -19,7 +19,7 @@ import type {
   OrchestratedTaskRunEventEnvelope,
 } from "@/src/orchestration/outbound-events.js";
 
-export type LarkFooterStatus = "thinking" | "tool_running" | null;
+export type LarkFooterStatus = "thinking" | "tool_running" | "waiting_approval" | null;
 
 export interface LarkAssistantTextBlock {
   kind: "assistant_text";
@@ -73,6 +73,7 @@ export interface LarkRunState {
   activeAssistantMessageId: string | null;
   activeToolSequenceBlockId: string | null;
   footerStatus: LarkFooterStatus;
+  awaitingApprovalTarget: "user" | "main_agent" | null;
   reasoning: LarkReasoningState;
   terminal: LarkRunTerminal;
   terminalErrorKind: string | null;
@@ -178,6 +179,7 @@ function createInitialRunState(input: {
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: null,
+    awaitingApprovalTarget: null,
     reasoning: {
       content: "",
       expanded: false,
@@ -212,6 +214,7 @@ function onAssistantMessageStarted(
     ...state,
     activeAssistantMessageId: event.messageId,
     footerStatus: "thinking",
+    awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
       active: false,
@@ -257,6 +260,7 @@ function onAssistantMessageDelta(
         ? null
         : state.activeToolSequenceBlockId,
     footerStatus: null,
+    awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
       active: false,
@@ -274,6 +278,7 @@ function onAssistantReasoningDelta(
   return {
     ...state,
     footerStatus: "thinking",
+    awaitingApprovalTarget: null,
     reasoning: {
       content:
         event.delta.length === 0
@@ -311,6 +316,7 @@ function onAssistantMessageCompleted(
     activeToolSequenceBlockId:
       existingBlock == null && hasVisibleText ? null : state.activeToolSequenceBlockId,
     footerStatus: null,
+    awaitingApprovalTarget: null,
     reasoning: {
       content:
         event.reasoningText == null || event.reasoningText.trim().length === 0
@@ -361,6 +367,7 @@ function onToolCallStarted(state: LarkRunState, event: ToolCallStartedEvent): La
     ),
     activeToolSequenceBlockId,
     footerStatus: "tool_running",
+    awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
       active: false,
@@ -385,6 +392,7 @@ function onToolCallCompleted(state: LarkRunState, event: ToolCallCompletedEvent)
         : block,
     ),
     footerStatus: hasRunningTool(state.blocks, event.toolCallId) ? "tool_running" : null,
+    awaitingApprovalTarget: null,
   };
 }
 
@@ -408,6 +416,7 @@ function onToolCallFailed(state: LarkRunState, event: ToolCallFailedEvent): Lark
         : block,
     ),
     footerStatus: hasRunningTool(state.blocks, event.toolCallId) ? "tool_running" : null,
+    awaitingApprovalTarget: null,
   };
 }
 
@@ -447,6 +456,7 @@ function finalizeRun(
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: null,
+    awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
       active: false,
@@ -475,6 +485,7 @@ function finalizeTaskRun(
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: null,
+    awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
       active: false,
@@ -486,19 +497,25 @@ function finalizeTaskRun(
   };
 }
 
-export function markLarkRunAwaitingApproval(state: LarkRunState): LarkRunState {
+export function markLarkRunAwaitingApproval(
+  state: LarkRunState,
+  input: {
+    approvalTarget: "user" | "main_agent";
+  },
+): LarkRunState {
   return {
     ...state,
     blocks: finalizeActiveToolSequenceIfNeeded(state.blocks, state.activeToolSequenceBlockId),
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
-    footerStatus: null,
+    footerStatus: input.approvalTarget === "main_agent" ? "waiting_approval" : null,
+    awaitingApprovalTarget: input.approvalTarget,
     reasoning: {
       ...state.reasoning,
       active: false,
       expanded: false,
     },
-    terminal: "awaiting_approval",
+    terminal: input.approvalTarget === "main_agent" ? "running" : "awaiting_approval",
     terminalErrorKind: null,
     terminalMessage: null,
   };
@@ -506,22 +523,31 @@ export function markLarkRunAwaitingApproval(state: LarkRunState): LarkRunState {
 
 export function markLarkRunApprovalResolved(
   state: LarkRunState,
-  decision: "approve" | "deny",
+  input: {
+    decision: "approve" | "deny";
+    actor: string;
+  },
 ): LarkRunState {
   return {
     ...state,
-    blocks: resolvePendingPermissionRequestTools(state.blocks, decision),
+    blocks: resolvePendingPermissionRequestTools(state.blocks, input.decision),
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: null,
+    awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
       active: false,
       expanded: false,
     },
-    terminal: decision === "approve" ? "continued" : "denied",
+    terminal: input.decision === "approve" ? "continued" : "denied",
     terminalErrorKind: null,
-    terminalMessage: decision === "deny" ? "用户拒绝了这次授权请求。" : null,
+    terminalMessage:
+      input.decision === "approve"
+        ? null
+        : input.actor === "system:timeout"
+          ? "授权请求已超时。"
+          : "用户拒绝了这次授权请求。",
   };
 }
 
