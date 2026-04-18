@@ -2837,12 +2837,31 @@ describe("agent loop", () => {
     const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
     const approvalId = Number(await waitForApprovalRequested(emittedEvents));
 
-    expect(emittedEvents.find((event) => event.type === "approval_requested")?.request).toEqual({
+    const requestedEvent = emittedEvents.find((event) => event.type === "approval_requested") as
+      | {
+          type: "approval_requested";
+          approvalFlowId?: string;
+          approvalAttemptIndex?: number;
+          request?: {
+            scopes: Array<
+              | { kind: "fs.read"; path: string }
+              | { kind: "fs.write"; path: string }
+              | { kind: "db.read"; database: "system" }
+              | { kind: "db.write"; database: "system" }
+              | { kind: "bash.full_access"; prefix: string[] }
+            >;
+          };
+        }
+      | undefined;
+
+    expect(requestedEvent?.request).toEqual({
       scopes: [
         { kind: "fs.read", path: "/tmp/requested-read.txt" },
         { kind: "fs.write", path: "/tmp/requested-write.txt" },
       ],
     });
+    expect(requestedEvent?.approvalFlowId).toBeTruthy();
+    expect(requestedEvent?.approvalAttemptIndex).toBe(1);
 
     expect(
       loop.submitApprovalResponse({
@@ -2856,11 +2875,20 @@ describe("agent loop", () => {
     ).toBe(true);
 
     const result = await runPromise;
-    expect(
-      result.events.some(
-        (event) => event.type === "approval_resolved" && event.decision === "approve",
-      ),
-    ).toBe(true);
+    const resolvedEvent = result.events.find(
+      (event) => event.type === "approval_resolved" && event.decision === "approve",
+    ) as
+      | {
+          type: "approval_resolved";
+          approvalFlowId?: string;
+          approvalAttemptIndex?: number;
+          flowContinues?: boolean;
+        }
+      | undefined;
+    expect(resolvedEvent).toBeDefined();
+    expect(resolvedEvent?.approvalFlowId).toBe(requestedEvent?.approvalFlowId);
+    expect(resolvedEvent?.approvalAttemptIndex).toBe(1);
+    expect(resolvedEvent?.flowContinues).toBe(false);
   });
 
   test("updates runtime observability while a permission approval is pending", async () => {
@@ -3324,8 +3352,11 @@ describe("agent loop", () => {
       type: string;
       approvalId?: string;
       approvalTarget?: "user" | "main_agent";
+      approvalFlowId?: string;
+      approvalAttemptIndex?: number;
       actor?: string;
       decision?: string;
+      flowContinues?: boolean;
     }> = [];
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
@@ -3372,10 +3403,28 @@ describe("agent loop", () => {
         (event) =>
           event.type === "approval_resolved" &&
           event.approvalId === String(userApprovalId) &&
+          event.approvalAttemptIndex === 1 &&
           event.actor === "system:timeout" &&
+          event.flowContinues === true &&
           event.decision === "deny",
       ),
     ).toBe(true);
+
+    const approvalRequestedEvents = emittedEvents.filter(
+      (event) => event.type === "approval_requested",
+    ) as Array<{
+      type: "approval_requested";
+      approvalId: string;
+      approvalTarget: "user" | "main_agent";
+      approvalFlowId?: string;
+      approvalAttemptIndex?: number;
+    }>;
+    expect(approvalRequestedEvents).toHaveLength(2);
+    expect(approvalRequestedEvents[0]?.approvalFlowId).toBeTruthy();
+    expect(approvalRequestedEvents[0]?.approvalFlowId).toBe(
+      approvalRequestedEvents[1]?.approvalFlowId,
+    );
+    expect(approvalRequestedEvents.map((event) => event.approvalAttemptIndex)).toEqual([1, 2]);
 
     expect(
       loop.submitApprovalResponse({
@@ -3387,7 +3436,18 @@ describe("agent loop", () => {
       }),
     ).toBe(true);
 
-    await runPromise;
+    const result = await runPromise;
+    expect(
+      result.events.some(
+        (event) =>
+          event.type === "approval_resolved" &&
+          event.approvalId === String(delegatedApprovalId) &&
+          event.approvalAttemptIndex === 2 &&
+          event.flowContinues === false &&
+          event.actor === "main_agent:agent_1" &&
+          event.decision === "approve",
+      ),
+    ).toBe(true);
   });
 
   test("queues steer input during a streaming text turn and handles it in the next turn", async () => {

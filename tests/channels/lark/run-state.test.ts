@@ -1248,6 +1248,8 @@ describe("lark run state", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_1",
+        approvalFlowId: "approval_1",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "需要授权",
         request: {
@@ -1388,6 +1390,39 @@ describe("lark run state", () => {
     expect(finalText).toContain("任务将继续执行");
   });
 
+  test("suppresses approval buttons when waiting-user state no longer has a live approval id", () => {
+    const approvalState = {
+      ...createLarkApprovalStateFromRequest({
+        event: {
+          type: "approval_requested",
+          eventId: "evt_approval_card_stale_1",
+          createdAt: "2026-03-28T00:00:00.000Z",
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          branchId: "branch_1",
+          runId: "run_1",
+          approvalId: "approval_stale_1",
+          approvalFlowId: "flow_stale_1",
+          approvalAttemptIndex: 1,
+          approvalTarget: "user",
+          title: "需要授权",
+          request: {
+            scopes: [{ kind: "fs.write", path: "/tmp/stale.txt" }],
+          },
+          reasonText: "等待用户确认。",
+          expiresAt: null,
+        },
+        sourceRunCardObjectId: "run_1:seg:1",
+      }),
+      currentApprovalId: null,
+    };
+
+    const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
+    expect(cardText).not.toContain("允许 1天");
+    expect(cardText).not.toContain("允许 永久");
+    expect(cardText).not.toContain("拒绝");
+  });
+
   test("formats single-path approval titles with bold access and code-wrapped path", () => {
     const approvalState = createLarkApprovalStateFromRequest({
       event: {
@@ -1399,6 +1434,8 @@ describe("lark run state", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_fmt_1",
+        approvalFlowId: "approval_fmt_1",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "Approval required: Write /Users/example/Desktop/test-new-2.js",
         request: {
@@ -1426,6 +1463,8 @@ describe("lark run state", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_bash_1",
+        approvalFlowId: "approval_bash_1",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "Approval required: run bash with full access for prefix git status",
         request: {
@@ -1460,6 +1499,8 @@ describe("lark run state", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_bash_2",
+        approvalFlowId: "approval_bash_2",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "Approval required: run bash with full access for prefix pnpm test",
         request: {
@@ -1488,6 +1529,8 @@ describe("lark run state", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_fmt_2",
+        approvalFlowId: "approval_fmt_2",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "Approval required: Write /Users/example/Desktop/test-new-2.js",
         request: {
@@ -1527,6 +1570,8 @@ describe("lark run state", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_fmt_3",
+        approvalFlowId: "approval_fmt_3",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title:
           "Approval required: run bash with full access for prefix git -C /Users/example/work/pokoclaw log --oneline -5",

@@ -1451,7 +1451,7 @@ export function createLarkOutboundRuntime(
       return;
     }
     const approvalId = event.approvalId;
-    const approvalFlowId = event.approvalFlowId?.trim() || approvalId;
+    const approvalFlowId = event.approvalFlowId;
     const runId = envelope.run.runId;
     if (runId == null) {
       return;

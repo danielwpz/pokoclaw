@@ -148,7 +148,7 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
     },
   ];
 
-  if (state.phase !== "waiting_user") {
+  if (state.phase !== "waiting_user" || state.currentApprovalId == null) {
     elements.push({ tag: "hr" });
     return elements;
   }

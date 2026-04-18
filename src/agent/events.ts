@@ -165,8 +165,8 @@ export interface CompactionFailedEvent extends AgentRuntimeEventBase {
 export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
   type: "approval_requested";
   approvalId: string;
-  approvalFlowId?: string;
-  approvalAttemptIndex?: number;
+  approvalFlowId: string;
+  approvalAttemptIndex: number;
   approvalTarget: "user" | "main_agent";
   title: string;
   request: PermissionRequest;
@@ -178,8 +178,8 @@ export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
 export interface ApprovalResolvedEvent extends AgentRuntimeEventBase {
   type: "approval_resolved";
   approvalId: string;
-  approvalFlowId?: string;
-  approvalAttemptIndex?: number;
+  approvalFlowId: string;
+  approvalAttemptIndex: number;
   decision: "approve" | "deny";
   actor: string;
   rawInput: string | null;

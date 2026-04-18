@@ -234,11 +234,11 @@ function upsertAttempt(
 }
 
 function readApprovalFlowId(event: ApprovalRequestedEvent | ApprovalResolvedEvent): string {
-  return event.approvalFlowId?.trim() || event.approvalId;
+  return event.approvalFlowId;
 }
 
 function readApprovalAttemptIndex(event: ApprovalRequestedEvent | ApprovalResolvedEvent): number {
-  return event.approvalAttemptIndex ?? 1;
+  return event.approvalAttemptIndex;
 }
 
 function describeResolvedAttemptStatus(
