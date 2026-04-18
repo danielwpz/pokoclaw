@@ -105,8 +105,8 @@ export function buildLarkRenderedSubagentCreationRequestCard(
 }
 
 export function buildLarkRenderedApprovalCard(state: LarkApprovalState): LarkRenderedApprovalCard {
-  const approved = state.decision === "approve";
-  const denied = state.decision === "deny";
+  const approved = state.phase === "approved";
+  const denied = state.phase === "denied";
   const card = {
     schema: "2.0",
     config: {
@@ -119,7 +119,7 @@ export function buildLarkRenderedApprovalCard(state: LarkApprovalState): LarkRen
     header: {
       title: {
         tag: "plain_text",
-        content: state.resolved ? `授权请求 — ${approved ? "授权成功" : "已拒绝"}` : "授权请求",
+        content: describeApprovalCardHeaderTitle(state),
       },
       template: denied ? "red" : approved ? "green" : "blue",
       icon: {
@@ -139,88 +139,66 @@ export function buildLarkRenderedApprovalCard(state: LarkApprovalState): LarkRen
 }
 
 function buildApprovalCardElements(state: LarkApprovalState): Array<Record<string, unknown>> {
-  const approved = state.decision === "approve";
   const permissionSummaryLines = formatPermissionSummaryLines(state);
   const elements: Array<Record<string, unknown>> = [
     {
       tag: "markdown",
-      content: !state.resolved
-        ? [
-            "### 授权运行命令",
-            "",
-            "**原因**",
-            state.reasonText,
-            ...formatApprovalCommandLines(state.commandText),
-            ...permissionSummaryLines,
-            ...formatHumanDeadlineLines("有效期至", state.expiresAt),
-            "",
-            "> 你处理后，agent 才会继续执行。",
-          ].join("\n")
-        : approved
-          ? [
-              `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
-              ...formatResolvedPermissionLines(state.request),
-            ].join("\n")
-          : [
-              `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
-              ...formatResolvedPermissionLines(state.request),
-              "",
-              "**结果**：当前操作已停止。",
-            ].join("\n"),
+      content: buildApprovalCardBodyMarkdown(state, permissionSummaryLines),
       text_size: "normal",
     },
   ];
 
-  if (state.resolved) {
+  if (state.phase !== "waiting_user" || state.currentApprovalId == null) {
     elements.push({ tag: "hr" });
-  } else {
-    elements.push({ tag: "hr" });
-    elements.push({
-      tag: "column_set",
-      flex_mode: "none",
-      horizontal_align: "right",
-      columns: [
-        {
-          tag: "column",
-          width: "auto",
-          elements: [
-            {
-              tag: "button",
-              text: { tag: "plain_text", content: "允许 1天" },
-              type: "default",
-              size: "medium",
-              value: {
-                action: "approve_permission",
-                approvalId: state.approvalId,
-                grantTtl: "one_day",
-              },
-            },
-            {
-              tag: "button",
-              text: { tag: "plain_text", content: "允许 永久" },
-              type: "primary",
-              size: "medium",
-              value: {
-                action: "approve_permission",
-                approvalId: state.approvalId,
-                grantTtl: "permanent",
-              },
-            },
-            {
-              tag: "button",
-              text: { tag: "plain_text", content: "拒绝" },
-              type: "danger",
-              size: "medium",
-              value: {
-                action: "deny_permission",
-                approvalId: state.approvalId,
-              },
-            },
-          ],
-        },
-      ],
-    });
+    return elements;
   }
+
+  elements.push({ tag: "hr" });
+  elements.push({
+    tag: "column_set",
+    flex_mode: "none",
+    horizontal_align: "right",
+    columns: [
+      {
+        tag: "column",
+        width: "auto",
+        elements: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "允许 1天" },
+            type: "default",
+            size: "medium",
+            value: {
+              action: "approve_permission",
+              approvalId: state.currentApprovalId ?? state.approvalId,
+              grantTtl: "one_day",
+            },
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "允许 永久" },
+            type: "primary",
+            size: "medium",
+            value: {
+              action: "approve_permission",
+              approvalId: state.currentApprovalId ?? state.approvalId,
+              grantTtl: "permanent",
+            },
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "拒绝" },
+            type: "danger",
+            size: "medium",
+            value: {
+              action: "deny_permission",
+              approvalId: state.currentApprovalId ?? state.approvalId,
+            },
+          },
+        ],
+      },
+    ],
+  });
 
   return elements;
 }
@@ -326,10 +304,118 @@ function summarizeSubagentRequestState(state: LarkSubagentCreationRequestCardSta
 }
 
 function summarizeApprovalState(state: LarkApprovalState): string {
-  if (!state.resolved) {
-    return "等待授权";
+  switch (state.phase) {
+    case "waiting_user":
+      return "等待你的批复";
+    case "handoff_to_delegate":
+    case "waiting_delegate":
+      return "等待主 Agent 代批";
+    case "approved":
+      return `${describeApprovalActorLabel(state.actor)}已批准`;
+    case "denied":
+      return describeDeniedApprovalSummary(state.actor);
   }
-  return state.decision === "approve" ? "授权成功" : "已拒绝";
+}
+
+function describeApprovalCardHeaderTitle(state: LarkApprovalState): string {
+  switch (state.phase) {
+    case "waiting_user":
+      return "授权请求";
+    case "handoff_to_delegate":
+    case "waiting_delegate":
+      return "授权请求 — 等待主 Agent 代批";
+    case "approved":
+      return "授权请求 — 已批准";
+    case "denied":
+      return state.actor === "system:timeout" ? "授权请求 — 已超时" : "授权请求 — 已拒绝";
+  }
+}
+
+function buildApprovalCardBodyMarkdown(
+  state: LarkApprovalState,
+  permissionSummaryLines: string[],
+): string {
+  if (state.phase === "waiting_user") {
+    return [
+      "### 授权运行命令",
+      "",
+      "**原因**",
+      state.reasonText,
+      ...formatApprovalCommandLines(state.commandText),
+      ...permissionSummaryLines,
+      ...formatHumanDeadlineLines("有效期至", state.expiresAt),
+      "",
+      "> 你处理后，agent 才会继续执行。",
+    ].join("\n");
+  }
+
+  if (state.phase === "handoff_to_delegate" || state.phase === "waiting_delegate") {
+    return [
+      "### 授权运行命令",
+      "",
+      ...formatApprovalDelegateStatusLines(state),
+      "",
+      "**原因**",
+      state.reasonText,
+      ...formatApprovalCommandLines(state.commandText),
+      ...permissionSummaryLines,
+      ...formatHumanDeadlineLines("有效期至", state.expiresAt),
+    ].join("\n");
+  }
+
+  if (state.phase === "approved") {
+    return [
+      `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+      ...formatResolvedPermissionLines(state.request),
+      "",
+      `**结果**：${describeApprovalActorLabel(state.actor)}已批准，任务将继续执行。`,
+    ].join("\n");
+  }
+
+  return [
+    `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
+    ...formatResolvedPermissionLines(state.request),
+    "",
+    `**结果**：${describeDeniedApprovalResult(state.actor)}`,
+  ].join("\n");
+}
+
+function formatApprovalDelegateStatusLines(state: LarkApprovalState): string[] {
+  const userTimedOut = state.attempts.some(
+    (attempt) => attempt.approvalTarget === "user" && attempt.status === "timed_out",
+  );
+  if (state.phase === "handoff_to_delegate" || userTimedOut) {
+    return ["**状态**：未收到你的批复，已转交主 Agent 代批。"];
+  }
+
+  return ["**状态**：当前请求已交由主 Agent 代批。"];
+}
+
+function describeApprovalActorLabel(actor: string | null): string {
+  if (actor?.startsWith("main_agent:")) {
+    return "主 Agent ";
+  }
+  if (actor != null && actor !== "system:timeout") {
+    return "你";
+  }
+  return "";
+}
+
+function describeDeniedApprovalSummary(actor: string | null): string {
+  if (actor === "system:timeout") {
+    return "你的批复已超时";
+  }
+  return `${describeApprovalActorLabel(actor)}已拒绝`;
+}
+
+function describeDeniedApprovalResult(actor: string | null): string {
+  if (actor === "system:timeout") {
+    return "未收到你的批复，当前操作已停止。";
+  }
+  if (actor?.startsWith("main_agent:")) {
+    return "主 Agent 已拒绝，当前操作已停止。";
+  }
+  return "你已拒绝，当前操作已停止。";
 }
 
 function formatHumanDeadlineLines(label: string, isoTimestamp: string | null): string[] {

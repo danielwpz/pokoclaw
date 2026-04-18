@@ -2203,6 +2203,8 @@ describe("lark outbound runtime", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_1",
+        approvalFlowId: "approval_1",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "需要授权",
         request: {
@@ -2248,6 +2250,8 @@ describe("lark outbound runtime", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_1",
+        approvalFlowId: "approval_1",
+        approvalAttemptIndex: 1,
         decision: "approve",
         actor: "user:demo",
         rawInput: "approve_1d",
@@ -2411,6 +2415,8 @@ describe("lark outbound runtime", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "1",
+        approvalFlowId: "1",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "Approval required: run bash with full access for prefix git status",
         request: {
@@ -2516,6 +2522,8 @@ describe("lark outbound runtime", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "1",
+        approvalFlowId: "1",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "Approval required",
         request: {
@@ -2545,7 +2553,7 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
-  test("does not create a user-visible approval card for delegated task approvals", async () => {
+  test("delivers one task-thread approval card across timeout fallback and delegated approval", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`
@@ -2596,13 +2604,16 @@ describe("lark outbound runtime", () => {
     const createCard = vi
       .fn()
       .mockResolvedValueOnce({ data: { card_id: "card_task_status_1" } })
-      .mockResolvedValueOnce({ data: { card_id: "card_task_thread_1" } });
-    const createMessage = vi.fn(async () => ({
-      data: { message_id: "om_task_1", open_message_id: "oom_task_1" },
-    }));
-    const reply = vi.fn(async () => ({
-      data: { message_id: "om_task_thread_1", open_message_id: "oom_task_thread_1" },
-    }));
+      .mockResolvedValueOnce({ data: { card_id: "card_approval_flow_1" } });
+    const createMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { message_id: "om_task_1", open_message_id: "oom_task_1" } });
+    const reply = vi.fn().mockResolvedValueOnce({
+      data: {
+        message_id: "om_task_thread_approval_1",
+        open_message_id: "oom_task_thread_approval_1",
+      },
+    });
     const updateCard = vi.fn(async () => ({}));
     const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
     const runtime = createLarkOutboundRuntime({
@@ -2649,39 +2660,78 @@ describe("lark outbound runtime", () => {
 
     bus.publish(
       makeTaskRuntimeEnvelope({
-        type: "tool_call_started",
+        type: "approval_requested",
         eventId: "evt_task_perm_1",
         createdAt: "2026-03-28T00:00:01.000Z",
         sessionId: "sess_task",
         conversationId: "conv_1",
         branchId: "branch_1",
         runId: "run_task_1",
-        turn: 1,
-        toolCallId: "tool_request_1",
-        toolName: "request_permissions",
-        args: {
-          entries: [
-            {
-              resource: "filesystem",
-              path: "/tmp/secret.txt",
-              access: "write",
-              scope: "exact",
-            },
-          ],
-          justification: "Need to write the output file.",
+        approvalId: "approval_1",
+        approvalFlowId: "flow_1",
+        approvalAttemptIndex: 1,
+        approvalTarget: "user",
+        title: "需要授权",
+        request: {
+          scopes: [{ kind: "fs.write", path: "/tmp/secret.txt" }],
         },
+        reasonText: "需要执行危险操作。",
+        expiresAt: null,
       }),
     );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenCalledOnce();
+    expect(reply).toHaveBeenCalledOnce();
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "approval_card",
+        internalObjectId: "flow_1",
+      }),
+    ).toMatchObject({
+      larkCardId: "card_approval_flow_1",
+      larkMessageId: "om_task_thread_approval_1",
+    });
+
+    const replyInput = (reply.mock.calls as unknown[][]).at(0)?.[0] as
+      | { path?: { message_id?: string } }
+      | undefined;
+    expect(replyInput?.path?.message_id).toBe("om_task_1");
+
     bus.publish(
       makeTaskRuntimeEnvelope({
-        type: "approval_requested",
+        type: "approval_resolved",
         eventId: "evt_task_perm_2",
-        createdAt: "2026-03-28T00:00:02.000Z",
+        createdAt: "2026-03-28T00:00:20.000Z",
         sessionId: "sess_task",
         conversationId: "conv_1",
         branchId: "branch_1",
         runId: "run_task_1",
         approvalId: "approval_1",
+        approvalFlowId: "flow_1",
+        approvalAttemptIndex: 1,
+        decision: "deny",
+        actor: "system:timeout",
+        rawInput: null,
+        flowContinues: true,
+      }),
+    );
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "approval_requested",
+        eventId: "evt_task_perm_3",
+        createdAt: "2026-03-28T00:00:20.100Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        approvalId: "approval_2",
+        approvalFlowId: "flow_1",
+        approvalAttemptIndex: 2,
         approvalTarget: "main_agent",
         title: "需要授权",
         request: {
@@ -2698,19 +2748,33 @@ describe("lark outbound runtime", () => {
     expect(createCard).toHaveBeenCalledTimes(2);
     expect(createMessage).toHaveBeenCalledOnce();
     expect(reply).toHaveBeenCalledOnce();
-    expect(updateCard).not.toHaveBeenCalled();
-    expect(
-      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
-        channelInstallationId: "default",
-        internalObjectKind: "approval_card",
-        internalObjectId: "approval_1",
+    expect(JSON.stringify(updateCard.mock.calls)).toContain("已转交主 Agent 代批");
+
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "approval_resolved",
+        eventId: "evt_task_perm_4",
+        createdAt: "2026-03-28T00:00:23.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        approvalId: "approval_2",
+        approvalFlowId: "flow_1",
+        approvalAttemptIndex: 2,
+        decision: "approve",
+        actor: "main_agent:delegate",
+        rawInput: "approve",
+        flowContinues: false,
       }),
-    ).toBeNull();
+    );
 
-    const createCalls = createCard.mock.calls as unknown[][];
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
 
-    const taskThreadCreate = createCalls.at(1)?.[0];
-    expect(JSON.stringify(taskThreadCreate)).toContain("request_permissions");
+    const latestUpdateCardInput = (updateCard.mock.calls as unknown[][]).at(-1)?.[0];
+    expect(JSON.stringify(latestUpdateCardInput)).toContain("主 Agent 已批准");
+    expect(JSON.stringify(latestUpdateCardInput)).toContain("任务将继续执行");
 
     await runtime.shutdown();
   });
@@ -2806,6 +2870,8 @@ describe("lark outbound runtime", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "2",
+        approvalFlowId: "2",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "Approval required: run bash with full access for prefix git status",
         request: {
@@ -2832,6 +2898,8 @@ describe("lark outbound runtime", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "2",
+        approvalFlowId: "2",
+        approvalAttemptIndex: 1,
         decision: "approve",
         actor: "user:demo",
         rawInput: "approve",
@@ -3114,6 +3182,8 @@ describe("lark outbound runtime", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_1",
+        approvalFlowId: "approval_1",
+        approvalAttemptIndex: 1,
         approvalTarget: "user",
         title: "需要授权",
         request: {
@@ -3139,6 +3209,8 @@ describe("lark outbound runtime", () => {
         branchId: "branch_1",
         runId: "run_1",
         approvalId: "approval_1",
+        approvalFlowId: "approval_1",
+        approvalAttemptIndex: 1,
         decision: "deny",
         actor: "user:demo",
         rawInput: "deny",

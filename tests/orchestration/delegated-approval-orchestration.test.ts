@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, test } from "vitest";
 import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
@@ -274,6 +275,29 @@ function createRunner(input: {
   return runner;
 }
 
+async function waitFor(
+  predicate: () => boolean,
+  input: {
+    label: string;
+    timeoutMs?: number;
+    intervalMs?: number;
+  },
+): Promise<void> {
+  const timeoutMs = input.timeoutMs ?? 2_000;
+  const intervalMs = input.intervalMs ?? 20;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+
+    await delay(intervalMs);
+  }
+
+  throw new Error(`Timed out waiting for ${input.label}`);
+}
+
 describe("delegated approval end-to-end", () => {
   let handle: TestDatabaseHandle | null = null;
 
@@ -331,6 +355,7 @@ describe("delegated approval end-to-end", () => {
       storage: handle.storage.db,
       securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
+      approvalTimeoutMs: 20,
       emitEvent(event) {
         manager.emitRuntimeEvent(event);
       },
@@ -371,16 +396,31 @@ describe("delegated approval end-to-end", () => {
     });
 
     expect(result.status).toBe("started");
+    await waitFor(
+      () =>
+        approvalsRepo.listBySession(created.executionSession.id, {
+          statuses: ["approved", "cancelled"],
+          limit: 10,
+        }).length >= 2,
+      { label: "delegated approval approval records" },
+    );
+
     const approvals = approvalsRepo.listBySession(created.executionSession.id, {
-      statuses: ["approved"],
+      statuses: ["approved", "cancelled"],
+      limit: 10,
     });
-    expect(approvals).toHaveLength(1);
-    expect(approvals[0]).toMatchObject({
+    expect(approvals).toHaveLength(2);
+    expect(approvals.find((approval) => approval.approvalTarget === "user")).toMatchObject({
+      approvalTarget: "user",
+      status: "cancelled",
+      reasonText: "Approval request timed out.",
+    });
+    const approvedRecord = approvals.find((approval) => approval.approvalTarget === "main_agent");
+    expect(approvedRecord).toMatchObject({
       approvalTarget: "main_agent",
       status: "approved",
       reasonText: "Legitimate for this unattended task.",
     });
-    const approvedRecord = approvals[0];
     if (approvedRecord == null) {
       throw new Error("Expected approved delegated approval record");
     }
@@ -466,6 +506,7 @@ describe("delegated approval end-to-end", () => {
       storage: handle.storage.db,
       securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
+      approvalTimeoutMs: 20,
       emitEvent(event) {
         manager.emitRuntimeEvent(event);
       },
@@ -505,11 +546,26 @@ describe("delegated approval end-to-end", () => {
     });
 
     expect(result.status).toBe("started");
+    await waitFor(
+      () =>
+        approvalsRepo.listBySession(created.executionSession.id, {
+          statuses: ["denied", "cancelled"],
+          limit: 10,
+        }).length >= 2,
+      { label: "delegated denial approval records" },
+    );
+
     const approvals = approvalsRepo.listBySession(created.executionSession.id, {
-      statuses: ["denied"],
+      statuses: ["denied", "cancelled"],
+      limit: 10,
     });
-    expect(approvals).toHaveLength(1);
-    expect(approvals[0]).toMatchObject({
+    expect(approvals).toHaveLength(2);
+    expect(approvals.find((approval) => approval.approvalTarget === "user")).toMatchObject({
+      approvalTarget: "user",
+      status: "cancelled",
+      reasonText: "Approval request timed out.",
+    });
+    expect(approvals.find((approval) => approval.approvalTarget === "main_agent")).toMatchObject({
       approvalTarget: "main_agent",
       status: "denied",
       reasonText: "Not justified for this unattended task.",
@@ -572,6 +628,7 @@ describe("delegated approval end-to-end", () => {
       storage: handle.storage.db,
       securityConfig: DEFAULT_CONFIG.security,
       compaction: DEFAULT_CONFIG.compaction,
+      approvalTimeoutMs: 20,
       emitEvent(event) {
         manager.emitRuntimeEvent(event);
       },
@@ -618,12 +675,26 @@ describe("delegated approval end-to-end", () => {
     });
 
     expect(result.status).toBe("started");
+    await waitFor(
+      () =>
+        approvalsRepo.listBySession(created.executionSession.id, {
+          statuses: ["approved", "cancelled"],
+          limit: 10,
+        }).length >= 4,
+      { label: "multiple delegated approval records" },
+    );
+
     const approvals = approvalsRepo.listBySession(created.executionSession.id, {
-      statuses: ["approved"],
+      statuses: ["approved", "cancelled"],
       limit: 10,
     });
-    expect(approvals).toHaveLength(2);
-    const firstApproval = approvals[1];
+    expect(approvals).toHaveLength(4);
+    expect(approvals.filter((approval) => approval.approvalTarget === "user")).toHaveLength(2);
+    const delegatedApprovals = approvals
+      .filter((approval) => approval.approvalTarget === "main_agent")
+      .sort((left, right) => left.id - right.id);
+    expect(delegatedApprovals).toHaveLength(2);
+    const firstApproval = delegatedApprovals[0];
     if (firstApproval == null) {
       throw new Error("Expected first approval record for reused approval session");
     }

@@ -150,19 +150,19 @@ export class RuntimeControlService {
       };
     }
 
-    const accepted = this.cancel.cancel(
-      run.sessionId,
+    const stopped = this.stopRuns(
+      this.collectStopTargetsForSession(run.sessionId),
       input.reasonText ?? `stop requested by ${input.actor}`,
+      input,
     );
-    if (accepted) {
-      this.recordHarnessStopEvent(run, input);
-    }
+    const accepted = stopped.some((candidate) => candidate.runId === input.runId);
     logger.info("processed stop run request", {
       runId: input.runId,
       sessionId: run.sessionId,
       conversationId: run.conversationId,
       actor: input.actor,
       accepted,
+      cascadedRunIds: stopped.map((candidate) => candidate.runId),
     });
 
     return {
@@ -177,18 +177,11 @@ export class RuntimeControlService {
     const matches = Array.from(this.runsByRunId.values()).filter(
       (run) => run.conversationId === input.conversationId,
     );
-    const stopped: ActiveRunRecord[] = [];
-
-    for (const run of matches) {
-      const accepted = this.cancel.cancel(
-        run.sessionId,
-        input.reasonText ?? `stop requested by ${input.actor}`,
-      );
-      if (accepted) {
-        stopped.push(run);
-        this.recordHarnessStopEvent(run, input);
-      }
-    }
+    const stopped = this.stopRuns(
+      this.collectStopTargetsForSessions(matches.map((run) => run.sessionId)),
+      input.reasonText ?? `stop requested by ${input.actor}`,
+      input,
+    );
 
     logger.info("processed stop conversation request", {
       conversationId: input.conversationId,
@@ -206,21 +199,11 @@ export class RuntimeControlService {
   }
 
   stopSession(input: StopSessionInput): StopSessionResult {
-    const matches = Array.from(this.runsByRunId.values()).filter(
-      (run) => run.sessionId === input.sessionId,
+    const stopped = this.stopRuns(
+      this.collectStopTargetsForSession(input.sessionId),
+      input.reasonText ?? `stop requested by ${input.actor}`,
+      input,
     );
-    const stopped: ActiveRunRecord[] = [];
-
-    for (const run of matches) {
-      const accepted = this.cancel.cancel(
-        run.sessionId,
-        input.reasonText ?? `stop requested by ${input.actor}`,
-      );
-      if (accepted) {
-        stopped.push(run);
-        this.recordHarnessStopEvent(run, input);
-      }
-    }
 
     logger.info("processed stop session request", {
       sessionId: input.sessionId,
@@ -472,6 +455,65 @@ export class RuntimeControlService {
     }
 
     this.observabilityByRunId.set(runId, updater(existing));
+  }
+
+  private stopRuns(
+    runs: ActiveRunRecord[],
+    reasonText: string,
+    input: StopRunInput | StopSessionInput | StopConversationInput,
+  ): ActiveRunRecord[] {
+    const stopped: ActiveRunRecord[] = [];
+
+    for (const run of runs) {
+      const accepted = this.cancel.cancel(run.sessionId, reasonText);
+      if (!accepted) {
+        continue;
+      }
+
+      stopped.push(run);
+      this.recordHarnessStopEvent(run, input);
+    }
+
+    return stopped;
+  }
+
+  private collectStopTargetsForSession(sessionId: string): ActiveRunRecord[] {
+    return this.collectStopTargetsForSessions([sessionId]);
+  }
+
+  private collectStopTargetsForSessions(sessionIds: string[]): ActiveRunRecord[] {
+    const allSessionIds = new Set(sessionIds);
+    for (const sessionId of sessionIds) {
+      const approvalSessionId = this.findLinkedApprovalSessionId(sessionId);
+      if (approvalSessionId != null) {
+        allSessionIds.add(approvalSessionId);
+      }
+    }
+
+    const seenRunIds = new Set<string>();
+    const targets: ActiveRunRecord[] = [];
+    for (const run of this.runsByRunId.values()) {
+      if (!allSessionIds.has(run.sessionId) || seenRunIds.has(run.runId)) {
+        continue;
+      }
+
+      seenRunIds.add(run.runId);
+      targets.push(run);
+    }
+
+    return targets;
+  }
+
+  private findLinkedApprovalSessionId(sourceSessionId: string): string | null {
+    if (this.persistence?.sessions == null) {
+      return null;
+    }
+
+    return (
+      this.persistence.sessions.findLatestApprovalSessionForSource(sourceSessionId, {
+        statuses: ["active", "paused"],
+      })?.id ?? null
+    );
   }
 
   /**

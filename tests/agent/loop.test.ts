@@ -156,6 +156,25 @@ async function waitForApprovalRequested(
   throw new Error("Approval request was not emitted");
 }
 
+async function waitForApprovalRequestCount(
+  events: Array<{ type: string; approvalId?: string }>,
+  count: number,
+): Promise<string[]> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const approvalIds = events
+      .filter((event) => event.type === "approval_requested")
+      .map((event) => event.approvalId)
+      .filter((approvalId): approvalId is string => approvalId != null);
+    if (approvalIds.length >= count) {
+      return approvalIds;
+    }
+
+    await delay(5);
+  }
+
+  throw new Error(`Expected ${count} approval requests to be emitted`);
+}
+
 const LOOP_PROTECTED_FILE = "/tmp/pokoclaw-loop-protected.txt";
 
 describe("agent loop", () => {
@@ -2818,12 +2837,31 @@ describe("agent loop", () => {
     const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
     const approvalId = Number(await waitForApprovalRequested(emittedEvents));
 
-    expect(emittedEvents.find((event) => event.type === "approval_requested")?.request).toEqual({
+    const requestedEvent = emittedEvents.find((event) => event.type === "approval_requested") as
+      | {
+          type: "approval_requested";
+          approvalFlowId?: string;
+          approvalAttemptIndex?: number;
+          request?: {
+            scopes: Array<
+              | { kind: "fs.read"; path: string }
+              | { kind: "fs.write"; path: string }
+              | { kind: "db.read"; database: "system" }
+              | { kind: "db.write"; database: "system" }
+              | { kind: "bash.full_access"; prefix: string[] }
+            >;
+          };
+        }
+      | undefined;
+
+    expect(requestedEvent?.request).toEqual({
       scopes: [
         { kind: "fs.read", path: "/tmp/requested-read.txt" },
         { kind: "fs.write", path: "/tmp/requested-write.txt" },
       ],
     });
+    expect(requestedEvent?.approvalFlowId).toBeTruthy();
+    expect(requestedEvent?.approvalAttemptIndex).toBe(1);
 
     expect(
       loop.submitApprovalResponse({
@@ -2837,11 +2875,20 @@ describe("agent loop", () => {
     ).toBe(true);
 
     const result = await runPromise;
-    expect(
-      result.events.some(
-        (event) => event.type === "approval_resolved" && event.decision === "approve",
-      ),
-    ).toBe(true);
+    const resolvedEvent = result.events.find(
+      (event) => event.type === "approval_resolved" && event.decision === "approve",
+    ) as
+      | {
+          type: "approval_resolved";
+          approvalFlowId?: string;
+          approvalAttemptIndex?: number;
+          flowContinues?: boolean;
+        }
+      | undefined;
+    expect(resolvedEvent).toBeDefined();
+    expect(resolvedEvent?.approvalFlowId).toBe(requestedEvent?.approvalFlowId);
+    expect(resolvedEvent?.approvalAttemptIndex).toBe(1);
+    expect(resolvedEvent?.flowContinues).toBe(false);
   });
 
   test("updates runtime observability while a permission approval is pending", async () => {
@@ -3136,7 +3183,7 @@ describe("agent loop", () => {
     });
   });
 
-  test("routes task-session approval requests to the main agent target", async () => {
+  test("routes task-session approval requests to the user first", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
 
@@ -3221,22 +3268,186 @@ describe("agent loop", () => {
     const approvalId = Number(await waitForApprovalRequested(emittedEvents));
     const approvalRecord = approvalsRepo.getById(approvalId);
 
-    expect(approvalRecord?.approvalTarget).toBe("main_agent");
+    expect(approvalRecord?.approvalTarget).toBe("user");
     expect(emittedEvents.find((event) => event.type === "approval_requested")?.approvalTarget).toBe(
-      "main_agent",
+      "user",
     );
 
     expect(
       loop.submitApprovalResponse({
         approvalId,
         decision: "approve",
-        actor: "main_agent",
+        actor: "user",
+        rawInput: "approve",
+        grantedBy: "user",
+      }),
+    ).toBe(true);
+
+    await runPromise;
+  });
+
+  test("falls back from user approval timeout to main-agent approval for task sessions", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    const approvalsRepo = new ApprovalsRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_task",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "task",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_task",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"perform the task"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_task_perm",
+                name: "request_permissions",
+                arguments: {
+                  entries: [
+                    {
+                      resource: "filesystem",
+                      path: LOOP_PROTECTED_FILE,
+                      scope: "exact",
+                      access: "write",
+                    },
+                  ],
+                  justification: "Need to write the requested note.",
+                },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "approved after delegated fallback" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(createRequestPermissionsTool());
+
+    const emittedEvents: Array<{
+      type: string;
+      approvalId?: string;
+      approvalTarget?: "user" | "main_agent";
+      approvalFlowId?: string;
+      approvalAttemptIndex?: number;
+      actor?: string;
+      decision?: string;
+      flowContinues?: boolean;
+    }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      approvalTimeoutMs: 50,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_task", scenario: "task" });
+    await waitForApprovalRequested(emittedEvents);
+    await vi.advanceTimersByTimeAsync(60);
+
+    const approvalIds = await waitForApprovalRequestCount(emittedEvents, 2);
+    const userApprovalIdRaw = approvalIds[0];
+    const delegatedApprovalIdRaw = approvalIds[1];
+    if (userApprovalIdRaw == null || delegatedApprovalIdRaw == null) {
+      throw new Error("Expected both approval ids to be present");
+    }
+    const userApprovalId = Number.parseInt(userApprovalIdRaw, 10);
+    const delegatedApprovalId = Number.parseInt(delegatedApprovalIdRaw, 10);
+
+    expect(approvalsRepo.getById(userApprovalId)).toMatchObject({
+      approvalTarget: "user",
+      status: "cancelled",
+      reasonText: "Approval request timed out.",
+    });
+    expect(approvalsRepo.getById(delegatedApprovalId)?.approvalTarget).toBe("main_agent");
+    expect(
+      emittedEvents
+        .filter((event) => event.type === "approval_requested")
+        .map((event) => event.approvalTarget),
+    ).toEqual(["user", "main_agent"]);
+    expect(
+      emittedEvents.some(
+        (event) =>
+          event.type === "approval_resolved" &&
+          event.approvalId === String(userApprovalId) &&
+          event.approvalAttemptIndex === 1 &&
+          event.actor === "system:timeout" &&
+          event.flowContinues === true &&
+          event.decision === "deny",
+      ),
+    ).toBe(true);
+
+    const approvalRequestedEvents = emittedEvents.filter(
+      (event) => event.type === "approval_requested",
+    ) as Array<{
+      type: "approval_requested";
+      approvalId: string;
+      approvalTarget: "user" | "main_agent";
+      approvalFlowId?: string;
+      approvalAttemptIndex?: number;
+    }>;
+    expect(approvalRequestedEvents).toHaveLength(2);
+    expect(approvalRequestedEvents[0]?.approvalFlowId).toBeTruthy();
+    expect(approvalRequestedEvents[0]?.approvalFlowId).toBe(
+      approvalRequestedEvents[1]?.approvalFlowId,
+    );
+    expect(approvalRequestedEvents.map((event) => event.approvalAttemptIndex)).toEqual([1, 2]);
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId: delegatedApprovalId,
+        decision: "approve",
+        actor: "main_agent:agent_1",
         rawInput: "approve",
         grantedBy: "main_agent",
       }),
     ).toBe(true);
 
-    await runPromise;
+    const result = await runPromise;
+    expect(
+      result.events.some(
+        (event) =>
+          event.type === "approval_resolved" &&
+          event.approvalId === String(delegatedApprovalId) &&
+          event.approvalAttemptIndex === 2 &&
+          event.flowContinues === false &&
+          event.actor === "main_agent:agent_1" &&
+          event.decision === "approve",
+      ),
+    ).toBe(true);
   });
 
   test("queues steer input during a streaming text turn and handles it in the next turn", async () => {

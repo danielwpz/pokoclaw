@@ -11,6 +11,7 @@ async function withStorageFixture<T>(
     cancel: SessionRunAbortRegistry;
     control: RuntimeControlService;
     harnessEvents: HarnessEventsRepo;
+    sessions: SessionsRepo;
     taskRuns: TaskRunsRepo;
   }) => T | Promise<T>,
 ): Promise<T> {
@@ -50,12 +51,13 @@ async function withStorageFixture<T>(
     const cancel = new SessionRunAbortRegistry();
     const harnessEvents = new HarnessEventsRepo(handle.storage.db);
     const taskRuns = new TaskRunsRepo(handle.storage.db);
+    const sessions = new SessionsRepo(handle.storage.db);
     const control = new RuntimeControlService(cancel, {
       harnessEvents,
-      sessions: new SessionsRepo(handle.storage.db),
+      sessions,
       taskRuns,
     });
-    return await run({ cancel, control, harnessEvents, taskRuns });
+    return await run({ cancel, control, harnessEvents, sessions, taskRuns });
   } finally {
     await destroyTestDatabase(handle);
   }
@@ -235,6 +237,59 @@ describe("RuntimeControlService", () => {
         sourceKind: "command",
         requestScope: "session",
       });
+    });
+  });
+
+  test("stopping a source task session also stops its delegated approval run", async () => {
+    await withStorageFixture(async ({ cancel, control, harnessEvents, sessions }) => {
+      const sourceHandle = cancel.begin("sess_1");
+      const approvalHandle = cancel.begin("sess_approval_1");
+
+      control.beginRun({
+        runId: "run_task",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "task",
+      });
+      control.beginRun({
+        runId: "run_approval",
+        sessionId: "sess_approval_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+
+      sessions.create({
+        id: "sess_approval_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        ownerAgentId: "agent_1",
+        purpose: "approval",
+        approvalForSessionId: "sess_1",
+        createdAt: new Date("2026-04-05T00:00:00.000Z"),
+        updatedAt: new Date("2026-04-05T00:00:00.000Z"),
+      });
+
+      const result = control.stopSession({
+        sessionId: "sess_1",
+        actor: "test",
+        sourceKind: "command",
+        requestScope: "session",
+      });
+
+      expect(result).toEqual({
+        accepted: true,
+        sessionId: "sess_1",
+        runIds: ["run_task", "run_approval"],
+        conversationId: "conv_1",
+      });
+      expect(sourceHandle.signal.aborted).toBe(true);
+      expect(approvalHandle.signal.aborted).toBe(true);
+      expect(cancel.isActive("sess_1")).toBe(false);
+      expect(cancel.isActive("sess_approval_1")).toBe(false);
+      expect(harnessEvents.listByRunId("run_task")).toHaveLength(1);
+      expect(harnessEvents.listByRunId("run_approval")).toHaveLength(1);
     });
   });
 

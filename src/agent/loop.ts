@@ -53,6 +53,7 @@ import {
   DEFAULT_RUNTIME_MAX_TURNS,
 } from "@/src/config/defaults.js";
 import type { CompactionConfig, RuntimeConfig, SecurityConfig } from "@/src/config/schema.js";
+import { SessionApprovalFlowRegistry } from "@/src/runtime/approval-flow.js";
 import {
   type ApprovalResponseInput,
   type ApprovalWaitOutcome,
@@ -229,6 +230,7 @@ export class AgentLoop {
   private readonly bootstrapResolver: AgentBootstrapResolver;
   private readonly memoryResolver: AgentMemoryResolver;
   private readonly approvalWaits = new SessionApprovalWaitRegistry();
+  private readonly approvalFlow = new SessionApprovalFlowRegistry();
   private readonly steerQueue = new SessionSteerQueueRegistry();
   private readonly defaultMaxTurns: number;
   private readonly approvalTimeoutMs: number;
@@ -1481,6 +1483,7 @@ export class AgentLoop {
           storage: this.deps.storage,
           security: this.security,
           approvalWaits: this.approvalWaits,
+          approvalFlow: this.approvalFlow,
           sessions: this.deps.sessions,
           approvalTimeoutMs: this.approvalTimeoutMs,
           runInput: input.input,
@@ -1856,9 +1859,12 @@ export class AgentLoop {
       eventId: randomUUID(),
       createdAt: new Date().toISOString(),
       approvalId: String(input.approval.id),
+      approvalFlowId: `approval_flow:detached:${input.approval.id}`,
+      approvalAttemptIndex: 1,
       decision: "deny",
       actor: input.actor,
       rawInput: input.rawInput,
+      flowContinues: false,
       sessionId: input.session.id,
       conversationId: input.session.conversationId,
       branchId: input.session.branchId,

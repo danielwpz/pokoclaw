@@ -7,7 +7,6 @@
  */
 import { randomUUID } from "node:crypto";
 import {
-  createLarkApprovalStateFromRequest,
   type LarkApprovalState,
   reduceLarkApprovalState,
   shouldHandleLarkApprovalRuntimeEvent,
@@ -1041,14 +1040,14 @@ export function createLarkOutboundRuntime(
     }
   };
 
-  const flushApprovalCard = async (approvalId: string) => {
-    const state = approvalStates.get(approvalId);
+  const flushApprovalCard = async (approvalFlowId: string) => {
+    const state = approvalStates.get(approvalFlowId);
     if (state == null) {
       return;
     }
     if (!shouldCreateStandaloneLarkApprovalCard(state)) {
       logger.debug("skipping standalone lark approval card delivery for delegated approval", {
-        approvalId,
+        approvalFlowId,
         runId: state.runId,
         approvalTarget: state.approvalTarget,
       });
@@ -1056,7 +1055,8 @@ export function createLarkOutboundRuntime(
     }
 
     logger.debug("starting lark approval card flush", {
-      approvalId,
+      approvalFlowId,
+      approvalId: state.approvalId,
       runId: state.runId,
       resolved: state.resolved,
       decision: state.decision,
@@ -1079,10 +1079,34 @@ export function createLarkOutboundRuntime(
       const client = input.clients.getOrCreate(target.channelInstallationId);
       const cardkit = getCardkitSdk(client);
       const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
+      const taskRootBinding =
+        state.taskRunId == null
+          ? null
+          : bindingsRepo.getByInternalObject({
+              channelInstallationId: target.channelInstallationId,
+              internalObjectKind: RUN_CARD_OBJECT_KIND,
+              internalObjectId: buildTaskRunCardObjectId(state.taskRunId),
+            });
+      if (
+        state.taskRunId != null &&
+        shouldRenderStandaloneTaskCard(state.taskRunType) &&
+        taskRootBinding?.larkMessageId == null
+      ) {
+        logger.debug("deferring task approval card flush until task status card exists", {
+          approvalFlowId,
+          taskRunId: state.taskRunId,
+          channelInstallationId: target.channelInstallationId,
+        });
+        bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`, {
+          immediate: true,
+        });
+        bumpVersionAndSchedule(`approval:${approvalFlowId}`);
+        continue;
+      }
       const existing = bindingsRepo.getByInternalObject({
         channelInstallationId: target.channelInstallationId,
         internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
-        internalObjectId: approvalId,
+        internalObjectId: approvalFlowId,
       });
       const rendered = buildLarkRenderedApprovalCard(state);
 
@@ -1095,18 +1119,28 @@ export function createLarkOutboundRuntime(
           conversationId: state.conversationId,
           branchId: state.branchId,
           internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
-          internalObjectId: approvalId,
+          internalObjectId: approvalFlowId,
           chatId,
-          surfaceObject,
+          surfaceObject:
+            state.taskRunId != null &&
+            shouldRenderStandaloneTaskCard(state.taskRunType) &&
+            taskRootBinding?.larkMessageId != null
+              ? {
+                  chat_id: chatId,
+                  reply_to_message_id: taskRootBinding.larkMessageId,
+                }
+              : surfaceObject,
           cardJson: JSON.stringify(rendered.card),
           lastSequence: 0,
           status: state.resolved ? "finalized" : "active",
           metadataJson: JSON.stringify({
-            approvalId,
+            approvalFlowId,
+            approvalId: state.approvalId,
             runId: state.runId,
           }),
           logContext: {
-            approvalId,
+            approvalFlowId,
+            approvalId: state.approvalId,
             runId: state.runId,
           },
         });
@@ -1115,7 +1149,8 @@ export function createLarkOutboundRuntime(
         }
 
         logger.info("created standalone lark approval card", {
-          approvalId,
+          approvalFlowId,
+          approvalId: state.approvalId,
           runId: state.runId,
           channelInstallationId: target.channelInstallationId,
           larkMessageId: binding.larkMessageId,
@@ -1136,7 +1171,8 @@ export function createLarkOutboundRuntime(
       }
       const metadataJson = buildBindingMetadata(
         {
-          approvalId,
+          approvalFlowId,
+          approvalId: state.approvalId,
           runId: state.runId,
         },
         existing.metadataJson,
@@ -1146,7 +1182,8 @@ export function createLarkOutboundRuntime(
         operation: "card.update",
         sequence,
         logContext: {
-          approvalId,
+          approvalFlowId,
+          approvalId: state.approvalId,
           runId: state.runId,
           channelInstallationId: target.channelInstallationId,
           larkCardId,
@@ -1169,12 +1206,13 @@ export function createLarkOutboundRuntime(
           bindingsRepo,
           channelInstallationId: target.channelInstallationId,
           internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
-          internalObjectId: approvalId,
+          internalObjectId: approvalFlowId,
           metadataJson,
           nextSequenceFloor: mutation.nextSequenceFloor,
-          deliveryId: `approval:${approvalId}`,
+          deliveryId: `approval:${approvalFlowId}`,
           logContext: {
-            approvalId,
+            approvalFlowId,
+            approvalId: state.approvalId,
             runId: state.runId,
             channelInstallationId: target.channelInstallationId,
             larkCardId,
@@ -1187,13 +1225,14 @@ export function createLarkOutboundRuntime(
       bindingsRepo.updateDeliveryState({
         channelInstallationId: target.channelInstallationId,
         internalObjectKind: APPROVAL_CARD_OBJECT_KIND,
-        internalObjectId: approvalId,
+        internalObjectId: approvalFlowId,
         lastSequence: sequence,
         status: state.resolved ? "finalized" : "active",
         metadataJson,
       });
       logger.debug("updated standalone lark approval card", {
-        approvalId,
+        approvalFlowId,
+        approvalId: state.approvalId,
         runId: state.runId,
         channelInstallationId: target.channelInstallationId,
         larkCardId: existing.larkCardId,
@@ -1412,6 +1451,7 @@ export function createLarkOutboundRuntime(
       return;
     }
     const approvalId = event.approvalId;
+    const approvalFlowId = event.approvalFlowId;
     const runId = envelope.run.runId;
     if (runId == null) {
       return;
@@ -1426,38 +1466,49 @@ export function createLarkOutboundRuntime(
       if (sourceRunCardObjectId != null) {
         const existingRunState = runStates.get(sourceRunCardObjectId);
         if (existingRunState != null) {
-          runStates.set(sourceRunCardObjectId, markLarkRunAwaitingApproval(existingRunState));
-          activeRunSegmentByRunId.delete(runId);
+          const nextRunState = markLarkRunAwaitingApproval(existingRunState, {
+            approvalTarget: event.approvalTarget,
+          });
+          runStates.set(sourceRunCardObjectId, nextRunState);
+          if (nextRunState.terminal === "running") {
+            activeRunSegmentByRunId.set(runId, sourceRunCardObjectId);
+          } else {
+            activeRunSegmentByRunId.delete(runId);
+          }
           latestRunSegmentByRunId.set(runId, sourceRunCardObjectId);
           logger.debug("finalized lark run card segment awaiting approval", {
             runId,
+            approvalFlowId,
             approvalId,
             sourceRunCardObjectId,
+            approvalTarget: event.approvalTarget,
           });
           bumpVersionAndSchedule(`run:${sourceRunCardObjectId}`);
         }
       }
-      approvalStates.set(
-        approvalId,
-        createLarkApprovalStateFromRequest({
-          event,
-          taskRunId: envelope.taskRun.taskRunId,
-          taskRunType: envelope.taskRun.runType,
-          sourceRunCardObjectId,
-        }),
-      );
-      latestApprovalByRunId.set(runId, approvalId);
-      if (shouldCreateStandaloneLarkApprovalCard(event)) {
+      const previousApprovalState = approvalStates.get(approvalFlowId) ?? null;
+      const nextApprovalState = reduceLarkApprovalState(previousApprovalState, envelope, {
+        sourceRunCardObjectId:
+          sourceRunCardObjectId ?? previousApprovalState?.sourceRunCardObjectId ?? null,
+      });
+      if (nextApprovalState == null) {
+        return;
+      }
+      approvalStates.set(approvalFlowId, nextApprovalState);
+      latestApprovalByRunId.set(runId, approvalFlowId);
+      if (shouldCreateStandaloneLarkApprovalCard(nextApprovalState)) {
         logger.debug("queued standalone lark approval card", {
           runId,
+          approvalFlowId,
           approvalId,
           sourceRunCardObjectId,
           approvalTarget: event.approvalTarget,
         });
-        bumpVersionAndSchedule(`approval:${approvalId}`);
+        bumpVersionAndSchedule(`approval:${approvalFlowId}`);
       } else {
         logger.debug("suppressed standalone lark approval card for delegated approval", {
           runId,
+          approvalFlowId,
           approvalId,
           sourceRunCardObjectId,
           approvalTarget: event.approvalTarget,
@@ -1466,26 +1517,39 @@ export function createLarkOutboundRuntime(
       return;
     }
 
-    const previousApprovalState = approvalStates.get(approvalId) ?? null;
+    const previousApprovalState = approvalStates.get(approvalFlowId) ?? null;
     const nextApprovalState = reduceLarkApprovalState(previousApprovalState, envelope);
     if (nextApprovalState == null) {
       return;
     }
-    approvalStates.set(approvalId, nextApprovalState);
-    latestApprovalByRunId.delete(runId);
+    approvalStates.set(approvalFlowId, nextApprovalState);
+    if (nextApprovalState.resolved) {
+      latestApprovalByRunId.delete(runId);
+    } else {
+      latestApprovalByRunId.set(runId, approvalFlowId);
+    }
     if (shouldCreateStandaloneLarkApprovalCard(nextApprovalState)) {
-      bumpVersionAndSchedule(`approval:${approvalId}`);
+      bumpVersionAndSchedule(`approval:${approvalFlowId}`);
     }
 
-    if (previousApprovalState?.sourceRunCardObjectId != null) {
+    if (previousApprovalState?.sourceRunCardObjectId != null && event.flowContinues !== true) {
       const sourceRunState = runStates.get(previousApprovalState.sourceRunCardObjectId);
       if (sourceRunState != null) {
-        runStates.set(
-          previousApprovalState.sourceRunCardObjectId,
-          markLarkRunApprovalResolved(sourceRunState, event.decision),
-        );
+        const nextRunState = markLarkRunApprovalResolved(sourceRunState, {
+          decision: event.decision,
+          actor: event.actor,
+        });
+        runStates.set(previousApprovalState.sourceRunCardObjectId, nextRunState);
+        if (activeRunSegmentByRunId.get(runId) === previousApprovalState.sourceRunCardObjectId) {
+          if (nextRunState.terminal === "running") {
+            activeRunSegmentByRunId.set(runId, previousApprovalState.sourceRunCardObjectId);
+          } else {
+            activeRunSegmentByRunId.delete(runId);
+          }
+        }
         logger.debug("updated prior lark run card segment after approval resolution", {
           runId,
+          approvalFlowId,
           approvalId,
           sourceRunCardObjectId: previousApprovalState.sourceRunCardObjectId,
           decision: event.decision,
@@ -2063,8 +2127,9 @@ function shouldDeliverLarkRuntimeTranscript(envelope: OrchestratedRuntimeEventEn
 
 function shouldCreateStandaloneLarkApprovalCard(value: {
   approvalTarget: "user" | "main_agent";
+  taskRunId?: string | null;
 }): boolean {
-  return value.approvalTarget === "user";
+  return value.approvalTarget === "user" || value.taskRunId != null;
 }
 
 function safeJson(value: unknown): string {

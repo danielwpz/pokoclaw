@@ -7,6 +7,11 @@
  */
 import type { AgentRuntimeEventInput, AgentToolCall } from "@/src/agent/events.js";
 import type { RunAgentLoopInput } from "@/src/agent/loop.js";
+import {
+  isExplicitUserApprovalDecision,
+  isUserApprovalTimeoutOutcome,
+  type SessionApprovalFlowRegistry,
+} from "@/src/runtime/approval-flow.js";
 import { resolveApprovalRouteForSession } from "@/src/runtime/approval-routing.js";
 import type {
   ApprovalWaitOutcome,
@@ -27,7 +32,129 @@ interface ApprovalResumePayload {
   runId: string;
 }
 
+function buildApprovalFlowId(input: { runId: string; toolCallId: string }): string {
+  return `approval_flow:${input.runId}:${input.toolCallId}`;
+}
+
 export async function requestToolApproval(input: {
+  storage: import("@/src/storage/db/client.js").StorageDb;
+  security: SecurityService;
+  approvalWaits: SessionApprovalWaitRegistry;
+  sessions: {
+    updateStatus(input: { id: string; status: "paused" | "active"; updatedAt: Date }): void;
+  };
+  approvalTimeoutMs: number;
+  approvalFlow: SessionApprovalFlowRegistry;
+  runInput: RunAgentLoopInput;
+  session: Session;
+  toolCall: AgentToolCall;
+  turn: number;
+  runId: string;
+  request: PermissionRequest;
+  reasonText: string;
+  approvalTitle?: string;
+  approvalCommand?: string;
+  signal: AbortSignal;
+  recordEvent(event: AgentRuntimeEventInput): void;
+  onRequested?: (input: { approvalId: number; createdAt: Date; expiresAt: Date }) => void;
+}): Promise<ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest }> {
+  const approvalRoute = resolveApprovalRouteForSession({
+    db: input.storage,
+    session: input.session,
+  });
+  const approvalFlowId = buildApprovalFlowId({
+    runId: input.runId,
+    toolCallId: input.toolCall.id,
+  });
+  const approvalPlan = input.approvalFlow.resolvePlan({
+    sessionId: input.runInput.sessionId,
+    route: approvalRoute,
+  });
+
+  let currentApprovalId: number | null = null;
+  input.sessions.updateStatus({
+    id: input.runInput.sessionId,
+    status: "paused",
+    updatedAt: new Date(),
+  });
+
+  const onAbort = () => {
+    if (currentApprovalId != null) {
+      input.approvalWaits.cancelSession({
+        sessionId: input.runInput.sessionId,
+        actor: "system:cancel",
+        reasonText: "Run cancelled while waiting for approval.",
+        decidedAt: new Date(),
+      });
+    }
+  };
+  input.signal.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    let outcome = await requestApprovalRound({
+      ...input,
+      approvalRoute,
+      approvalFlowId,
+      approvalAttemptIndex: 1,
+      approvalTarget: approvalPlan.initialTarget,
+      resolveFlowContinues: (roundOutcome) =>
+        roundOutcome.actor === "system:timeout" && approvalPlan.fallbackTarget != null,
+      setCurrentApprovalId: (approvalId) => {
+        currentApprovalId = approvalId;
+      },
+    });
+
+    if (outcome.approvalTarget === "user") {
+      if (isExplicitUserApprovalDecision(outcome)) {
+        input.approvalFlow.resetUserTimeouts(input.runInput.sessionId);
+      } else if (isUserApprovalTimeoutOutcome(outcome) && approvalPlan.fallbackTarget != null) {
+        input.approvalFlow.recordUserTimeout(input.runInput.sessionId);
+        input.security.resolveApproval({
+          approvalId: outcome.approvalId,
+          status: "cancelled",
+          reasonText: outcome.reasonText,
+          decidedAt: outcome.decidedAt,
+        });
+        outcome = await requestApprovalRound({
+          ...input,
+          approvalRoute,
+          approvalFlowId,
+          approvalAttemptIndex: 2,
+          approvalTarget: approvalPlan.fallbackTarget,
+          resolveFlowContinues: () => false,
+          setCurrentApprovalId: (approvalId) => {
+            currentApprovalId = approvalId;
+          },
+        });
+      }
+    }
+
+    if (input.signal.aborted && outcome.actor === "system:cancel") {
+      input.security.resolveApproval({
+        approvalId: outcome.approvalId,
+        status: "cancelled",
+        reasonText: outcome.reasonText,
+        decidedAt: outcome.decidedAt,
+      });
+      input.signal.throwIfAborted();
+    }
+
+    return outcome;
+  } finally {
+    input.signal.removeEventListener("abort", onAbort);
+    input.sessions.updateStatus({
+      id: input.runInput.sessionId,
+      status: "active",
+      updatedAt: new Date(),
+    });
+  }
+}
+
+function buildApprovalTitle(): string {
+  return "Approval required";
+}
+
+async function requestApprovalRound(input: {
   storage: import("@/src/storage/db/client.js").StorageDb;
   security: SecurityService;
   approvalWaits: SessionApprovalWaitRegistry;
@@ -47,13 +174,21 @@ export async function requestToolApproval(input: {
   signal: AbortSignal;
   recordEvent(event: AgentRuntimeEventInput): void;
   onRequested?: (input: { approvalId: number; createdAt: Date; expiresAt: Date }) => void;
-}): Promise<ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest }> {
+  approvalRoute: ReturnType<typeof resolveApprovalRouteForSession>;
+  approvalFlowId: string;
+  approvalAttemptIndex: number;
+  approvalTarget: "user" | "main_agent";
+  resolveFlowContinues: (outcome: ApprovalWaitOutcome) => boolean;
+  setCurrentApprovalId: (approvalId: number) => void;
+}): Promise<
+  ApprovalWaitOutcome & {
+    approvalId: number;
+    request: PermissionRequest;
+    approvalTarget: "user" | "main_agent";
+  }
+> {
   const createdAt = new Date();
   const expiresAt = new Date(createdAt.getTime() + input.approvalTimeoutMs);
-  const approvalRoute = resolveApprovalRouteForSession({
-    db: input.storage,
-    session: input.session,
-  });
   const resumePayloadJson = JSON.stringify({
     toolCallId: input.toolCall.id,
     toolName: input.toolCall.name,
@@ -65,18 +200,20 @@ export async function requestToolApproval(input: {
     ownerAgentId: input.session.ownerAgentId ?? "",
     requestedBySessionId: input.runInput.sessionId,
     request: input.request,
-    approvalTarget: approvalRoute.target,
+    approvalTarget: input.approvalTarget,
     reasonText: input.reasonText,
     createdAt,
     expiresAt,
     resumePayloadJson,
   });
+  input.setCurrentApprovalId(approvalId);
+
   logger.info("approval requested for tool call", {
     sessionId: input.runInput.sessionId,
     approvalId,
     toolName: input.toolCall.name,
-    approvalTarget: approvalRoute.target,
-    runtimeKind: approvalRoute.runtimeKind,
+    approvalTarget: input.approvalTarget,
+    runtimeKind: input.approvalRoute.runtimeKind,
     scopeCount: input.request.scopes.length,
     scope:
       input.request.scopes[0] == null
@@ -84,6 +221,7 @@ export async function requestToolApproval(input: {
         : describePermissionScope(input.request.scopes[0]),
     runId: input.runId,
   });
+
   input.onRequested?.({
     approvalId,
     createdAt,
@@ -96,16 +234,12 @@ export async function requestToolApproval(input: {
     timeoutMs: input.approvalTimeoutMs,
   });
 
-  input.sessions.updateStatus({
-    id: input.runInput.sessionId,
-    status: "paused",
-    updatedAt: createdAt,
-  });
-
   input.recordEvent({
     type: "approval_requested",
     approvalId: String(approvalId),
-    approvalTarget: approvalRoute.target,
+    approvalFlowId: input.approvalFlowId,
+    approvalAttemptIndex: input.approvalAttemptIndex,
+    approvalTarget: input.approvalTarget,
     title: input.approvalTitle ?? buildApprovalTitle(),
     request: input.request,
     reasonText: input.reasonText,
@@ -117,63 +251,35 @@ export async function requestToolApproval(input: {
     runId: input.runId,
   });
 
-  const onAbort = () => {
-    input.approvalWaits.cancelSession({
-      sessionId: input.runInput.sessionId,
-      actor: "system:cancel",
-      reasonText: "Run cancelled while waiting for approval.",
-      decidedAt: new Date(),
-    });
+  const outcome = await waitPromise;
+
+  input.recordEvent({
+    type: "approval_resolved",
+    approvalId: String(approvalId),
+    approvalFlowId: input.approvalFlowId,
+    approvalAttemptIndex: input.approvalAttemptIndex,
+    decision: outcome.decision,
+    actor: outcome.actor,
+    rawInput: outcome.rawInput,
+    flowContinues: input.resolveFlowContinues(outcome),
+    sessionId: input.runInput.sessionId,
+    conversationId: input.session.conversationId,
+    branchId: input.session.branchId,
+    runId: input.runId,
+  });
+  logger.info("approval resolved for tool call", {
+    sessionId: input.runInput.sessionId,
+    approvalId,
+    toolName: input.toolCall.name,
+    decision: outcome.decision,
+    actor: outcome.actor,
+    runId: input.runId,
+  });
+
+  return {
+    ...outcome,
+    approvalId,
+    request: input.request,
+    approvalTarget: input.approvalTarget,
   };
-  input.signal.addEventListener("abort", onAbort, { once: true });
-
-  try {
-    const outcome = await waitPromise;
-    if (input.signal.aborted && outcome.actor === "system:cancel") {
-      input.security.resolveApproval({
-        approvalId,
-        status: "cancelled",
-        reasonText: outcome.reasonText,
-        decidedAt: outcome.decidedAt,
-      });
-      input.signal.throwIfAborted();
-    }
-
-    input.recordEvent({
-      type: "approval_resolved",
-      approvalId: String(approvalId),
-      decision: outcome.decision,
-      actor: outcome.actor,
-      rawInput: outcome.rawInput,
-      sessionId: input.runInput.sessionId,
-      conversationId: input.session.conversationId,
-      branchId: input.session.branchId,
-      runId: input.runId,
-    });
-    logger.info("approval resolved for tool call", {
-      sessionId: input.runInput.sessionId,
-      approvalId,
-      toolName: input.toolCall.name,
-      decision: outcome.decision,
-      actor: outcome.actor,
-      runId: input.runId,
-    });
-
-    return {
-      ...outcome,
-      approvalId,
-      request: input.request,
-    };
-  } finally {
-    input.signal.removeEventListener("abort", onAbort);
-    input.sessions.updateStatus({
-      id: input.runInput.sessionId,
-      status: "active",
-      updatedAt: new Date(),
-    });
-  }
-}
-
-function buildApprovalTitle(): string {
-  return "Approval required";
 }

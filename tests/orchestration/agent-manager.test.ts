@@ -210,6 +210,8 @@ describe("AgentManager", () => {
         branchId: "branch_sub",
         runId: "run_1",
         approvalId: "1",
+        approvalFlowId: "1",
+        approvalAttemptIndex: 1,
         approvalTarget: "main_agent",
         title: "Need approval",
         request: {
@@ -272,6 +274,8 @@ describe("AgentManager", () => {
       branchId: "branch_1",
       runId: "run_1",
       approvalId: "1",
+      approvalFlowId: "1",
+      approvalAttemptIndex: 1,
       approvalTarget: "user",
       title: "Need approval",
       request: {
@@ -312,6 +316,8 @@ describe("AgentManager", () => {
         branchId: "branch_sub",
         runId: "run_1",
         approvalId: "1",
+        approvalFlowId: "1",
+        approvalAttemptIndex: 1,
         approvalTarget: "main_agent",
         title: "Need approval",
         request: {
@@ -1501,6 +1507,8 @@ describe("AgentManager", () => {
       branchId: "branch_1",
       runId: "run_1",
       approvalId: "not-a-number",
+      approvalFlowId: "not-a-number",
+      approvalAttemptIndex: 1,
       approvalTarget: "main_agent",
       title: "Need approval",
       request: {
