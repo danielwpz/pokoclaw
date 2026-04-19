@@ -125,7 +125,17 @@ export function createBashTool() {
               timeoutMs,
               ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
             });
-      const rendered = renderBashResult(result);
+      const rendered = renderBashResult({
+        ...result,
+        hintText: buildSandboxNotFoundHintIfNeeded({
+          args,
+          sandboxMode,
+          exitCode: result.exitCode,
+          signal: result.signal,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        }),
+      });
 
       return textToolResult(rendered.text, {
         command: result.command,
@@ -505,14 +515,16 @@ function renderBashResult(input: {
   stderr: string;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
+  hintText?: string | null | undefined;
 }): { text: string; truncated: boolean } {
-  const fullText = renderBashResultBlock({
+  const fullText = renderBashResultSections({
     command: input.command,
     cwd: input.cwd,
     exitCode: input.exitCode,
     signal: input.signal,
     stdout: input.stdout,
     stderr: input.stderr,
+    hintText: input.hintText,
   });
   if (fullText.length <= MAX_OUTPUT_CHARS) {
     return {
@@ -521,29 +533,135 @@ function renderBashResult(input: {
     };
   }
 
-  const trimmed = truncateBashStreams(input.stdout, input.stderr, MAX_OUTPUT_CHARS);
+  const trimmed = truncateBashStreams({
+    stdout: input.stdout,
+    stderr: input.stderr,
+    maxChars: MAX_OUTPUT_CHARS,
+    trailingText: buildBashResultTrailingText({
+      truncated: true,
+      hintText: input.hintText,
+    }),
+  });
   return {
-    text: `${renderBashResultBlock({
+    text: renderBashResultSections({
       command: input.command,
       cwd: input.cwd,
       exitCode: input.exitCode,
       signal: input.signal,
       stdout: trimmed.stdout,
       stderr: trimmed.stderr,
-    })}\n\n(Output truncated.)`,
+      truncated: true,
+      hintText: input.hintText,
+    }),
     truncated: true,
   };
 }
 
-function truncateBashStreams(stdout: string, stderr: string, maxChars: number) {
-  const reserved = 512;
-  const budget = Math.max(256, maxChars - reserved);
+function buildSandboxNotFoundHintIfNeeded(input: {
+  args: BashToolArgs;
+  sandboxMode: "sandboxed" | "full_access";
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}): string | null {
+  if (input.sandboxMode === "full_access") {
+    return null;
+  }
+  if (input.signal != null) {
+    return null;
+  }
+  if (input.exitCode == null || input.exitCode <= 0) {
+    return null;
+  }
+  if (!looksLikeShellNotFoundFailure({ stdout: input.stdout, stderr: input.stderr })) {
+    return null;
+  }
+
+  const retryJson = renderBashArgsJson(
+    selectBashArgs(input.args, {
+      mode: "full_access",
+      requireJustification: true,
+      dropPrefix: true,
+    }),
+  );
+
+  return [
+    'Hint: this sandboxed bash failure looks like a shell "not found" error.',
+    "",
+    "In this environment that can be a sandbox symptom rather than proof that the command is truly unavailable.",
+    'If this command is normally expected to exist, consider retrying once with `sandboxMode: "full_access"` before concluding it is missing.',
+    "",
+    "Use this exact bash argument object on the next retry if full access is warranted:",
+    "```json",
+    retryJson,
+    "```",
+  ].join("\n");
+}
+
+function looksLikeShellNotFoundFailure(input: { stdout: string; stderr: string }): boolean {
+  const combined = `${input.stderr}\n${input.stdout}`;
+  return SHELL_NOT_FOUND_PATTERNS.some((pattern) => pattern.test(combined));
+}
+
+const SHELL_NOT_FOUND_PATTERNS: ReadonlyArray<RegExp> = [
+  /\bcommand not found\b/i,
+  /(?:^|[\r\n])\s*(?:\/[^\s:]+)?(?:bash|zsh|sh):\s+.+?:\s+not found\b/i,
+  /(?:^|[\r\n])\s*env:\s+.+?:\s+No such file or directory\b/i,
+  /\bis not recognized as an internal or external command\b/i,
+  /\bbad interpreter\b.*\bno such file or directory\b/i,
+  /\bcannot execute: required file not found\b/i,
+];
+
+function renderBashResultSections(input: {
+  command: string;
+  cwd: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  truncated?: boolean;
+  hintText?: string | null | undefined;
+}): string {
+  const base = renderBashResultBlock({
+    command: input.command,
+    cwd: input.cwd,
+    exitCode: input.exitCode,
+    signal: input.signal,
+    stdout: input.stdout,
+    stderr: input.stderr,
+  });
+  const trailingText = buildBashResultTrailingText({
+    truncated: input.truncated ?? false,
+    hintText: input.hintText,
+  });
+  return trailingText.length === 0 ? base : `${base}\n\n${trailingText}`;
+}
+
+function buildBashResultTrailingText(input: {
+  truncated: boolean;
+  hintText?: string | null | undefined;
+}): string {
+  return [
+    ...(input.truncated ? ["(Output truncated.)"] : []),
+    ...(input.hintText == null || input.hintText.trim().length === 0 ? [] : [input.hintText]),
+  ].join("\n\n");
+}
+
+function truncateBashStreams(input: {
+  stdout: string;
+  stderr: string;
+  maxChars: number;
+  trailingText?: string;
+}) {
+  const reserved = 512 + (input.trailingText?.length ?? 0);
+  const budget = Math.max(256, input.maxChars - reserved);
   const stdoutBudget = Math.floor(budget * 0.6);
   const stderrBudget = budget - stdoutBudget;
 
   return {
-    stdout: truncateBlock(stdout, stdoutBudget),
-    stderr: truncateBlock(stderr, stderrBudget),
+    stdout: truncateBlock(input.stdout, stdoutBudget),
+    stderr: truncateBlock(input.stderr, stderrBudget),
   };
 }
 

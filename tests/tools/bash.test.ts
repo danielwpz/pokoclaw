@@ -166,6 +166,144 @@ describe("bash tool", () => {
     ]);
   });
 
+  test('adds a full-access hint for sandboxed shell "command not found" failures', async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeSandboxedBashMock.mockResolvedValue({
+      command: "git --version",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "",
+      stderr: "/bin/bash: git: command not found\n",
+      exitCode: 127,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "git --version",
+      },
+    );
+
+    expect(result.details).toEqual({
+      command: "git --version",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      exitCode: 127,
+      signal: null,
+      stdoutChars: 0,
+      stderrChars: 34,
+      outputTruncated: false,
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `<bash_result>
+  <command>git --version</command>
+  <cwd>/tmp/work</cwd>
+  <exit_code>127</exit_code>
+  <signal></signal>
+
+  <stdout>
+    
+  </stdout>
+
+  <stderr>
+    /bin/bash: git: command not found
+    
+  </stderr>
+</bash_result>
+
+Hint: this sandboxed bash failure looks like a shell "not found" error.
+
+In this environment that can be a sandbox symptom rather than proof that the command is truly unavailable.
+If this command is normally expected to exist, consider retrying once with \`sandboxMode: "full_access"\` before concluding it is missing.
+
+Use this exact bash argument object on the next retry if full access is warranted:
+\`\`\`json
+{
+  "command": "git --version",
+  "timeoutSec": 10,
+  "sandboxMode": "full_access",
+  "justification": "<one short sentence explaining why this exact command needs full access for the current user request>"
+}
+\`\`\``,
+      },
+    ]);
+  });
+
+  test('does not add a full-access hint for generic "not found" stderr that is not a shell command-missing error', async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeSandboxedBashMock.mockResolvedValue({
+      command: "gh repo view missing/repo",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "",
+      stderr:
+        "GraphQL: Could not resolve to a Repository with the name 'missing/repo'. Repository not found.\n",
+      exitCode: 1,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "gh repo view missing/repo",
+      },
+    );
+
+    expect(result.details).toEqual({
+      command: "gh repo view missing/repo",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      exitCode: 1,
+      signal: null,
+      stdoutChars: 0,
+      stderrChars: 95,
+      outputTruncated: false,
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `<bash_result>
+  <command>gh repo view missing/repo</command>
+  <cwd>/tmp/work</cwd>
+  <exit_code>1</exit_code>
+  <signal></signal>
+
+  <stdout>
+    
+  </stdout>
+
+  <stderr>
+    GraphQL: Could not resolve to a Repository with the name 'missing/repo'. Repository not found.
+    
+  </stderr>
+</bash_result>`,
+      },
+    ]);
+  });
+
   test("passes timeoutSec through as timeoutMs to sandbox execution", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
