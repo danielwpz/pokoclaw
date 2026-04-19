@@ -6,6 +6,7 @@
  */
 import { Type } from "@sinclair/typebox";
 
+import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import { defineTool, type ToolDefinition, textToolResult } from "@/src/tools/core/types.js";
 
 export type MeditationFindingIssueType =
@@ -39,11 +40,6 @@ export interface ConsolidationRuleProposal {
   evidence_examples: string[];
 }
 
-export interface ConsolidationPrivateLessonsProposal {
-  agent_id: string;
-  lessons: ConsolidationRuleProposal[];
-}
-
 export type ConsolidationPriority = "low" | "medium" | "high";
 export type ConsolidationDurability = "transient" | "recurring" | "durable";
 export type ConsolidationPromotionDecision =
@@ -63,9 +59,18 @@ export interface ConsolidationEvaluationSubmit {
   evaluations: ConsolidationFindingEvaluation[];
 }
 
+export interface ConsolidationRewriteTarget {
+  lessons: ConsolidationRuleProposal[];
+  rewritten_markdown: string;
+}
+
+export interface ConsolidationPrivateRewriteTarget extends ConsolidationRewriteTarget {
+  agent_id: string;
+}
+
 export interface ConsolidationRewriteSubmit {
-  shared_repeat_use_lessons: ConsolidationRuleProposal[] | null | "";
-  private_repeat_use_lessons: ConsolidationPrivateLessonsProposal[];
+  shared_rewrite: ConsolidationRewriteTarget | null | "";
+  private_rewrites: ConsolidationPrivateRewriteTarget[];
 }
 
 const MEDITATION_FINDING_SCHEMA = Type.Object(
@@ -128,22 +133,28 @@ export const CONSOLIDATION_EVALUATION_SUBMIT_SCHEMA = Type.Object(
 
 export const CONSOLIDATION_REWRITE_SUBMIT_SCHEMA = Type.Object(
   {
-    shared_repeat_use_lessons: Type.Union([
-      Type.Array(
-        Type.Object(
-          {
-            rule_text: Type.String(),
-            supported_finding_ids: Type.Array(Type.String()),
-            why_generalizable: Type.String(),
-            evidence_examples: Type.Array(Type.String()),
-          },
-          { additionalProperties: false },
-        ),
+    shared_rewrite: Type.Union([
+      Type.Object(
+        {
+          lessons: Type.Array(
+            Type.Object(
+              {
+                rule_text: Type.String(),
+                supported_finding_ids: Type.Array(Type.String()),
+                why_generalizable: Type.String(),
+                evidence_examples: Type.Array(Type.String()),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+          rewritten_markdown: Type.String(),
+        },
+        { additionalProperties: false },
       ),
       Type.Null(),
       Type.Literal(""),
     ]),
-    private_repeat_use_lessons: Type.Array(
+    private_rewrites: Type.Array(
       Type.Object(
         {
           agent_id: Type.String(),
@@ -158,6 +169,7 @@ export const CONSOLIDATION_REWRITE_SUBMIT_SCHEMA = Type.Object(
               { additionalProperties: false },
             ),
           ),
+          rewritten_markdown: Type.String(),
         },
         { additionalProperties: false },
       ),
@@ -198,18 +210,32 @@ export function createConsolidationEvaluationSubmitTool(
 
 export function createConsolidationRewriteSubmitTool(
   onSubmit: (payload: ConsolidationRewriteSubmit) => void,
+  validateSubmission?: (payload: ConsolidationRewriteSubmit) => string[],
 ): ToolDefinition<ConsolidationRewriteSubmit> {
   return defineTool({
     name: "submit",
     description:
-      "Submit structured repeat-use lesson proposals for shared and touched private memory targets.",
+      "Submit structured repeat-use lesson proposals plus the final rewritten markdown for shared and touched private memory targets.",
     inputSchema: CONSOLIDATION_REWRITE_SUBMIT_SCHEMA,
     execute(_context, args) {
-      onSubmit({
+      const payload = {
         ...args,
-        shared_repeat_use_lessons:
-          args.shared_repeat_use_lessons === "" ? null : args.shared_repeat_use_lessons,
-      });
+        shared_rewrite: args.shared_rewrite === "" ? null : args.shared_rewrite,
+      };
+      const issues = validateSubmission?.(payload) ?? [];
+      if (issues.length > 0) {
+        throw toolRecoverableError(
+          [
+            "Rewrite submission failed host validation. Re-submit a complete rewritten_markdown that fixes every issue below.",
+            ...issues.map((issue) => `- ${issue}`),
+          ].join("\n"),
+          {
+            code: "meditation_rewrite_validation_failed",
+            issues,
+          },
+        );
+      }
+      onSubmit(payload);
       return textToolResult("Meditation consolidation rewrite submitted.");
     },
   });

@@ -218,8 +218,8 @@ describe("MeditationPipelineRunner", () => {
           }
 
           return createSubmitTurnResult({
-            shared_repeat_use_lessons: null,
-            private_repeat_use_lessons: [
+            shared_rewrite: null,
+            private_rewrites: [
               {
                 agent_id: "agent_sub_1",
                 lessons: [
@@ -232,6 +232,8 @@ describe("MeditationPipelineRunner", () => {
                     evidence_examples: ["user quote: lead with the diagnosis first"],
                   },
                 ],
+                rewritten_markdown:
+                  "# Scope\n\n# Durable Local Facts\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
               },
             ],
           });
@@ -373,8 +375,8 @@ describe("MeditationPipelineRunner", () => {
     expect(consolidationRewritePrompt).toContain("Approved Shared Findings");
     expect(consolidationRewritePrompt).toContain("Approved Private Findings By Bucket");
     expect(consolidationRewriteSubmit).toEqual({
-      shared_repeat_use_lessons: null,
-      private_repeat_use_lessons: [
+      shared_rewrite: null,
+      private_rewrites: [
         {
           agent_id: "agent_sub_1",
           lessons: [
@@ -387,6 +389,8 @@ describe("MeditationPipelineRunner", () => {
               evidence_examples: ["user quote: lead with the diagnosis first"],
             },
           ],
+          rewritten_markdown:
+            "# Scope\n\n# Durable Local Facts\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
         },
       ],
     });
@@ -767,15 +771,18 @@ describe("MeditationPipelineRunner", () => {
           }
 
           return createSubmitTurnResult({
-            shared_repeat_use_lessons: [
-              {
-                rule_text: "This should be dropped.",
-                supported_finding_ids: [],
-                why_generalizable: "",
-                evidence_examples: [],
-              },
-            ],
-            private_repeat_use_lessons: [
+            shared_rewrite: {
+              lessons: [
+                {
+                  rule_text: "This should be dropped.",
+                  supported_finding_ids: [],
+                  why_generalizable: "",
+                  evidence_examples: [],
+                },
+              ],
+              rewritten_markdown: "# Existing Shared Memory\n\n- Keep this content.\n",
+            },
+            private_rewrites: [
               {
                 agent_id: "agent_sub_1",
                 lessons: [
@@ -786,6 +793,8 @@ describe("MeditationPipelineRunner", () => {
                     evidence_examples: ["tool error: Permission request denied."],
                   },
                 ],
+                rewritten_markdown:
+                  "# Scope\n\n# Durable Local Facts\n\n# Repeat-Use Lessons\n\n- Keep the private rewrite.\n",
               },
             ],
           });
@@ -819,11 +828,13 @@ describe("MeditationPipelineRunner", () => {
     );
 
     expect(consolidationRewriteSubmit).toMatchObject({
-      shared_repeat_use_lessons: [
-        {
-          rule_text: "This should be dropped.",
-        },
-      ],
+      shared_rewrite: {
+        lessons: [
+          {
+            rule_text: "This should be dropped.",
+          },
+        ],
+      },
     });
     expect(dailyNote).toContain("Shared memory rewritten: no");
     expect(dailyNote).toContain("Rewrite rejections:");
@@ -883,6 +894,7 @@ describe("MeditationPipelineRunner", () => {
               evidence_examples: ["example"],
             },
           ],
+          rewritten_markdown: "# Scope\n\n- should be dropped\n",
         },
         {
           agent_id: "agent_sub_1",
@@ -894,6 +906,7 @@ describe("MeditationPipelineRunner", () => {
               evidence_examples: ["example"],
             },
           ],
+          rewritten_markdown: "# Scope\n\n- should stay\n",
         },
       ],
     });
@@ -909,6 +922,7 @@ describe("MeditationPipelineRunner", () => {
             evidence_examples: ["example"],
           },
         ],
+        rewrittenMarkdown: "# Scope\n\n- should stay\n",
       },
     ]);
   });
@@ -933,6 +947,7 @@ describe("MeditationPipelineRunner", () => {
               evidence_examples: ["example"],
             },
           ],
+          rewritten_markdown: "# Scope\n\n- should be dropped\n",
         },
       ],
     });
@@ -975,6 +990,62 @@ describe("MeditationPipelineRunner", () => {
               evidence_examples: [],
             },
           ],
+          rewritten_markdown: "# Scope\n\n- invalid\n",
+        },
+      ],
+    });
+
+    expect(filtered).toEqual([]);
+  });
+
+  test("drops all private rewrites when the same agent_id appears more than once", () => {
+    const filtered = filterEligiblePrivateMemoryRewrites({
+      bucketPackets: [
+        {
+          agentId: "agent_sub_1",
+          agentKind: "sub",
+          approvedPrivateFindings: [
+            {
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
+              agentId: "agent_sub_1",
+              agentKind: "sub",
+              priority: "high",
+              durability: "durable",
+              promotionDecision: "private_memory",
+              reason: "ok",
+              summary: "summary",
+              issueType: "agent_workflow_issue",
+              scopeHint: "subagent",
+              evidenceSummary: "evidence",
+              examples: ["tool error: Permission request denied."],
+            },
+          ],
+        },
+      ],
+      privateMemoryRewrites: [
+        {
+          agent_id: "agent_sub_1",
+          lessons: [
+            {
+              rule_text: "first candidate",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "ok",
+              evidence_examples: ["example"],
+            },
+          ],
+          rewritten_markdown: "# Scope\n\n- first candidate\n",
+        },
+        {
+          agent_id: "agent_sub_1",
+          lessons: [
+            {
+              rule_text: "second candidate",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "ok",
+              evidence_examples: ["example"],
+            },
+          ],
+          rewritten_markdown: "# Scope\n\n- second candidate\n",
         },
       ],
     });

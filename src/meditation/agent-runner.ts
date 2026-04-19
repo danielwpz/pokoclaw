@@ -35,7 +35,7 @@ import type { StorageDb } from "@/src/storage/db/client.js";
 
 export const MAX_BUCKET_SUBMIT_TURNS = 2;
 export const MAX_CONSOLIDATION_EVALUATION_SUBMIT_TURNS = 2;
-export const MAX_CONSOLIDATION_REWRITE_SUBMIT_TURNS = 2;
+export const MAX_CONSOLIDATION_REWRITE_SUBMIT_TURNS = 3;
 
 export interface MeditationAgentExecution<TSubmission>
   extends MeditationSubmitLoopResult<TSubmission> {
@@ -148,9 +148,16 @@ export async function runMeditationConsolidationRewriteAgent(
     storage: input.storage,
     securityConfig: input.securityConfig,
     tools: [
-      createConsolidationRewriteSubmitTool((payload) => {
-        submission = payload;
-      }),
+      createConsolidationRewriteSubmitTool(
+        (payload) => {
+          submission = payload;
+        },
+        (payload) =>
+          validateConsolidationRewriteSubmission({
+            promptInput: input.promptInput,
+            submission: payload,
+          }),
+      ),
     ],
     getSubmission: () => submission,
     maxTurns: MAX_CONSOLIDATION_REWRITE_SUBMIT_TURNS,
@@ -165,3 +172,71 @@ export async function runMeditationConsolidationRewriteAgent(
 }
 
 export type { PreparedMeditationBucket };
+
+function validateConsolidationRewriteSubmission(input: {
+  promptInput: MeditationConsolidationRewritePromptInput;
+  submission: ConsolidationRewriteSubmit;
+}): string[] {
+  const issues: string[] = [];
+
+  if (input.submission.shared_rewrite != null && input.submission.shared_rewrite !== "") {
+    issues.push(
+      ...validateRewriteMarkdownLength({
+        targetLabel: "shared",
+        currentMarkdown: input.promptInput.sharedMemoryCurrent,
+        rewrittenMarkdown: input.submission.shared_rewrite.rewritten_markdown,
+      }),
+    );
+  }
+
+  const currentPrivateMemoryByAgentId = new Map(
+    input.promptInput.bucketPackets.map(
+      (packet) => [packet.agentId, packet.privateMemoryCurrent] as const,
+    ),
+  );
+  for (const rewrite of input.submission.private_rewrites) {
+    const currentMarkdown = currentPrivateMemoryByAgentId.get(rewrite.agent_id);
+    if (typeof currentMarkdown !== "string") {
+      continue;
+    }
+    issues.push(
+      ...validateRewriteMarkdownLength({
+        targetLabel: `private:${rewrite.agent_id}`,
+        currentMarkdown,
+        rewrittenMarkdown: rewrite.rewritten_markdown,
+      }),
+    );
+  }
+
+  return issues;
+}
+
+function validateRewriteMarkdownLength(input: {
+  targetLabel: string;
+  currentMarkdown: string;
+  rewrittenMarkdown: string;
+}): string[] {
+  const currentLength = normalizeMarkdownForValidation(input.currentMarkdown).length;
+  const rewrittenLength = normalizeMarkdownForValidation(input.rewrittenMarkdown).length;
+
+  if (rewrittenLength === 0) {
+    return [`${input.targetLabel} rewritten_markdown is empty.`];
+  }
+
+  if (currentLength === 0) {
+    return [];
+  }
+
+  const minimumLength = Math.ceil(currentLength * 0.5);
+  if (rewrittenLength < minimumLength) {
+    return [
+      `${input.targetLabel} rewritten_markdown is too short (${rewrittenLength} chars < ${minimumLength} minimum from current ${currentLength}). Preserve all existing semantics, including URLs, paths, constants, commands, and durable constraints.`,
+    ];
+  }
+
+  return [];
+}
+
+function normalizeMarkdownForValidation(markdown: string): string {
+  return markdown.replace(/\r\n/g, "\n").trim();
+}

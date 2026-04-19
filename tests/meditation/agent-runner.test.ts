@@ -319,9 +319,10 @@ describe("meditation agent runner", () => {
         async completeTurn(input) {
           expect(input.systemPrompt).toContain("Do not reevaluate the world from scratch.");
           expect(input.messages[0]?.payloadJson).toContain("approved findings");
+          expect(input.systemPrompt).toContain("rewritten markdown");
           return createTurnResult({
-            shared_repeat_use_lessons: null,
-            private_repeat_use_lessons: [
+            shared_rewrite: null,
+            private_rewrites: [
               {
                 agent_id: "agent_sub_1",
                 lessons: [
@@ -334,6 +335,8 @@ describe("meditation agent runner", () => {
                     evidence_examples: ["user quote: lead with the diagnosis first"],
                   },
                 ],
+                rewritten_markdown:
+                  "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
               },
             ],
           });
@@ -346,8 +349,8 @@ describe("meditation agent runner", () => {
     });
 
     expect(result.submission).toEqual({
-      shared_repeat_use_lessons: null,
-      private_repeat_use_lessons: [
+      shared_rewrite: null,
+      private_rewrites: [
         {
           agent_id: "agent_sub_1",
           lessons: [
@@ -360,8 +363,113 @@ describe("meditation agent runner", () => {
               evidence_examples: ["user quote: lead with the diagnosis first"],
             },
           ],
+          rewritten_markdown:
+            "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
         },
       ],
     });
+  });
+
+  test("retries consolidation rewrite when rewritten markdown is too short", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    let turn = 0;
+
+    const promptInput: MeditationConsolidationRewritePromptInput = {
+      currentDate: "2026-04-08",
+      timezone: "UTC",
+      sharedMemoryCurrent: "# Preferences\n\n- Prefer concise updates.\n",
+      approvedSharedFindings: [],
+      bucketPackets: [
+        {
+          bucketId: "bucket_sub_1",
+          agentId: "agent_sub_1",
+          agentKind: "sub",
+          displayName: "Atlas Frontend",
+          description: "Handles atlas-web frontend tasks.",
+          workdir: "/repo/atlas-web",
+          compactSummary: "Recently fixing frontend regressions.",
+          privateMemoryCurrent:
+            "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Keep using the shared diagnosis-first rule.\n",
+          approvedPrivateFindings: [
+            {
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
+              agentId: "agent_sub_1",
+              agentKind: "sub",
+              priority: "high",
+              durability: "durable",
+              promotionDecision: "private_memory",
+              reason: "This keeps repeating in atlas-web frontend work.",
+              summary: "For atlas-web frontend debugging, lead with diagnosis before explanation.",
+              issueType: "user_preference_signal",
+              scopeHint: "subagent",
+              evidenceSummary: "The user interrupted the run and asked for diagnosis first.",
+              examples: ["user quote: lead with the diagnosis first"],
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = await runMeditationConsolidationRewriteAgent({
+      bridge: {
+        async completeTurn(input) {
+          turn += 1;
+          if (turn === 1) {
+            return createTurnResult({
+              shared_rewrite: null,
+              private_rewrites: [
+                {
+                  agent_id: "agent_sub_1",
+                  lessons: [
+                    {
+                      rule_text:
+                        "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+                      supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+                      why_generalizable:
+                        "This is a stable future-facing collaboration rule for this subagent.",
+                      evidence_examples: ["user quote: lead with the diagnosis first"],
+                    },
+                  ],
+                  rewritten_markdown: "Too short.\n",
+                },
+              ],
+            });
+          }
+
+          expect(input.messages.some((message) => message.payloadJson.includes("too short"))).toBe(
+            true,
+          );
+          return createTurnResult({
+            shared_rewrite: null,
+            private_rewrites: [
+              {
+                agent_id: "agent_sub_1",
+                lessons: [
+                  {
+                    rule_text:
+                      "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+                    supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+                    why_generalizable:
+                      "This is a stable future-facing collaboration rule for this subagent.",
+                    evidence_examples: ["user quote: lead with the diagnosis first"],
+                  },
+                ],
+                rewritten_markdown:
+                  "# Scope\n\n- atlas-web frontend.\n\n# Repeat-Use Lessons\n\n- Keep using the shared diagnosis-first rule.\n- Lead with diagnosis before explanation during atlas-web frontend debugging.\n",
+              },
+            ],
+          });
+        },
+      },
+      model: createModel(),
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      promptInput,
+    });
+
+    expect(turn).toBe(2);
+    expect(result.submission.private_rewrites[0]?.rewritten_markdown).toContain(
+      "Lead with diagnosis before explanation during atlas-web frontend debugging.",
+    );
   });
 });

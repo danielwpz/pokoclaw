@@ -298,6 +298,14 @@ describe("meditation prompts", () => {
     });
 
     expect(systemPrompt).toContain("Do not reevaluate the world from scratch.");
+    expect(systemPrompt).toContain("structured-lesson flow");
+    expect(systemPrompt).toContain("preserve all valid existing memory semantics");
+    expect(systemPrompt).toContain("URLs, path names, command strings");
+    expect(systemPrompt).toContain("Use append-first behavior");
+    expect(systemPrompt).toContain("at least 90% the same in meaning");
+    expect(systemPrompt).toContain("Replacing old content is exceptional.");
+    expect(systemPrompt).toContain("keep both and add a short clarifying note");
+    expect(systemPrompt).toContain("Preserve the existing file structure and ordering by default.");
     expect(systemPrompt).toContain("Write durable future-facing rules, not incident reports.");
     expect(systemPrompt).toContain(
       "Avoid retelling one incident. Extract the future-facing rule instead.",
@@ -311,9 +319,19 @@ describe("meditation prompts", () => {
     expect(systemPrompt).toContain(
       "If an approved finding cannot be rewritten as a short future-facing rule, leave that target unchanged.",
     );
+    expect(systemPrompt).toContain(
+      "Do not rewrite an existing sentence just to make it cleaner if that edit could narrow, broaden, or redirect the meaning.",
+    );
+    expect(systemPrompt).toContain("The lessons output and rewritten_markdown must agree");
     expect(systemPrompt).toContain("## Good Rewrite Examples");
+    expect(systemPrompt).toContain("keep an old rule, then add a nearby new bullet");
     expect(systemPrompt).toContain("## Bad Rewrite Examples");
-    expect(systemPrompt).toContain('"shared_repeat_use_lessons": [');
+    expect(systemPrompt).toContain(
+      "replace an existing rule with a new one just because they seem related",
+    );
+    expect(systemPrompt).toContain("Prefer append-first. Replace old content only when");
+    expect(systemPrompt).toContain('"shared_rewrite": {');
+    expect(systemPrompt).toContain('"rewritten_markdown": "string"');
     expect(systemPrompt).toContain('"rule_text": "string"');
     expect(systemPrompt).toContain('"supported_finding_ids": ["string"]');
     expect(userPrompt).toContain("Approved Shared Findings");

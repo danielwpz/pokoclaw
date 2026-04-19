@@ -32,6 +32,6 @@ pnpm-debug.log*
 .agents/
 skills-lock.json
 
-# runtime temp
+# local runtime temp / sandboxes / one-off diagnostics
 .tmp/
 tmp/

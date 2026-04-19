@@ -56,8 +56,9 @@ import type {
   MeditationRunResult,
 } from "@/src/meditation/scheduler.js";
 import type {
-  ConsolidationPrivateLessonsProposal,
+  ConsolidationPrivateRewriteTarget,
   ConsolidationRewriteSubmit,
+  ConsolidationRewriteTarget,
   ConsolidationRuleProposal,
   MeditationFinding,
 } from "@/src/meditation/submit-tools.js";
@@ -121,11 +122,11 @@ interface MeditationRewriteProposalRejection {
 interface EligiblePrivateLessonsRewrite {
   agentId: string;
   lessons: ConsolidationRuleProposal[];
+  rewrittenMarkdown: string;
 }
 
 const MAX_REPEAT_USE_LESSONS_PER_TARGET = 3;
 const MAX_REPEAT_USE_RULE_TEXT_LENGTH = 240;
-const REPEAT_USE_LESSONS_HEADING = "# Repeat-Use Lessons";
 
 export class MeditationPipelineRunner implements MeditationRunner {
   private readonly readModel: MeditationReadModel;
@@ -419,18 +420,17 @@ export class MeditationPipelineRunner implements MeditationRunner {
             });
           }
 
-          if (rewriteDecision.sharedLessons != null) {
+          if (rewriteDecision.sharedRewrite != null) {
             const sharedPath = buildWorkspaceSharedMemoryPath(workspaceDir);
-            const sharedMemoryRewrite = renderMemoryWithRepeatUseLessons({
-              currentContent: consolidationRewritePromptInput.sharedMemoryCurrent,
-              lessons: rewriteDecision.sharedLessons,
-            });
             await Promise.all([
               writeMeditationTextFileAtomic(
                 path.join(artifactDir, "rewrite-preview", "shared.md"),
-                sharedMemoryRewrite,
+                rewriteDecision.sharedRewrite.rewrittenMarkdown,
               ),
-              writeMeditationTextFileAtomic(sharedPath, sharedMemoryRewrite),
+              writeMeditationTextFileAtomic(
+                sharedPath,
+                rewriteDecision.sharedRewrite.rewrittenMarkdown,
+              ),
             ]);
             consolidationSummary = {
               ...consolidationSummary,
@@ -449,18 +449,14 @@ export class MeditationPipelineRunner implements MeditationRunner {
             if (packet == null || packet.privateMemoryCurrent == null) {
               continue;
             }
-            const privateMemoryRewrite = renderMemoryWithRepeatUseLessons({
-              currentContent: packet.privateMemoryCurrent,
-              lessons: rewrite.lessons,
-            });
             await Promise.all([
               writeMeditationTextFileAtomic(
                 path.join(artifactDir, "rewrite-preview", `private-${rewrite.agentId}.md`),
-                privateMemoryRewrite,
+                rewrite.rewrittenMarkdown,
               ),
               writeMeditationTextFileAtomic(
                 buildPrivateWorkspaceMemoryPath(privateWorkspaceDir),
-                privateMemoryRewrite,
+                rewrite.rewrittenMarkdown,
               ),
             ]);
           }
@@ -547,34 +543,34 @@ function materializeMeditationRewriteDecision(input: {
   promptInput: MeditationConsolidationRewritePromptInput;
   submission: ConsolidationRewriteSubmit;
 }): {
-  sharedLessons: ConsolidationRuleProposal[] | null;
+  sharedRewrite: { lessons: ConsolidationRuleProposal[]; rewrittenMarkdown: string } | null;
   privateLessons: EligiblePrivateLessonsRewrite[];
   rejections: MeditationRewriteProposalRejection[];
 } {
-  const sharedDecision = validateSharedLessonsProposal({
+  const sharedDecision = validateSharedRewriteProposal({
     approvedSharedFindings: input.promptInput.approvedSharedFindings,
-    sharedRepeatUseLessons: input.submission.shared_repeat_use_lessons,
+    sharedRewrite: input.submission.shared_rewrite,
   });
-  const privateDecision = validatePrivateLessonsProposals({
+  const privateDecision = validatePrivateRewriteProposals({
     bucketPackets: input.promptInput.bucketPackets,
-    privateRepeatUseLessons: input.submission.private_repeat_use_lessons,
+    privateRewrites: input.submission.private_rewrites,
   });
 
   return {
-    sharedLessons: sharedDecision.eligible,
+    sharedRewrite: sharedDecision.eligible,
     privateLessons: privateDecision.eligible,
     rejections: [...sharedDecision.rejections, ...privateDecision.rejections],
   };
 }
 
-function validateSharedLessonsProposal(input: {
+function validateSharedRewriteProposal(input: {
   approvedSharedFindings: MeditationApprovedFinding[];
-  sharedRepeatUseLessons: ConsolidationRuleProposal[] | null | "";
+  sharedRewrite: ConsolidationRewriteTarget | null | "";
 }): {
-  eligible: ConsolidationRuleProposal[] | null;
+  eligible: { lessons: ConsolidationRuleProposal[]; rewrittenMarkdown: string } | null;
   rejections: MeditationRewriteProposalRejection[];
 } {
-  if (input.sharedRepeatUseLessons == null || input.sharedRepeatUseLessons === "") {
+  if (input.sharedRewrite == null || input.sharedRewrite === "") {
     return {
       eligible: null,
       rejections: [],
@@ -582,7 +578,7 @@ function validateSharedLessonsProposal(input: {
   }
 
   const reasons = summarizeRuleProposalIssues({
-    lessons: input.sharedRepeatUseLessons,
+    lessons: input.sharedRewrite.lessons,
     eligibleFindingIds: new Set(input.approvedSharedFindings.map((finding) => finding.findingId)),
     hasApprovedFindings: input.approvedSharedFindings.length > 0,
   });
@@ -599,18 +595,18 @@ function validateSharedLessonsProposal(input: {
   }
 
   return {
-    eligible: normalizeRepeatUseLessonProposals(input.sharedRepeatUseLessons),
+    eligible: normalizeRewriteProposal(input.sharedRewrite),
     rejections: [],
   };
 }
 
-function validatePrivateLessonsProposals(input: {
+function validatePrivateRewriteProposals(input: {
   bucketPackets: Array<{
     agentId: string;
     agentKind: "main" | "sub" | "shared" | "unknown";
     approvedPrivateFindings?: MeditationApprovedFinding[];
   }>;
-  privateRepeatUseLessons: ConsolidationPrivateLessonsProposal[];
+  privateRewrites: ConsolidationPrivateRewriteTarget[];
 }): {
   eligible: EligiblePrivateLessonsRewrite[];
   rejections: MeditationRewriteProposalRejection[];
@@ -618,17 +614,25 @@ function validatePrivateLessonsProposals(input: {
   const packetByAgentId = new Map(
     input.bucketPackets.map((packet) => [packet.agentId, packet] as const),
   );
+  const duplicateAgentIds = new Set<string>();
   const seenAgentIds = new Set<string>();
+  for (const proposal of input.privateRewrites) {
+    if (seenAgentIds.has(proposal.agent_id)) {
+      duplicateAgentIds.add(proposal.agent_id);
+      continue;
+    }
+    seenAgentIds.add(proposal.agent_id);
+  }
   const eligible: EligiblePrivateLessonsRewrite[] = [];
   const rejections: MeditationRewriteProposalRejection[] = [];
 
-  for (const proposal of input.privateRepeatUseLessons) {
+  for (const proposal of input.privateRewrites) {
     const rejectionReasons = new Set<string>();
     const packet = packetByAgentId.get(proposal.agent_id);
     if (packet == null) {
       rejectionReasons.add("unknown_private_target");
     } else {
-      if (seenAgentIds.has(proposal.agent_id)) {
+      if (duplicateAgentIds.has(proposal.agent_id)) {
         rejectionReasons.add("duplicate_private_target");
       }
       if (packet.agentKind !== "sub") {
@@ -657,9 +661,8 @@ function validatePrivateLessonsProposals(input: {
 
     eligible.push({
       agentId: proposal.agent_id,
-      lessons: normalizeRepeatUseLessonProposals(proposal.lessons),
+      ...normalizeRewriteProposal(proposal),
     });
-    seenAgentIds.add(proposal.agent_id);
   }
 
   return {
@@ -741,36 +744,21 @@ function normalizeRepeatUseLessonProposals(
   return normalized;
 }
 
-function renderMemoryWithRepeatUseLessons(input: {
-  currentContent: string;
+function normalizeRewriteProposal(input: {
   lessons: ConsolidationRuleProposal[];
-}): string {
-  const normalizedCurrent = input.currentContent.replace(/\r\n/g, "\n").trimEnd();
-  const lessonLines =
-    input.lessons.length === 0
-      ? ""
-      : input.lessons.map((lesson) => `- ${lesson.rule_text}`).join("\n");
-  const replacementSection = [REPEAT_USE_LESSONS_HEADING, "", lessonLines].join("\n").trimEnd();
-  const lines = normalizedCurrent.length === 0 ? [] : normalizedCurrent.split("\n");
-  const headingIndex = lines.findIndex((line) => line.trim() === REPEAT_USE_LESSONS_HEADING);
+  rewritten_markdown: string;
+}): {
+  lessons: ConsolidationRuleProposal[];
+  rewrittenMarkdown: string;
+} {
+  return {
+    lessons: normalizeRepeatUseLessonProposals(input.lessons),
+    rewrittenMarkdown: normalizeRewrittenMarkdown(input.rewritten_markdown),
+  };
+}
 
-  if (headingIndex === -1) {
-    const parts = [normalizedCurrent, replacementSection].filter((part) => part.trim().length > 0);
-    return `${parts.join("\n\n").trimEnd()}\n`;
-  }
-
-  let nextHeadingIndex = lines.length;
-  for (let index = headingIndex + 1; index < lines.length; index += 1) {
-    if (lines[index]?.startsWith("# ")) {
-      nextHeadingIndex = index;
-      break;
-    }
-  }
-
-  const before = lines.slice(0, headingIndex).join("\n").trimEnd();
-  const after = lines.slice(nextHeadingIndex).join("\n").trimStart();
-  const parts = [before, replacementSection, after].filter((part) => part.trim().length > 0);
-  return `${parts.join("\n\n").trimEnd()}\n`;
+function normalizeRewrittenMarkdown(markdown: string): string {
+  return `${markdown.replace(/\r\n/g, "\n").trimEnd()}\n`;
 }
 
 async function writeJsonArtifact(filePath: string, payload: unknown): Promise<void> {
@@ -783,11 +771,11 @@ export function filterEligiblePrivateMemoryRewrites(input: {
     agentKind: "main" | "sub" | "shared" | "unknown";
     approvedPrivateFindings?: MeditationApprovedFinding[];
   }>;
-  privateMemoryRewrites: ConsolidationPrivateLessonsProposal[];
+  privateMemoryRewrites: ConsolidationPrivateRewriteTarget[];
 }): EligiblePrivateLessonsRewrite[] {
-  return validatePrivateLessonsProposals({
+  return validatePrivateRewriteProposals({
     bucketPackets: input.bucketPackets,
-    privateRepeatUseLessons: input.privateMemoryRewrites,
+    privateRewrites: input.privateMemoryRewrites,
   }).eligible;
 }
 
