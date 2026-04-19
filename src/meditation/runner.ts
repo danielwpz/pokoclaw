@@ -614,7 +614,15 @@ function validatePrivateRewriteProposals(input: {
   const packetByAgentId = new Map(
     input.bucketPackets.map((packet) => [packet.agentId, packet] as const),
   );
+  const duplicateAgentIds = new Set<string>();
   const seenAgentIds = new Set<string>();
+  for (const proposal of input.privateRewrites) {
+    if (seenAgentIds.has(proposal.agent_id)) {
+      duplicateAgentIds.add(proposal.agent_id);
+      continue;
+    }
+    seenAgentIds.add(proposal.agent_id);
+  }
   const eligible: EligiblePrivateLessonsRewrite[] = [];
   const rejections: MeditationRewriteProposalRejection[] = [];
 
@@ -624,7 +632,7 @@ function validatePrivateRewriteProposals(input: {
     if (packet == null) {
       rejectionReasons.add("unknown_private_target");
     } else {
-      if (seenAgentIds.has(proposal.agent_id)) {
+      if (duplicateAgentIds.has(proposal.agent_id)) {
         rejectionReasons.add("duplicate_private_target");
       }
       if (packet.agentKind !== "sub") {
@@ -655,7 +663,6 @@ function validatePrivateRewriteProposals(input: {
       agentId: proposal.agent_id,
       ...normalizeRewriteProposal(proposal),
     });
-    seenAgentIds.add(proposal.agent_id);
   }
 
   return {

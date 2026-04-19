@@ -997,6 +997,61 @@ describe("MeditationPipelineRunner", () => {
 
     expect(filtered).toEqual([]);
   });
+
+  test("drops all private rewrites when the same agent_id appears more than once", () => {
+    const filtered = filterEligiblePrivateMemoryRewrites({
+      bucketPackets: [
+        {
+          agentId: "agent_sub_1",
+          agentKind: "sub",
+          approvedPrivateFindings: [
+            {
+              findingId: buildMeditationFindingId("bucket_sub_1", 0),
+              agentId: "agent_sub_1",
+              agentKind: "sub",
+              priority: "high",
+              durability: "durable",
+              promotionDecision: "private_memory",
+              reason: "ok",
+              summary: "summary",
+              issueType: "agent_workflow_issue",
+              scopeHint: "subagent",
+              evidenceSummary: "evidence",
+              examples: ["tool error: Permission request denied."],
+            },
+          ],
+        },
+      ],
+      privateMemoryRewrites: [
+        {
+          agent_id: "agent_sub_1",
+          lessons: [
+            {
+              rule_text: "first candidate",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "ok",
+              evidence_examples: ["example"],
+            },
+          ],
+          rewritten_markdown: "# Scope\n\n- first candidate\n",
+        },
+        {
+          agent_id: "agent_sub_1",
+          lessons: [
+            {
+              rule_text: "second candidate",
+              supported_finding_ids: [buildMeditationFindingId("bucket_sub_1", 0)],
+              why_generalizable: "ok",
+              evidence_examples: ["example"],
+            },
+          ],
+          rewritten_markdown: "# Scope\n\n- second candidate\n",
+        },
+      ],
+    });
+
+    expect(filtered).toEqual([]);
+  });
 });
 
 function createSubmitTurnResult(args: Record<string, unknown>): PiBridgeRunTurnResult {
