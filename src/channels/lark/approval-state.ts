@@ -33,6 +33,7 @@ export interface LarkApprovalState {
   taskRunId: string | null;
   taskRunType: string | null;
   title: string;
+  grantOnApprove: boolean;
   request: PermissionRequest;
   reasonText: string;
   commandText: string | null;
@@ -65,6 +66,7 @@ export function createLarkApprovalStateFromRequest(input: {
     taskRunId: input.taskRunId ?? null,
     taskRunType: input.taskRunType ?? null,
     title: input.event.title,
+    grantOnApprove: input.event.grantOnApprove ?? true,
     request: input.event.request,
     reasonText: input.event.reasonText,
     commandText: input.event.commandText ?? null,
@@ -147,6 +149,7 @@ function onApprovalRequested(
     taskRunId: envelope.taskRun.taskRunId ?? previous.taskRunId,
     taskRunType: envelope.taskRun.runType ?? previous.taskRunType,
     title: envelope.event.title,
+    grantOnApprove: envelope.event.grantOnApprove ?? true,
     request: envelope.event.request,
     reasonText: envelope.event.reasonText,
     commandText: envelope.event.commandText ?? null,

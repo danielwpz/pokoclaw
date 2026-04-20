@@ -1495,6 +1495,7 @@ export class AgentLoop {
           reasonText: error.reasonText,
           ...(error.approvalTitle == null ? {} : { approvalTitle: error.approvalTitle }),
           ...(error.approvalCommand == null ? {} : { approvalCommand: error.approvalCommand }),
+          grantOnApprove: error.grantOnApprove,
           signal: input.signal,
           recordEvent: (event) => this.recordEvent(input.events, event),
           onRequested: ({ approvalId }) => this.markWaitingApproval(input.runId, approvalId),

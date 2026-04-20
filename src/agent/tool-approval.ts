@@ -54,6 +54,7 @@ export async function requestToolApproval(input: {
   reasonText: string;
   approvalTitle?: string;
   approvalCommand?: string;
+  grantOnApprove: boolean;
   signal: AbortSignal;
   recordEvent(event: AgentRuntimeEventInput): void;
   onRequested?: (input: { approvalId: number; createdAt: Date; expiresAt: Date }) => void;
@@ -171,6 +172,7 @@ async function requestApprovalRound(input: {
   reasonText: string;
   approvalTitle?: string;
   approvalCommand?: string;
+  grantOnApprove: boolean;
   signal: AbortSignal;
   recordEvent(event: AgentRuntimeEventInput): void;
   onRequested?: (input: { approvalId: number; createdAt: Date; expiresAt: Date }) => void;
@@ -240,6 +242,7 @@ async function requestApprovalRound(input: {
     approvalFlowId: input.approvalFlowId,
     approvalAttemptIndex: input.approvalAttemptIndex,
     approvalTarget: input.approvalTarget,
+    grantOnApprove: input.grantOnApprove,
     title: input.approvalTitle ?? buildApprovalTitle(),
     request: input.request,
     reasonText: input.reasonText,

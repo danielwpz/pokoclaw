@@ -168,6 +168,7 @@ export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
   approvalFlowId: string;
   approvalAttemptIndex: number;
   approvalTarget: "user" | "main_agent";
+  grantOnApprove?: boolean;
   title: string;
   request: PermissionRequest;
   reasonText: string;
