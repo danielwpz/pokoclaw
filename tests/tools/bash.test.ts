@@ -635,6 +635,95 @@ Use this exact bash argument object on the next retry if full access is warrante
     });
   });
 
+  test("uses existing bash full-access grants for every parsed subcommand in a compound command", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["agent-browser"] }],
+    });
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command:
+        "agent-browser open https://example.com && agent-browser wait 2500 && agent-browser snapshot -s main > /tmp/browser.txt",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command:
+          "agent-browser open https://example.com && agent-browser wait 2500 && agent-browser snapshot -s main > /tmp/browser.txt",
+        sandboxMode: "full_access",
+        justification: "Need to browse the requested page and save the captured output.",
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      command:
+        "agent-browser open https://example.com && agent-browser wait 2500 && agent-browser snapshot -s main > /tmp/browser.txt",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
+  test("still requests approval when a compound command is only partially covered by existing grants", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["agent-browser", "open"] }],
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command:
+            "agent-browser open https://example.com && agent-browser wait 2500 && agent-browser snapshot -s main > /tmp/browser.txt",
+          sandboxMode: "full_access",
+          justification: "Need to browse the requested page and save the captured output.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      grantOnApprove: false,
+      approvalTitle: "Approval required: run bash command with full access",
+      request: {
+        scopes: [{ kind: "bash.full_access", prefix: ["bash", "-lc"] }],
+      },
+    });
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
   test("rejects reusable full-access prefixes for complex shell commands", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
