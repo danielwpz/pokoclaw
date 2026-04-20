@@ -999,7 +999,9 @@ export function createLarkCardActionHandler(input: {
           ? "deny"
           : normalized.grantTtl === "one_day"
             ? "approve_1d"
-            : "approve_permanent",
+            : normalized.grantTtl === "permanent"
+              ? "approve_permanent"
+              : "approve",
       grantedBy: "user",
       ...(normalized.action === "deny_permission"
         ? {}
@@ -1033,7 +1035,9 @@ export function createLarkCardActionHandler(input: {
             ? "已拒绝"
             : normalized.grantTtl === "one_day"
               ? "已允许 1天"
-              : "已允许 永久",
+              : normalized.grantTtl === "permanent"
+                ? "已允许 永久"
+                : "已允许 本次",
       },
     };
   };

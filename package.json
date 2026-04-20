@@ -66,6 +66,8 @@
     "croner": "^10.0.1",
     "drizzle-orm": "^0.45.1",
     "openai": "6.26.0",
-    "toml": "^3.0.0"
+    "toml": "^3.0.0",
+    "tree-sitter-bash": "^0.25.1",
+    "web-tree-sitter": "^0.26.8"
   }
 }

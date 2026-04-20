@@ -3,6 +3,8 @@ import { type Static, Type } from "@sinclair/typebox";
 import {
   bashPrefixMatchesCommand,
   normalizeBashCommandPrefix,
+  type ParsedBashCommandSequence,
+  parseConservativeBashCommandSequence,
 } from "@/src/security/bash-prefix.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import { executeSandboxedBash, executeUnsandboxedBash } from "@/src/security/sandbox.js";
@@ -108,7 +110,14 @@ export function createBashTool() {
         context.storage,
         buildSystemPolicy({ security: context.securityConfig }),
       );
-      const normalizedCommandPrefix = normalizeBashCommandPrefix(args.command);
+      const parsedCommandSequence =
+        sandboxMode === "full_access"
+          ? await parseConservativeBashCommandSequence(args.command)
+          : null;
+      const normalizedCommandPrefix =
+        parsedCommandSequence?.kind === "simple"
+          ? (parsedCommandSequence.commands[0]?.argv ?? null)
+          : normalizeBashCommandPrefix(args.command);
 
       const result =
         sandboxMode === "full_access"
@@ -118,6 +127,7 @@ export function createBashTool() {
               timeoutMs,
               security,
               normalizedCommandPrefix,
+              parsedCommandSequence,
             })
           : await executeSandboxedBash({
               context,
@@ -177,6 +187,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
   timeoutMs: number;
   security: SecurityService;
   normalizedCommandPrefix: string[] | null;
+  parsedCommandSequence: ParsedBashCommandSequence | null;
 }) {
   const justification = input.args.justification?.trim();
   if (justification == null || justification.length === 0) {
@@ -215,12 +226,15 @@ async function executeBashWithFullAccessIfAllowed(input: {
     });
   }
 
-  if (input.normalizedCommandPrefix != null) {
-    const access = input.security.checkBashFullAccess({
-      ownerAgentId,
-      commandPrefix: input.normalizedCommandPrefix,
+  if (input.parsedCommandSequence != null) {
+    const hasFullAccess = input.parsedCommandSequence.commands.every((command) => {
+      const access = input.security.checkBashFullAccess({
+        ownerAgentId,
+        commandPrefix: command.argv,
+      });
+      return access.result === "allow";
     });
-    if (access.result === "allow") {
+    if (hasFullAccess) {
       return await executeUnsandboxedBash({
         context: input.context,
         command: input.args.command,

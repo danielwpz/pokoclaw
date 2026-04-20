@@ -154,51 +154,7 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
   }
 
   elements.push({ tag: "hr" });
-  elements.push({
-    tag: "column_set",
-    flex_mode: "none",
-    horizontal_align: "right",
-    columns: [
-      {
-        tag: "column",
-        width: "auto",
-        elements: [
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "允许 1天" },
-            type: "default",
-            size: "medium",
-            value: {
-              action: "approve_permission",
-              approvalId: state.currentApprovalId ?? state.approvalId,
-              grantTtl: "one_day",
-            },
-          },
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "允许 永久" },
-            type: "primary",
-            size: "medium",
-            value: {
-              action: "approve_permission",
-              approvalId: state.currentApprovalId ?? state.approvalId,
-              grantTtl: "permanent",
-            },
-          },
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "拒绝" },
-            type: "danger",
-            size: "medium",
-            value: {
-              action: "deny_permission",
-              approvalId: state.currentApprovalId ?? state.approvalId,
-            },
-          },
-        ],
-      },
-    ],
-  });
+  elements.push(buildApprovalActionButtons(state));
 
   return elements;
 }
@@ -366,7 +322,7 @@ function buildApprovalCardBodyMarkdown(
   if (state.phase === "approved") {
     return [
       `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
-      ...formatResolvedPermissionLines(state.request),
+      ...formatResolvedPermissionLinesForState(state),
       "",
       `**结果**：${describeApprovalActorLabel(state.actor)}已批准，任务将继续执行。`,
     ].join("\n");
@@ -374,7 +330,7 @@ function buildApprovalCardBodyMarkdown(
 
   return [
     `**操作**：${formatApprovalTitleMarkdown(state.title)}`,
-    ...formatResolvedPermissionLines(state.request),
+    ...formatResolvedPermissionLinesForState(state),
     "",
     `**结果**：${describeDeniedApprovalResult(state.actor)}`,
   ].join("\n");
@@ -448,6 +404,10 @@ function formatHumanLocalTimestamp(isoTimestamp: string): string {
 }
 
 function formatPermissionSummaryLines(state: LarkApprovalState): string[] {
+  if (!state.grantOnApprove) {
+    return [];
+  }
+
   const bashPrefixes = state.request.scopes.flatMap((scope) =>
     scope.kind === "bash.full_access" ? [scope.prefix] : [],
   );
@@ -457,6 +417,14 @@ function formatPermissionSummaryLines(state: LarkApprovalState): string[] {
       commandText: state.commandText,
       prefixes: bashPrefixes,
     });
+  }
+
+  return formatResolvedPermissionLines(state.request);
+}
+
+function formatResolvedPermissionLinesForState(state: LarkApprovalState): string[] {
+  if (!state.grantOnApprove) {
+    return formatApprovalCommandLines(state.commandText);
   }
 
   return formatResolvedPermissionLines(state.request);
@@ -496,6 +464,69 @@ function formatBashPermissionSummaryLines(input: {
   }
 
   return ["", "**授权范围**", ...widerPrefixes.map((prefix) => `- \`${prefix}\``)];
+}
+
+function buildApprovalActionButtons(state: LarkApprovalState): Record<string, unknown> {
+  const approvalId = state.currentApprovalId ?? state.approvalId;
+  const approveValue =
+    state.grantOnApprove === true
+      ? {
+          action: "approve_permission",
+          approvalId,
+          grantTtl: "permanent",
+        }
+      : {
+          action: "approve_permission",
+          approvalId,
+        };
+
+  const approveLabel = state.grantOnApprove ? "允许 永久" : "允许本次";
+  const primaryButtons: Array<Record<string, unknown>> = [];
+
+  if (state.grantOnApprove) {
+    primaryButtons.push({
+      tag: "button",
+      text: { tag: "plain_text", content: "允许 1天" },
+      type: "default",
+      size: "medium",
+      value: {
+        action: "approve_permission",
+        approvalId,
+        grantTtl: "one_day",
+      },
+    });
+  }
+
+  primaryButtons.push({
+    tag: "button",
+    text: { tag: "plain_text", content: approveLabel },
+    type: "primary",
+    size: "medium",
+    value: approveValue,
+  });
+  primaryButtons.push({
+    tag: "button",
+    text: { tag: "plain_text", content: "拒绝" },
+    type: "danger",
+    size: "medium",
+    value: {
+      action: "deny_permission",
+      approvalId,
+    },
+  });
+
+  return {
+    tag: "column_set",
+    flex_mode: "none",
+    horizontal_align: "right",
+    columns: [
+      {
+        tag: "column",
+        width: "auto",
+        elements: primaryButtons,
+      },
+    ],
+  };
 }
 
 function formatRequestedPermissionLines(lines: string[]): string[] {
