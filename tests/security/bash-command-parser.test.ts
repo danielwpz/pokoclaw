@@ -19,6 +19,22 @@ describe("parseConservativeBashCommandSequence", () => {
     });
   });
 
+  test("parses single-quoted raw string arguments", () => {
+    expect(
+      parseConservativeBashCommandSequence(
+        "python -m agent_browser_cli --url 'https://example.com'",
+      ),
+    ).toEqual({
+      kind: "simple",
+      commands: [
+        {
+          envAssignments: [],
+          argv: ["python", "-m", "agent_browser_cli", "--url", "https://example.com"],
+        },
+      ],
+    });
+  });
+
   test("parses compound commands and preserves each subcommand argv", () => {
     expect(parseConservativeBashCommandSequence("npm test && echo done | cat")).toEqual({
       kind: "compound",
