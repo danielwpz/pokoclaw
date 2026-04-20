@@ -724,7 +724,7 @@ Use this exact bash argument object on the next retry if full access is warrante
     expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
 
-  test("allows a git-only compound workflow under a broad git prefix even with an echo separator", async () => {
+  test("allows a pure git compound workflow under a broad git prefix", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
     new SecurityService(handle.storage.db).grantScopes({
@@ -734,10 +734,10 @@ Use this exact bash argument object on the next retry if full access is warrante
     });
     executeUnsandboxedBashMock.mockResolvedValue({
       command:
-        "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+        "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && git branch -vv",
       cwd: "/tmp/work",
       timeoutMs: 10_000,
-      stdout: "---\n",
+      stdout: "",
       stderr: "",
       exitCode: 0,
       signal: null,
@@ -756,10 +756,9 @@ Use this exact bash argument object on the next retry if full access is warrante
       },
       {
         command:
-          "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+          "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && git branch -vv",
         sandboxMode: "full_access",
-        justification:
-          "Need to sync the branch, inspect status, and print a separator before branch output.",
+        justification: "Need to sync the branch and inspect the local repository state.",
       },
     );
 
@@ -767,7 +766,7 @@ Use this exact bash argument object on the next retry if full access is warrante
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
       command:
-        "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+        "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && git branch -vv",
       cwd: "/tmp/work",
       exitCode: 0,
     });
@@ -783,6 +782,47 @@ Use this exact bash argument object on the next retry if full access is warrante
         { kind: "bash.full_access", prefix: ["git", "fetch"] },
         { kind: "bash.full_access", prefix: ["git", "pull"] },
       ],
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command:
+            "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && git branch -vv",
+          sandboxMode: "full_access",
+          justification: "Need to sync the branch and inspect the local repository state.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      grantOnApprove: false,
+      approvalTitle: "Approval required: run bash command with full access",
+      request: {
+        scopes: [{ kind: "bash.full_access", prefix: ["bash", "-lc"] }],
+      },
+    });
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("still requests approval for a git compound workflow when it includes an ungranted echo command", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["git"] }],
     });
 
     const registry = new ToolRegistry([createBashTool()]);

@@ -66,7 +66,6 @@ describe("parseConservativeBashCommandSequence", () => {
         {
           envAssignments: [],
           argv: ["agent-browser", "snapshot", "-s", "main"],
-          hasOutputRedirect: true,
         },
       ],
     });

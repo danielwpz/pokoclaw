@@ -228,13 +228,6 @@ async function executeBashWithFullAccessIfAllowed(input: {
 
   if (input.parsedCommandSequence != null) {
     const hasFullAccess = input.parsedCommandSequence.commands.every((command) => {
-      if (
-        input.parsedCommandSequence?.kind === "compound" &&
-        isImplicitlySafeCompoundSeparator(command)
-      ) {
-        return true;
-      }
-
       const access = input.security.checkBashFullAccess({
         ownerAgentId,
         commandPrefix: command.argv,
@@ -276,14 +269,6 @@ async function executeBashWithFullAccessIfAllowed(input: {
         }
       : {}),
   });
-}
-
-function isImplicitlySafeCompoundSeparator(command: ParsedBashCommandSequence["commands"][number]) {
-  return (
-    command.envAssignments.length === 0 &&
-    command.hasOutputRedirect !== true &&
-    command.argv[0] === "echo"
-  );
 }
 
 function detectUnsupportedBackgroundSyntax(command: string): string | null {
