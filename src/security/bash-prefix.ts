@@ -16,6 +16,7 @@ const TREE_SITTER_BASH_WASM_PATH = fileURLToPath(
 export interface SimpleBashCommand {
   envAssignments: string[];
   argv: string[];
+  hasOutputRedirect?: boolean;
 }
 
 export interface ParsedBashCommandSequence {
@@ -214,7 +215,15 @@ function extractRedirectedStatement(node: Node): SimpleBashCommand[] | null {
     }
   }
 
-  return extractCommandSequence(body);
+  const commands = extractCommandSequence(body);
+  if (commands == null) {
+    return null;
+  }
+
+  return commands.map((command) => ({
+    ...command,
+    hasOutputRedirect: true,
+  }));
 }
 
 function extractVariableAssignment(node: Node): string | null {

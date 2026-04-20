@@ -724,6 +724,100 @@ Use this exact bash argument object on the next retry if full access is warrante
     expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
 
+  test("allows a git-only compound workflow under a broad git prefix even with an echo separator", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["git"] }],
+    });
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command:
+        "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "---\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command:
+          "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+        sandboxMode: "full_access",
+        justification:
+          "Need to sync the branch, inspect status, and print a separator before branch output.",
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      command:
+        "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
+  test("still requests approval for a git compound workflow when only narrower git prefixes are granted", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [
+        { kind: "bash.full_access", prefix: ["git", "fetch"] },
+        { kind: "bash.full_access", prefix: ["git", "pull"] },
+      ],
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          command:
+            "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+          sandboxMode: "full_access",
+          justification:
+            "Need to sync the branch, inspect status, and print a separator before branch output.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      grantOnApprove: false,
+      approvalTitle: "Approval required: run bash command with full access",
+      request: {
+        scopes: [{ kind: "bash.full_access", prefix: ["bash", "-lc"] }],
+      },
+    });
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
   test("rejects reusable full-access prefixes for complex shell commands", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
