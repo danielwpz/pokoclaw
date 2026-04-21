@@ -29,6 +29,12 @@ export {
   type LarkRenderedTaskCard,
   type LarkTaskTerminalMessagePresentation,
 } from "@/src/channels/lark/render/task-card.js";
+export {
+  buildLarkRenderedThinkTankEpisodeCard,
+  buildLarkRenderedThinkTankMainCard,
+  buildLarkRenderedThinkTankStepCard,
+  type LarkRenderedThinkTankCard,
+} from "@/src/channels/lark/render/think-tank-card.js";
 
 export interface LarkRenderedApprovalCard {
   card: Record<string, unknown>;

@@ -91,6 +91,7 @@ describe("llm models helpers", () => {
     expect(isModelScenario("chat")).toBe(true);
     expect(isModelScenario("compaction")).toBe(true);
     expect(isModelScenario("task")).toBe(true);
+    expect(isModelScenario("thinkTankAdvisor")).toBe(true);
     expect(isModelScenario("meditationBucket")).toBe(true);
     expect(isModelScenario("agent")).toBe(false);
   });

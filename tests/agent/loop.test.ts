@@ -77,6 +77,7 @@ function createModelConfig(
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
         task: ["anthropic_main/claude-sonnet-4-5"],
+        thinkTankAdvisor: [],
         meditationBucket: [],
         meditationConsolidation: [],
       },

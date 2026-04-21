@@ -8,6 +8,7 @@
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
 import type { AgentManager } from "@/src/orchestration/agent-manager.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
+import type { ThinkTankCapabilities } from "@/src/think-tank/types.js";
 import type { ToolRuntimeControl } from "@/src/tools/core/types.js";
 
 const logger = createSubsystemLogger("runtime-orchestration-bridge");
@@ -19,7 +20,14 @@ type RuntimeOrchestrationTarget = Pick<
   | "runCronJobNow"
   | "startBackgroundTask"
   | "suppressBackgroundTaskCompletionNotice"
->;
+> & {
+  getThinkTankCapabilities?: (input: {
+    sourceSessionId: string;
+  }) => Promise<ThinkTankCapabilities> | ThinkTankCapabilities;
+  startThinkTankConsultation?: ToolRuntimeControl["startThinkTankConsultation"];
+  consultThinkTankParticipant?: ToolRuntimeControl["consultThinkTankParticipant"];
+  getThinkTankStatus?: ToolRuntimeControl["getThinkTankStatus"];
+};
 
 export class RuntimeOrchestrationBridge {
   private manager: RuntimeOrchestrationTarget | null = null;
@@ -64,6 +72,42 @@ export class RuntimeOrchestrationBridge {
       });
 
       return result;
+    },
+    getThinkTankCapabilities: async (input) => {
+      const manager = this.requireManager("getThinkTankCapabilities");
+      if (manager.getThinkTankCapabilities == null) {
+        throw new Error(
+          "RuntimeOrchestrationBridge cannot getThinkTankCapabilities before think tank runtime is attached.",
+        );
+      }
+      return await manager.getThinkTankCapabilities(input);
+    },
+    startThinkTankConsultation: async (input) => {
+      const manager = this.requireManager("startThinkTankConsultation");
+      if (manager.startThinkTankConsultation == null) {
+        throw new Error(
+          "RuntimeOrchestrationBridge cannot startThinkTankConsultation before think tank runtime is attached.",
+        );
+      }
+      return await manager.startThinkTankConsultation(input);
+    },
+    consultThinkTankParticipant: async (input) => {
+      const manager = this.requireManager("consultThinkTankParticipant");
+      if (manager.consultThinkTankParticipant == null) {
+        throw new Error(
+          "RuntimeOrchestrationBridge cannot consultThinkTankParticipant before think tank runtime is attached.",
+        );
+      }
+      return await manager.consultThinkTankParticipant(input);
+    },
+    getThinkTankStatus: async (input) => {
+      const manager = this.requireManager("getThinkTankStatus");
+      if (manager.getThinkTankStatus == null) {
+        throw new Error(
+          "RuntimeOrchestrationBridge cannot getThinkTankStatus before think tank runtime is attached.",
+        );
+      }
+      return await manager.getThinkTankStatus(input);
     },
     suppressBackgroundTaskCompletionNotice: (input) => {
       this.requireManager(

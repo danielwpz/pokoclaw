@@ -66,6 +66,10 @@ describe("storage db bootstrap", () => {
       expect(tableNames).toContain("harness_events");
       expect(tableNames).toContain("lark_object_bindings");
       expect(tableNames).toContain("meditation_state");
+      expect(tableNames).toContain("schema_migrations");
+      expect(tableNames).toContain("think_tank_consultations");
+      expect(tableNames).toContain("think_tank_participants");
+      expect(tableNames).toContain("think_tank_episodes");
     } finally {
       await destroyTestDatabase(handle);
     }
@@ -82,6 +86,67 @@ describe("storage db bootstrap", () => {
 
       expect(columnNames).toContain("expires_at");
       expect(columnNames).toContain("resume_payload_json");
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("records applied migrations and upgrades channel_threads for think tank", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      const migrations = handle.storage.sqlite
+        .prepare("SELECT version FROM schema_migrations ORDER BY version ASC")
+        .all() as Array<{ version: string }>;
+      expect(migrations.map((row) => row.version)).toEqual(["0001_init", "0002_think_tank"]);
+
+      const threadColumns = handle.storage.sqlite
+        .prepare("PRAGMA table_info(channel_threads)")
+        .all() as Array<{ name: string }>;
+      expect(threadColumns.map((row) => row.name)).toContain("root_think_tank_consultation_id");
+
+      seedAgentFixture(handle);
+
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+        ) VALUES (
+          'sess_tt_moderator', 'conv_1', 'branch_1', 'agent_1', 'think_tank', 'active',
+          '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z'
+        );
+
+        INSERT INTO think_tank_consultations (
+          id, source_session_id, source_conversation_id, source_branch_id, owner_agent_id,
+          moderator_session_id, moderator_model_id, status, topic, context_text,
+          created_at, updated_at
+        ) VALUES (
+          'tt_1', 'sess_1', 'conv_1', 'branch_1', 'agent_1',
+          'sess_tt_moderator', 'model.chat', 'idle', 'Topic', 'Context',
+          '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z'
+        );
+
+        INSERT INTO channel_threads (
+          id, channel_type, channel_installation_id, home_conversation_id, external_chat_id,
+          external_thread_id, subject_kind, root_think_tank_consultation_id,
+          created_at, updated_at
+        ) VALUES (
+          'thread_tt_1', 'lark', 'default', 'conv_1', 'oc_chat_1',
+          'omt_tt_1', 'think_tank', 'tt_1',
+          '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z'
+        );
+      `);
+
+      const inserted = handle.storage.sqlite
+        .prepare(
+          "SELECT subject_kind, root_think_tank_consultation_id FROM channel_threads WHERE id = ?",
+        )
+        .get("thread_tt_1") as
+        | { subject_kind: string; root_think_tank_consultation_id: string | null }
+        | undefined;
+      expect(inserted).toEqual({
+        subject_kind: "think_tank",
+        root_think_tank_consultation_id: "tt_1",
+      });
     } finally {
       await destroyTestDatabase(handle);
     }

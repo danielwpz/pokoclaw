@@ -12,9 +12,10 @@ export interface UpsertChannelThreadInput {
   homeConversationId: string;
   externalChatId: string;
   externalThreadId: string;
-  subjectKind: "chat" | "task";
+  subjectKind: "chat" | "task" | "think_tank";
   branchId?: string | null;
   rootTaskRunId?: string | null;
+  rootThinkTankConsultationId?: string | null;
   openedFromMessageId?: string | null;
   status?: string;
   createdAt?: Date;
@@ -37,6 +38,7 @@ export class ChannelThreadsRepo {
       subjectKind: input.subjectKind,
       branchId: input.branchId ?? null,
       rootTaskRunId: input.rootTaskRunId ?? null,
+      rootThinkTankConsultationId: input.rootThinkTankConsultationId ?? null,
       openedFromMessageId: input.openedFromMessageId ?? null,
       status: input.status ?? "active",
       createdAt: toCanonicalUtcIsoTimestamp(createdAt),
@@ -58,6 +60,7 @@ export class ChannelThreadsRepo {
           subjectKind: row.subjectKind,
           branchId: row.branchId,
           rootTaskRunId: row.rootTaskRunId,
+          rootThinkTankConsultationId: row.rootThinkTankConsultationId,
           openedFromMessageId: row.openedFromMessageId,
           status: row.status,
           updatedAt: row.updatedAt,
@@ -117,6 +120,26 @@ export class ChannelThreadsRepo {
             eq(channelThreads.channelType, input.channelType),
             eq(channelThreads.channelInstallationId, input.channelInstallationId),
             eq(channelThreads.rootTaskRunId, input.rootTaskRunId),
+          ),
+        )
+        .get() ?? null
+    );
+  }
+
+  getByRootThinkTankConsultation(input: {
+    channelType: string;
+    channelInstallationId: string;
+    rootThinkTankConsultationId: string;
+  }): ChannelThread | null {
+    return (
+      this.db
+        .select()
+        .from(channelThreads)
+        .where(
+          and(
+            eq(channelThreads.channelType, input.channelType),
+            eq(channelThreads.channelInstallationId, input.channelInstallationId),
+            eq(channelThreads.rootThinkTankConsultationId, input.rootThinkTankConsultationId),
           ),
         )
         .get() ?? null

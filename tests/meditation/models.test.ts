@@ -46,6 +46,7 @@ function createRegistry(options?: {
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
         task: ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"],
+        thinkTankAdvisor: [],
         meditationBucket: options?.bucketScenarioIds ?? ["openai_main/gpt-5-mini"],
         meditationConsolidation: options?.consolidationScenarioIds ?? [
           "anthropic_main/claude-sonnet-4-5",

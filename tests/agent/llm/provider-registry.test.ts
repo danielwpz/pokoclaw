@@ -47,6 +47,7 @@ function createConfig(): Pick<AppConfig, "providers" | "models"> {
         chat: ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"],
         compaction: ["openai_main/gpt-5-mini"],
         task: ["anthropic_main/claude-sonnet-4-5"],
+        thinkTankAdvisor: ["anthropic_main/claude-sonnet-4-5", "openai_main/gpt-5-mini"],
         meditationBucket: ["openai_main/gpt-5-mini"],
         meditationConsolidation: ["anthropic_main/claude-sonnet-4-5"],
       },

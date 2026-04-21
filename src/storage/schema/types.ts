@@ -19,6 +19,9 @@ import type {
   subagentCreationRequests,
   taskRuns,
   taskWorkstreams,
+  thinkTankConsultations,
+  thinkTankEpisodes,
+  thinkTankParticipants,
 } from "@/src/storage/schema/tables.js";
 
 export type ChannelInstance = InferSelectModel<typeof channelInstances>;
@@ -53,6 +56,15 @@ export type NewCronJob = InferInsertModel<typeof cronJobs>;
 
 export type TaskRun = InferSelectModel<typeof taskRuns>;
 export type NewTaskRun = InferInsertModel<typeof taskRuns>;
+
+export type ThinkTankConsultation = InferSelectModel<typeof thinkTankConsultations>;
+export type NewThinkTankConsultation = InferInsertModel<typeof thinkTankConsultations>;
+
+export type ThinkTankParticipant = InferSelectModel<typeof thinkTankParticipants>;
+export type NewThinkTankParticipant = InferInsertModel<typeof thinkTankParticipants>;
+
+export type ThinkTankEpisode = InferSelectModel<typeof thinkTankEpisodes>;
+export type NewThinkTankEpisode = InferInsertModel<typeof thinkTankEpisodes>;
 
 export type MeditationState = InferSelectModel<typeof meditationState>;
 export type NewMeditationState = InferInsertModel<typeof meditationState>;

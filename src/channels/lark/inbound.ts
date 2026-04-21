@@ -49,6 +49,7 @@ import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import { TaskWorkstreamsRepo } from "@/src/storage/repos/task-workstreams.repo.js";
+import { ThinkTankConsultationsRepo } from "@/src/storage/repos/think-tank-consultations.repo.js";
 import type { ChannelSurface, TaskRun } from "@/src/storage/schema/types.js";
 import { extractTaskCompletionSignal } from "@/src/tasks/task-completion.js";
 
@@ -131,6 +132,15 @@ export interface CreateLarkInboundRuntimeInput {
       resultSummary?: string | null;
       finishedAt?: Date;
     }): void;
+  };
+  thinkTanks?: {
+    continueConsultation(input: { consultationId: string; prompt: string; createdAt?: Date }): {
+      accepted: true;
+      consultationId: string;
+      episodeId: string;
+      episodeSequence: number;
+      status: "running";
+    };
   };
   steerReactionState?: LarkSteerReactionState;
 }
@@ -229,11 +239,12 @@ export function buildLarkThreadSurfaceKey(chatId: string, threadId: string): str
 }
 
 interface LarkInboundRoute {
-  kind: "main_chat" | "ordinary_thread" | "task_thread";
+  kind: "main_chat" | "ordinary_thread" | "task_thread" | "think_tank_thread";
   conversationId: string;
   branchId: string;
   sessionId: string;
   taskRunId?: string | null;
+  consultationId?: string | null;
   scenario: "chat" | "task";
   stopScope: "conversation" | "session";
   chatId: string;
@@ -342,6 +353,7 @@ export function createLarkMessageReceiveHandler(input: {
     messageId: string;
   }) => Promise<LarkQuotedMessage | null>;
   taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
+  thinkTanks?: CreateLarkInboundRuntimeInput["thinkTanks"];
   steerReactionState?: LarkSteerReactionState;
 }): (data: unknown) => Promise<void> {
   return async (data: unknown) => {
@@ -393,6 +405,7 @@ export function createLarkMessageReceiveHandler(input: {
       mainSurface,
       normalized: hydrated,
       ...(input.taskThreads == null ? {} : { taskThreads: input.taskThreads }),
+      ...(input.thinkTanks == null ? {} : { thinkTanks: input.thinkTanks }),
       ...(input.quoteMessageFetcher == null
         ? {}
         : { quoteMessageFetcher: input.quoteMessageFetcher }),
@@ -544,6 +557,25 @@ export function createLarkMessageReceiveHandler(input: {
       route.kind === "ordinary_thread"
         ? hydrated.text
         : await buildInboundMessageContent(hydrated, input);
+    if (route.kind === "think_tank_thread") {
+      if (route.consultationId == null || input.thinkTanks == null) {
+        throw new Error("Think tank thread routing was resolved without a consultation handler.");
+      }
+      input.thinkTanks.continueConsultation({
+        consultationId: route.consultationId,
+        prompt: content,
+        ...(hydrated.createdAt == null ? {} : { createdAt: hydrated.createdAt }),
+      });
+      logger.info("continued think tank consultation from lark thread", {
+        installationId: input.installationId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
+        threadId: hydrated.threadId,
+        consultationId: route.consultationId,
+        sessionId: route.sessionId,
+      });
+      return;
+    }
     const imageAssets =
       input.clients == null
         ? []
@@ -1519,6 +1551,7 @@ async function resolveLarkInboundRoute(input: {
   mainSurface: ChannelSurface;
   normalized: NormalizedLarkTextMessage;
   taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
+  thinkTanks?: CreateLarkInboundRuntimeInput["thinkTanks"];
   quoteMessageFetcher?: (input: {
     installationId: string;
     messageId: string;
@@ -1576,6 +1609,7 @@ async function resolveLarkInboundRoute(input: {
       channelThread,
       allowTaskFollowupCreation,
       taskThreads: input.taskThreads,
+      thinkTanks: input.thinkTanks,
     });
     if (routed != null) {
       return routed;
@@ -1934,11 +1968,13 @@ function resolveStoredChannelThreadRoute(input: {
     subjectKind: string;
     branchId: string | null;
     rootTaskRunId: string | null;
+    rootThinkTankConsultationId: string | null;
     homeConversationId: string;
     openedFromMessageId: string | null;
   };
   allowTaskFollowupCreation: boolean;
   taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
+  thinkTanks?: CreateLarkInboundRuntimeInput["thinkTanks"];
 }): LarkInboundRoute | null {
   const sessionsRepo = new SessionsRepo(input.db);
   if (input.channelThread.subjectKind === "chat") {
@@ -1979,6 +2015,43 @@ function resolveStoredChannelThreadRoute(input: {
       stopScope: "session",
       chatId: input.normalized.chatId,
       replyToMessageId: input.channelThread.openedFromMessageId,
+    };
+  }
+
+  if (input.channelThread.subjectKind === "think_tank") {
+    if (input.channelThread.rootThinkTankConsultationId == null) {
+      logger.warn("ignoring invalid stored lark think tank thread without consultation id", {
+        installationId: input.installationId,
+        threadId: input.normalized.threadId,
+        channelThreadId: input.channelThread.id,
+      });
+      return null;
+    }
+
+    const consultation = new ThinkTankConsultationsRepo(input.db).getById(
+      input.channelThread.rootThinkTankConsultationId,
+    );
+    if (consultation == null) {
+      logger.warn("ignoring stored lark think tank thread because consultation is missing", {
+        installationId: input.installationId,
+        threadId: input.normalized.threadId,
+        channelThreadId: input.channelThread.id,
+        consultationId: input.channelThread.rootThinkTankConsultationId,
+      });
+      return null;
+    }
+
+    return {
+      kind: "think_tank_thread",
+      consultationId: consultation.id,
+      conversationId: consultation.sourceConversationId,
+      branchId: consultation.sourceBranchId,
+      sessionId: consultation.moderatorSessionId,
+      scenario: "chat",
+      stopScope: "session",
+      chatId: input.normalized.chatId,
+      replyToMessageId:
+        input.normalized.parentMessageId ?? input.channelThread.openedFromMessageId ?? null,
     };
   }
 

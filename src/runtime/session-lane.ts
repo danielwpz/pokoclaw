@@ -30,6 +30,7 @@ const logger = createSubsystemLogger("runtime-lane");
 export interface SubmitSessionMessageInput {
   sessionId: string;
   scenario: ModelScenario;
+  modelIdOverride?: string;
   content: string;
   userPayload?: AgentUserPayload;
   runtimeImages?: AgentUserRuntimeImagePayload[];
@@ -143,6 +144,7 @@ export class InMemorySessionLane {
       .run({
         sessionId: input.sessionId,
         scenario: input.scenario,
+        ...(input.modelIdOverride == null ? {} : { modelIdOverride: input.modelIdOverride }),
         ...(normalized.runtimeImages == null || normalized.runtimeImages.length === 0
           ? {}
           : { initialRuntimeImagesByMessageId: { [messageId]: normalized.runtimeImages } }),

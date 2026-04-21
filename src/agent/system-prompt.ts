@@ -27,6 +27,10 @@ import {
   buildSubagentScheduledTasksSection,
   buildTaskAgentIdentitySection,
   buildTaskAgentOperatingModelSection,
+  buildThinkTankModeratorIdentitySection,
+  buildThinkTankModeratorOperatingModelSection,
+  buildThinkTankParticipantIdentitySection,
+  buildThinkTankParticipantOperatingModelSection,
   buildToolUsageSection,
   buildWorkspaceRuntimeSection,
 } from "@/src/agent/system-prompt-sections.js";
@@ -175,10 +179,40 @@ function buildApprovalAgentSystemPrompt(input: BuildAgentSystemPromptInput): str
   ]);
 }
 
+function buildThinkTankModeratorSystemPrompt(input: BuildAgentSystemPromptInput): string {
+  return joinSections([
+    buildThinkTankModeratorIdentitySection(),
+    buildThinkTankModeratorOperatingModelSection(),
+    buildWorkspaceRuntimeSection({
+      ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
+      ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+    }),
+  ]);
+}
+
+function buildThinkTankParticipantSystemPrompt(input: BuildAgentSystemPromptInput): string {
+  return joinSections([
+    buildThinkTankParticipantIdentitySection(),
+    buildThinkTankParticipantOperatingModelSection(),
+    buildWorkspaceRuntimeSection({
+      ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
+      ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+    }),
+  ]);
+}
+
 // Keep the prompt assembled from purpose-specific builders so each runtime role
 // can evolve into a distinct agent setup instead of accumulating branchy patch
 // logic inside one shared prompt body.
 export function buildAgentSystemPrompt(input: BuildAgentSystemPromptInput = {}): string {
+  if (input.sessionPurpose === "think_tank_moderator") {
+    return buildThinkTankModeratorSystemPrompt(input);
+  }
+
+  if (input.sessionPurpose === "think_tank_participant") {
+    return buildThinkTankParticipantSystemPrompt(input);
+  }
+
   if (input.sessionPurpose === "approval") {
     return buildApprovalAgentSystemPrompt(input);
   }

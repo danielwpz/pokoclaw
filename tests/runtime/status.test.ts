@@ -65,6 +65,7 @@ function createConfig(): AppConfig {
         chat: ["openrouter-gpt5.4"],
         compaction: ["openrouter-gpt5.4"],
         task: ["openrouter-gpt5.4"],
+        thinkTankAdvisor: [],
         meditationBucket: [],
         meditationConsolidation: [],
       },

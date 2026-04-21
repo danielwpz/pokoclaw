@@ -1334,6 +1334,82 @@ describe("lark inbound message handling", () => {
     });
   });
 
+  test("routes think tank thread follow-up into the same consultation instead of runtime ingress", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+        VALUES (
+          'sess_tt_mod', 'conv_main', 'branch_main', 'agent_main', 'think_tank_moderator', 'active',
+          '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO think_tank_consultations (
+          id, source_session_id, source_conversation_id, source_branch_id, owner_agent_id,
+          moderator_session_id, moderator_model_id, status, topic, context_text,
+          created_at, updated_at
+        ) VALUES (
+          'tt_1', 'sess_chat_1', 'conv_main', 'branch_main', 'agent_main',
+          'sess_tt_mod', 'codex-gpt5.4', 'idle',
+          'How should think tank threads behave?', 'Need thread follow-up to continue the same consultation.',
+          '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+
+        INSERT INTO channel_threads (
+          id, channel_type, channel_installation_id, home_conversation_id, external_chat_id, external_thread_id,
+          subject_kind, root_think_tank_consultation_id, opened_from_message_id, created_at, updated_at
+        ) VALUES (
+          'thread_tt_1', 'lark', 'default', 'conv_main', 'oc_chat_1', 'omt_tt_thread_1',
+          'think_tank', 'tt_1', 'om_tt_root_1', '2026-03-27T00:00:03.000Z', '2026-03-27T00:00:04.000Z'
+        );
+      `);
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const thinkTanks = {
+        continueConsultation: vi.fn(() => ({
+          accepted: true as const,
+          consultationId: "tt_1",
+          episodeId: "ep_2",
+          episodeSequence: 2,
+          status: "running" as const,
+        })),
+      };
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        thinkTanks,
+      });
+
+      await handler({
+        sender: {
+          sender_id: { open_id: "ou_sender" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_tt_thread_msg_1",
+          parent_id: "om_user_reply_tt",
+          thread_id: "omt_tt_thread_1",
+          chat_id: "oc_chat_1",
+          chat_type: "p2p",
+          message_type: "text",
+          create_time: "1774569600000",
+          content: JSON.stringify({
+            text: "继续追问：如果一个 consultation 正在运行，thread 新消息该怎么处理？",
+          }),
+        },
+      });
+
+      expect(thinkTanks.continueConsultation).toHaveBeenCalledExactlyOnceWith({
+        consultationId: "tt_1",
+        prompt: "继续追问：如果一个 consultation 正在运行，thread 新消息该怎么处理？",
+        createdAt: new Date("2026-03-27T00:00:00.000Z"),
+      });
+      expect(submitMessage).not.toHaveBeenCalled();
+    });
+  });
+
   test("expands quote replies by fetching the referenced message text", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
