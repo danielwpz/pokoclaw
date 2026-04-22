@@ -42,7 +42,7 @@ const THINK_TANK_STEP_SCHEMA = Type.Object(
         minItems: 1,
       }),
     ),
-    summaryKind: Type.Optional(Type.Union([Type.Literal("midpoint"), Type.Literal("final")])),
+    summaryKind: Type.Optional(Type.String({ minLength: 1 })),
     summary: Type.Optional(THINK_TANK_SUMMARY_SCHEMA),
     errorMessage: Type.Optional(Type.String({ minLength: 1 })),
   },
@@ -93,37 +93,51 @@ export function createFinishThinkTankEpisodeTool() {
             currentConclusion: args.summary.currentConclusion.trim(),
             openQuestions: [...args.summary.openQuestions],
           },
-          steps: args.steps.map((step) => ({
-            key: step.key.trim(),
-            kind: step.kind,
-            title: step.title.trim(),
-            order: step.order,
-            ...(step.roundIndex === undefined ? {} : { roundIndex: step.roundIndex }),
-            ...(step.participantEntries === undefined
-              ? {}
-              : {
-                  participantEntries: step.participantEntries.map((entry) => ({
-                    participantId: entry.participantId.trim(),
-                    content: entry.content.trim(),
-                  })),
-                }),
-            ...(step.summaryKind === undefined ? {} : { summaryKind: step.summaryKind }),
-            ...(step.summary === undefined
-              ? {}
-              : {
-                  summary: {
-                    agreements: [...step.summary.agreements],
-                    keyDifferences: [...step.summary.keyDifferences],
-                    currentConclusion: step.summary.currentConclusion.trim(),
-                    openQuestions: [...step.summary.openQuestions],
-                  },
-                }),
-            ...(step.errorMessage === undefined ? {} : { errorMessage: step.errorMessage.trim() }),
-          })),
+          steps: args.steps.map((step) => {
+            const normalizedSummaryKind = normalizeSummaryKind(step.summaryKind);
+            return {
+              key: step.key.trim(),
+              kind: step.kind,
+              title: step.title.trim(),
+              order: step.order,
+              ...(step.roundIndex === undefined ? {} : { roundIndex: step.roundIndex }),
+              ...(step.participantEntries === undefined
+                ? {}
+                : {
+                    participantEntries: step.participantEntries.map((entry) => ({
+                      participantId: entry.participantId.trim(),
+                      content: entry.content.trim(),
+                    })),
+                  }),
+              ...(normalizedSummaryKind === undefined
+                ? {}
+                : { summaryKind: normalizedSummaryKind }),
+              ...(step.summary === undefined
+                ? {}
+                : {
+                    summary: {
+                      agreements: [...step.summary.agreements],
+                      keyDifferences: [...step.summary.keyDifferences],
+                      currentConclusion: step.summary.currentConclusion.trim(),
+                      openQuestions: [...step.summary.openQuestions],
+                    },
+                  }),
+              ...(step.errorMessage === undefined
+                ? {}
+                : { errorMessage: step.errorMessage.trim() }),
+            };
+          }),
         },
       };
 
       return textToolResult("Recorded think tank episode completion.", details);
     },
   });
+}
+
+function normalizeSummaryKind(value: string | undefined): "midpoint" | "final" | undefined {
+  if (value === "midpoint" || value === "final") {
+    return value;
+  }
+  return undefined;
 }

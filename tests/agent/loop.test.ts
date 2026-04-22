@@ -4440,6 +4440,104 @@ describe("agent loop", () => {
     expect(rows[3]?.payloadJson ?? "").toContain("recovered");
   });
 
+  test("stops the run immediately when a tool result requests stopRun control", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"start think tank"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let turns = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        turns += 1;
+        if (turns === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "consult_think_tank",
+                arguments: {},
+              },
+            ],
+          });
+        }
+
+        throw new Error("loop should have stopped after consult_think_tank");
+      },
+    };
+
+    const tools = new ToolRegistry();
+    tools.register(
+      defineTool({
+        name: "consult_think_tank",
+        description: "Starts an async think tank consultation",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          return {
+            content: [{ type: "text", text: "consultation started" }],
+            details: { consultationId: "tt_1" },
+            control: {
+              stopRun: {
+                reason: "think_tank_consultation_started",
+                payload: {
+                  consultationId: "tt_1",
+                },
+              },
+            },
+          };
+        },
+      }),
+    );
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(turns).toBe(1);
+    expect(rows).toHaveLength(3);
+    expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_1",
+      toolName: "consult_think_tank",
+      isError: false,
+    });
+    expect(result.stopSignal).toEqual({
+      reason: "think_tank_consultation_started",
+      payload: {
+        consultationId: "tt_1",
+      },
+    });
+  });
+
   test("requests compaction when the session context crosses the threshold", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);

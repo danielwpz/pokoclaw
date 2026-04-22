@@ -20,6 +20,7 @@ describe("builtin tools", () => {
     expect(registry.has("consult_think_tank")).toBe(true);
     expect(registry.has("get_think_tank_status")).toBe(true);
     expect(registry.has("consult_participant")).toBe(true);
+    expect(registry.has("upsert_think_tank_step")).toBe(true);
     expect(registry.has("finish_think_tank_episode")).toBe(true);
     expect(registry.has("finish_task")).toBe(true);
     expect(registry.has("request_permissions")).toBe(true);
@@ -45,6 +46,7 @@ describe("builtin tools", () => {
       "consult_think_tank",
       "get_think_tank_status",
       "consult_participant",
+      "upsert_think_tank_step",
       "finish_think_tank_episode",
       "finish_task",
       "request_permissions",

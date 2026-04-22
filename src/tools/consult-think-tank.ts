@@ -100,7 +100,17 @@ export function createConsultThinkTankTool() {
         })),
       });
 
-      return jsonToolResult(started, started);
+      return {
+        ...jsonToolResult(started, started),
+        control: {
+          stopRun: {
+            reason: "think_tank_consultation_started",
+            payload: {
+              consultationId: started.consultationId,
+            },
+          },
+        },
+      };
     },
   });
 }

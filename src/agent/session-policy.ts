@@ -18,6 +18,7 @@ export const APPROVAL_SESSION_TOOL_ALLOWLIST = [
 
 export const THINK_TANK_MODERATOR_TOOL_ALLOWLIST = [
   "consult_participant",
+  "upsert_think_tank_step",
   "finish_think_tank_episode",
 ] as const;
 

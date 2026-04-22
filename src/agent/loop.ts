@@ -1143,10 +1143,23 @@ export class AgentLoop {
               toolCall,
               result: executedTool.result,
             });
-            if (stopDecision?.kind === "stop_run") {
+            const resultStopDecision =
+              executedTool.result.control?.stopRun == null
+                ? null
+                : {
+                    kind: "stop_run" as const,
+                    reason: executedTool.result.control.stopRun.reason,
+                    ...(executedTool.result.control.stopRun.payload === undefined
+                      ? {}
+                      : { payload: executedTool.result.control.stopRun.payload }),
+                  };
+            const effectiveStopDecision = stopDecision ?? resultStopDecision;
+            if (effectiveStopDecision?.kind === "stop_run") {
               stopSignal = {
-                reason: stopDecision.reason,
-                ...(stopDecision.payload === undefined ? {} : { payload: stopDecision.payload }),
+                reason: effectiveStopDecision.reason,
+                ...(effectiveStopDecision.payload === undefined
+                  ? {}
+                  : { payload: effectiveStopDecision.payload }),
               };
               completed = true;
               break;

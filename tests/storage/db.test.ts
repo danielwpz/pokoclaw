@@ -1,5 +1,9 @@
+import { mkdir, rm } from "node:fs/promises";
+import path from "node:path";
+
 import { describe, expect, test } from "vitest";
 
+import { openStorageDatabase } from "@/src/storage/db/client.js";
 import { getProductionDatabasePath } from "@/src/storage/db/paths.js";
 import {
   createTestDatabase,
@@ -149,6 +153,101 @@ describe("storage db bootstrap", () => {
       });
     } finally {
       await destroyTestDatabase(handle);
+    }
+  });
+
+  test("upgrades a populated 0001 database to 0002 without foreign key failures", async () => {
+    const databasePath = path.join("/tmp", `test-think-tank-migration-${Date.now()}.sqlite`);
+    await mkdir(path.dirname(databasePath), { recursive: true });
+
+    const seedStorage = openStorageDatabase({
+      databasePath,
+      initSqlPath: path.resolve(process.cwd(), "src/storage/migrate/files/0001_init.sql"),
+    });
+
+    try {
+      seedStorage.sqlite.exec(`
+        CREATE TABLE schema_migrations (
+          version TEXT PRIMARY KEY,
+          applied_at TEXT NOT NULL
+            CHECK (
+              applied_at GLOB '????-??-??T??:??:??*Z'
+              AND datetime(applied_at) IS NOT NULL
+            )
+        );
+
+        INSERT INTO schema_migrations (version, applied_at)
+        VALUES ('0001_init', '2026-04-21T06:47:31.313Z');
+
+        INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+        VALUES ('ci_1', 'lark', 'acct_a', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+
+        INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+        VALUES ('conv_1', 'ci_1', 'chat_1', 'dm', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+
+        INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+        VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+
+        INSERT INTO agents (id, conversation_id, kind, created_at)
+        VALUES ('agent_1', 'conv_1', 'main', '2026-03-22T00:00:00.000Z');
+
+        INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, created_at, updated_at)
+        VALUES ('sess_1', 'conv_1', 'branch_1', 'agent_1', 'chat', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+
+        INSERT INTO task_workstreams (id, owner_agent_id, conversation_id, branch_id, created_at, updated_at)
+        VALUES ('ws_1', 'agent_1', 'conv_1', 'branch_1', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id, workstream_id, execution_session_id,
+          status, started_at
+        ) VALUES (
+          'run_1', 'delegate', 'agent_1', 'conv_1', 'branch_1', 'ws_1', 'sess_1',
+          'completed', '2026-03-22T00:00:00.000Z'
+        );
+
+        INSERT INTO channel_threads (
+          id, channel_type, channel_installation_id, home_conversation_id, external_chat_id,
+          external_thread_id, subject_kind, root_task_run_id, created_at, updated_at
+        ) VALUES (
+          'thread_1', 'lark', 'default', 'conv_1', 'oc_chat_1',
+          'omt_thread_1', 'task', 'run_1', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z'
+        );
+
+        INSERT INTO harness_events (
+          id, event_type, run_id, session_id, conversation_id, branch_id, agent_id, task_run_id,
+          actor, source_kind, request_scope, created_at
+        ) VALUES (
+          'evt_1', 'tool_call', 'run_1', 'sess_1', 'conv_1', 'branch_1', 'agent_1', 'run_1',
+          'assistant', 'runtime', 'workspace', '2026-03-22T00:00:00.000Z'
+        );
+      `);
+    } finally {
+      seedStorage.close();
+    }
+
+    const migratedStorage = openStorageDatabase({
+      databasePath,
+      initializeSchema: true,
+    });
+
+    try {
+      const migrations = migratedStorage.sqlite
+        .prepare("SELECT version FROM schema_migrations ORDER BY version ASC")
+        .all() as Array<{ version: string }>;
+      expect(migrations.map((row) => row.version)).toEqual(["0001_init", "0002_think_tank"]);
+
+      const threadColumns = migratedStorage.sqlite
+        .prepare("PRAGMA table_info(channel_threads)")
+        .all() as Array<{ name: string }>;
+      expect(threadColumns.map((row) => row.name)).toContain("root_think_tank_consultation_id");
+
+      const foreignKeyViolations = migratedStorage.sqlite.pragma(
+        "foreign_key_check",
+      ) as Array<unknown>;
+      expect(foreignKeyViolations).toHaveLength(0);
+    } finally {
+      migratedStorage.close();
+      await rm(databasePath, { force: true });
     }
   });
 

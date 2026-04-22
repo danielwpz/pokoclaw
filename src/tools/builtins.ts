@@ -21,6 +21,7 @@ import { createQuerySystemDbTool } from "@/src/tools/query-system-db.js";
 import { createReadTool } from "@/src/tools/read.js";
 import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
 import { createReviewPermissionRequestTool } from "@/src/tools/review-permission-request.js";
+import { createUpsertThinkTankStepTool } from "@/src/tools/upsert-think-tank-step.js";
 import { createWaitTaskTool } from "@/src/tools/wait-task.js";
 import { createWebFetchTool } from "@/src/tools/web/fetch.js";
 import { createWebSearchTool } from "@/src/tools/web/search.js";
@@ -45,6 +46,7 @@ export function createBuiltinToolRegistry(
   registry.register(createConsultThinkTankTool());
   registry.register(createGetThinkTankStatusTool());
   registry.register(createConsultParticipantTool());
+  registry.register(createUpsertThinkTankStepTool());
   registry.register(createFinishThinkTankEpisodeTool());
   registry.register(createFinishTaskTool());
   registry.register(createRequestPermissionsTool());

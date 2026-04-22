@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 
 import {
-  buildLarkRenderedThinkTankEpisodeCard,
   buildLarkRenderedThinkTankMainCard,
   buildLarkRenderedThinkTankStepCard,
 } from "@/src/channels/lark/render/think-tank-card.js";
@@ -55,16 +54,15 @@ describe("lark think tank cards", () => {
     expect(text).toContain("🎯 Current Conclusion");
   });
 
-  test("renders an episode placeholder card immediately when a round starts", () => {
-    const rendered = buildLarkRenderedThinkTankEpisodeCard({
+  test("renders a pending participant round as the thread placeholder card", () => {
+    const rendered = buildLarkRenderedThinkTankStepCard({
       consultation: makeConsultationState(),
-      episode: {
-        episodeId: "ep_1",
-        episodeSequence: 1,
-        prompt: "先讨论长期运行最关键的能力。",
-        status: "running",
-        plannedSteps: null,
-        steps: new Map(),
+      step: {
+        key: "round_1",
+        kind: "participant_round",
+        title: "Round 1 · 独立观点",
+        order: 10,
+        status: "pending",
       },
     });
     const card = rendered.card as {
@@ -72,9 +70,40 @@ describe("lark think tank cards", () => {
     };
     const text = JSON.stringify(rendered.card);
 
-    expect(card.header?.title?.content).toBe("第 1 轮讨论中");
+    expect(card.header?.title?.content).toBe("Round 1 · 独立观点");
     expect(card.header?.template).toBe("blue");
-    expect(text).toContain("主持人已启动本轮讨论");
+    expect(text).toContain("顾问正在思考中");
+  });
+
+  test("renders partial pending participant output while unfinished experts stay in thinking state", () => {
+    const rendered = buildLarkRenderedThinkTankStepCard({
+      consultation: makeConsultationState(),
+      step: {
+        key: "round_1",
+        kind: "participant_round",
+        title: "Round 1 · 独立观点",
+        order: 10,
+        status: "pending",
+        participantRound: {
+          roundIndex: 1,
+          entries: [
+            {
+              participantId: "runtime_engineer",
+              title: "高级 Agent 研发工程师",
+              model: "openrouter-claude-sonnet-4",
+              preview: "先解决恢复能力和故",
+              content: "先解决恢复能力和故障边界，否则长期运行不可托付。",
+            },
+          ],
+        },
+      },
+    });
+
+    const text = JSON.stringify(rendered.card);
+    expect(text).toContain("先解决恢复能力和故障边界");
+    expect(text).toContain("仍在思考中");
+    expect(text).toContain("专家 A");
+    expect(text).toContain("专家 B");
   });
 
   test("renders a participant round as demo-style collapsible expert sections", () => {

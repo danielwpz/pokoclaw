@@ -162,30 +162,42 @@ function buildParticipantRoundCard(
         ? "Round 1 · 独立观点"
         : `Round ${String(roundIndex)} · 交换意见`;
   const entries = step.participantRound?.entries ?? [];
+  const entriesByParticipantId = new Map(entries.map((entry) => [entry.participantId, entry]));
   const elements: Array<Record<string, unknown>> =
-    step.status === "pending"
+    step.status === "pending" && entries.length === 0
       ? [
           {
             tag: "markdown",
             content: "主持人已发出本轮问题，顾问正在思考中。",
           },
         ]
-      : entries.flatMap((entry, index) =>
-          buildExpertSection({
+      : consultation.participants.flatMap((participant, index) => {
+          const entry = entriesByParticipantId.get(participant.id);
+          if (entry == null) {
+            return buildPendingExpertSection({
+              emoji: THINK_TANK_PARTICIPANT_EMOJI[index] ?? "•",
+              name: resolveParticipantDisplayName(consultation, participant.id),
+              title: participant.title ?? "未命名顾问",
+              model: participant.model,
+            });
+          }
+          return buildExpertSection({
             emoji: THINK_TANK_PARTICIPANT_EMOJI[index] ?? "•",
             name: resolveParticipantDisplayName(consultation, entry.participantId),
-            title: entry.title ?? "未命名顾问",
+            title: entry.title ?? participant.title ?? "未命名顾问",
             model: entry.model,
             content: entry.content,
             preview: entry.preview,
-          }),
-        );
+          });
+        });
 
   return buildThreadCard({
     title,
     summary:
       step.status === "pending"
-        ? "顾问正在进行本轮讨论。"
+        ? entries.length > 0
+          ? "顾问观点正在陆续返回。"
+          : "顾问正在进行本轮讨论。"
         : `顾问已完成第 ${String(roundIndex)} 轮输出。`,
     template: roundIndex <= 1 ? "blue" : "turquoise",
     sections: elements,
@@ -215,7 +227,7 @@ function buildModeratorSummaryCard(step: ThinkTankEpisodeStepSnapshot): Record<s
 function buildFinalSummaryCard(step: ThinkTankEpisodeStepSnapshot): Record<string, unknown> {
   const summary = step.moderatorSummary?.summary;
   return buildThreadCard({
-    title: step.title.trim().length > 0 ? step.title : "Final Synthesis · 当前结论",
+    title: step.title.trim().length > 0 ? step.title : "Final Synthesis · 最终裁决",
     summary:
       step.status === "pending" ? "主 Agent 正在形成当前结论。" : "主 Agent 已完成当前结论。",
     template: "green",
@@ -289,6 +301,24 @@ function buildExpertSection(input: {
       content: input.content,
       preview: input.preview,
     }),
+  ];
+}
+
+function buildPendingExpertSection(input: {
+  emoji: string;
+  name: string;
+  title: string;
+  model: string;
+}): Array<Record<string, unknown>> {
+  return [
+    {
+      tag: "markdown",
+      content: `### ${input.emoji} ${input.name}\n${input.title} · ${input.model}`,
+    },
+    {
+      tag: "markdown",
+      content: "仍在思考中，结果会继续更新到这张卡片。",
+    },
   ];
 }
 

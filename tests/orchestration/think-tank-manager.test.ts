@@ -9,6 +9,7 @@ import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { ThinkTankConsultationsRepo } from "@/src/storage/repos/think-tank-consultations.repo.js";
 import { ThinkTankEpisodesRepo } from "@/src/storage/repos/think-tank-episodes.repo.js";
 import { ThinkTankParticipantsRepo } from "@/src/storage/repos/think-tank-participants.repo.js";
+import type { ThinkTankEpisodeSubmitStep } from "@/src/think-tank/episode-completion.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -38,7 +39,82 @@ function makeStartedRun(input: { sessionId: string; scenario: ModelScenario }) {
   };
 }
 
+function makeParticipantConsultRun(input: {
+  sessionId: string;
+  scenario: ModelScenario;
+  reply: string;
+}) {
+  return {
+    status: "started" as const,
+    messageId: `msg_${input.sessionId}`,
+    run: {
+      runId: `run_${input.sessionId}`,
+      sessionId: input.sessionId,
+      scenario: input.scenario,
+      modelId: "test-model",
+      appendedMessageIds: [],
+      toolExecutions: 0,
+      compaction: {
+        shouldCompact: false,
+        reason: null,
+        thresholdTokens: 1000,
+        effectiveWindow: 2000,
+      },
+      events: [
+        {
+          type: "assistant_message_completed" as const,
+          eventId: `event_${input.sessionId}`,
+          sessionId: input.sessionId,
+          conversationId: "conv_1",
+          branchId: "branch_1",
+          runId: `run_${input.sessionId}`,
+          createdAt: "2026-04-21T00:00:01.000Z",
+          turn: 1,
+          messageId: `assistant_${input.sessionId}`,
+          text: input.reply,
+          reasoningText: null,
+          toolCalls: [],
+          usage: {
+            input: 10,
+            output: 10,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 20,
+          },
+        },
+      ],
+      stopSignal: null,
+    },
+  };
+}
+
 function makeCompletedThinkTankRun(input: { sessionId: string; scenario: ModelScenario }) {
+  return makeCompletedThinkTankRunWithSteps({
+    ...input,
+    steps: [
+      {
+        key: "final",
+        kind: "final_summary",
+        title: "Current Conclusion",
+        order: 40,
+        summaryKind: "final",
+        summary: {
+          agreements: ["Use a thin semantic event layer."],
+          keyDifferences: ["How much channel rendering should be standardized."],
+          currentConclusion:
+            "Runtime should publish stable events and let each channel render independently.",
+          openQuestions: ["How much UI richness should non-Lark channels match?"],
+        },
+      },
+    ],
+  });
+}
+
+function makeCompletedThinkTankRunWithSteps(input: {
+  sessionId: string;
+  scenario: ModelScenario;
+  steps: ThinkTankEpisodeSubmitStep[];
+}) {
   return {
     status: "started" as const,
     messageId: "msg_started",
@@ -67,22 +143,7 @@ function makeCompletedThinkTankRun(input: { sessionId: string; scenario: ModelSc
                 "Runtime should publish stable events and let each channel render independently.",
               openQuestions: ["How much UI richness should non-Lark channels match?"],
             },
-            steps: [
-              {
-                key: "final",
-                kind: "final_summary",
-                title: "Current Conclusion",
-                order: 40,
-                summaryKind: "final",
-                summary: {
-                  agreements: ["Use a thin semantic event layer."],
-                  keyDifferences: ["How much channel rendering should be standardized."],
-                  currentConclusion:
-                    "Runtime should publish stable events and let each channel render independently.",
-                  openQuestions: ["How much UI richness should non-Lark channels match?"],
-                },
-              },
-            ],
+            steps: input.steps,
           },
         },
       },
@@ -110,6 +171,63 @@ function seedFixture(handle: TestDatabaseHandle): void {
       'sess_source', 'conv_1', 'branch_1', 'agent_1', 'chat', 'active',
       '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
     );
+  `);
+}
+
+function seedRunningThinkTankFixture(handle: TestDatabaseHandle): void {
+  handle.storage.sqlite.exec(`
+    INSERT INTO sessions (
+      id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+    ) VALUES (
+      'sess_tt_moderator', 'conv_1', 'branch_1', 'agent_1', 'think_tank_moderator', 'active',
+      '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+    );
+    INSERT INTO sessions (
+      id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+    ) VALUES (
+      'sess_tt_product', 'conv_1', 'branch_1', 'agent_1', 'think_tank_participant', 'active',
+      '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+    );
+    INSERT INTO sessions (
+      id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+    ) VALUES (
+      'sess_tt_infra', 'conv_1', 'branch_1', 'agent_1', 'think_tank_participant', 'active',
+      '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+    );
+
+    INSERT INTO think_tank_consultations (
+      id, source_session_id, source_conversation_id, source_branch_id, owner_agent_id,
+      moderator_session_id, moderator_model_id, status, topic, context_text, created_at, updated_at
+    ) VALUES (
+      'tt_running', 'sess_source', 'conv_1', 'branch_1', 'agent_1',
+      'sess_tt_moderator', 'codex-gpt5.4', 'running',
+      'How should runtime progress update channel-neutral think tank cards?',
+      'Need live progress events during the episode.',
+      '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+    );
+
+    INSERT INTO think_tank_episodes (
+      id, consultation_id, sequence, status, prompt_text, result_json, error_text, started_at, finished_at
+    ) VALUES (
+      'ep_running', 'tt_running', 1, 'running',
+      'Please run the first round and keep the thread updated.',
+      NULL, NULL, '2026-04-21T00:00:00.000Z', NULL
+    );
+
+    INSERT INTO think_tank_participants (
+      id, consultation_id, participant_id, title, model_id, persona_text,
+      continuation_session_id, sort_order, created_at, updated_at
+    ) VALUES
+      (
+        'ttp_1', 'tt_running', 'product_lead', 'Product Lead', 'openrouter-claude-sonnet-4',
+        'Prioritize product clarity and user trust.',
+        'sess_tt_product', 1, '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+      ),
+      (
+        'ttp_2', 'tt_running', 'infra_engineer', 'Infra Engineer', 'openrouter-gemini-3.1-flash',
+        'Prioritize reliability and operating simplicity.',
+        'sess_tt_infra', 2, '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+      );
   `);
 }
 
@@ -376,6 +494,323 @@ describe("AgentManager think tank runtime contracts", () => {
       if (manager != null) {
         await manager.waitForThinkTankIdle();
       }
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("canonicalizes submitted step keys so round placeholders can update in place", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+    let manager: AgentManager | null = null;
+
+    try {
+      seedFixture(handle);
+
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const events: OrchestratedOutboundEventEnvelope[] = [];
+      const unsubscribe = bus.subscribe((event) => {
+        events.push(event);
+      });
+
+      manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: async (input) =>
+            makeCompletedThinkTankRunWithSteps({
+              sessionId: input.sessionId,
+              scenario: input.scenario,
+              steps: [
+                {
+                  key: "independent_perspectives_live",
+                  kind: "participant_round",
+                  title: "Round 1 · 独立观点",
+                  order: 10,
+                  roundIndex: 1,
+                  participantEntries: [
+                    {
+                      participantId: "product_lead",
+                      content: "Runtime should stay channel-neutral.",
+                    },
+                    {
+                      participantId: "infra_engineer",
+                      content: "The renderer should own thread projection.",
+                    },
+                  ],
+                },
+                {
+                  key: "wrap_up",
+                  kind: "final_summary",
+                  title: "Final Synthesis · 最终裁决",
+                  order: 40,
+                  summaryKind: "final",
+                  summary: {
+                    agreements: ["Use a thin semantic event layer."],
+                    keyDifferences: ["How much channel rendering should be standardized."],
+                    currentConclusion:
+                      "Runtime should publish stable events and let each channel render independently.",
+                    openQuestions: ["How much UI richness should non-Lark channels match?"],
+                  },
+                },
+              ],
+            }),
+          submitApprovalDecision: () => true,
+        },
+        outboundEventBus: bus,
+        models: createModelSource(),
+      });
+
+      const started = await manager.startThinkTankConsultation({
+        sourceSessionId: "sess_source",
+        sourceConversationId: "conv_1",
+        sourceBranchId: "branch_1",
+        ownerAgentId: "agent_1",
+        moderatorModelId: "codex-gpt5.4",
+        topic: "How should think tank runtime and channel stay decoupled?",
+        context: "Need a stable event layer.",
+        participants: [
+          {
+            id: "product_lead",
+            model: "openrouter-claude-sonnet-4",
+            persona: "Prioritize product clarity and user trust.",
+            title: "Product Lead",
+          },
+          {
+            id: "infra_engineer",
+            model: "openrouter-gemini-3.1-flash",
+            persona: "Prioritize reliability and operating simplicity.",
+            title: "Infra Engineer",
+          },
+        ],
+      });
+
+      await manager.waitForThinkTankIdle();
+
+      const stepEvents = events.filter(
+        (event) =>
+          event.kind === "think_tank_event" && event.event.type === "episode_step_upserted",
+      ) as Array<Extract<OrchestratedOutboundEventEnvelope, { kind: "think_tank_event" }>>;
+      expect(stepEvents).toHaveLength(2);
+      const firstStepEvent = stepEvents[0];
+      const secondStepEvent = stepEvents[1];
+      expect(firstStepEvent?.consultationId).toBe(started.consultationId);
+      if (
+        firstStepEvent == null ||
+        firstStepEvent.event.type !== "episode_step_upserted" ||
+        secondStepEvent == null ||
+        secondStepEvent.event.type !== "episode_step_upserted"
+      ) {
+        throw new Error("Expected episode_step_upserted events.");
+      }
+      expect(firstStepEvent.event.step.key).toBe("round_1");
+      expect(secondStepEvent.event.step.key).toBe("final");
+
+      const completedEpisode = new ThinkTankEpisodesRepo(
+        handle.storage.db,
+      ).findLatestByConsultation(started.consultationId);
+      expect(completedEpisode?.resultJson).toContain('"key":"round_1"');
+      expect(completedEpisode?.resultJson).not.toContain("independent_perspectives_live");
+
+      unsubscribe();
+    } finally {
+      if (manager != null) {
+        await manager.waitForThinkTankIdle();
+      }
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("publishes incremental participant round updates while experts reply", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      seedFixture(handle);
+      seedRunningThinkTankFixture(handle);
+
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const events: OrchestratedOutboundEventEnvelope[] = [];
+      const unsubscribe = bus.subscribe((event) => {
+        events.push(event);
+      });
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: async (input) =>
+            makeParticipantConsultRun({
+              sessionId: input.sessionId,
+              scenario: input.scenario,
+              reply:
+                input.sessionId === "sess_tt_product"
+                  ? "Product needs the thread to show real progress immediately."
+                  : "Infra needs stable step identities and in-place updates.",
+            }),
+          submitApprovalDecision: () => true,
+        },
+        outboundEventBus: bus,
+        models: createModelSource(),
+      });
+
+      await manager.consultThinkTankParticipant({
+        moderatorSessionId: "sess_tt_moderator",
+        participantId: "product_lead",
+        prompt: "Give your independent view.",
+        step: {
+          key: "round_1",
+          title: "Round 1 · 独立观点",
+          order: 10,
+          roundIndex: 1,
+        },
+      });
+      await manager.consultThinkTankParticipant({
+        moderatorSessionId: "sess_tt_moderator",
+        participantId: "infra_engineer",
+        prompt: "Give your independent view.",
+        step: {
+          key: "round_1",
+          title: "Round 1 · 独立观点",
+          order: 10,
+          roundIndex: 1,
+        },
+      });
+
+      const stepEvents = events.filter(
+        (event) =>
+          event.kind === "think_tank_event" && event.event.type === "episode_step_upserted",
+      ) as Array<Extract<OrchestratedOutboundEventEnvelope, { kind: "think_tank_event" }>>;
+      expect(stepEvents).toHaveLength(2);
+      expect(stepEvents[0]).toMatchObject({
+        consultationId: "tt_running",
+        event: {
+          type: "episode_step_upserted",
+          step: {
+            key: "round_1",
+            kind: "participant_round",
+            status: "pending",
+          },
+        },
+      });
+      expect(stepEvents[1]).toMatchObject({
+        consultationId: "tt_running",
+        event: {
+          type: "episode_step_upserted",
+          step: {
+            key: "round_1",
+            kind: "participant_round",
+            status: "completed",
+          },
+        },
+      });
+
+      const firstEvent =
+        stepEvents[0]?.event.type === "episode_step_upserted" ? stepEvents[0].event.step : null;
+      const secondEvent =
+        stepEvents[1]?.event.type === "episode_step_upserted" ? stepEvents[1].event.step : null;
+      expect(firstEvent?.participantRound?.entries).toHaveLength(1);
+      expect(secondEvent?.participantRound?.entries).toHaveLength(2);
+
+      const episode = new ThinkTankEpisodesRepo(handle.storage.db).getById("ep_running");
+      expect(episode?.resultJson).toContain('"key":"round_1"');
+
+      unsubscribe();
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("upserts moderator summary progress into the running episode before final completion", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      seedFixture(handle);
+      seedRunningThinkTankFixture(handle);
+
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const events: OrchestratedOutboundEventEnvelope[] = [];
+      const unsubscribe = bus.subscribe((event) => {
+        events.push(event);
+      });
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: async (input) =>
+            makeParticipantConsultRun({
+              sessionId: input.sessionId,
+              scenario: input.scenario,
+              reply: "unused",
+            }),
+          submitApprovalDecision: () => true,
+        },
+        outboundEventBus: bus,
+        models: createModelSource(),
+      });
+
+      manager.upsertThinkTankEpisodeStep({
+        moderatorSessionId: "sess_tt_moderator",
+        step: {
+          kind: "moderator_summary",
+          status: "pending",
+          key: "midpoint",
+          title: "Moderator Synthesis · 第一轮结论",
+          order: 20,
+          roundIndex: 1,
+        },
+      });
+      manager.upsertThinkTankEpisodeStep({
+        moderatorSessionId: "sess_tt_moderator",
+        step: {
+          kind: "moderator_summary",
+          status: "completed",
+          key: "midpoint",
+          title: "Moderator Synthesis · 第一轮结论",
+          order: 20,
+          roundIndex: 1,
+          summaryKind: "midpoint",
+          summary: {
+            agreements: ["Cards should update in place."],
+            keyDifferences: ["How much to infer from planned steps."],
+            currentConclusion:
+              "Keep the event layer channel-neutral and emit step upserts during execution.",
+            openQuestions: ["Should future channels render collapsible panels too?"],
+          },
+        },
+      });
+
+      await Promise.resolve();
+
+      const stepEvents = events.filter(
+        (event) =>
+          event.kind === "think_tank_event" && event.event.type === "episode_step_upserted",
+      ) as Array<Extract<OrchestratedOutboundEventEnvelope, { kind: "think_tank_event" }>>;
+      expect(stepEvents).toHaveLength(2);
+      expect(stepEvents[0]).toMatchObject({
+        consultationId: "tt_running",
+        event: {
+          type: "episode_step_upserted",
+          step: {
+            key: "midpoint",
+            kind: "moderator_summary",
+            status: "pending",
+          },
+        },
+      });
+      expect(stepEvents[1]).toMatchObject({
+        consultationId: "tt_running",
+        event: {
+          type: "episode_step_upserted",
+          step: {
+            key: "midpoint",
+            kind: "moderator_summary",
+            status: "completed",
+          },
+        },
+      });
+
+      const episode = new ThinkTankEpisodesRepo(handle.storage.db).getById("ep_running");
+      expect(episode?.resultJson).toContain('"key":"midpoint"');
+      expect(episode?.resultJson).toContain("Cards should update in place.");
+
+      unsubscribe();
+    } finally {
       await destroyTestDatabase(handle);
     }
   });

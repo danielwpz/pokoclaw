@@ -62,8 +62,12 @@ export function buildThinkTankModeratorSetupEnvelope(
   lines.push("    You may stop after one round if the question is already resolved.");
   lines.push("    You may add a third round only when it materially improves the conclusion.");
   lines.push(
-    "    Use consult_participant for advisor turns and finish_think_tank_episode exactly once when this episode is done.",
+    "    Use upsert_think_tank_step to mark a round or moderator synthesis as started or updated while the episode is running.",
   );
+  lines.push(
+    "    Use consult_participant for advisor turns. Pass stable round metadata in the step field for every advisor call in the same round.",
+  );
+  lines.push("    Call finish_think_tank_episode exactly once when this episode is done.");
   lines.push("  </rules>");
   lines.push("</think_tank_consultation_setup>");
 
@@ -125,7 +129,19 @@ export function buildThinkTankEpisodeKickoffEnvelope(
     "    Run a focused think tank episode. Default to one independent round plus one exchange round. Keep the process tight.",
   );
   lines.push(
+    "    At the start of each participant round, call upsert_think_tank_step with kind participant_round and status pending so channels can render the live placeholder card.",
+  );
+  lines.push(
+    "    Every consult_participant call in the same round must reuse the same step metadata: roundIndex plus stable key/title/order when available.",
+  );
+  lines.push(
     "    When using consult_participant for exchange, include all other participants' previous-round outputs in the prompt you send.",
+  );
+  lines.push(
+    "    When you begin synthesizing, call upsert_think_tank_step with kind moderator_summary or final_summary and status pending.",
+  );
+  lines.push(
+    "    When that synthesis is ready, call upsert_think_tank_step again with status completed and the structured summary payload.",
   );
   lines.push(
     "    When the episode is done, call finish_think_tank_episode with structured summary fields and semantic step snapshots.",

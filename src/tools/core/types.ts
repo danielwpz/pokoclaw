@@ -7,8 +7,11 @@ import type { StorageDb } from "@/src/storage/db/client.js";
 import type {
   ThinkTankCapabilities,
   ThinkTankConsultationStatusView,
+  ThinkTankEpisodeStepSnapshot,
+  ThinkTankEpisodeStepUpsertInput,
   ThinkTankParticipantAssignment,
   ThinkTankParticipantDefinition,
+  ThinkTankParticipantRoundStepHint,
 } from "@/src/think-tank/types.js";
 
 export type ToolContentBlock =
@@ -24,6 +27,12 @@ export type ToolContentBlock =
 export interface ToolResult<TDetails = unknown> {
   content: ToolContentBlock[];
   details?: TDetails;
+  control?: {
+    stopRun?: {
+      reason: string;
+      payload?: unknown;
+    };
+  };
 }
 
 export interface ToolExecutionContext {
@@ -123,6 +132,7 @@ export interface ToolRuntimeControl {
     moderatorSessionId: string;
     participantId: string;
     prompt: string;
+    step?: ThinkTankParticipantRoundStepHint;
   }): Promise<{
     participantId: string;
     title: string | null;
@@ -130,6 +140,16 @@ export interface ToolRuntimeControl {
     continuationSessionId: string;
     reply: string;
   }>;
+  upsertThinkTankEpisodeStep?(input: {
+    moderatorSessionId: string;
+    step: ThinkTankEpisodeStepUpsertInput;
+  }):
+    | Promise<{
+        step: ThinkTankEpisodeStepSnapshot;
+      }>
+    | {
+        step: ThinkTankEpisodeStepSnapshot;
+      };
   getThinkTankStatus?(input: {
     sourceSessionId: string;
     consultationId: string;

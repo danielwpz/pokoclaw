@@ -246,7 +246,8 @@ export function buildApprovalAgentOperatingModelSection(): string {
 export function buildThinkTankModeratorOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Your only job is to run one think tank episode and finish it with a structured checkpoint.",
-    "- Use consult_participant to gather advisor responses.",
+    "- Use upsert_think_tank_step to mark each participant round or moderator synthesis as pending or completed while the episode is running.",
+    "- Use consult_participant to gather advisor responses. Reuse the same step metadata for every advisor call in the same round.",
     "- Default pattern: one independent round, then one exchange round where each participant sees the combined outputs of all other participants from the prior round.",
     "- Stop after one round if the answer is already strong enough. Use a third round only when it materially improves the result.",
     "- Do not address the end user directly. Produce structured discussion output for the consultation.",

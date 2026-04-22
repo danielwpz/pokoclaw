@@ -1,10 +1,12 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { createConsultThinkTankTool } from "@/src/tools/consult-think-tank.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { createFinishThinkTankEpisodeTool } from "@/src/tools/finish-think-tank-episode.js";
 import { createGetThinkTankCapabilitiesTool } from "@/src/tools/get-think-tank-capabilities.js";
 import { createGetThinkTankStatusTool } from "@/src/tools/get-think-tank-status.js";
+import { createUpsertThinkTankStepTool } from "@/src/tools/upsert-think-tank-step.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -229,6 +231,162 @@ describe("think tank tools", () => {
         ),
       ).rejects.toMatchObject({
         kind: "recoverable_error",
+      });
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("finish_think_tank_episode ignores unknown summaryKind values instead of failing validation", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      seedChatFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+        ) VALUES (
+          'sess_tt_moderator', 'conv_1', 'branch_1', 'agent_1', 'think_tank_moderator', 'active',
+          '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+        );
+      `);
+
+      const registry = new ToolRegistry([createFinishThinkTankEpisodeTool()]);
+      const result = await registry.execute(
+        "finish_think_tank_episode",
+        {
+          sessionId: "sess_tt_moderator",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          summary: {
+            agreements: ["先把恢复和可见性做起来。"],
+            keyDifferences: ["产品更看重托付感。"],
+            currentConclusion: "优先补恢复能力，再把过程展示清楚。",
+            openQuestions: ["哪些场景允许完全无人值守？"],
+          },
+          steps: [
+            {
+              key: "round_1",
+              kind: "participant_round",
+              title: "Round 1 · 独立观点",
+              order: 10,
+              participantEntries: [
+                {
+                  participantId: "product_lead",
+                  content: "先解决用户信任和过程可见性。",
+                },
+              ],
+            },
+            {
+              key: "final",
+              kind: "final_summary",
+              title: "Final Synthesis · 最终裁决",
+              order: 40,
+              summaryKind: "current",
+              summary: {
+                agreements: ["先把恢复和可见性做起来。"],
+                keyDifferences: ["产品更看重托付感。"],
+                currentConclusion: "优先补恢复能力，再把过程展示清楚。",
+                openQuestions: ["哪些场景允许完全无人值守？"],
+              },
+            },
+          ],
+        },
+      );
+
+      expect(result.content[0]?.type).toBe("text");
+      expect(result.details).toMatchObject({
+        thinkTankEpisodeCompletion: {
+          steps: [
+            {
+              key: "round_1",
+              kind: "participant_round",
+            },
+            {
+              key: "final",
+              kind: "final_summary",
+            },
+          ],
+        },
+      });
+
+      const finalStep =
+        (
+          (
+            result.details as {
+              thinkTankEpisodeCompletion?: { steps?: Array<Record<string, unknown>> };
+            }
+          ).thinkTankEpisodeCompletion?.steps ?? []
+        ).at(-1) ?? null;
+      expect(finalStep).not.toHaveProperty("summaryKind");
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("upsert_think_tank_step bridges running progress and ignores unknown summaryKind values", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      seedChatFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+        ) VALUES (
+          'sess_tt_moderator', 'conv_1', 'branch_1', 'agent_1', 'think_tank_moderator', 'active',
+          '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+        );
+      `);
+
+      const upsertThinkTankEpisodeStep = vi.fn((input) => ({
+        step: {
+          key: input.step.key ?? "midpoint",
+          kind: input.step.kind,
+          title: input.step.title ?? "Moderator Synthesis · 第一轮结论",
+          order: input.step.order ?? 20,
+          status: input.step.status,
+        },
+      }));
+      const registry = new ToolRegistry([createUpsertThinkTankStepTool()]);
+      const result = await registry.execute(
+        "upsert_think_tank_step",
+        {
+          sessionId: "sess_tt_moderator",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          runtimeControl: {
+            submitApprovalDecision: () => true,
+            upsertThinkTankEpisodeStep,
+          },
+        },
+        {
+          kind: "moderator_summary",
+          status: "pending",
+          title: "Moderator Synthesis · 第一轮结论",
+          order: 20,
+          summaryKind: "current",
+        },
+      );
+
+      expect(upsertThinkTankEpisodeStep).toHaveBeenCalledWith({
+        moderatorSessionId: "sess_tt_moderator",
+        step: {
+          kind: "moderator_summary",
+          status: "pending",
+          title: "Moderator Synthesis · 第一轮结论",
+          order: 20,
+        },
+      });
+      expect(result.details).toMatchObject({
+        thinkTankEpisodeStep: {
+          key: "midpoint",
+          kind: "moderator_summary",
+          status: "pending",
+        },
       });
     } finally {
       await destroyTestDatabase(handle);

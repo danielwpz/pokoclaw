@@ -25,6 +25,7 @@ import {
   type LarkModelSwitchCardState,
 } from "@/src/channels/lark/render.js";
 import type { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
+import { resolveThinkTankThreadRoute } from "@/src/channels/lark/think-tank-thread-route.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
 import type { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
@@ -1625,6 +1626,15 @@ async function resolveLarkInboundRoute(input: {
   });
   if (taskThread != null) {
     return taskThread;
+  }
+
+  const thinkTankThread = resolveThinkTankThreadRoute({
+    db: input.db,
+    installationId: input.installationId,
+    normalized: input.normalized,
+  });
+  if (thinkTankThread != null) {
+    return thinkTankThread;
   }
 
   const ordinaryThread = resolveExistingOrdinaryThreadRoute({

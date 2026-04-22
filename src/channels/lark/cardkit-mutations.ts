@@ -25,6 +25,7 @@ export type LarkSequencedCardMutationOutcome<T extends LarkCardOperationResponse
     };
 
 export interface LarkCardkitLogger {
+  info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
   error(message: string, fields?: Record<string, unknown>): void;
 }
@@ -122,11 +123,13 @@ export async function invokeLarkCardkitCallWithBusinessRetry<
   logger: LarkCardkitLogger;
   operation: "card.create" | "card.update" | "cardElement.content";
   logContext: Record<string, unknown>;
+  timeoutMs?: number;
   invoke: () => Promise<T>;
 }): Promise<T> {
   let attempt = 0;
   while (true) {
-    const response = await input.invoke();
+    const pending = input.invoke();
+    const response = await withOptionalTimeout(pending, input.timeoutMs, `Lark ${input.operation}`);
     const code = response.code;
     if (code == null || code === 0) {
       return response;
@@ -161,6 +164,33 @@ export async function invokeLarkCardkitCallWithBusinessRetry<
     );
     return response;
   }
+}
+
+function withOptionalTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number | undefined,
+  label: string,
+): Promise<T> {
+  if (timeoutMs == null || timeoutMs <= 0) {
+    return promise;
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${String(timeoutMs)}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
 
 export async function invokeSequencedLarkCardkitMutation<

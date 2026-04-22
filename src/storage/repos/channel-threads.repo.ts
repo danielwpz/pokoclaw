@@ -146,6 +146,56 @@ export class ChannelThreadsRepo {
     );
   }
 
+  patchByRootThinkTankConsultation(input: {
+    channelType: string;
+    channelInstallationId: string;
+    rootThinkTankConsultationId: string;
+    homeConversationId?: string;
+    externalChatId?: string;
+    externalThreadId?: string;
+    subjectKind?: "chat" | "task" | "think_tank";
+    openedFromMessageId?: string | null;
+    status?: string;
+    updatedAt?: Date;
+  }): ChannelThread | null {
+    const updatedAt = input.updatedAt ?? new Date();
+    const result = this.db
+      .update(channelThreads)
+      .set({
+        ...(input.homeConversationId === undefined
+          ? {}
+          : { homeConversationId: input.homeConversationId }),
+        ...(input.externalChatId === undefined ? {} : { externalChatId: input.externalChatId }),
+        ...(input.externalThreadId === undefined
+          ? {}
+          : { externalThreadId: input.externalThreadId }),
+        ...(input.subjectKind === undefined ? {} : { subjectKind: input.subjectKind }),
+        ...(input.openedFromMessageId === undefined
+          ? {}
+          : { openedFromMessageId: input.openedFromMessageId }),
+        ...(input.status === undefined ? {} : { status: input.status }),
+        updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
+      })
+      .where(
+        and(
+          eq(channelThreads.channelType, input.channelType),
+          eq(channelThreads.channelInstallationId, input.channelInstallationId),
+          eq(channelThreads.rootThinkTankConsultationId, input.rootThinkTankConsultationId),
+        ),
+      )
+      .run();
+
+    if ((result.changes ?? 0) < 1) {
+      return null;
+    }
+
+    return this.getByRootThinkTankConsultation({
+      channelType: input.channelType,
+      channelInstallationId: input.channelInstallationId,
+      rootThinkTankConsultationId: input.rootThinkTankConsultationId,
+    });
+  }
+
   getByBranch(input: {
     channelType: string;
     channelInstallationId: string;

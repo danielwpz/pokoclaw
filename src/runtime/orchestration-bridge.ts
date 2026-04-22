@@ -26,6 +26,7 @@ type RuntimeOrchestrationTarget = Pick<
   }) => Promise<ThinkTankCapabilities> | ThinkTankCapabilities;
   startThinkTankConsultation?: ToolRuntimeControl["startThinkTankConsultation"];
   consultThinkTankParticipant?: ToolRuntimeControl["consultThinkTankParticipant"];
+  upsertThinkTankEpisodeStep?: ToolRuntimeControl["upsertThinkTankEpisodeStep"];
   getThinkTankStatus?: ToolRuntimeControl["getThinkTankStatus"];
 };
 
@@ -99,6 +100,15 @@ export class RuntimeOrchestrationBridge {
         );
       }
       return await manager.consultThinkTankParticipant(input);
+    },
+    upsertThinkTankEpisodeStep: async (input) => {
+      const manager = this.requireManager("upsertThinkTankEpisodeStep");
+      if (manager.upsertThinkTankEpisodeStep == null) {
+        throw new Error(
+          "RuntimeOrchestrationBridge cannot upsertThinkTankEpisodeStep before think tank runtime is attached.",
+        );
+      }
+      return await manager.upsertThinkTankEpisodeStep(input);
     },
     getThinkTankStatus: async (input) => {
       const manager = this.requireManager("getThinkTankStatus");

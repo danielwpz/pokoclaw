@@ -45,6 +45,18 @@ export interface ThinkTankParticipantRoundEntry {
   content: string;
 }
 
+export interface ThinkTankParticipantRoundEntryInput {
+  participantId: string;
+  content: string;
+}
+
+export interface ThinkTankParticipantRoundStepHint {
+  key?: string;
+  title?: string | null;
+  order?: number;
+  roundIndex?: number;
+}
+
 export interface ThinkTankEpisodeStepSnapshot {
   key: string;
   kind: ThinkTankEpisodeStepKind;
@@ -62,6 +74,19 @@ export interface ThinkTankEpisodeStepSnapshot {
   error?: {
     message: string;
   };
+}
+
+export interface ThinkTankEpisodeStepUpsertInput {
+  key?: string;
+  kind: ThinkTankEpisodeStepKind;
+  status: ThinkTankEpisodeStepStatus;
+  title?: string | null;
+  order?: number;
+  roundIndex?: number;
+  participantEntries?: ThinkTankParticipantRoundEntryInput[];
+  summaryKind?: "midpoint" | "final";
+  summary?: ThinkTankStructuredSummary;
+  errorMessage?: string;
 }
 
 export interface ThinkTankEpisodeResult {

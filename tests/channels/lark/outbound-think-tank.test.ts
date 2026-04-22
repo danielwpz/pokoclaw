@@ -63,7 +63,7 @@ describe("lark outbound runtime think tank cards", () => {
     }
   });
 
-  test("creates a main think tank card, a thread placeholder card, and thread step cards", async () => {
+  test("creates a first-round placeholder card and updates the same thread card with real expert output", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`
@@ -106,7 +106,6 @@ describe("lark outbound runtime think tank cards", () => {
     const createCard = vi
       .fn()
       .mockResolvedValueOnce({ data: { card_id: "card_tt_main_1" } })
-      .mockResolvedValueOnce({ data: { card_id: "card_tt_episode_1" } })
       .mockResolvedValueOnce({ data: { card_id: "card_tt_step_1" } });
     const createMessage = vi.fn(async () => ({
       data: {
@@ -114,20 +113,12 @@ describe("lark outbound runtime think tank cards", () => {
         open_message_id: "omt_tt_main_1",
       },
     }));
-    const reply = vi
-      .fn()
-      .mockResolvedValueOnce({
-        data: {
-          message_id: "om_tt_episode_1",
-          open_message_id: "omt_tt_episode_1",
-        },
-      })
-      .mockResolvedValueOnce({
-        data: {
-          message_id: "om_tt_step_1",
-          open_message_id: "omt_tt_step_1",
-        },
-      });
+    const reply = vi.fn().mockResolvedValueOnce({
+      data: {
+        message_id: "om_tt_step_1",
+        open_message_id: "omt_tt_step_1",
+      },
+    });
     const updateCard = vi.fn(async () => ({}));
     const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
     const runtime = createLarkOutboundRuntime({
@@ -220,13 +211,15 @@ describe("lark outbound runtime think tank cards", () => {
     expect(createCard).toHaveBeenCalledTimes(2);
     expect(reply).toHaveBeenCalledTimes(1);
 
-    const episodeBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
-      channelInstallationId: "default",
-      internalObjectKind: "think_tank_episode_card",
-      internalObjectId: "think_tank:tt_1:episode:ep_1",
-    });
-    expect(episodeBinding?.larkMessageId).toBe("om_tt_episode_1");
-    expect(episodeBinding?.threadRootMessageId).toBe("omt_tt_main_1");
+    const stepBindingAfterStart = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject(
+      {
+        channelInstallationId: "default",
+        internalObjectKind: "think_tank_step_card",
+        internalObjectId: "think_tank:tt_1:episode:ep_1:step:round_1",
+      },
+    );
+    expect(stepBindingAfterStart?.larkMessageId).toBe("om_tt_step_1");
+    expect(stepBindingAfterStart?.threadRootMessageId).toBe("omt_tt_main_1");
 
     bus.publish(
       makeThinkTankEnvelope({
@@ -234,7 +227,44 @@ describe("lark outbound runtime think tank cards", () => {
         episodeId: "ep_1",
         episodeSequence: 1,
         step: {
-          key: "round_1",
+          key: "independent_perspectives_live",
+          kind: "participant_round",
+          title: "Round 1 · 独立观点",
+          order: 10,
+          status: "pending",
+          participantRound: {
+            roundIndex: 1,
+            entries: [
+              {
+                participantId: "product",
+                title: "产品经理",
+                model: "openrouter-claude-sonnet-4",
+                preview: "应该先解决用户信任",
+                content: "应该先解决用户信任和过程可见性。",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(updateCard).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify((updateCard.mock.calls as unknown[][]).at(0)?.[0])).toContain(
+      "仍在思考中",
+    );
+
+    bus.publish(
+      makeThinkTankEnvelope({
+        type: "episode_step_upserted",
+        episodeId: "ep_1",
+        episodeSequence: 1,
+        step: {
+          key: "independent_perspectives_live",
           kind: "participant_round",
           title: "Round 1 · 独立观点",
           order: 10,
@@ -265,8 +295,12 @@ describe("lark outbound runtime think tank cards", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(250);
 
-    expect(createCard).toHaveBeenCalledTimes(3);
-    expect(reply).toHaveBeenCalledTimes(2);
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(updateCard).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify((updateCard.mock.calls as unknown[][]).at(1)?.[0])).toContain(
+      "应该先解决用户信任和过程可见性",
+    );
 
     const stepBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
       channelInstallationId: "default",
@@ -274,6 +308,13 @@ describe("lark outbound runtime think tank cards", () => {
       internalObjectId: "think_tank:tt_1:episode:ep_1:step:round_1",
     });
     expect(stepBinding?.larkMessageId).toBe("om_tt_step_1");
+
+    const legacyEpisodeBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "think_tank_episode_card",
+      internalObjectId: "think_tank:tt_1:episode:ep_1",
+    });
+    expect(legacyEpisodeBinding).toBeNull();
 
     bus.publish(
       makeThinkTankEnvelope({
@@ -305,7 +346,485 @@ describe("lark outbound runtime think tank cards", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(250);
 
-    expect(updateCard).toHaveBeenCalled();
+    expect(updateCard.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    await runtime.shutdown();
+  });
+
+  test("defers main think tank card flush until the scheduled outbound tick", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_chat', 'conv_1', 'branch_1', 'agent_1', 'chat', 'active', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO think_tank_consultations (
+        id, source_session_id, source_conversation_id, source_branch_id, owner_agent_id,
+        moderator_session_id, moderator_model_id, status, topic, context_text, created_at, updated_at
+      )
+      VALUES (
+        'tt_1', 'sess_chat', 'conv_1', 'branch_1', 'agent_1',
+        'sess_chat', 'codex-gpt5.4', 'running', '如何提升 Agent 的长期运行能力？',
+        'Need stable long-running execution.', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn().mockResolvedValue({ data: { card_id: "card_tt_main_1" } });
+    const createMessage = vi.fn(async () => ({
+      data: {
+        message_id: "om_tt_main_1",
+        open_message_id: "omt_tt_main_1",
+      },
+    }));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: vi.fn(async () => ({})),
+                  },
+                  cardElement: {
+                    content: vi.fn(async () => ({})),
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply: vi.fn(async () => ({})),
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeThinkTankEnvelope({
+        type: "consultation_upserted",
+        status: "running",
+        topic: "如何提升 Agent 的长期运行能力？",
+        participants: [
+          {
+            id: "product",
+            title: "产品经理",
+            model: "openrouter-claude-sonnet-4",
+          },
+          {
+            id: "engineering",
+            title: "高级 Agent 研发工程师",
+            model: "openrouter-gemini-3.1-flash",
+          },
+        ],
+        latestSummary: null,
+        firstCompleted: false,
+      }),
+    );
+
+    await Promise.resolve();
+    expect(createCard).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(createCard).toHaveBeenCalledTimes(1);
+    expect(createMessage).toHaveBeenCalledTimes(1);
+
+    await runtime.shutdown();
+  });
+
+  test("adopts a legacy episode placeholder binding and updates it in place as the first step card", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_chat', 'conv_1', 'branch_1', 'agent_1', 'chat', 'active', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO think_tank_consultations (
+        id, source_session_id, source_conversation_id, source_branch_id, owner_agent_id,
+        moderator_session_id, moderator_model_id, status, topic, context_text, created_at, updated_at
+      )
+      VALUES (
+        'tt_1', 'sess_chat', 'conv_1', 'branch_1', 'agent_1',
+        'sess_chat', 'codex-gpt5.4', 'running', '如何提升 Agent 的长期运行能力？',
+        'Need stable long-running execution.', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn().mockResolvedValueOnce({ data: { card_id: "card_tt_main_1" } });
+    const createMessage = vi.fn(async () => ({
+      data: {
+        message_id: "om_tt_main_1",
+        open_message_id: "omt_tt_main_1",
+      },
+    }));
+    const reply = vi.fn(async () => ({}));
+    const updateCard = vi.fn(async () => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: updateCard,
+                  },
+                  cardElement: {
+                    content: vi.fn(async () => ({})),
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeThinkTankEnvelope({
+        type: "consultation_upserted",
+        status: "running",
+        topic: "如何提升 Agent 的长期运行能力？",
+        participants: [
+          {
+            id: "product",
+            title: "产品经理",
+            model: "openrouter-claude-sonnet-4",
+          },
+          {
+            id: "engineering",
+            title: "高级 Agent 研发工程师",
+            model: "openrouter-gemini-3.1-flash",
+          },
+        ],
+        latestSummary: null,
+        firstCompleted: false,
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    new LarkObjectBindingsRepo(handle.storage.db).upsert({
+      id: "binding_legacy_episode",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      internalObjectKind: "think_tank_episode_card",
+      internalObjectId: "think_tank:tt_1:episode:ep_1",
+      larkMessageId: "om_tt_episode_legacy",
+      larkOpenMessageId: "omt_tt_episode_legacy",
+      larkCardId: "card_tt_episode_legacy",
+      threadRootMessageId: "omt_tt_main_1",
+      lastSequence: 0,
+      status: "active",
+    });
+
+    bus.publish(
+      makeThinkTankEnvelope({
+        type: "episode_started",
+        episodeId: "ep_1",
+        episodeSequence: 1,
+        prompt: "请先讨论最关键的长期运行能力。",
+        plannedSteps: [
+          {
+            key: "round_1",
+            kind: "participant_round",
+            title: "Round 1 · 独立观点",
+            order: 10,
+          },
+        ],
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(reply).not.toHaveBeenCalled();
+    expect(updateCard).toHaveBeenCalledTimes(1);
+
+    bus.publish(
+      makeThinkTankEnvelope({
+        type: "episode_step_upserted",
+        episodeId: "ep_1",
+        episodeSequence: 1,
+        step: {
+          key: "round_1",
+          kind: "participant_round",
+          title: "Round 1 · 独立观点",
+          order: 10,
+          status: "completed",
+          participantRound: {
+            roundIndex: 1,
+            entries: [
+              {
+                participantId: "product",
+                title: "产品经理",
+                model: "openrouter-claude-sonnet-4",
+                preview: "应该先解决用户信任",
+                content: "应该先解决用户信任和过程可见性。",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(reply).not.toHaveBeenCalled();
+    expect(updateCard).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify((updateCard.mock.calls as unknown[][]).at(1)?.[0])).toContain(
+      "应该先解决用户信任和过程可见性",
+    );
+
+    const legacyEpisodeBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "think_tank_episode_card",
+      internalObjectId: "think_tank:tt_1:episode:ep_1",
+    });
+    expect(legacyEpisodeBinding).toBeNull();
+
+    const stepBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "think_tank_step_card",
+      internalObjectId: "think_tank:tt_1:episode:ep_1:step:round_1",
+    });
+    expect(stepBinding?.larkMessageId).toBe("om_tt_episode_legacy");
+    expect(stepBinding?.larkCardId).toBe("card_tt_episode_legacy");
+
+    await runtime.shutdown();
+  });
+
+  test("replays queued episode deliveries as ordered step cards once the thread binding exists", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_chat', 'conv_1', 'branch_1', 'agent_1', 'chat', 'active', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z');
+
+      INSERT INTO think_tank_consultations (
+        id, source_session_id, source_conversation_id, source_branch_id, owner_agent_id,
+        moderator_session_id, moderator_model_id, status, topic, context_text, created_at, updated_at
+      )
+      VALUES (
+        'tt_1', 'sess_chat', 'conv_1', 'branch_1', 'agent_1',
+        'sess_chat', 'codex-gpt5.4', 'running', '如何提升 Agent 的长期运行能力？',
+        'Need stable long-running execution.', '2026-04-21T00:00:00.000Z', '2026-04-21T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { card_id: "card_tt_main_1" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_tt_step_1" } });
+    const createMessage = vi.fn(async () => ({
+      data: {
+        message_id: "om_tt_main_1",
+        open_message_id: "omt_tt_main_1",
+      },
+    }));
+    const reply = vi.fn().mockResolvedValueOnce({
+      data: {
+        message_id: "om_tt_step_1",
+        open_message_id: "omt_tt_step_1",
+      },
+    });
+    const updateCard = vi.fn(async () => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: updateCard,
+                  },
+                  cardElement: {
+                    content: vi.fn(async () => ({})),
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeThinkTankEnvelope({
+        type: "consultation_upserted",
+        status: "running",
+        topic: "如何提升 Agent 的长期运行能力？",
+        participants: [
+          {
+            id: "product",
+            title: "产品经理",
+            model: "openrouter-claude-sonnet-4",
+          },
+          {
+            id: "engineering",
+            title: "高级 Agent 研发工程师",
+            model: "openrouter-gemini-3.1-flash",
+          },
+        ],
+        latestSummary: null,
+        firstCompleted: false,
+      }),
+    );
+    bus.publish(
+      makeThinkTankEnvelope({
+        type: "episode_started",
+        episodeId: "ep_1",
+        episodeSequence: 1,
+        prompt: "请先讨论最关键的长期运行能力。",
+        plannedSteps: [
+          {
+            key: "round_1",
+            kind: "participant_round",
+            title: "Round 1 · 独立观点",
+            order: 10,
+          },
+        ],
+      }),
+    );
+    bus.publish(
+      makeThinkTankEnvelope({
+        type: "episode_step_upserted",
+        episodeId: "ep_1",
+        episodeSequence: 1,
+        step: {
+          key: "round_1",
+          kind: "participant_round",
+          title: "Round 1 · 独立观点",
+          order: 10,
+          status: "completed",
+          participantRound: {
+            roundIndex: 1,
+            entries: [
+              {
+                participantId: "product",
+                title: "产品经理",
+                model: "openrouter-claude-sonnet-4",
+                preview: "应该先解决用户信任",
+                content: "应该先解决用户信任和过程可见性。",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(createMessage).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledTimes(1);
+
+    const stepBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "think_tank_step_card",
+      internalObjectId: "think_tank:tt_1:episode:ep_1:step:round_1",
+    });
+    expect(stepBinding?.larkMessageId).toBe("om_tt_step_1");
 
     await runtime.shutdown();
   });

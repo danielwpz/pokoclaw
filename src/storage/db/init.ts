@@ -47,9 +47,15 @@ export function initSchemaIfNeeded(
     }
 
     const appliedAt = new Date().toISOString();
+    const foreignKeysEnabled = isForeignKeysEnabled(sqlite);
+    if (foreignKeysEnabled) {
+      sqlite.pragma("foreign_keys = OFF");
+    }
+
     sqlite.exec("BEGIN IMMEDIATE TRANSACTION");
     try {
       sqlite.exec(migration.sql);
+      assertNoForeignKeyViolations(sqlite, migration.version);
       sqlite
         .prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)")
         .run(migration.version, appliedAt);
@@ -57,6 +63,10 @@ export function initSchemaIfNeeded(
     } catch (error) {
       sqlite.exec("ROLLBACK");
       throw error;
+    } finally {
+      if (foreignKeysEnabled) {
+        sqlite.pragma("foreign_keys = ON");
+      }
     }
   }
 }
@@ -74,4 +84,29 @@ function listMigrationFiles(migrationsDirPath: string): MigrationFile[] {
       version: entry.slice(0, -".sql".length),
       sql: readFileSync(path.join(migrationsDirPath, entry), "utf8"),
     }));
+}
+
+function isForeignKeysEnabled(sqlite: Database.Database): boolean {
+  const value = sqlite.pragma("foreign_keys", { simple: true });
+  return value === 1;
+}
+
+function assertNoForeignKeyViolations(sqlite: Database.Database, migrationVersion: string): void {
+  const violations = sqlite.pragma("foreign_key_check") as Array<{
+    table: string;
+    rowid: number;
+    parent: string;
+    fkid: number;
+  }>;
+  if (violations.length === 0) {
+    return;
+  }
+
+  const details = violations
+    .map(
+      (violation) =>
+        `${violation.table}(rowid=${String(violation.rowid)}) -> ${violation.parent} [fk=${String(violation.fkid)}]`,
+    )
+    .join(", ");
+  throw new Error(`Migration ${migrationVersion} introduced foreign key violations: ${details}`);
 }
