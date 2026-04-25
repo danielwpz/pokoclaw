@@ -13,6 +13,7 @@ import {
 
 const logger = createSubsystemLogger("think-tank/runner");
 const DEFAULT_MAX_MODERATOR_PASSES = 3;
+const MAX_MODERATOR_PASSES = 10;
 
 export interface ThinkTankEpisodeRunnerIngress {
   submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult>;
@@ -43,7 +44,7 @@ export class ThinkTankEpisodeRunner {
   private readonly maxModeratorPasses: number;
 
   constructor(private readonly deps: ThinkTankEpisodeRunnerDependencies) {
-    this.maxModeratorPasses = Math.max(1, deps.maxModeratorPasses ?? DEFAULT_MAX_MODERATOR_PASSES);
+    this.maxModeratorPasses = normalizeMaxModeratorPasses(deps.maxModeratorPasses);
   }
 
   async runEpisode(input: {
@@ -174,6 +175,17 @@ export class ThinkTankEpisodeRunner {
 
     return this.deps.ingress.submitMessage(messageInput);
   }
+}
+
+function normalizeMaxModeratorPasses(value: number | undefined): number {
+  const candidate = value ?? DEFAULT_MAX_MODERATOR_PASSES;
+  if (Number.isNaN(candidate)) {
+    return DEFAULT_MAX_MODERATOR_PASSES;
+  }
+  if (!Number.isFinite(candidate)) {
+    return candidate > 0 ? MAX_MODERATOR_PASSES : 1;
+  }
+  return Math.min(MAX_MODERATOR_PASSES, Math.max(1, Math.trunc(candidate)));
 }
 
 function extractThinkTankEpisodeCompletionFromRun(

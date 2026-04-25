@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -77,10 +77,14 @@ export class ThinkTankEpisodesRepo {
       this.db
         .select()
         .from(thinkTankEpisodes)
-        .where(eq(thinkTankEpisodes.consultationId, consultationId))
+        .where(
+          and(
+            eq(thinkTankEpisodes.consultationId, consultationId),
+            eq(thinkTankEpisodes.status, "running"),
+          ),
+        )
         .orderBy(desc(thinkTankEpisodes.sequence), desc(thinkTankEpisodes.startedAt))
-        .all()
-        .find((episode) => episode.status === "running") ?? null
+        .get() ?? null
     );
   }
 

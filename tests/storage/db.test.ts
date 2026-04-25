@@ -245,6 +245,37 @@ describe("storage db bootstrap", () => {
         "foreign_key_check",
       ) as Array<unknown>;
       expect(foreignKeyViolations).toHaveLength(0);
+
+      const migratedTaskRun = migratedStorage.sqlite
+        .prepare("SELECT id, run_type, status, execution_session_id FROM task_runs WHERE id = ?")
+        .get("run_1");
+      expect(migratedTaskRun).toEqual({
+        id: "run_1",
+        run_type: "delegate",
+        status: "completed",
+        execution_session_id: "sess_1",
+      });
+
+      const migratedThread = migratedStorage.sqlite
+        .prepare(
+          "SELECT id, subject_kind, root_task_run_id, root_think_tank_consultation_id FROM channel_threads WHERE id = ?",
+        )
+        .get("thread_1");
+      expect(migratedThread).toEqual({
+        id: "thread_1",
+        subject_kind: "task",
+        root_task_run_id: "run_1",
+        root_think_tank_consultation_id: null,
+      });
+
+      const migratedHarnessEvent = migratedStorage.sqlite
+        .prepare("SELECT id, task_run_id, event_type FROM harness_events WHERE id = ?")
+        .get("evt_1");
+      expect(migratedHarnessEvent).toEqual({
+        id: "evt_1",
+        task_run_id: "run_1",
+        event_type: "tool_call",
+      });
     } finally {
       migratedStorage.close();
       await rm(databasePath, { force: true });

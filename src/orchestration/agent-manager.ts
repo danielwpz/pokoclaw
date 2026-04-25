@@ -85,6 +85,7 @@ import {
 } from "@/src/tasks/background-task-payload.js";
 import { TaskExecutionRunner, type TaskExecutionRunResult } from "@/src/tasks/runner.js";
 import type { ThinkTankEpisodeSubmitStep } from "@/src/think-tank/episode-completion.js";
+import { applyThinkTankParticipantReplyFallbackLimit } from "@/src/think-tank/reply-limits.js";
 import { ThinkTankEpisodeRunner } from "@/src/think-tank/runner.js";
 import {
   buildThinkTankModeratorSetupEnvelope,
@@ -1107,7 +1108,17 @@ export class AgentManager {
         `Think tank participant ${participant.participantId} completed without assistant text.`,
       );
     }
-    const normalizedReply = reply.trim();
+    const limitedReply = applyThinkTankParticipantReplyFallbackLimit({ reply: reply.trim() });
+    if (limitedReply.truncated) {
+      logger.warn("truncated think tank participant reply at fallback limit", {
+        consultationId: consultation.id,
+        participantId: participant.participantId,
+        continuationSessionId: participant.continuationSessionId,
+        originalCharCount: limitedReply.originalCharCount,
+        maxChars: limitedReply.maxChars,
+      });
+    }
+    const normalizedReply = limitedReply.reply;
     const existingRoundStep = findThinkTankParticipantRoundStepBySlot({
       steps: runningEpisode.result.steps,
       ...(input.step?.key === undefined ? {} : { key: input.step.key }),

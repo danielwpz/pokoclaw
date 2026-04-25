@@ -1,7 +1,5 @@
 import type { ThinkTankParticipantAssignment } from "@/src/think-tank/types.js";
 
-export const THINK_TANK_PARTICIPANT_MAX_WORDS = 500;
-
 export interface BuildThinkTankModeratorSetupEnvelopeInput {
   consultationId: string;
   topic: string;
@@ -66,6 +64,9 @@ export function buildThinkTankModeratorSetupEnvelope(
   );
   lines.push(
     "    Use consult_participant for advisor turns. Pass stable round metadata in the step field for every advisor call in the same round.",
+  );
+  lines.push(
+    "    In each consult_participant prompt, include a response length budget that matches the question complexity.",
   );
   lines.push("    Call finish_think_tank_episode exactly once when this episode is done.");
   lines.push("  </rules>");
@@ -135,6 +136,9 @@ export function buildThinkTankEpisodeKickoffEnvelope(
     "    Every consult_participant call in the same round must reuse the same step metadata: roundIndex plus stable key/title/order when available.",
   );
   lines.push(
+    "    Set an explicit advisor response length budget in each consult_participant prompt; use shorter budgets for quick judgment and larger budgets for deep analysis.",
+  );
+  lines.push(
     "    When using consult_participant for exchange, include all other participants' previous-round outputs in the prompt you send.",
   );
   lines.push(
@@ -175,7 +179,8 @@ export function buildThinkTankParticipantConsultEnvelope(input: { prompt: string
   return [
     "<think_tank_consult_request>",
     "  <instructions>",
-    `    Respond in at most ${String(THINK_TANK_PARTICIPANT_MAX_WORDS)} words.`,
+    "    Follow the moderator's requested response length budget when one is present.",
+    "    If no budget is provided, answer concisely but completely.",
     "    Be direct. Do not repeat the full prompt. Focus on the requested analysis.",
     "  </instructions>",
     "  <prompt>",

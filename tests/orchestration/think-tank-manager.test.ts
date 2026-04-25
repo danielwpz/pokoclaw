@@ -10,6 +10,7 @@ import { ThinkTankConsultationsRepo } from "@/src/storage/repos/think-tank-consu
 import { ThinkTankEpisodesRepo } from "@/src/storage/repos/think-tank-episodes.repo.js";
 import { ThinkTankParticipantsRepo } from "@/src/storage/repos/think-tank-participants.repo.js";
 import type { ThinkTankEpisodeSubmitStep } from "@/src/think-tank/episode-completion.js";
+import { THINK_TANK_PARTICIPANT_REPLY_FALLBACK_MAX_CHARS } from "@/src/think-tank/reply-limits.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -711,6 +712,54 @@ describe("AgentManager think tank runtime contracts", () => {
       expect(episode?.resultJson).toContain('"key":"round_1"');
 
       unsubscribe();
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("applies a fallback cap to oversized participant replies", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      seedFixture(handle);
+      seedRunningThinkTankFixture(handle);
+      const oversizedReply = "x".repeat(THINK_TANK_PARTICIPANT_REPLY_FALLBACK_MAX_CHARS + 50);
+
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: async (input) =>
+            makeParticipantConsultRun({
+              sessionId: input.sessionId,
+              scenario: input.scenario,
+              reply: oversizedReply,
+            }),
+          submitApprovalDecision: () => true,
+        },
+        outboundEventBus: bus,
+        models: createModelSource(),
+      });
+
+      const result = await manager.consultThinkTankParticipant({
+        moderatorSessionId: "sess_tt_moderator",
+        participantId: "product_lead",
+        prompt: "Give your independent view with a reasonable budget.",
+        step: {
+          key: "round_1",
+          title: "Round 1",
+          order: 10,
+          roundIndex: 1,
+        },
+      });
+
+      expect(result.reply.length).toBeLessThanOrEqual(
+        THINK_TANK_PARTICIPANT_REPLY_FALLBACK_MAX_CHARS,
+      );
+      expect(result.reply).toContain("[truncated by system safety limit:");
+
+      const episode = new ThinkTankEpisodesRepo(handle.storage.db).getById("ep_running");
+      expect(episode?.resultJson).toContain("[truncated by system safety limit:");
     } finally {
       await destroyTestDatabase(handle);
     }
