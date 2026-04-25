@@ -16,6 +16,12 @@ export const APPROVAL_SESSION_TOOL_ALLOWLIST = [
   "review_permission_request",
 ] as const;
 
+export const THINK_TANK_MODERATOR_TOOL_ALLOWLIST = [
+  "consult_participant",
+  "upsert_think_tank_step",
+  "finish_think_tank_episode",
+] as const;
+
 export function isToolAllowedForSession(input: {
   purpose: string;
   agentKind?: string | null;
@@ -25,6 +31,16 @@ export function isToolAllowedForSession(input: {
     return APPROVAL_SESSION_TOOL_ALLOWLIST.includes(
       input.toolName as (typeof APPROVAL_SESSION_TOOL_ALLOWLIST)[number],
     );
+  }
+
+  if (input.purpose === "think_tank_moderator") {
+    return THINK_TANK_MODERATOR_TOOL_ALLOWLIST.includes(
+      input.toolName as (typeof THINK_TANK_MODERATOR_TOOL_ALLOWLIST)[number],
+    );
+  }
+
+  if (input.purpose === "think_tank_participant") {
+    return false;
   }
 
   if (input.toolName === "create_subagent") {
@@ -51,12 +67,28 @@ export function isToolAllowedForSession(input: {
     return input.purpose === "task";
   }
 
+  if (
+    input.toolName === "get_think_tank_capabilities" ||
+    input.toolName === "consult_think_tank" ||
+    input.toolName === "get_think_tank_status"
+  ) {
+    return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
+  }
+
   return true;
 }
 
 export function getAllowedToolsForSessionPurpose(purpose: string): readonly string[] | null {
   if (purpose === "approval") {
     return APPROVAL_SESSION_TOOL_ALLOWLIST;
+  }
+
+  if (purpose === "think_tank_moderator") {
+    return THINK_TANK_MODERATOR_TOOL_ALLOWLIST;
+  }
+
+  if (purpose === "think_tank_participant") {
+    return [];
   }
 
   return null;

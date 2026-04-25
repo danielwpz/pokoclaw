@@ -18,6 +18,9 @@ import {
   subagentCreationRequests,
   taskRuns,
   taskWorkstreams,
+  thinkTankConsultations,
+  thinkTankEpisodes,
+  thinkTankParticipants,
 } from "@/src/storage/schema/tables.js";
 
 export const channelInstancesRelations = relations(channelInstances, ({ many }) => ({
@@ -37,6 +40,7 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   sessions: many(sessions),
   taskWorkstreams: many(taskWorkstreams),
   taskRuns: many(taskRuns),
+  thinkTankConsultations: many(thinkTankConsultations),
   harnessEvents: many(harnessEvents),
   subagentCreationRequests: many(subagentCreationRequests),
 }));
@@ -52,6 +56,7 @@ export const conversationBranchesRelations = relations(conversationBranches, ({ 
   sessions: many(sessions),
   taskWorkstreams: many(taskWorkstreams),
   taskRuns: many(taskRuns),
+  thinkTankConsultations: many(thinkTankConsultations),
   harnessEvents: many(harnessEvents),
 }));
 
@@ -124,6 +129,10 @@ export const channelThreadsRelations = relations(channelThreads, ({ one }) => ({
     fields: [channelThreads.rootTaskRunId],
     references: [taskRuns.id],
   }),
+  rootThinkTankConsultation: one(thinkTankConsultations, {
+    fields: [channelThreads.rootThinkTankConsultationId],
+    references: [thinkTankConsultations.id],
+  }),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one, many }) => ({
@@ -140,6 +149,13 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
     references: [agents.id],
   }),
   messages: many(messages),
+  sourceThinkTankConsultations: many(thinkTankConsultations, {
+    relationName: "think_tank_consultation_source_session",
+  }),
+  moderatorThinkTankConsultation: many(thinkTankConsultations, {
+    relationName: "think_tank_consultation_moderator_session",
+  }),
+  thinkTankParticipantSessions: many(thinkTankParticipants),
   approvals: many(approvalLedger),
   subagentCreationRequests: many(subagentCreationRequests),
   harnessEvents: many(harnessEvents),
@@ -201,6 +217,55 @@ export const taskRunsRelations = relations(taskRuns, ({ one }) => ({
   cronJob: one(cronJobs, {
     fields: [taskRuns.cronJobId],
     references: [cronJobs.id],
+  }),
+}));
+
+export const thinkTankConsultationsRelations = relations(
+  thinkTankConsultations,
+  ({ one, many }) => ({
+    sourceSession: one(sessions, {
+      fields: [thinkTankConsultations.sourceSessionId],
+      references: [sessions.id],
+      relationName: "think_tank_consultation_source_session",
+    }),
+    sourceConversation: one(conversations, {
+      fields: [thinkTankConsultations.sourceConversationId],
+      references: [conversations.id],
+    }),
+    sourceBranch: one(conversationBranches, {
+      fields: [thinkTankConsultations.sourceBranchId],
+      references: [conversationBranches.id],
+    }),
+    ownerAgent: one(agents, {
+      fields: [thinkTankConsultations.ownerAgentId],
+      references: [agents.id],
+    }),
+    moderatorSession: one(sessions, {
+      fields: [thinkTankConsultations.moderatorSessionId],
+      references: [sessions.id],
+      relationName: "think_tank_consultation_moderator_session",
+    }),
+    participants: many(thinkTankParticipants),
+    episodes: many(thinkTankEpisodes),
+    channelThreads: many(channelThreads),
+  }),
+);
+
+export const thinkTankParticipantsRelations = relations(thinkTankParticipants, ({ one }) => ({
+  consultation: one(thinkTankConsultations, {
+    fields: [thinkTankParticipants.consultationId],
+    references: [thinkTankConsultations.id],
+  }),
+  continuationSession: one(sessions, {
+    fields: [thinkTankParticipants.continuationSessionId],
+    references: [sessions.id],
+  }),
+}));
+
+export const thinkTankEpisodesRelations = relations(thinkTankEpisodes, ({ one }) => ({
+  consultation: one(thinkTankConsultations, {
+    fields: [thinkTankEpisodes.consultationId],
+    references: [thinkTankConsultations.id],
   }),
 }));
 

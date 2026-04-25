@@ -96,6 +96,15 @@ export interface CreateLarkChannelRuntimeInput {
       finishedAt?: Date;
     }): void;
   };
+  thinkTanks?: {
+    continueConsultation(input: { consultationId: string; prompt: string; createdAt?: Date }): {
+      accepted: true;
+      consultationId: string;
+      episodeId: string;
+      episodeSequence: number;
+      status: "running";
+    };
+  };
 }
 
 export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): LarkChannelRuntime {
@@ -114,6 +123,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
     ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
     ...(input.taskThreads == null ? {} : { taskThreads: input.taskThreads }),
+    ...(input.thinkTanks == null ? {} : { thinkTanks: input.thinkTanks }),
     steerReactionState,
   });
   const outbound = createLarkOutboundRuntime({

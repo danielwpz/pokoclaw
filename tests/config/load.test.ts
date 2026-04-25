@@ -177,6 +177,7 @@ describe("config loader", () => {
       chat: [],
       compaction: [],
       task: [],
+      thinkTankAdvisor: [],
       meditationBucket: [],
       meditationConsolidation: [],
     });

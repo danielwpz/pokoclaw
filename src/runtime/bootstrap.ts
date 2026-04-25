@@ -128,6 +128,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     storage: input.storage,
     ingress,
     outboundEventBus,
+    models: liveModels,
     subagentProvisioner:
       input.subagentProvisioner ??
       createLarkSubagentConversationSurfaceProvisioner({
@@ -194,6 +195,14 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       completeTaskExecution: (taskInput) => manager.completeTaskExecution(taskInput),
       blockTaskExecution: (taskInput) => manager.blockTaskExecution(taskInput),
       failTaskExecution: (taskInput) => manager.failTaskExecution(taskInput),
+    },
+    thinkTanks: {
+      continueConsultation: ({ consultationId, prompt, createdAt }) =>
+        manager.continueThinkTankConsultation({
+          consultationId,
+          prompt,
+          ...(createdAt === undefined ? {} : { createdAt }),
+        }),
     },
   });
 

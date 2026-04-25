@@ -4,6 +4,15 @@ import { Check, Clone, Default } from "@sinclair/typebox/value";
 import type { SecurityConfig } from "@/src/config/schema.js";
 import type { RunLiveObservabilitySnapshot } from "@/src/runtime/run-observability.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import type {
+  ThinkTankCapabilities,
+  ThinkTankConsultationStatusView,
+  ThinkTankEpisodeStepSnapshot,
+  ThinkTankEpisodeStepUpsertInput,
+  ThinkTankParticipantAssignment,
+  ThinkTankParticipantDefinition,
+  ThinkTankParticipantRoundStepHint,
+} from "@/src/think-tank/types.js";
 
 export type ToolContentBlock =
   | {
@@ -18,6 +27,12 @@ export type ToolContentBlock =
 export interface ToolResult<TDetails = unknown> {
   content: ToolContentBlock[];
   details?: TDetails;
+  control?: {
+    stopRun?: {
+      reason: string;
+      payload?: unknown;
+    };
+  };
 }
 
 export interface ToolExecutionContext {
@@ -26,6 +41,7 @@ export interface ToolExecutionContext {
   sessionPurpose?: string;
   ownerAgentId?: string | null;
   agentKind?: string | null;
+  currentModelId?: string | null;
   cwd?: string;
   securityConfig: SecurityConfig;
   storage: StorageDb;
@@ -94,6 +110,50 @@ export interface ToolRuntimeControl {
     accepted: boolean;
     taskRunId: string;
   }>;
+  getThinkTankCapabilities?(input: {
+    sourceSessionId: string;
+  }): Promise<ThinkTankCapabilities> | ThinkTankCapabilities;
+  startThinkTankConsultation?(input: {
+    sourceSessionId: string;
+    sourceConversationId: string;
+    sourceBranchId: string;
+    ownerAgentId: string | null;
+    moderatorModelId: string;
+    topic: string;
+    context: string;
+    participants: ThinkTankParticipantDefinition[];
+  }): Promise<{
+    accepted: true;
+    consultationId: string;
+    status: "running";
+    participants: ThinkTankParticipantAssignment[];
+  }>;
+  consultThinkTankParticipant?(input: {
+    moderatorSessionId: string;
+    participantId: string;
+    prompt: string;
+    step?: ThinkTankParticipantRoundStepHint;
+  }): Promise<{
+    participantId: string;
+    title: string | null;
+    model: string;
+    continuationSessionId: string;
+    reply: string;
+  }>;
+  upsertThinkTankEpisodeStep?(input: {
+    moderatorSessionId: string;
+    step: ThinkTankEpisodeStepUpsertInput;
+  }):
+    | Promise<{
+        step: ThinkTankEpisodeStepSnapshot;
+      }>
+    | {
+        step: ThinkTankEpisodeStepSnapshot;
+      };
+  getThinkTankStatus?(input: {
+    sourceSessionId: string;
+    consultationId: string;
+  }): Promise<ThinkTankConsultationStatusView | null> | ThinkTankConsultationStatusView | null;
   suppressBackgroundTaskCompletionNotice?(input: { taskRunId: string }): void;
 }
 

@@ -31,6 +31,8 @@ import {
   buildLarkRenderedRunCardPages,
   buildLarkRenderedSubagentCreationRequestCard,
   buildLarkRenderedTaskCard,
+  buildLarkRenderedThinkTankMainCard,
+  buildLarkRenderedThinkTankStepCard,
   describeTaskRunKind,
   describeTaskRunTerminal,
   getLarkTaskTerminalMessagePresentation,
@@ -45,6 +47,22 @@ import {
   shouldHandleLarkTaskRunEvent,
 } from "@/src/channels/lark/run-state.js";
 import type { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
+import {
+  buildThinkTankEpisodeCardObjectId,
+  buildThinkTankMainCardObjectId,
+  buildThinkTankStepCardObjectId,
+  ensureThinkTankThreadBindingFromMainCard,
+  listThinkTankThreadDeliveryTargets,
+  scheduleKnownThinkTankThreadDeliveries,
+  scheduleThinkTankEventDeliveries,
+  THINK_TANK_EPISODE_DELIVERY_PREFIX,
+  THINK_TANK_MAIN_DELIVERY_PREFIX,
+  THINK_TANK_STEP_DELIVERY_PREFIX,
+} from "@/src/channels/lark/think-tank-delivery.js";
+import {
+  type LarkThinkTankConsultationState,
+  reduceLarkThinkTankState,
+} from "@/src/channels/lark/think-tank-state.js";
 import type {
   OrchestratedOutboundEventEnvelope,
   OrchestratedRuntimeEventEnvelope,
@@ -69,6 +87,11 @@ const LARK_CARD_LOG_PREVIEW_MAX_LENGTH = 600;
 const LARK_CARDKIT_RECONCILE_RETRY_DELAY_MS = 1000;
 const TASK_STATUS_DELIVERY_PREFIX = "task_status:";
 const STEER_CONFIRMED_REACTION_EMOJI = "OK";
+const THINK_TANK_MAIN_CARD_OBJECT_KIND = "think_tank_card";
+const THINK_TANK_EPISODE_CARD_OBJECT_KIND = "think_tank_episode_card";
+const THINK_TANK_STEP_CARD_OBJECT_KIND = "think_tank_step_card";
+const THINK_TANK_MAIN_CARD_CREATE_TIMEOUT_MS = 15_000;
+const THINK_TANK_MAIN_MESSAGE_CREATE_TIMEOUT_MS = 15_000;
 
 interface LarkCardElementContentInput {
   path: {
@@ -134,6 +157,7 @@ export function createLarkOutboundRuntime(
   const runStates = new Map<string, LarkRunState>();
   const taskStates = new Map<string, LarkRunState>();
   const approvalStates = new Map<string, LarkApprovalState>();
+  const thinkTankStates = new Map<string, LarkThinkTankConsultationState>();
   const activeRunSegmentByRunId = new Map<string, string>();
   const latestRunSegmentByRunId = new Map<string, string>();
   const nextRunSegmentIndexByRunId = new Map<string, number>();
@@ -241,6 +265,22 @@ export function createLarkOutboundRuntime(
         await flushRunCard(deliveryId.slice(4));
       } else if (deliveryId.startsWith(TASK_STATUS_DELIVERY_PREFIX)) {
         await flushTaskCard(deliveryId.slice(TASK_STATUS_DELIVERY_PREFIX.length));
+      } else if (deliveryId.startsWith(THINK_TANK_MAIN_DELIVERY_PREFIX)) {
+        await flushThinkTankMainCard(deliveryId.slice(THINK_TANK_MAIN_DELIVERY_PREFIX.length));
+      } else if (deliveryId.startsWith(THINK_TANK_EPISODE_DELIVERY_PREFIX)) {
+        const [consultationId, episodeId] = deliveryId
+          .slice(THINK_TANK_EPISODE_DELIVERY_PREFIX.length)
+          .split(":", 2);
+        if (consultationId != null && episodeId != null) {
+          await flushThinkTankEpisodeCard({ consultationId, episodeId });
+        }
+      } else if (deliveryId.startsWith(THINK_TANK_STEP_DELIVERY_PREFIX)) {
+        const [consultationId, episodeId, stepKey] = deliveryId
+          .slice(THINK_TANK_STEP_DELIVERY_PREFIX.length)
+          .split(":", 3);
+        if (consultationId != null && episodeId != null && stepKey != null) {
+          await flushThinkTankEpisodeCard({ consultationId, episodeId });
+        }
       } else if (deliveryId.startsWith("approval:")) {
         await flushApprovalCard(deliveryId.slice("approval:".length));
       } else if (deliveryId.startsWith("subagent:")) {
@@ -301,17 +341,20 @@ export function createLarkOutboundRuntime(
     }
 
     if (binding.larkCardId == null) {
+      const cardCreateInput = {
+        data: {
+          type: "card_json" as const,
+          data: bindingInput.cardJson,
+        },
+      };
       const createResp = await invokeLarkCardkitCallWithBusinessRetry({
         logger,
         operation: "card.create",
         logContext: bindingInput.logContext,
-        invoke: () =>
-          bindingInput.cardkit.card.create({
-            data: {
-              type: "card_json",
-              data: bindingInput.cardJson,
-            },
-          }),
+        ...(bindingInput.internalObjectKind === THINK_TANK_MAIN_CARD_OBJECT_KIND
+          ? { timeoutMs: THINK_TANK_MAIN_CARD_CREATE_TIMEOUT_MS }
+          : {}),
+        invoke: () => bindingInput.cardkit.card.create(cardCreateInput),
       });
       const larkCardId = createResp.data?.card_id ?? createResp.card_id ?? null;
       logger.debug("created lark cardkit card response", {
@@ -365,6 +408,9 @@ export function createLarkOutboundRuntime(
         surfaceObject: bindingInput.surfaceObject,
         larkCardId,
         larkMessageUuid: binding.larkMessageUuid,
+        ...(bindingInput.internalObjectKind === THINK_TANK_MAIN_CARD_OBJECT_KIND
+          ? { timeoutMs: THINK_TANK_MAIN_MESSAGE_CREATE_TIMEOUT_MS }
+          : {}),
       });
       const larkMessageId = response.data?.message_id ?? null;
       if (larkMessageId == null) {
@@ -1040,6 +1086,395 @@ export function createLarkOutboundRuntime(
     }
   };
 
+  const flushThinkTankMainCard = async (consultationId: string) => {
+    const state = thinkTankStates.get(consultationId);
+    if (state == null) {
+      return;
+    }
+
+    const surfaces = new ChannelSurfacesRepo(input.storage).listByConversationBranch({
+      channelType: LARK_CHANNEL_TYPE,
+      conversationId: state.conversationId,
+      branchId: state.branchId,
+    });
+
+    for (const surface of surfaces) {
+      const surfaceObject = parseSurfaceObject(surface.surfaceObjectJson);
+      const chatId = typeof surfaceObject.chat_id === "string" ? surfaceObject.chat_id : null;
+      if (chatId == null || chatId.length === 0) {
+        continue;
+      }
+
+      const client = input.clients.getOrCreate(surface.channelInstallationId);
+      const cardkit = getCardkitSdk(client);
+      const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
+      const internalObjectId = buildThinkTankMainCardObjectId(consultationId);
+      const existing = bindingsRepo.getByInternalObject({
+        channelInstallationId: surface.channelInstallationId,
+        internalObjectKind: THINK_TANK_MAIN_CARD_OBJECT_KIND,
+        internalObjectId,
+      });
+      const rendered = buildLarkRenderedThinkTankMainCard(state);
+      const snapshotKey = `${surface.channelInstallationId}:${THINK_TANK_MAIN_DELIVERY_PREFIX}${consultationId}`;
+      const snapshot = deliverySnapshots.get(snapshotKey) ?? null;
+      const shouldRenderUpdate =
+        snapshot == null || snapshot.structureSignature !== rendered.structureSignature;
+      const metadataJson = buildBindingMetadata(
+        {
+          consultationId,
+          role: "think_tank_main",
+          topic: state.topic,
+        },
+        existing?.metadataJson ?? null,
+      );
+      const bindingInput = {
+        bindingsRepo,
+        client,
+        cardkit,
+        channelInstallationId: surface.channelInstallationId,
+        conversationId: state.conversationId,
+        branchId: state.branchId,
+        internalObjectKind: THINK_TANK_MAIN_CARD_OBJECT_KIND,
+        internalObjectId,
+        chatId,
+        surfaceObject,
+        cardJson: JSON.stringify(rendered.card),
+        status: "active" as const,
+        metadataJson,
+        logContext: {
+          consultationId,
+          cardRole: "think_tank_main",
+        },
+      };
+
+      if (existing?.larkCardId == null || existing.larkMessageId == null) {
+        const binding = await ensureInteractiveCardReferenceBinding({
+          ...bindingInput,
+          lastSequence: 0,
+        });
+        if (binding == null) {
+          continue;
+        }
+        deliverySnapshots.set(snapshotKey, {
+          structureSignature: rendered.structureSignature,
+          activeAssistantElementId: null,
+          activeAssistantText: "",
+        });
+        ensureThinkTankThreadBindingFromMainCard({
+          storage: input.storage,
+          channelInstallationId: surface.channelInstallationId,
+          consultationId,
+          conversationId: state.conversationId,
+          binding,
+          chatId,
+        });
+        scheduleKnownThinkTankThreadDeliveries({
+          state,
+          consultationId,
+          bumpVersionAndSchedule,
+        });
+        continue;
+      }
+
+      ensureThinkTankThreadBindingFromMainCard({
+        storage: input.storage,
+        channelInstallationId: surface.channelInstallationId,
+        consultationId,
+        conversationId: state.conversationId,
+        binding: existing,
+        chatId,
+      });
+      scheduleKnownThinkTankThreadDeliveries({
+        state,
+        consultationId,
+        bumpVersionAndSchedule,
+      });
+
+      if (!shouldRenderUpdate || existing.larkCardId == null) {
+        continue;
+      }
+
+      const sequence = getNextCardkitSequence(existing);
+      const larkCardId = existing.larkCardId;
+      if (larkCardId == null) {
+        continue;
+      }
+      const mutation = await invokeSequencedLarkCardkitMutation({
+        logger,
+        operation: "card.update",
+        sequence,
+        logContext: {
+          consultationId,
+          cardRole: "think_tank_main",
+          channelInstallationId: surface.channelInstallationId,
+          larkCardId,
+          sequence,
+        },
+        invoke: () =>
+          cardkit.card.update({
+            path: { card_id: larkCardId },
+            data: {
+              card: {
+                type: "card_json",
+                data: JSON.stringify(rendered.card),
+              },
+              sequence,
+            },
+          }),
+      });
+      if (mutation.kind === "reconcile") {
+        scheduleCardkitSequenceReconcile({
+          bindingsRepo,
+          channelInstallationId: surface.channelInstallationId,
+          internalObjectKind: THINK_TANK_MAIN_CARD_OBJECT_KIND,
+          internalObjectId,
+          metadataJson,
+          nextSequenceFloor: mutation.nextSequenceFloor,
+          deliveryId: `${THINK_TANK_MAIN_DELIVERY_PREFIX}${consultationId}`,
+          logContext: {
+            consultationId,
+            cardRole: "think_tank_main",
+            channelInstallationId: surface.channelInstallationId,
+            larkCardId,
+            sequence,
+          },
+          reason: mutation.reason,
+        });
+        continue;
+      }
+
+      bindingsRepo.updateDeliveryState({
+        channelInstallationId: surface.channelInstallationId,
+        internalObjectKind: THINK_TANK_MAIN_CARD_OBJECT_KIND,
+        internalObjectId,
+        lastSequence: sequence,
+        status: "active",
+        metadataJson,
+      });
+      deliverySnapshots.set(snapshotKey, {
+        structureSignature: rendered.structureSignature,
+        activeAssistantElementId: null,
+        activeAssistantText: "",
+      });
+    }
+  };
+
+  const flushThinkTankEpisodeCard = async (inputCard: {
+    consultationId: string;
+    episodeId: string;
+  }) => {
+    const consultation = thinkTankStates.get(inputCard.consultationId);
+    const episode = consultation?.episodes.get(inputCard.episodeId) ?? null;
+    if (consultation == null || episode == null) {
+      return;
+    }
+
+    const targets = listThinkTankThreadDeliveryTargets(input.storage, {
+      consultationId: inputCard.consultationId,
+      conversationId: consultation.conversationId,
+      branchId: consultation.branchId,
+    });
+    if (targets.length === 0) {
+      bumpVersionAndSchedule(`${THINK_TANK_MAIN_DELIVERY_PREFIX}${inputCard.consultationId}`);
+      bumpVersionAndSchedule(
+        `${THINK_TANK_EPISODE_DELIVERY_PREFIX}${inputCard.consultationId}:${inputCard.episodeId}`,
+        { delayMs: LARK_CARDKIT_RECONCILE_RETRY_DELAY_MS },
+      );
+      return;
+    }
+
+    for (const target of targets) {
+      const client = input.clients.getOrCreate(target.channelInstallationId);
+      const cardkit = getCardkitSdk(client);
+      const bindingsRepo = new LarkObjectBindingsRepo(input.storage);
+      const orderedSteps = [...episode.steps.values()].sort(
+        (left, right) => left.order - right.order,
+      );
+      for (const [stepIndex, step] of orderedSteps.entries()) {
+        const internalObjectId = buildThinkTankStepCardObjectId(
+          inputCard.consultationId,
+          inputCard.episodeId,
+          step.key,
+        );
+        const existing = findThinkTankStepBinding({
+          bindingsRepo,
+          channelInstallationId: target.channelInstallationId,
+          consultationId: inputCard.consultationId,
+          episodeId: inputCard.episodeId,
+          stepKey: step.key,
+          adoptLegacyEpisodePlaceholder: stepIndex === 0,
+        });
+        const rendered = buildLarkRenderedThinkTankStepCard({
+          consultation,
+          step,
+        });
+        const snapshotKey =
+          `${target.channelInstallationId}:` +
+          `${THINK_TANK_STEP_DELIVERY_PREFIX}${inputCard.consultationId}:${inputCard.episodeId}:${step.key}`;
+        const snapshot = deliverySnapshots.get(snapshotKey) ?? null;
+        const shouldRenderUpdate =
+          snapshot == null || snapshot.structureSignature !== rendered.structureSignature;
+        const metadataJson = buildBindingMetadata(
+          {
+            consultationId: inputCard.consultationId,
+            episodeId: inputCard.episodeId,
+            stepKey: step.key,
+            role: "think_tank_step",
+          },
+          existing?.metadataJson ?? null,
+        );
+
+        if (existing?.larkCardId == null || existing.larkMessageId == null) {
+          const binding = await ensureInteractiveCardReferenceBinding({
+            bindingsRepo,
+            client,
+            cardkit,
+            channelInstallationId: target.channelInstallationId,
+            conversationId: consultation.conversationId,
+            branchId: consultation.branchId,
+            internalObjectKind: THINK_TANK_STEP_CARD_OBJECT_KIND,
+            internalObjectId,
+            chatId: target.chatId,
+            surfaceObject: target.surfaceObject,
+            cardJson: JSON.stringify(rendered.card),
+            lastSequence: 0,
+            status: step.status === "failed" ? "finalized" : "active",
+            metadataJson,
+            logContext: {
+              consultationId: inputCard.consultationId,
+              episodeId: inputCard.episodeId,
+              stepKey: step.key,
+              cardRole: "think_tank_step",
+            },
+          });
+          if (binding == null) {
+            continue;
+          }
+          deliverySnapshots.set(snapshotKey, {
+            structureSignature: rendered.structureSignature,
+            activeAssistantElementId: null,
+            activeAssistantText: "",
+          });
+          continue;
+        }
+
+        if (!shouldRenderUpdate || existing.larkCardId == null) {
+          continue;
+        }
+
+        const sequence = getNextCardkitSequence(existing);
+        const larkCardId = existing.larkCardId;
+        if (larkCardId == null) {
+          continue;
+        }
+        const mutation = await invokeSequencedLarkCardkitMutation({
+          logger,
+          operation: "card.update",
+          sequence,
+          logContext: {
+            consultationId: inputCard.consultationId,
+            episodeId: inputCard.episodeId,
+            stepKey: step.key,
+            cardRole: "think_tank_step",
+            channelInstallationId: target.channelInstallationId,
+            larkCardId,
+            sequence,
+          },
+          invoke: () =>
+            cardkit.card.update({
+              path: { card_id: larkCardId },
+              data: {
+                card: {
+                  type: "card_json",
+                  data: JSON.stringify(rendered.card),
+                },
+                sequence,
+              },
+            }),
+        });
+        if (mutation.kind === "reconcile") {
+          scheduleCardkitSequenceReconcile({
+            bindingsRepo,
+            channelInstallationId: target.channelInstallationId,
+            internalObjectKind: THINK_TANK_STEP_CARD_OBJECT_KIND,
+            internalObjectId,
+            metadataJson,
+            nextSequenceFloor: mutation.nextSequenceFloor,
+            deliveryId: `${THINK_TANK_EPISODE_DELIVERY_PREFIX}${inputCard.consultationId}:${inputCard.episodeId}`,
+            logContext: {
+              consultationId: inputCard.consultationId,
+              episodeId: inputCard.episodeId,
+              stepKey: step.key,
+              cardRole: "think_tank_step",
+              channelInstallationId: target.channelInstallationId,
+              larkCardId,
+              sequence,
+            },
+            reason: mutation.reason,
+          });
+          continue;
+        }
+        bindingsRepo.updateDeliveryState({
+          channelInstallationId: target.channelInstallationId,
+          internalObjectKind: THINK_TANK_STEP_CARD_OBJECT_KIND,
+          internalObjectId,
+          lastSequence: sequence,
+          status: step.status === "failed" ? "finalized" : "active",
+          metadataJson,
+        });
+        deliverySnapshots.set(snapshotKey, {
+          structureSignature: rendered.structureSignature,
+          activeAssistantElementId: null,
+          activeAssistantText: "",
+        });
+      }
+    }
+  };
+
+  const findThinkTankStepBinding = (inputBinding: {
+    bindingsRepo: LarkObjectBindingsRepo;
+    channelInstallationId: string;
+    consultationId: string;
+    episodeId: string;
+    stepKey: string;
+    adoptLegacyEpisodePlaceholder: boolean;
+  }): LarkObjectBinding | null => {
+    const stepInternalObjectId = buildThinkTankStepCardObjectId(
+      inputBinding.consultationId,
+      inputBinding.episodeId,
+      inputBinding.stepKey,
+    );
+    const existingStepBinding = inputBinding.bindingsRepo.getByInternalObject({
+      channelInstallationId: inputBinding.channelInstallationId,
+      internalObjectKind: THINK_TANK_STEP_CARD_OBJECT_KIND,
+      internalObjectId: stepInternalObjectId,
+    });
+    if (existingStepBinding != null || !inputBinding.adoptLegacyEpisodePlaceholder) {
+      return existingStepBinding;
+    }
+
+    const legacyEpisodeObjectId = buildThinkTankEpisodeCardObjectId(
+      inputBinding.consultationId,
+      inputBinding.episodeId,
+    );
+    const legacyEpisodeBinding = inputBinding.bindingsRepo.getByInternalObject({
+      channelInstallationId: inputBinding.channelInstallationId,
+      internalObjectKind: THINK_TANK_EPISODE_CARD_OBJECT_KIND,
+      internalObjectId: legacyEpisodeObjectId,
+    });
+    if (legacyEpisodeBinding == null) {
+      return null;
+    }
+
+    return inputBinding.bindingsRepo.rebindInternalObject({
+      channelInstallationId: inputBinding.channelInstallationId,
+      fromInternalObjectKind: THINK_TANK_EPISODE_CARD_OBJECT_KIND,
+      fromInternalObjectId: legacyEpisodeObjectId,
+      toInternalObjectKind: THINK_TANK_STEP_CARD_OBJECT_KIND,
+      toInternalObjectId: stepInternalObjectId,
+    });
+  };
+
   const flushApprovalCard = async (approvalFlowId: string) => {
     const state = approvalStates.get(approvalFlowId);
     if (state == null) {
@@ -1682,6 +2117,19 @@ export function createLarkOutboundRuntime(
           return;
         }
 
+        if (envelope.kind === "think_tank_event") {
+          const nextState = reduceLarkThinkTankState(
+            thinkTankStates.get(envelope.consultationId) ?? null,
+            envelope,
+          );
+          thinkTankStates.set(envelope.consultationId, nextState);
+          scheduleThinkTankEventDeliveries({
+            envelope,
+            bumpVersionAndSchedule,
+          });
+          return;
+        }
+
         if (envelope.kind !== "runtime_event") {
           return;
         }
@@ -1868,7 +2316,60 @@ async function sendLarkInteractiveCardReferenceMessage(input: {
   surfaceObject: Record<string, unknown>;
   larkCardId: string;
   larkMessageUuid?: string | null;
+  timeoutMs?: number;
 }): Promise<LarkInteractiveMessageResponse> {
+  const request = buildLarkInteractiveCardReferenceMessageRequest({
+    chatId: input.chatId,
+    surfaceObject: input.surfaceObject,
+    larkCardId: input.larkCardId,
+    ...(input.larkMessageUuid === undefined ? {} : { larkMessageUuid: input.larkMessageUuid }),
+  });
+
+  if (request.kind === "reply") {
+    return withOptionalLarkMessageTimeout(
+      input.client.sdk.im.message.reply(request.input) as Promise<LarkInteractiveMessageResponse>,
+      input.timeoutMs,
+      "Lark interactive message.reply",
+    );
+  }
+
+  return withOptionalLarkMessageTimeout(
+    input.client.sdk.im.message.create(request.input) as Promise<LarkInteractiveMessageResponse>,
+    input.timeoutMs,
+    "Lark interactive message.create",
+  );
+}
+
+function buildLarkInteractiveCardReferenceMessageRequest(input: {
+  chatId: string;
+  surfaceObject: Record<string, unknown>;
+  larkCardId: string;
+  larkMessageUuid?: string | null;
+}):
+  | {
+      kind: "reply";
+      input: {
+        path: { message_id: string };
+        data: {
+          msg_type: "interactive";
+          content: string;
+          reply_in_thread: true;
+          uuid?: string;
+        };
+      };
+    }
+  | {
+      kind: "create";
+      input: {
+        params: { receive_id_type: "chat_id" };
+        data: {
+          receive_id: string;
+          msg_type: "interactive";
+          content: string;
+          uuid?: string;
+        };
+      };
+    } {
   const threadReplyMessageId = readStringValue(input.surfaceObject.reply_to_message_id);
   const content = JSON.stringify({
     type: "card",
@@ -1878,26 +2379,32 @@ async function sendLarkInteractiveCardReferenceMessage(input: {
   });
 
   if (threadReplyMessageId != null) {
-    return input.client.sdk.im.message.reply({
-      path: { message_id: threadReplyMessageId },
-      data: {
-        msg_type: "interactive",
-        content,
-        reply_in_thread: true,
-        ...(input.larkMessageUuid == null ? {} : { uuid: input.larkMessageUuid }),
+    return {
+      kind: "reply",
+      input: {
+        path: { message_id: threadReplyMessageId },
+        data: {
+          msg_type: "interactive",
+          content,
+          reply_in_thread: true,
+          ...(input.larkMessageUuid == null ? {} : { uuid: input.larkMessageUuid }),
+        },
       },
-    }) as Promise<LarkInteractiveMessageResponse>;
+    };
   }
 
-  return input.client.sdk.im.message.create({
-    params: { receive_id_type: "chat_id" },
-    data: {
-      receive_id: input.chatId,
-      msg_type: "interactive",
-      content,
-      ...(input.larkMessageUuid == null ? {} : { uuid: input.larkMessageUuid }),
+  return {
+    kind: "create",
+    input: {
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: input.chatId,
+        msg_type: "interactive",
+        content,
+        ...(input.larkMessageUuid == null ? {} : { uuid: input.larkMessageUuid }),
+      },
     },
-  }) as Promise<LarkInteractiveMessageResponse>;
+  };
 }
 
 async function sendLarkThreadMarkdownCard(input: {
@@ -2138,6 +2645,33 @@ function safeJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function withOptionalLarkMessageTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number | undefined,
+  label: string,
+): Promise<T> {
+  if (timeoutMs == null || timeoutMs <= 0) {
+    return promise;
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${String(timeoutMs)}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
 }
 
 function shouldCreateRunSegmentForEvent(envelope: OrchestratedRuntimeEventEnvelope): boolean {

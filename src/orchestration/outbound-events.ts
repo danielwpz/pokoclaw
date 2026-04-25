@@ -13,6 +13,12 @@ import {
 import type { AgentRuntimeRole } from "@/src/security/policy.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import type { Session, SubagentCreationRequest, TaskRun } from "@/src/storage/schema/types.js";
+import type {
+  ThinkTankConsultationStatus,
+  ThinkTankEpisodeStatus,
+  ThinkTankEpisodeStepSnapshot,
+  ThinkTankStructuredSummary,
+} from "@/src/think-tank/types.js";
 
 export interface OutboundEventContext {
   target: {
@@ -154,10 +160,65 @@ export interface OrchestratedSubagentCreationEventEnvelope extends OutboundEvent
   event: SubagentCreationOutboundEvent;
 }
 
+export interface ThinkTankConsultationUpsertedOutboundEvent {
+  type: "consultation_upserted";
+  status: ThinkTankConsultationStatus;
+  topic: string;
+  participants: Array<{
+    id: string;
+    title: string | null;
+    model: string;
+  }>;
+  latestSummary: ThinkTankStructuredSummary | null;
+  firstCompleted: boolean;
+}
+
+export interface ThinkTankEpisodeStartedOutboundEvent {
+  type: "episode_started";
+  episodeId: string;
+  episodeSequence: number;
+  prompt: string;
+  plannedSteps: Array<{
+    key: string;
+    kind: ThinkTankEpisodeStepSnapshot["kind"];
+    title: string;
+    order: number;
+  }> | null;
+}
+
+export interface ThinkTankEpisodeStepUpsertedOutboundEvent {
+  type: "episode_step_upserted";
+  episodeId: string;
+  episodeSequence: number;
+  step: ThinkTankEpisodeStepSnapshot;
+}
+
+export interface ThinkTankEpisodeSettledOutboundEvent {
+  type: "episode_settled";
+  episodeId: string;
+  episodeSequence: number;
+  status: Extract<ThinkTankEpisodeStatus, "completed" | "failed" | "cancelled">;
+  latestSummary: ThinkTankStructuredSummary | null;
+}
+
+export type ThinkTankOutboundEvent =
+  | ThinkTankConsultationUpsertedOutboundEvent
+  | ThinkTankEpisodeStartedOutboundEvent
+  | ThinkTankEpisodeStepUpsertedOutboundEvent
+  | ThinkTankEpisodeSettledOutboundEvent;
+
+export interface OrchestratedThinkTankEventEnvelope extends OutboundEventContext {
+  kind: "think_tank_event";
+  consultationId: string;
+  episodeId: string | null;
+  event: ThinkTankOutboundEvent;
+}
+
 export type OrchestratedOutboundEventEnvelope =
   | OrchestratedRuntimeEventEnvelope
   | OrchestratedTaskRunEventEnvelope
-  | OrchestratedSubagentCreationEventEnvelope;
+  | OrchestratedSubagentCreationEventEnvelope
+  | OrchestratedThinkTankEventEnvelope;
 
 export function projectRuntimeEvent(input: {
   db: StorageDb;
@@ -240,6 +301,51 @@ export function projectSubagentCreationEvent(input: {
       ownerAgentId: state?.ownerAgentId ?? input.request.sourceAgentId,
       ownerRole: state?.ownerRole ?? null,
       mainAgentId: state?.mainAgentId ?? input.request.sourceAgentId,
+      taskRun: state?.taskRun ?? null,
+      runId: null,
+      object: {
+        messageId: null,
+        toolCallId: null,
+        toolName: null,
+        approvalId: null,
+      },
+    }),
+    event: input.event,
+  };
+}
+
+export function projectThinkTankEvent(input: {
+  db: StorageDb;
+  consultation: {
+    id: string;
+    sourceConversationId: string;
+    sourceBranchId: string;
+    sourceSessionId: string;
+  };
+  event: ThinkTankOutboundEvent;
+}): OrchestratedThinkTankEventEnvelope {
+  const state = resolveSessionLiveState({
+    db: input.db,
+    sessionId: input.consultation.sourceSessionId,
+  });
+
+  const episodeId =
+    "episodeId" in input.event && typeof input.event.episodeId === "string"
+      ? input.event.episodeId
+      : null;
+
+  return {
+    kind: "think_tank_event",
+    consultationId: input.consultation.id,
+    episodeId,
+    ...buildContext({
+      conversationId: input.consultation.sourceConversationId,
+      branchId: input.consultation.sourceBranchId,
+      sessionId: input.consultation.sourceSessionId,
+      sessionPurpose: state?.session.purpose ?? null,
+      ownerAgentId: state?.ownerAgentId ?? null,
+      ownerRole: state?.ownerRole ?? null,
+      mainAgentId: state?.mainAgentId ?? null,
       taskRun: state?.taskRun ?? null,
       runId: null,
       object: {

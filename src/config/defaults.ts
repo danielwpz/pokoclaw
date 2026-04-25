@@ -16,6 +16,7 @@ export const DEFAULT_CONFIG: RawConfig = {
       chat: [],
       compaction: [],
       task: [],
+      thinkTankAdvisor: [],
       meditationBucket: [],
       meditationConsolidation: [],
     },

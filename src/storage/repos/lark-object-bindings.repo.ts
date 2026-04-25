@@ -309,6 +309,50 @@ export class LarkObjectBindingsRepo {
     });
   }
 
+  rebindInternalObject(input: {
+    channelInstallationId: string;
+    fromInternalObjectKind: string;
+    fromInternalObjectId: string;
+    toInternalObjectKind: string;
+    toInternalObjectId: string;
+    updatedAt?: Date;
+  }): LarkObjectBinding | null {
+    const updatedAt = input.updatedAt ?? new Date();
+    const result = this.db
+      .update(larkObjectBindings)
+      .set({
+        internalObjectKind: input.toInternalObjectKind,
+        internalObjectId: input.toInternalObjectId,
+        updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
+      })
+      .where(
+        and(
+          eq(larkObjectBindings.channelInstallationId, input.channelInstallationId),
+          eq(larkObjectBindings.internalObjectKind, input.fromInternalObjectKind),
+          eq(larkObjectBindings.internalObjectId, input.fromInternalObjectId),
+        ),
+      )
+      .run();
+
+    if ((result.changes ?? 0) < 1) {
+      return null;
+    }
+
+    logger.debug("rebound lark object binding", {
+      channelInstallationId: input.channelInstallationId,
+      fromInternalObjectKind: input.fromInternalObjectKind,
+      fromInternalObjectId: input.fromInternalObjectId,
+      toInternalObjectKind: input.toInternalObjectKind,
+      toInternalObjectId: input.toInternalObjectId,
+    });
+
+    return this.getByInternalObject({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.toInternalObjectKind,
+      internalObjectId: input.toInternalObjectId,
+    });
+  }
+
   getByInternalObject(input: {
     channelInstallationId: string;
     internalObjectKind: string;

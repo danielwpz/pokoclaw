@@ -16,6 +16,12 @@ describe("builtin tools", () => {
     expect(registry.has("grep")).toBe(true);
     expect(registry.has("query_system_db")).toBe(true);
     expect(registry.has("get_runtime_status")).toBe(true);
+    expect(registry.has("get_think_tank_capabilities")).toBe(true);
+    expect(registry.has("consult_think_tank")).toBe(true);
+    expect(registry.has("get_think_tank_status")).toBe(true);
+    expect(registry.has("consult_participant")).toBe(true);
+    expect(registry.has("upsert_think_tank_step")).toBe(true);
+    expect(registry.has("finish_think_tank_episode")).toBe(true);
     expect(registry.has("finish_task")).toBe(true);
     expect(registry.has("request_permissions")).toBe(true);
     expect(registry.has("review_permission_request")).toBe(true);
@@ -36,6 +42,12 @@ describe("builtin tools", () => {
       "grep",
       "query_system_db",
       "get_runtime_status",
+      "get_think_tank_capabilities",
+      "consult_think_tank",
+      "get_think_tank_status",
+      "consult_participant",
+      "upsert_think_tank_step",
+      "finish_think_tank_episode",
       "finish_task",
       "request_permissions",
       "review_permission_request",

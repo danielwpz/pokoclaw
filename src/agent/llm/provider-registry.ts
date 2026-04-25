@@ -32,6 +32,7 @@ export class ProviderRegistry {
       chat: [...config.models.scenarios.chat],
       compaction: [...config.models.scenarios.compaction],
       task: [...config.models.scenarios.task],
+      thinkTankAdvisor: [...config.models.scenarios.thinkTankAdvisor],
       meditationBucket: [...config.models.scenarios.meditationBucket],
       meditationConsolidation: [...config.models.scenarios.meditationConsolidation],
     };
@@ -135,5 +136,12 @@ export class ProviderRegistry {
 }
 
 function getScenarioKeys(): ModelScenario[] {
-  return ["chat", "compaction", "task", "meditationBucket", "meditationConsolidation"];
+  return [
+    "chat",
+    "compaction",
+    "task",
+    "thinkTankAdvisor",
+    "meditationBucket",
+    "meditationConsolidation",
+  ];
 }

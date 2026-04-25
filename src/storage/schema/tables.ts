@@ -174,6 +174,12 @@ export const channelThreads = sqliteTable(
     rootTaskRunId: text("root_task_run_id").references((): AnySQLiteColumn => taskRuns.id, {
       onDelete: "cascade",
     }),
+    rootThinkTankConsultationId: text("root_think_tank_consultation_id").references(
+      (): AnySQLiteColumn => thinkTankConsultations.id,
+      {
+        onDelete: "cascade",
+      },
+    ),
     openedFromMessageId: text("opened_from_message_id"),
     status: text("status").notNull().default("active"),
     createdAt: text("created_at").notNull(),
@@ -188,6 +194,10 @@ export const channelThreads = sqliteTable(
     ),
     uniqueIndex("uidx_channel_threads_branch").on(table.channelType, table.branchId),
     uniqueIndex("uidx_channel_threads_root_run").on(table.channelType, table.rootTaskRunId),
+    uniqueIndex("uidx_channel_threads_root_think_tank").on(
+      table.channelType,
+      table.rootThinkTankConsultationId,
+    ),
     index("idx_channel_threads_home_conversation").on(table.homeConversationId, table.updatedAt),
   ],
 );
@@ -372,6 +382,107 @@ export const taskRuns = sqliteTable(
     index("idx_runs_cron_started").on(table.cronJobId, table.startedAt),
     index("idx_runs_workstream_started").on(table.workstreamId, table.startedAt),
     index("idx_runs_thread_root_started").on(table.threadRootRunId, table.startedAt),
+  ],
+);
+
+export const thinkTankConsultations = sqliteTable(
+  "think_tank_consultations",
+  {
+    id: text("id").primaryKey(),
+    sourceSessionId: text("source_session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    sourceConversationId: text("source_conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    sourceBranchId: text("source_branch_id")
+      .notNull()
+      .references(() => conversationBranches.id, { onDelete: "cascade" }),
+    ownerAgentId: text("owner_agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    moderatorSessionId: text("moderator_session_id")
+      .notNull()
+      .unique()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    moderatorModelId: text("moderator_model_id").notNull(),
+    status: text("status").notNull(),
+    topic: text("topic").notNull(),
+    contextText: text("context_text").notNull(),
+    latestSummaryJson: text("latest_summary_json"),
+    firstCompletedAt: text("first_completed_at"),
+    firstCompletionNoticeAt: text("first_completion_notice_at"),
+    lastEpisodeStartedAt: text("last_episode_started_at"),
+    lastEpisodeFinishedAt: text("last_episode_finished_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("idx_think_tank_consultations_source_session").on(table.sourceSessionId, table.updatedAt),
+    index("idx_think_tank_consultations_owner_status_updated").on(
+      table.ownerAgentId,
+      table.status,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const thinkTankParticipants = sqliteTable(
+  "think_tank_participants",
+  {
+    id: text("id").primaryKey(),
+    consultationId: text("consultation_id")
+      .notNull()
+      .references(() => thinkTankConsultations.id, { onDelete: "cascade" }),
+    participantId: text("participant_id").notNull(),
+    title: text("title"),
+    modelId: text("model_id").notNull(),
+    personaText: text("persona_text").notNull(),
+    continuationSessionId: text("continuation_session_id")
+      .notNull()
+      .unique()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uidx_think_tank_participants_consultation_participant").on(
+      table.consultationId,
+      table.participantId,
+    ),
+    index("idx_think_tank_participants_consultation_sort").on(
+      table.consultationId,
+      table.sortOrder,
+    ),
+  ],
+);
+
+export const thinkTankEpisodes = sqliteTable(
+  "think_tank_episodes",
+  {
+    id: text("id").primaryKey(),
+    consultationId: text("consultation_id")
+      .notNull()
+      .references(() => thinkTankConsultations.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    status: text("status").notNull(),
+    promptText: text("prompt_text").notNull(),
+    resultJson: text("result_json"),
+    errorText: text("error_text"),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
+  },
+  (table) => [
+    uniqueIndex("uidx_think_tank_episodes_consultation_sequence").on(
+      table.consultationId,
+      table.sequence,
+    ),
+    index("idx_think_tank_episodes_consultation_status_started").on(
+      table.consultationId,
+      table.status,
+      table.startedAt,
+    ),
   ],
 );
 

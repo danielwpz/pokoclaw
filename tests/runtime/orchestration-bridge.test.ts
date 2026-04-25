@@ -44,6 +44,7 @@ function createModelConfig(): Pick<AppConfig, "providers" | "models"> {
         chat: ["anthropic_main/claude-sonnet-4-5"],
         compaction: ["anthropic_main/claude-sonnet-4-5"],
         task: ["anthropic_main/claude-sonnet-4-5"],
+        thinkTankAdvisor: [],
         meditationBucket: [],
         meditationConsolidation: [],
       },
@@ -314,6 +315,103 @@ describe("RuntimeOrchestrationBridge", () => {
     });
     expect(suppressBackgroundTaskCompletionNotice).toHaveBeenCalledExactlyOnceWith({
       taskRunId: "task_bg_1",
+    });
+  });
+
+  test("forwards think tank runtime control methods when attached", async () => {
+    const bridge = createRuntimeOrchestrationBridge({
+      manager: {
+        emitRuntimeEvent: vi.fn(),
+        submitSubagentCreationRequest: vi.fn(),
+        runCronJobNow: vi.fn(),
+        startBackgroundTask: vi.fn(),
+        suppressBackgroundTaskCompletionNotice: vi.fn(),
+        getThinkTankCapabilities: vi.fn(() => ({
+          availableModels: ["openrouter-claude-sonnet-4", "openrouter-gemini-3.1-flash"],
+          recommendedParticipantCount: 2,
+          maxParticipantCount: 4,
+        })),
+        startThinkTankConsultation: vi.fn(async () => ({
+          accepted: true as const,
+          consultationId: "tt_1",
+          status: "running" as const,
+          participants: [
+            {
+              id: "product_lead",
+              model: "openrouter-claude-sonnet-4",
+              title: "Product Lead",
+              continuationSessionId: "sess_tt_1",
+            },
+          ],
+        })),
+        getThinkTankStatus: vi.fn(async () => ({
+          consultationId: "tt_1",
+          topic: "Topic",
+          status: "idle" as const,
+          latestEpisodeStatus: "completed" as const,
+          participants: [
+            {
+              id: "product_lead",
+              model: "openrouter-claude-sonnet-4",
+              title: "Product Lead",
+              continuationSessionId: "sess_tt_1",
+            },
+          ],
+          latestSummary: {
+            agreements: ["A"],
+            keyDifferences: ["B"],
+            currentConclusion: "C",
+            openQuestions: ["D"],
+          },
+          updatedAt: "2026-04-21T00:00:00.000Z",
+        })),
+      },
+    });
+
+    await expect(
+      bridge.runtimeControl.getThinkTankCapabilities?.({
+        sourceSessionId: "sess_main",
+      }),
+    ).resolves.toMatchObject({
+      availableModels: ["openrouter-claude-sonnet-4", "openrouter-gemini-3.1-flash"],
+    });
+
+    await expect(
+      bridge.runtimeControl.startThinkTankConsultation?.({
+        sourceSessionId: "sess_main",
+        sourceConversationId: "conv_main",
+        sourceBranchId: "branch_main",
+        ownerAgentId: "agent_main",
+        moderatorModelId: "anthropic_main/claude-sonnet-4-5",
+        topic: "Topic",
+        context: "Context",
+        participants: [
+          {
+            id: "product_lead",
+            model: "openrouter-claude-sonnet-4",
+            persona: "Persona",
+            title: "Product Lead",
+          },
+          {
+            id: "infra_engineer",
+            model: "openrouter-gemini-3.1-flash",
+            persona: "Persona 2",
+            title: "Infra Engineer",
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({
+      consultationId: "tt_1",
+    });
+
+    await expect(
+      bridge.runtimeControl.getThinkTankStatus?.({
+        sourceSessionId: "sess_main",
+        consultationId: "tt_1",
+      }),
+    ).resolves.toMatchObject({
+      consultationId: "tt_1",
+      status: "idle",
     });
   });
 });

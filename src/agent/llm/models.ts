@@ -50,6 +50,7 @@ const MODEL_SCENARIOS = [
   "chat",
   "compaction",
   "task",
+  "thinkTankAdvisor",
   "meditationBucket",
   "meditationConsolidation",
 ] as const;

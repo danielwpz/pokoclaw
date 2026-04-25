@@ -150,6 +150,7 @@ export interface AgentModelRunner {
 export interface RunAgentLoopInput {
   sessionId: string;
   scenario: ModelScenario;
+  modelIdOverride?: string;
   initialRuntimeImagesByMessageId?: Record<string, AgentUserRuntimeImagePayload[]>;
   maxTurns?: number;
   afterToolResultHook?: AgentLoopAfterToolResultHook;
@@ -273,6 +274,7 @@ export class AgentLoop {
     sessionPurpose?: string;
     ownerAgentId?: string | null;
     agentKind?: string | null;
+    currentModelId?: string | null;
     cwd?: string;
     signal: AbortSignal;
     toolCallId: string;
@@ -320,6 +322,7 @@ export class AgentLoop {
       toolCallId: input.toolCallId,
       ...(input.ownerAgentId === undefined ? {} : { ownerAgentId: input.ownerAgentId }),
       ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
+      ...(input.currentModelId === undefined ? {} : { currentModelId: input.currentModelId }),
       ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
       runtimeControl,
     };
@@ -479,7 +482,10 @@ export class AgentLoop {
       ),
     });
     const models = resolveProviderRegistry(this.deps.models);
-    const model = models.getRequiredScenarioModel(input.scenario);
+    const model =
+      input.modelIdOverride == null
+        ? models.getRequiredScenarioModel(input.scenario)
+        : models.getRequiredModel(input.modelIdOverride);
     assertSessionModelSupportsTools({
       sessionPurpose: context.session.purpose,
       scenario: input.scenario,
@@ -1018,6 +1024,7 @@ export class AgentLoop {
               input,
               context,
               ownerAgent,
+              modelId: model.id,
               messages,
               toolCall,
               turn: turn + 1,
@@ -1136,10 +1143,23 @@ export class AgentLoop {
               toolCall,
               result: executedTool.result,
             });
-            if (stopDecision?.kind === "stop_run") {
+            const resultStopDecision =
+              executedTool.result.control?.stopRun == null
+                ? null
+                : {
+                    kind: "stop_run" as const,
+                    reason: executedTool.result.control.stopRun.reason,
+                    ...(executedTool.result.control.stopRun.payload === undefined
+                      ? {}
+                      : { payload: executedTool.result.control.stopRun.payload }),
+                  };
+            const effectiveStopDecision = stopDecision ?? resultStopDecision;
+            if (effectiveStopDecision?.kind === "stop_run") {
               stopSignal = {
-                reason: stopDecision.reason,
-                ...(stopDecision.payload === undefined ? {} : { payload: stopDecision.payload }),
+                reason: effectiveStopDecision.reason,
+                ...(effectiveStopDecision.payload === undefined
+                  ? {}
+                  : { payload: effectiveStopDecision.payload }),
               };
               completed = true;
               break;
@@ -1435,6 +1455,7 @@ export class AgentLoop {
     input: RunAgentLoopInput;
     context: ReturnType<AgentSessionService["getContext"]>;
     ownerAgent: ReturnType<AgentsRepo["getById"]>;
+    modelId: string;
     messages: Message[];
     toolCall: AgentToolCall;
     turn: number;
@@ -1460,6 +1481,7 @@ export class AgentLoop {
             sessionPurpose: input.context.session.purpose,
             ownerAgentId: input.context.session.ownerAgentId,
             agentKind: input.ownerAgent?.kind ?? null,
+            currentModelId: input.modelId,
             signal: input.signal,
             toolCallId: input.toolCall.id,
             ...(input.ownerAgent?.workdir == null ? {} : { cwd: input.ownerAgent.workdir }),
@@ -1596,6 +1618,7 @@ export class AgentLoop {
       input: RunAgentLoopInput;
       context: ReturnType<AgentSessionService["getContext"]>;
       ownerAgent: ReturnType<AgentsRepo["getById"]>;
+      modelId: string;
       messages: Message[];
       toolCall: AgentToolCall;
       turn: number;
@@ -1677,6 +1700,7 @@ export class AgentLoop {
           conversationId: input.input.context.session.conversationId,
           ownerAgentId: input.input.context.session.ownerAgentId,
           agentKind: input.input.ownerAgent?.kind ?? null,
+          currentModelId: input.input.modelId,
           signal: input.input.signal,
           toolCallId: retryTarget.id,
           ...(input.input.ownerAgent?.workdir == null
@@ -2199,7 +2223,11 @@ function assertSessionModelSupportsTools(input: {
     return;
   }
 
-  if (input.sessionPurpose !== "task" && input.sessionPurpose !== "approval") {
+  if (
+    input.sessionPurpose !== "task" &&
+    input.sessionPurpose !== "approval" &&
+    input.sessionPurpose !== "think_tank_moderator"
+  ) {
     return;
   }
 

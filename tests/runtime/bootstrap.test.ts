@@ -20,6 +20,7 @@ function createConfig(): AppConfig {
         chat: [],
         compaction: [],
         task: [],
+        thinkTankAdvisor: [],
         meditationBucket: [],
         meditationConsolidation: [],
       },

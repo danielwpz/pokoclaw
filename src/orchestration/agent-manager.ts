@@ -7,6 +7,11 @@
  */
 import { randomUUID } from "node:crypto";
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
+import {
+  type ProviderRegistrySource,
+  resolveProviderRegistry,
+} from "@/src/agent/llm/provider-registry-source.js";
+import type { RunAgentLoopResult } from "@/src/agent/loop.js";
 import { extractCronTaskDefinition } from "@/src/cron/payload.js";
 import { CronService } from "@/src/cron/service.js";
 import {
@@ -19,6 +24,7 @@ import {
   projectRuntimeEvent,
   projectSubagentCreationEvent,
   projectTaskRunEvent,
+  projectThinkTankEvent,
 } from "@/src/orchestration/outbound-events.js";
 import {
   type ApproveSubagentCreationRequestInput,
@@ -42,6 +48,13 @@ import {
   failTaskExecution,
   type SettledTaskExecution,
 } from "@/src/orchestration/task-run-lifecycle.js";
+import {
+  buildDefaultThinkTankPlannedSteps,
+  findThinkTankParticipantRoundStepBySlot,
+  normalizeRunningThinkTankStep,
+  normalizeSubmittedThinkTankSteps,
+  upsertThinkTankEpisodeResultStep,
+} from "@/src/orchestration/think-tank-steps.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
@@ -62,12 +75,33 @@ import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import { TaskWorkstreamsRepo } from "@/src/storage/repos/task-workstreams.repo.js";
+import { ThinkTankConsultationsRepo } from "@/src/storage/repos/think-tank-consultations.repo.js";
+import { ThinkTankEpisodesRepo } from "@/src/storage/repos/think-tank-episodes.repo.js";
+import { ThinkTankParticipantsRepo } from "@/src/storage/repos/think-tank-participants.repo.js";
 import type { SubagentCreationRequest, TaskRun } from "@/src/storage/schema/types.js";
 import {
   buildBackgroundTaskPayload,
   parseBackgroundTaskPayload,
 } from "@/src/tasks/background-task-payload.js";
 import { TaskExecutionRunner, type TaskExecutionRunResult } from "@/src/tasks/runner.js";
+import type { ThinkTankEpisodeSubmitStep } from "@/src/think-tank/episode-completion.js";
+import { applyThinkTankParticipantReplyFallbackLimit } from "@/src/think-tank/reply-limits.js";
+import { ThinkTankEpisodeRunner } from "@/src/think-tank/runner.js";
+import {
+  buildThinkTankModeratorSetupEnvelope,
+  buildThinkTankParticipantConsultEnvelope,
+  buildThinkTankParticipantSetupEnvelope,
+} from "@/src/think-tank/session-runtime.js";
+import type {
+  ThinkTankCapabilities,
+  ThinkTankConsultationStatusView,
+  ThinkTankEpisodeResult,
+  ThinkTankEpisodeStepSnapshot,
+  ThinkTankEpisodeStepUpsertInput,
+  ThinkTankParticipantDefinition,
+  ThinkTankParticipantRoundStepHint,
+  ThinkTankStructuredSummary,
+} from "@/src/think-tank/types.js";
 
 const logger = createSubsystemLogger("orchestration/agent-manager");
 
@@ -80,6 +114,7 @@ export interface AgentManagerDependencies {
   storage: StorageDb;
   ingress: AgentManagerIngress;
   outboundEventBus?: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
+  models?: ProviderRegistrySource;
   subagentProvisioner?: SubagentConversationSurfaceProvisioner;
   subagentPrivateWorkspace?: SubagentPrivateWorkspaceManager;
 }
@@ -105,17 +140,32 @@ interface PendingBackgroundTaskCompletionNotice {
   createdAt: Date;
 }
 
+interface PendingThinkTankCompletionNotice {
+  consultationId: string;
+  sourceSessionId: string;
+  content: string;
+  createdAt: Date;
+}
+
+const THINK_TANK_RECOMMENDED_PARTICIPANT_COUNT = 2;
+const THINK_TANK_MAX_PARTICIPANT_COUNT = 4;
+
 // AgentManager is the orchestration-facing runtime entrypoint.
 // It sits above session-local runtime ingress and handles cross-session
 // coordination such as delegated approvals without pulling that logic into
 // AgentLoop or session lanes.
 export class AgentManager {
   private readonly inflightRuntimeEventTasks = new Set<Promise<void>>();
+  private readonly inflightThinkTankTasks = new Set<Promise<void>>();
   private readonly suppressedBackgroundTaskCompletionNotices = new Set<string>();
   private readonly activeSessionRuns = new Set<string>();
   private readonly pendingBackgroundTaskCompletionNotices = new Map<
     string,
     PendingBackgroundTaskCompletionNotice[]
+  >();
+  private readonly pendingThinkTankCompletionNotices = new Map<
+    string,
+    PendingThinkTankCompletionNotice[]
   >();
 
   constructor(private readonly deps: AgentManagerDependencies) {}
@@ -642,12 +692,565 @@ export class AgentManager {
     };
   }
 
+  getThinkTankCapabilities(_input: { sourceSessionId: string }): ThinkTankCapabilities {
+    const models = this.requireThinkTankModels();
+    return {
+      availableModels: models.getScenarioModelIds("thinkTankAdvisor"),
+      recommendedParticipantCount: THINK_TANK_RECOMMENDED_PARTICIPANT_COUNT,
+      maxParticipantCount: THINK_TANK_MAX_PARTICIPANT_COUNT,
+    };
+  }
+
+  async startThinkTankConsultation(input: {
+    sourceSessionId: string;
+    sourceConversationId: string;
+    sourceBranchId: string;
+    ownerAgentId: string | null;
+    moderatorModelId: string;
+    topic: string;
+    context: string;
+    participants: ThinkTankParticipantDefinition[];
+  }): Promise<{
+    accepted: true;
+    consultationId: string;
+    status: "running";
+    participants: Array<{
+      id: string;
+      model: string;
+      title: string | null;
+      continuationSessionId: string;
+    }>;
+  }> {
+    const sessionsRepo = new SessionsRepo(this.deps.storage);
+    const messagesRepo = new MessagesRepo(this.deps.storage);
+    const sourceSession = sessionsRepo.getById(input.sourceSessionId);
+    if (sourceSession == null) {
+      throw new Error(`Cannot start think tank from unknown session ${input.sourceSessionId}`);
+    }
+    if (sourceSession.purpose !== "chat") {
+      throw new Error(
+        `Cannot start think tank from non-chat session ${sourceSession.id} (${sourceSession.purpose})`,
+      );
+    }
+    if (sourceSession.conversationId !== input.sourceConversationId) {
+      throw new Error("Think tank source conversation mismatch.");
+    }
+    if (sourceSession.branchId !== input.sourceBranchId) {
+      throw new Error("Think tank source branch mismatch.");
+    }
+    if (sourceSession.ownerAgentId == null) {
+      throw new Error(`Cannot start think tank from unowned session ${sourceSession.id}`);
+    }
+
+    const participantCount = input.participants.length;
+    if (
+      participantCount < THINK_TANK_RECOMMENDED_PARTICIPANT_COUNT ||
+      participantCount > THINK_TANK_MAX_PARTICIPANT_COUNT
+    ) {
+      throw new Error(
+        `Think tank participant count must be between ${THINK_TANK_RECOMMENDED_PARTICIPANT_COUNT} and ${THINK_TANK_MAX_PARTICIPANT_COUNT}.`,
+      );
+    }
+
+    const availableModels = new Set(
+      this.requireThinkTankModels().getScenarioModelIds("thinkTankAdvisor"),
+    );
+    for (const participant of input.participants) {
+      if (!availableModels.has(participant.model)) {
+        throw new Error(`Think tank participant model is not allowed: ${participant.model}`);
+      }
+    }
+
+    const now = new Date();
+    const consultationId = randomUUID();
+    const moderatorSessionId = randomUUID();
+    sessionsRepo.create({
+      id: moderatorSessionId,
+      conversationId: sourceSession.conversationId,
+      branchId: sourceSession.branchId,
+      ownerAgentId: sourceSession.ownerAgentId,
+      purpose: "think_tank_moderator",
+      contextMode: "isolated",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const consultationsRepo = new ThinkTankConsultationsRepo(this.deps.storage);
+    consultationsRepo.create({
+      id: consultationId,
+      sourceSessionId: sourceSession.id,
+      sourceConversationId: sourceSession.conversationId,
+      sourceBranchId: sourceSession.branchId,
+      ownerAgentId: sourceSession.ownerAgentId,
+      moderatorSessionId,
+      moderatorModelId: input.moderatorModelId,
+      status: "running",
+      topic: input.topic,
+      contextText: input.context,
+      createdAt: now,
+      updatedAt: now,
+      lastEpisodeStartedAt: now,
+    });
+
+    const participantsRepo = new ThinkTankParticipantsRepo(this.deps.storage);
+    const assignedParticipants = input.participants.map((participant, index) => {
+      const continuationSessionId = randomUUID();
+      sessionsRepo.create({
+        id: continuationSessionId,
+        conversationId: sourceSession.conversationId,
+        branchId: sourceSession.branchId,
+        ownerAgentId: sourceSession.ownerAgentId,
+        purpose: "think_tank_participant",
+        contextMode: "isolated",
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      participantsRepo.create({
+        id: randomUUID(),
+        consultationId,
+        participantId: participant.id,
+        title: participant.title ?? null,
+        modelId: participant.model,
+        personaText: participant.persona,
+        continuationSessionId,
+        sortOrder: index,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      return {
+        id: participant.id,
+        model: participant.model,
+        title: participant.title ?? null,
+        continuationSessionId,
+      };
+    });
+
+    messagesRepo.append({
+      id: randomUUID(),
+      sessionId: moderatorSessionId,
+      seq: messagesRepo.getNextSeq(moderatorSessionId),
+      role: "user",
+      messageType: "think_tank_consultation_setup",
+      visibility: "hidden_system",
+      payloadJson: JSON.stringify({
+        content: buildThinkTankModeratorSetupEnvelope({
+          consultationId,
+          topic: input.topic,
+          context: input.context,
+          participants: assignedParticipants,
+          participantPersonas: input.participants.map((participant) => ({
+            id: participant.id,
+            persona: participant.persona,
+            title: participant.title ?? null,
+            model: participant.model,
+          })),
+        }),
+      }),
+      createdAt: now,
+    });
+
+    for (const participant of input.participants) {
+      const assigned = assignedParticipants.find((entry) => entry.id === participant.id);
+      if (assigned == null) {
+        throw new Error(`Think tank participant assignment disappeared: ${participant.id}`);
+      }
+      messagesRepo.append({
+        id: randomUUID(),
+        sessionId: assigned.continuationSessionId,
+        seq: messagesRepo.getNextSeq(assigned.continuationSessionId),
+        role: "user",
+        messageType: "think_tank_participant_setup",
+        visibility: "hidden_system",
+        payloadJson: JSON.stringify({
+          content: buildThinkTankParticipantSetupEnvelope({
+            consultationId,
+            participantId: participant.id,
+            title: participant.title ?? null,
+            model: participant.model,
+            topic: input.topic,
+            context: input.context,
+            persona: participant.persona,
+          }),
+        }),
+        createdAt: now,
+      });
+    }
+
+    const episodeId = randomUUID();
+    new ThinkTankEpisodesRepo(this.deps.storage).create({
+      id: episodeId,
+      consultationId,
+      sequence: 1,
+      status: "running",
+      promptText: input.topic,
+      startedAt: now,
+    });
+
+    const consultationAnchor = {
+      id: consultationId,
+      sourceConversationId: sourceSession.conversationId,
+      sourceBranchId: sourceSession.branchId,
+      sourceSessionId: sourceSession.id,
+    };
+    this.publishThinkTankConsultationUpserted({
+      consultationAnchor,
+      consultationStatus: "running",
+      topic: input.topic,
+      participants: assignedParticipants.map((participant) => ({
+        id: participant.id,
+        title: participant.title,
+        model: participant.model,
+      })),
+      latestSummary: null,
+      firstCompleted: false,
+    });
+    this.publishThinkTankEpisodeStarted({
+      consultationAnchor,
+      episodeId,
+      episodeSequence: 1,
+      prompt: input.topic,
+    });
+
+    const task = this.runThinkTankEpisodeAsync({
+      consultationId,
+      episodeId,
+    }).finally(() => {
+      this.inflightThinkTankTasks.delete(task);
+    });
+    this.inflightThinkTankTasks.add(task);
+
+    return {
+      accepted: true,
+      consultationId,
+      status: "running",
+      participants: assignedParticipants,
+    };
+  }
+
+  continueThinkTankConsultation(input: {
+    consultationId: string;
+    prompt: string;
+    createdAt?: Date;
+  }): {
+    accepted: true;
+    consultationId: string;
+    episodeId: string;
+    episodeSequence: number;
+    status: "running";
+  } {
+    const prompt = input.prompt.trim();
+    if (prompt.length === 0) {
+      throw new Error("Think tank follow-up prompt cannot be empty.");
+    }
+    const consultationsRepo = new ThinkTankConsultationsRepo(this.deps.storage);
+    const episodesRepo = new ThinkTankEpisodesRepo(this.deps.storage);
+    const consultation = consultationsRepo.getById(input.consultationId);
+    if (consultation == null) {
+      throw new Error(`Think tank consultation not found: ${input.consultationId}`);
+    }
+    if (
+      consultation.status === "running" ||
+      episodesRepo.findActiveByConsultation(consultation.id)
+    ) {
+      throw new Error(
+        `Think tank consultation ${consultation.id} is already running. Wait for the current episode to settle before sending follow-up input.`,
+      );
+    }
+
+    const participants = this.listThinkTankParticipantDisplays(consultation.id);
+    const startedAt = input.createdAt ?? new Date();
+    const latestEpisode = episodesRepo.findLatestByConsultation(consultation.id);
+    const episodeSequence = (latestEpisode?.sequence ?? 0) + 1;
+    const episodeId = randomUUID();
+
+    episodesRepo.create({
+      id: episodeId,
+      consultationId: consultation.id,
+      sequence: episodeSequence,
+      status: "running",
+      promptText: prompt,
+      startedAt,
+    });
+    consultationsRepo.update({
+      id: consultation.id,
+      status: "running",
+      lastEpisodeStartedAt: startedAt,
+      updatedAt: startedAt,
+    });
+
+    const consultationAnchor = this.buildThinkTankConsultationAnchor(consultation);
+    this.publishThinkTankConsultationUpserted({
+      consultationAnchor,
+      consultationStatus: "running",
+      topic: consultation.topic,
+      participants,
+      latestSummary: parseThinkTankSummaryJson(consultation.latestSummaryJson),
+      firstCompleted: consultation.firstCompletedAt != null,
+    });
+    this.publishThinkTankEpisodeStarted({
+      consultationAnchor,
+      episodeId,
+      episodeSequence,
+      prompt,
+    });
+
+    const task = this.runThinkTankEpisodeAsync({
+      consultationId: consultation.id,
+      episodeId,
+    }).finally(() => {
+      this.inflightThinkTankTasks.delete(task);
+    });
+    this.inflightThinkTankTasks.add(task);
+
+    return {
+      accepted: true,
+      consultationId: consultation.id,
+      episodeId,
+      episodeSequence,
+      status: "running",
+    };
+  }
+
+  getThinkTankStatus(input: {
+    sourceSessionId: string;
+    consultationId: string;
+  }): ThinkTankConsultationStatusView | null {
+    const consultationsRepo = new ThinkTankConsultationsRepo(this.deps.storage);
+    const consultation = consultationsRepo.getById(input.consultationId);
+    if (consultation == null || consultation.sourceSessionId !== input.sourceSessionId) {
+      return null;
+    }
+
+    const participants = new ThinkTankParticipantsRepo(this.deps.storage)
+      .listByConsultation(consultation.id)
+      .map((participant) => ({
+        id: participant.participantId,
+        model: participant.modelId,
+        title: participant.title,
+        continuationSessionId: participant.continuationSessionId,
+      }));
+    const latestEpisode = new ThinkTankEpisodesRepo(this.deps.storage).findLatestByConsultation(
+      consultation.id,
+    );
+
+    return {
+      consultationId: consultation.id,
+      topic: consultation.topic,
+      status: consultation.status as "running" | "idle",
+      latestEpisodeStatus:
+        latestEpisode == null
+          ? null
+          : (latestEpisode.status as ThinkTankConsultationStatusView["latestEpisodeStatus"]),
+      participants,
+      latestSummary: parseThinkTankSummaryJson(consultation.latestSummaryJson),
+      updatedAt: consultation.updatedAt,
+    };
+  }
+
+  async consultThinkTankParticipant(input: {
+    moderatorSessionId: string;
+    participantId: string;
+    prompt: string;
+    step?: ThinkTankParticipantRoundStepHint;
+  }): Promise<{
+    participantId: string;
+    title: string | null;
+    model: string;
+    continuationSessionId: string;
+    reply: string;
+  }> {
+    const consultationsRepo = new ThinkTankConsultationsRepo(this.deps.storage);
+    const consultation = consultationsRepo.getByModeratorSessionId(input.moderatorSessionId);
+    if (consultation == null) {
+      throw new Error(
+        `Cannot consult think tank participant from unknown moderator session ${input.moderatorSessionId}`,
+      );
+    }
+    const runningEpisode = this.requireRunningThinkTankEpisodeState({
+      moderatorSessionId: input.moderatorSessionId,
+      consultation,
+    });
+
+    const participant = new ThinkTankParticipantsRepo(this.deps.storage).getByParticipantId({
+      consultationId: consultation.id,
+      participantId: input.participantId,
+    });
+    if (participant == null) {
+      throw new Error(
+        `Think tank participant ${input.participantId} does not exist in consultation ${consultation.id}`,
+      );
+    }
+
+    const started = await this.deps.ingress.submitMessage({
+      sessionId: participant.continuationSessionId,
+      scenario: "chat",
+      modelIdOverride: participant.modelId,
+      content: buildThinkTankParticipantConsultEnvelope({
+        prompt: input.prompt,
+      }),
+      messageType: "think_tank_participant_consult",
+      visibility: "hidden_system",
+    });
+
+    if (started.status !== "started") {
+      throw new Error(
+        `Think tank participant session ${participant.continuationSessionId} was already active.`,
+      );
+    }
+
+    const reply = extractLatestAssistantTextFromRun(started.run);
+    if (reply == null || reply.trim().length === 0) {
+      throw new Error(
+        `Think tank participant ${participant.participantId} completed without assistant text.`,
+      );
+    }
+    const limitedReply = applyThinkTankParticipantReplyFallbackLimit({ reply: reply.trim() });
+    if (limitedReply.truncated) {
+      logger.warn("truncated think tank participant reply at fallback limit", {
+        consultationId: consultation.id,
+        participantId: participant.participantId,
+        continuationSessionId: participant.continuationSessionId,
+        originalCharCount: limitedReply.originalCharCount,
+        maxChars: limitedReply.maxChars,
+      });
+    }
+    const normalizedReply = limitedReply.reply;
+    const existingRoundStep = findThinkTankParticipantRoundStepBySlot({
+      steps: runningEpisode.result.steps,
+      ...(input.step?.key === undefined ? {} : { key: input.step.key }),
+      ...(input.step?.roundIndex === undefined ? {} : { roundIndex: input.step.roundIndex }),
+      ...(input.step?.order === undefined ? {} : { order: input.step.order }),
+    });
+    const mergedParticipantIds = new Set(
+      existingRoundStep?.participantRound?.entries.map((entry) => entry.participantId) ?? [],
+    );
+    mergedParticipantIds.add(participant.participantId);
+    const roundStatus =
+      mergedParticipantIds.size >= runningEpisode.participants.length ? "completed" : "pending";
+
+    this.persistRunningThinkTankEpisodeStep({
+      consultation: runningEpisode.consultation,
+      episode: runningEpisode.episode,
+      participants: runningEpisode.participants,
+      participantIndex: runningEpisode.participantIndex,
+      currentResult: runningEpisode.result,
+      stepInput: {
+        kind: "participant_round",
+        status: roundStatus,
+        ...(input.step?.key === undefined ? {} : { key: input.step.key }),
+        ...(input.step?.title === undefined ? {} : { title: input.step.title }),
+        ...(input.step?.order === undefined ? {} : { order: input.step.order }),
+        ...(input.step?.roundIndex === undefined ? {} : { roundIndex: input.step.roundIndex }),
+        participantEntries: [
+          {
+            participantId: participant.participantId,
+            content: normalizedReply,
+          },
+        ],
+      },
+    });
+
+    return {
+      participantId: participant.participantId,
+      title: participant.title,
+      model: participant.modelId,
+      continuationSessionId: participant.continuationSessionId,
+      reply: normalizedReply,
+    };
+  }
+
+  upsertThinkTankEpisodeStep(input: {
+    moderatorSessionId: string;
+    step: ThinkTankEpisodeStepUpsertInput;
+  }): {
+    step: ThinkTankEpisodeStepSnapshot;
+  } {
+    const runningEpisode = this.requireRunningThinkTankEpisodeState({
+      moderatorSessionId: input.moderatorSessionId,
+    });
+    const step = this.persistRunningThinkTankEpisodeStep({
+      consultation: runningEpisode.consultation,
+      episode: runningEpisode.episode,
+      participants: runningEpisode.participants,
+      participantIndex: runningEpisode.participantIndex,
+      currentResult: runningEpisode.result,
+      stepInput: input.step,
+    });
+
+    return {
+      step,
+    };
+  }
+
   suppressBackgroundTaskCompletionNotice(input: { taskRunId: string }): void {
     this.suppressedBackgroundTaskCompletionNotices.add(input.taskRunId);
     const removedCount = this.removeQueuedBackgroundTaskCompletionNotice(input.taskRunId);
     if (removedCount > 0) {
       this.suppressedBackgroundTaskCompletionNotices.delete(input.taskRunId);
     }
+  }
+
+  private async runThinkTankEpisodeAsync(input: {
+    consultationId: string;
+    episodeId: string;
+  }): Promise<void> {
+    const consultationsRepo = new ThinkTankConsultationsRepo(this.deps.storage);
+    const episodesRepo = new ThinkTankEpisodesRepo(this.deps.storage);
+    const consultation = consultationsRepo.getById(input.consultationId);
+    const episode = episodesRepo.getById(input.episodeId);
+    if (consultation == null || episode == null) {
+      logger.warn("skipping think tank episode run because state is missing", {
+        consultationId: input.consultationId,
+        episodeId: input.episodeId,
+      });
+      return;
+    }
+
+    logger.info("starting think tank episode asynchronously", {
+      consultationId: consultation.id,
+      episodeId: episode.id,
+      episodeSequence: episode.sequence,
+      moderatorSessionId: consultation.moderatorSessionId,
+      moderatorModelId: consultation.moderatorModelId,
+    });
+
+    const runner = new ThinkTankEpisodeRunner({
+      ingress: this.deps.ingress,
+    });
+    const latestConclusion = parseThinkTankSummaryJson(
+      consultation.latestSummaryJson,
+    )?.currentConclusion;
+    const result = await runner.runEpisode({
+      moderatorSessionId: consultation.moderatorSessionId,
+      moderatorModelId: consultation.moderatorModelId,
+      consultationId: consultation.id,
+      episodeId: episode.id,
+      episodeSequence: episode.sequence,
+      episodePrompt: episode.promptText,
+      ...(latestConclusion == null ? {} : { latestConclusion }),
+    });
+
+    if (result.status === "completed") {
+      this.completeThinkTankEpisode({
+        consultation,
+        episode,
+        completion: result.completion,
+        finishedAt: new Date(),
+      });
+      return;
+    }
+
+    this.failThinkTankEpisode({
+      consultation,
+      episode,
+      status: result.status,
+      errorMessage: result.errorMessage,
+      finishedAt: new Date(),
+    });
   }
 
   completeTaskExecution(input: {
@@ -747,6 +1350,12 @@ export class AgentManager {
     }
   }
 
+  async waitForThinkTankIdle(): Promise<void> {
+    while (this.inflightThinkTankTasks.size > 0) {
+      await Promise.allSettled([...this.inflightThinkTankTasks]);
+    }
+  }
+
   async handleRuntimeEvent(
     event: AgentRuntimeEvent,
   ): Promise<DelegatedApprovalDeliveryResult | null> {
@@ -798,6 +1407,406 @@ export class AgentManager {
         cancelTaskExecution: (input) => this.cancelTaskExecution(input),
       },
     });
+  }
+
+  private completeThinkTankEpisode(input: {
+    consultation: NonNullable<ReturnType<ThinkTankConsultationsRepo["getById"]>>;
+    episode: NonNullable<ReturnType<ThinkTankEpisodesRepo["getById"]>>;
+    completion: { summary: ThinkTankStructuredSummary; steps: ThinkTankEpisodeSubmitStep[] };
+    finishedAt: Date;
+  }): void {
+    const participants = new ThinkTankParticipantsRepo(this.deps.storage).listByConsultation(
+      input.consultation.id,
+    );
+    const participantIndex = new Map(
+      participants.map((participant) => [participant.participantId, participant]),
+    );
+    const normalizedSteps = normalizeSubmittedThinkTankSteps({
+      steps: input.completion.steps,
+      participantIndex,
+    });
+    const result: ThinkTankEpisodeResult = {
+      steps: normalizedSteps,
+      latestSummary: input.completion.summary,
+    };
+
+    new ThinkTankEpisodesRepo(this.deps.storage).update({
+      id: input.episode.id,
+      status: "completed",
+      result,
+      errorText: null,
+      finishedAt: input.finishedAt,
+    });
+
+    const firstCompletedAt =
+      input.consultation.firstCompletedAt == null ? input.finishedAt : undefined;
+    new ThinkTankConsultationsRepo(this.deps.storage).update({
+      id: input.consultation.id,
+      status: "idle",
+      latestSummary: input.completion.summary,
+      ...(firstCompletedAt === undefined ? {} : { firstCompletedAt }),
+      lastEpisodeFinishedAt: input.finishedAt,
+      updatedAt: input.finishedAt,
+    });
+
+    const consultationAnchor = {
+      id: input.consultation.id,
+      sourceConversationId: input.consultation.sourceConversationId,
+      sourceBranchId: input.consultation.sourceBranchId,
+      sourceSessionId: input.consultation.sourceSessionId,
+    };
+
+    for (const step of normalizedSteps) {
+      this.publishOutboundEvent(
+        projectThinkTankEvent({
+          db: this.deps.storage,
+          consultation: consultationAnchor,
+          event: {
+            type: "episode_step_upserted",
+            episodeId: input.episode.id,
+            episodeSequence: input.episode.sequence,
+            step,
+          },
+        }),
+      );
+    }
+
+    this.publishOutboundEvent(
+      projectThinkTankEvent({
+        db: this.deps.storage,
+        consultation: consultationAnchor,
+        event: {
+          type: "episode_settled",
+          episodeId: input.episode.id,
+          episodeSequence: input.episode.sequence,
+          status: "completed",
+          latestSummary: input.completion.summary,
+        },
+      }),
+    );
+
+    this.publishOutboundEvent(
+      projectThinkTankEvent({
+        db: this.deps.storage,
+        consultation: consultationAnchor,
+        event: {
+          type: "consultation_upserted",
+          status: "idle",
+          topic: input.consultation.topic,
+          participants: participants.map((participant) => ({
+            id: participant.participantId,
+            title: participant.title,
+            model: participant.modelId,
+          })),
+          latestSummary: input.completion.summary,
+          firstCompleted: true,
+        },
+      }),
+    );
+
+    if (input.consultation.firstCompletedAt == null) {
+      this.appendThinkTankCompletionNoticeIfNeeded({
+        consultationId: input.consultation.id,
+      });
+    }
+  }
+
+  private failThinkTankEpisode(input: {
+    consultation: NonNullable<ReturnType<ThinkTankConsultationsRepo["getById"]>>;
+    episode: NonNullable<ReturnType<ThinkTankEpisodesRepo["getById"]>>;
+    status: "failed" | "cancelled";
+    errorMessage: string;
+    finishedAt: Date;
+  }): void {
+    const result: ThinkTankEpisodeResult = {
+      steps: [
+        {
+          key: "error",
+          kind: "error",
+          title: "Episode Error",
+          order: 999,
+          status: "failed",
+          error: {
+            message: input.errorMessage,
+          },
+        },
+      ],
+      latestSummary: null,
+    };
+    const errorStep = result.steps[0];
+    if (errorStep == null) {
+      throw new Error("Think tank failure result is missing its error step.");
+    }
+
+    new ThinkTankEpisodesRepo(this.deps.storage).update({
+      id: input.episode.id,
+      status: input.status,
+      result,
+      errorText: input.errorMessage,
+      finishedAt: input.finishedAt,
+    });
+    new ThinkTankConsultationsRepo(this.deps.storage).update({
+      id: input.consultation.id,
+      status: "idle",
+      lastEpisodeFinishedAt: input.finishedAt,
+      updatedAt: input.finishedAt,
+    });
+
+    const participants = new ThinkTankParticipantsRepo(this.deps.storage).listByConsultation(
+      input.consultation.id,
+    );
+    const consultationAnchor = {
+      id: input.consultation.id,
+      sourceConversationId: input.consultation.sourceConversationId,
+      sourceBranchId: input.consultation.sourceBranchId,
+      sourceSessionId: input.consultation.sourceSessionId,
+    };
+
+    this.publishOutboundEvent(
+      projectThinkTankEvent({
+        db: this.deps.storage,
+        consultation: consultationAnchor,
+        event: {
+          type: "episode_step_upserted",
+          episodeId: input.episode.id,
+          episodeSequence: input.episode.sequence,
+          step: errorStep,
+        },
+      }),
+    );
+
+    this.publishOutboundEvent(
+      projectThinkTankEvent({
+        db: this.deps.storage,
+        consultation: consultationAnchor,
+        event: {
+          type: "episode_settled",
+          episodeId: input.episode.id,
+          episodeSequence: input.episode.sequence,
+          status: input.status,
+          latestSummary: null,
+        },
+      }),
+    );
+
+    this.publishOutboundEvent(
+      projectThinkTankEvent({
+        db: this.deps.storage,
+        consultation: consultationAnchor,
+        event: {
+          type: "consultation_upserted",
+          status: "idle",
+          topic: input.consultation.topic,
+          participants: participants.map((participant) => ({
+            id: participant.participantId,
+            title: participant.title,
+            model: participant.modelId,
+          })),
+          latestSummary: parseThinkTankSummaryJson(input.consultation.latestSummaryJson),
+          firstCompleted: input.consultation.firstCompletedAt != null,
+        },
+      }),
+    );
+  }
+
+  private buildThinkTankConsultationAnchor(
+    consultation: Pick<
+      NonNullable<ReturnType<ThinkTankConsultationsRepo["getById"]>>,
+      "id" | "sourceConversationId" | "sourceBranchId" | "sourceSessionId"
+    >,
+  ) {
+    return {
+      id: consultation.id,
+      sourceConversationId: consultation.sourceConversationId,
+      sourceBranchId: consultation.sourceBranchId,
+      sourceSessionId: consultation.sourceSessionId,
+    };
+  }
+
+  private listThinkTankParticipantDisplays(consultationId: string): Array<{
+    id: string;
+    title: string | null;
+    model: string;
+  }> {
+    return new ThinkTankParticipantsRepo(this.deps.storage)
+      .listByConsultation(consultationId)
+      .map((participant) => ({
+        id: participant.participantId,
+        title: participant.title,
+        model: participant.modelId,
+      }));
+  }
+
+  private requireRunningThinkTankEpisodeState(input: {
+    moderatorSessionId: string;
+    consultation?: NonNullable<ReturnType<ThinkTankConsultationsRepo["getByModeratorSessionId"]>>;
+  }): {
+    consultation: NonNullable<ReturnType<ThinkTankConsultationsRepo["getByModeratorSessionId"]>>;
+    episode: NonNullable<ReturnType<ThinkTankEpisodesRepo["findActiveByConsultation"]>>;
+    participants: Array<{
+      participantId: string;
+      title: string | null;
+      modelId: string;
+    }>;
+    participantIndex: Map<
+      string,
+      {
+        participantId: string;
+        title: string | null;
+        modelId: string;
+      }
+    >;
+    result: ThinkTankEpisodeResult;
+  } {
+    const consultationsRepo = new ThinkTankConsultationsRepo(this.deps.storage);
+    const consultation =
+      input.consultation ?? consultationsRepo.getByModeratorSessionId(input.moderatorSessionId);
+    if (consultation == null) {
+      throw new Error(
+        `Cannot resolve think tank consultation for moderator session ${input.moderatorSessionId}`,
+      );
+    }
+
+    const episodesRepo = new ThinkTankEpisodesRepo(this.deps.storage);
+    const episode = episodesRepo.findActiveByConsultation(consultation.id);
+    if (episode == null) {
+      throw new Error(`Think tank consultation ${consultation.id} has no active episode.`);
+    }
+
+    const participants = new ThinkTankParticipantsRepo(this.deps.storage)
+      .listByConsultation(consultation.id)
+      .map((participant) => ({
+        participantId: participant.participantId,
+        title: participant.title,
+        modelId: participant.modelId,
+      }));
+    const participantIndex = new Map(
+      participants.map((participant) => [participant.participantId, participant]),
+    );
+
+    return {
+      consultation,
+      episode,
+      participants,
+      participantIndex,
+      result: parseThinkTankEpisodeResultJson(episode.resultJson) ?? {
+        steps: [],
+        latestSummary: null,
+      },
+    };
+  }
+
+  private persistRunningThinkTankEpisodeStep(input: {
+    consultation: Pick<
+      NonNullable<ReturnType<ThinkTankConsultationsRepo["getById"]>>,
+      "id" | "sourceConversationId" | "sourceBranchId" | "sourceSessionId"
+    >;
+    episode: Pick<NonNullable<ReturnType<ThinkTankEpisodesRepo["getById"]>>, "id" | "sequence">;
+    participants: Array<{
+      participantId: string;
+      title: string | null;
+      modelId: string;
+    }>;
+    participantIndex: Map<
+      string,
+      {
+        participantId: string;
+        title: string | null;
+        modelId: string;
+      }
+    >;
+    currentResult: ThinkTankEpisodeResult;
+    stepInput: ThinkTankEpisodeStepUpsertInput;
+  }): ThinkTankEpisodeStepSnapshot {
+    const step = normalizeRunningThinkTankStep({
+      step: input.stepInput,
+      existingSteps: input.currentResult.steps,
+      participants: input.participants,
+      participantIndex: input.participantIndex,
+    });
+    const nextResult = upsertThinkTankEpisodeResultStep({
+      current: input.currentResult,
+      step,
+    });
+
+    new ThinkTankEpisodesRepo(this.deps.storage).update({
+      id: input.episode.id,
+      result: nextResult,
+    });
+
+    this.publishOutboundEvent(
+      projectThinkTankEvent({
+        db: this.deps.storage,
+        consultation: this.buildThinkTankConsultationAnchor(input.consultation),
+        event: {
+          type: "episode_step_upserted",
+          episodeId: input.episode.id,
+          episodeSequence: input.episode.sequence,
+          step,
+        },
+      }),
+    );
+
+    return step;
+  }
+
+  private publishThinkTankConsultationUpserted(input: {
+    consultationAnchor: {
+      id: string;
+      sourceConversationId: string;
+      sourceBranchId: string;
+      sourceSessionId: string;
+    };
+    consultationStatus: "running" | "idle";
+    topic: string;
+    participants: Array<{
+      id: string;
+      title: string | null;
+      model: string;
+    }>;
+    latestSummary: ThinkTankStructuredSummary | null;
+    firstCompleted: boolean;
+  }): void {
+    this.publishOutboundEvent(
+      projectThinkTankEvent({
+        db: this.deps.storage,
+        consultation: input.consultationAnchor,
+        event: {
+          type: "consultation_upserted",
+          status: input.consultationStatus,
+          topic: input.topic,
+          participants: input.participants,
+          latestSummary: input.latestSummary,
+          firstCompleted: input.firstCompleted,
+        },
+      }),
+    );
+  }
+
+  private publishThinkTankEpisodeStarted(input: {
+    consultationAnchor: {
+      id: string;
+      sourceConversationId: string;
+      sourceBranchId: string;
+      sourceSessionId: string;
+    };
+    episodeId: string;
+    episodeSequence: number;
+    prompt: string;
+  }): void {
+    this.publishOutboundEvent(
+      projectThinkTankEvent({
+        db: this.deps.storage,
+        consultation: input.consultationAnchor,
+        event: {
+          type: "episode_started",
+          episodeId: input.episodeId,
+          episodeSequence: input.episodeSequence,
+          prompt: input.prompt,
+          plannedSteps: buildDefaultThinkTankPlannedSteps(),
+        },
+      }),
+    );
   }
 
   private publishTaskRunSettledEvent(
@@ -868,6 +1877,14 @@ export class AgentManager {
 
   private publishOutboundEvent(event: OrchestratedOutboundEventEnvelope): void {
     this.deps.outboundEventBus?.publish(event);
+  }
+
+  private requireThinkTankModels() {
+    if (this.deps.models == null) {
+      throw new Error("Think tank model registry is not configured.");
+    }
+
+    return resolveProviderRegistry(this.deps.models);
   }
 
   private getCurrentSubagentRequestForDecision(
@@ -1015,6 +2032,10 @@ export class AgentManager {
         sessionId: event.sessionId,
         trigger: event.type,
       });
+      this.flushThinkTankCompletionNoticesForSession({
+        sessionId: event.sessionId,
+        trigger: event.type,
+      });
     }
   }
 
@@ -1110,6 +2131,109 @@ export class AgentManager {
       });
     }
   }
+
+  private appendThinkTankCompletionNoticeIfNeeded(input: { consultationId: string }): void {
+    const consultationsRepo = new ThinkTankConsultationsRepo(this.deps.storage);
+    const consultation = consultationsRepo.getById(input.consultationId);
+    if (consultation == null) {
+      return;
+    }
+    if (consultation.firstCompletedAt == null || consultation.firstCompletionNoticeAt != null) {
+      return;
+    }
+
+    const sourceSession = new SessionsRepo(this.deps.storage).getById(consultation.sourceSessionId);
+    if (sourceSession == null || sourceSession.purpose !== "chat") {
+      return;
+    }
+
+    const participants = new ThinkTankParticipantsRepo(this.deps.storage).listByConsultation(
+      consultation.id,
+    );
+    const latestSummary = parseThinkTankSummaryJson(consultation.latestSummaryJson);
+    const createdAt = new Date(consultation.firstCompletedAt);
+    const content = renderThinkTankCompletionNotice({
+      topic: consultation.topic,
+      participants: participants.map((participant) => ({
+        title: participant.title,
+        model: participant.modelId,
+      })),
+      latestSummary,
+    });
+
+    const pending = this.pendingThinkTankCompletionNotices.get(sourceSession.id) ?? [];
+    pending.push({
+      consultationId: consultation.id,
+      sourceSessionId: sourceSession.id,
+      content,
+      createdAt,
+    });
+    pending.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+    this.pendingThinkTankCompletionNotices.set(sourceSession.id, pending);
+    consultationsRepo.update({
+      id: consultation.id,
+      firstCompletionNoticeAt: createdAt,
+      updatedAt: createdAt,
+    });
+    logger.info("queued hidden think tank completion notice", {
+      consultationId: consultation.id,
+      sourceSessionId: sourceSession.id,
+      pendingCount: pending.length,
+    });
+    this.flushThinkTankCompletionNoticesForSession({
+      sessionId: sourceSession.id,
+      trigger: "think_tank_episode_completed",
+    });
+  }
+
+  private flushThinkTankCompletionNoticesForSession(input: {
+    sessionId: string;
+    trigger: string;
+  }): void {
+    const pending = this.pendingThinkTankCompletionNotices.get(input.sessionId);
+    if (pending == null || pending.length === 0) {
+      return;
+    }
+    if (this.activeSessionRuns.has(input.sessionId)) {
+      logger.debug("deferred think tank completion notice flush due to active run", {
+        sourceSessionId: input.sessionId,
+        pendingCount: pending.length,
+        trigger: input.trigger,
+      });
+      return;
+    }
+
+    const sourceSession = new SessionsRepo(this.deps.storage).getById(input.sessionId);
+    if (sourceSession == null || sourceSession.purpose !== "chat") {
+      this.pendingThinkTankCompletionNotices.delete(input.sessionId);
+      return;
+    }
+
+    const messagesRepo = new MessagesRepo(this.deps.storage);
+    let appendedCount = 0;
+    for (const notice of pending) {
+      messagesRepo.append({
+        id: randomUUID(),
+        sessionId: sourceSession.id,
+        seq: messagesRepo.getNextSeq(sourceSession.id),
+        role: "user",
+        messageType: "think_tank_completion",
+        visibility: "hidden_system",
+        payloadJson: JSON.stringify({ content: notice.content }),
+        createdAt: notice.createdAt,
+      });
+      appendedCount += 1;
+    }
+    this.pendingThinkTankCompletionNotices.delete(input.sessionId);
+
+    if (appendedCount > 0) {
+      logger.info("flushed hidden think tank completion notices", {
+        sourceSessionId: sourceSession.id,
+        count: appendedCount,
+        trigger: input.trigger,
+      });
+    }
+  }
 }
 
 function logSettledTaskExecution(
@@ -1137,6 +2261,123 @@ function summarizeCronTaskRunForKickoff(run: {
     summary: run.resultSummary,
     error: run.errorText,
   };
+}
+
+function parseThinkTankSummaryJson(raw: string | null): ThinkTankStructuredSummary | null {
+  if (raw == null) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<ThinkTankStructuredSummary>;
+    if (
+      !Array.isArray(parsed.agreements) ||
+      !Array.isArray(parsed.keyDifferences) ||
+      !Array.isArray(parsed.openQuestions) ||
+      typeof parsed.currentConclusion !== "string"
+    ) {
+      return null;
+    }
+    if (
+      !parsed.agreements.every((item) => typeof item === "string") ||
+      !parsed.keyDifferences.every((item) => typeof item === "string") ||
+      !parsed.openQuestions.every((item) => typeof item === "string")
+    ) {
+      return null;
+    }
+
+    return {
+      agreements: parsed.agreements,
+      keyDifferences: parsed.keyDifferences,
+      currentConclusion: parsed.currentConclusion,
+      openQuestions: parsed.openQuestions,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseThinkTankEpisodeResultJson(raw: string | null): ThinkTankEpisodeResult | null {
+  if (raw == null) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<ThinkTankEpisodeResult>;
+    if (!Array.isArray(parsed.steps)) {
+      return null;
+    }
+    return {
+      steps: parsed.steps
+        .filter(
+          (step): step is ThinkTankEpisodeStepSnapshot =>
+            typeof step === "object" && step != null && typeof step.key === "string",
+        )
+        .sort((left, right) => left.order - right.order),
+      latestSummary:
+        parsed.latestSummary == null
+          ? null
+          : parseThinkTankSummaryJson(JSON.stringify(parsed.latestSummary)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractLatestAssistantTextFromRun(
+  run:
+    | RunAgentLoopResult
+    | {
+        events: AgentRuntimeEvent[];
+      },
+): string | null {
+  for (let index = run.events.length - 1; index >= 0; index -= 1) {
+    const event = run.events[index];
+    if (event?.type === "assistant_message_completed") {
+      return event.text.trim().length > 0 ? event.text.trim() : null;
+    }
+  }
+  return null;
+}
+
+function renderThinkTankCompletionNotice(input: {
+  topic: string;
+  participants: Array<{
+    title: string | null;
+    model: string;
+  }>;
+  latestSummary: ThinkTankStructuredSummary | null;
+}): string {
+  const lines = [
+    "This is a system completion notice for a think tank consultation you started. Do not echo this raw block to the user.",
+    "",
+    `<think_tank_completion topic="${escapeXml(input.topic)}">`,
+    "  <participants>",
+  ];
+  for (const participant of input.participants) {
+    const label =
+      participant.title == null || participant.title.trim().length === 0
+        ? participant.model
+        : `${participant.title} (${participant.model})`;
+    lines.push(`    <participant>${escapeXml(label)}</participant>`);
+  }
+  lines.push("  </participants>");
+  if (input.latestSummary != null) {
+    lines.push("  <current_conclusion>");
+    lines.push(`    ${escapeXml(input.latestSummary.currentConclusion)}`);
+    lines.push("  </current_conclusion>");
+  }
+  lines.push("</think_tank_completion>");
+  return lines.join("\n");
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }
 
 function isResolvedSubagentRequestStatus(

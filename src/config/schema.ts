@@ -45,6 +45,7 @@ export interface ModelScenarioConfig {
   chat: string[];
   compaction: string[];
   task: string[];
+  thinkTankAdvisor: string[];
   meditationBucket: string[];
   meditationConsolidation: string[];
 }
@@ -188,6 +189,7 @@ interface ModelScenarioConfigInput {
   chat?: unknown;
   compaction?: unknown;
   task?: unknown;
+  thinkTankAdvisor?: unknown;
   meditationBucket?: unknown;
   meditationConsolidation?: unknown;
 }
@@ -284,6 +286,7 @@ const MODEL_SCENARIOS = [
   "chat",
   "compaction",
   "task",
+  "thinkTankAdvisor",
   "meditationBucket",
   "meditationConsolidation",
 ] as const;
@@ -364,6 +367,7 @@ function cloneRawConfig(config: RawConfig): RawConfig {
         chat: [...config.models.scenarios.chat],
         compaction: [...config.models.scenarios.compaction],
         task: [...config.models.scenarios.task],
+        thinkTankAdvisor: [...config.models.scenarios.thinkTankAdvisor],
         meditationBucket: [...config.models.scenarios.meditationBucket],
         meditationConsolidation: [...config.models.scenarios.meditationConsolidation],
       },
@@ -528,6 +532,7 @@ function validateModelsConfig(
         chat: [...defaults.scenarios.chat],
         compaction: [...defaults.scenarios.compaction],
         task: [...defaults.scenarios.task],
+        thinkTankAdvisor: [...defaults.scenarios.thinkTankAdvisor],
         meditationBucket: [...defaults.scenarios.meditationBucket],
         meditationConsolidation: [...defaults.scenarios.meditationConsolidation],
       },
@@ -679,6 +684,7 @@ function validateModelScenarios(
       chat: [...defaults.chat],
       compaction: [...defaults.compaction],
       task: [...defaults.task],
+      thinkTankAdvisor: [...defaults.thinkTankAdvisor],
       meditationBucket: [...defaults.meditationBucket],
       meditationConsolidation: [...defaults.meditationConsolidation],
     };
@@ -700,6 +706,12 @@ function validateModelScenarios(
       "compaction",
     ),
     task: validateScenarioList(scenarios.task, defaults.task, catalogIds, "task"),
+    thinkTankAdvisor: validateScenarioList(
+      scenarios.thinkTankAdvisor,
+      defaults.thinkTankAdvisor,
+      catalogIds,
+      "thinkTankAdvisor",
+    ),
     meditationBucket: validateScenarioList(
       scenarios.meditationBucket,
       defaults.meditationBucket,
