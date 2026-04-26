@@ -659,6 +659,14 @@ export function buildOpenAIResponsesParams(
   return params;
 }
 
+/**
+ * Resolves the effective compat for completions-API calls.
+ *
+ * `supportsDeveloperRole` is always `false` regardless of per-model compat
+ * overrides.  Pokoclaw normalizes developer role to system everywhere, and
+ * enabling it would let the model emit a role that downstream normalization
+ * must later undo.
+ */
 function resolveCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
   return {
     ...DEFAULT_COMPAT,
@@ -668,6 +676,14 @@ function resolveCompat(model: Model<"openai-completions">): ResolvedOpenAIComple
   };
 }
 
+/**
+ * Normalizes developer role to system for the Responses API.
+ *
+ * This is a hard invariant: the Responses API must never emit developer-role
+ * input items, even if a future upstream change allows `supportsDeveloperRole`
+ * in a compat layer.  The responses format treats developer and system as
+ * equivalent, and pokoclaw normalizes to system everywhere.
+ */
 function normalizeResponsesInputRoles(input: ResponsesInput): ResponsesInput {
   if (!Array.isArray(input)) {
     return input;

@@ -386,7 +386,13 @@ export function convertResponsesMessages<TApi extends Api>(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
-            output.push(JSON.parse(block.thinkingSignature) as Record<string, unknown>);
+            try {
+              output.push(JSON.parse(block.thinkingSignature) as Record<string, unknown>);
+            } catch {
+              // thinkingSignature may be a plain string marker (e.g. "reasoning_content"
+              // used as a DeepSeek compat marker), not JSON.  Keep the raw value.
+              output.push({ thinking: block.thinkingSignature });
+            }
           }
         } else if (block.type === "text") {
           const parsedSignature = parseTextSignature(block.textSignature);

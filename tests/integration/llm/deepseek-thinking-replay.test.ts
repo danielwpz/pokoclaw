@@ -82,6 +82,12 @@ describe("DeepSeek thinking replay integration", () => {
 
     expect(result.usage.totalTokens).toBeGreaterThan(0);
     expect(hasAssistantOutput(result.content)).toBe(true);
+
+    const responseText = result.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    expect(responseText).toContain("POKOCLAW_DEEPSEEK_REPLAY_OK");
   }, 60_000);
 });
 
