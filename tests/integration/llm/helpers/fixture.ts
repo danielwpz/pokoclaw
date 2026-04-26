@@ -213,18 +213,22 @@ function defaultUsage(): MessageUsage {
   };
 }
 
-async function loadRequiredIntegrationLlmProfile(): Promise<IntegrationLlmProfile> {
+export async function loadIntegrationEnvFile(): Promise<Record<string, string>> {
   const envPath = path.resolve(process.cwd(), ENV_FILE_NAME);
-  const env = parseEnvFile(await readFile(envPath, "utf8"), envPath);
-  const baseUrl = getOptionalEnv(env, "POKOCLAW_IT_LLM_BASE_URL");
+  return parseEnvFile(await readFile(envPath, "utf8"), envPath);
+}
+
+async function loadRequiredIntegrationLlmProfile(): Promise<IntegrationLlmProfile> {
+  const env = await loadIntegrationEnvFile();
+  const baseUrl = getOptionalIntegrationEnv(env, "POKOCLAW_IT_LLM_BASE_URL");
 
   return {
-    api: getRequiredEnv(env, "POKOCLAW_IT_LLM_API"),
+    api: getRequiredIntegrationEnv(env, "POKOCLAW_IT_LLM_API"),
     ...(baseUrl !== undefined ? { baseUrl } : {}),
-    apiKey: getRequiredEnv(env, "POKOCLAW_IT_LLM_API_KEY"),
-    upstreamId: getRequiredEnv(env, "POKOCLAW_IT_LLM_UPSTREAM_ID"),
-    contextWindow: getIntegerEnv(env, "POKOCLAW_IT_LLM_CONTEXT_WINDOW", 200_000),
-    maxOutputTokens: getIntegerEnv(env, "POKOCLAW_IT_LLM_MAX_OUTPUT_TOKENS", 16_384),
+    apiKey: getRequiredIntegrationEnv(env, "POKOCLAW_IT_LLM_API_KEY"),
+    upstreamId: getRequiredIntegrationEnv(env, "POKOCLAW_IT_LLM_UPSTREAM_ID"),
+    contextWindow: getIntegerIntegrationEnv(env, "POKOCLAW_IT_LLM_CONTEXT_WINDOW", 200_000),
+    maxOutputTokens: getIntegerIntegrationEnv(env, "POKOCLAW_IT_LLM_MAX_OUTPUT_TOKENS", 16_384),
     supportsTools: getBooleanEnv(env, "POKOCLAW_IT_LLM_SUPPORTS_TOOLS", true),
     supportsVision: getBooleanEnv(env, "POKOCLAW_IT_LLM_SUPPORTS_VISION", false),
     reasoningEnabled: getBooleanEnv(env, "POKOCLAW_IT_LLM_SUPPORTS_REASONING", true),
@@ -292,7 +296,7 @@ function stripQuotes(value: string): string {
   return value;
 }
 
-function getRequiredEnv(env: Record<string, string>, key: string): string {
+export function getRequiredIntegrationEnv(env: Record<string, string>, key: string): string {
   const value = env[key]?.trim();
   if (!value) {
     throw new Error(`Missing required integration env: ${key}`);
@@ -301,13 +305,20 @@ function getRequiredEnv(env: Record<string, string>, key: string): string {
   return value;
 }
 
-function getOptionalEnv(env: Record<string, string>, key: string): string | undefined {
+export function getOptionalIntegrationEnv(
+  env: Record<string, string>,
+  key: string,
+): string | undefined {
   const value = env[key]?.trim();
   return value && value.length > 0 ? value : undefined;
 }
 
-function getIntegerEnv(env: Record<string, string>, key: string, fallback: number): number {
-  const value = getOptionalEnv(env, key);
+export function getIntegerIntegrationEnv(
+  env: Record<string, string>,
+  key: string,
+  fallback: number,
+): number {
+  const value = getOptionalIntegrationEnv(env, key);
   if (value == null) {
     return fallback;
   }
@@ -321,7 +332,7 @@ function getIntegerEnv(env: Record<string, string>, key: string, fallback: numbe
 }
 
 function getBooleanEnv(env: Record<string, string>, key: string, fallback: boolean): boolean {
-  const value = getOptionalEnv(env, key);
+  const value = getOptionalIntegrationEnv(env, key);
   if (value == null) {
     return fallback;
   }

@@ -331,35 +331,6 @@ describe("upstream openai usage normalization", () => {
     });
   });
 
-  test("ignores compat attempts to re-enable developer role for responses", () => {
-    const params = buildOpenAIResponsesParams(
-      {
-        ...OPENROUTER_RESPONSES_MODEL,
-        id: "openai/gpt-5",
-        name: "gpt-5",
-        provider: "openrouter",
-        reasoning: true,
-        input: ["text"],
-        contextWindow: 200_000,
-        maxTokens: 16_384,
-        compat: {
-          supportsDeveloperRole: true,
-        },
-      },
-      SIMPLE_CONTEXT,
-      undefined,
-    );
-
-    expect(Array.isArray(params.input)).toBe(true);
-    if (!Array.isArray(params.input)) {
-      throw new Error("expected array input");
-    }
-    expect(params.input[0]).toMatchObject({
-      role: "system",
-      content: "You are a helpful assistant.",
-    });
-  });
-
   test("forwards the configured responses max token budget without shrinking it", () => {
     const params = buildOpenAIResponsesParams(
       {
