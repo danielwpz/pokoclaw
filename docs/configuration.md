@@ -105,7 +105,8 @@ Default mapping rule:
 Say this clearly instead of treating all models as equal:
 
 - Best experience: GPT-5 or Claude Sonnet.
-- Acceptable floor: a strong mainstream model such as MiniMax 2.7 class.
+- Acceptable floor: DeepSeek V4 Pro or a strong mainstream model such as MiniMax 2.7 class.
+- DeepSeek V4 Pro is a practical lower-bound recommendation, not the best-experience tier.
 - Weak models are a false economy for this product. They often do not actually save effort or tokens; they mostly create more retries, more steering, and more frustration.
 
 If importing or selecting models, steer the user toward a good main model for `chat` and `task`. Pokoclaw's workflow quality depends heavily on tool use, multi-step execution, and judgment under uncertainty, so poor models degrade the whole product, not just wording quality.
@@ -196,7 +197,52 @@ Matching `secrets.toml`:
 appSecret = "paste-your-feishu-or-lark-app-secret-here"
 ```
 
-### Template C: Tavily for web search and web fetch
+### Template C: DeepSeek V4 Pro direct provider
+
+This is a direct DeepSeek setup using a secret reference. Replace the secret value in `secrets.toml`; do not put the API key in `config.toml`.
+
+```toml
+[providers.deepseek]
+api = "openai-completions"
+baseUrl = "https://api.deepseek.com"
+apiKey_ref = "secret://llm/deepseek/apiKey"
+
+[[models.catalog]]
+id = "deepseek-v4"
+provider = "deepseek"
+upstreamId = "deepseek-v4-pro"
+contextWindow = 200000
+maxOutputTokens = 32000
+supportsTools = true
+supportsVision = true
+[models.catalog.reasoning]
+enabled = true
+
+[models.scenarios]
+chat = ["deepseek-v4"]
+task = ["deepseek-v4"]
+compaction = ["deepseek-v4"]
+meditationBucket = ["deepseek-v4"]
+meditationConsolidation = ["deepseek-v4"]
+
+[channels.lark.installations.default]
+enabled = true
+appId = "cli_xxx"
+appSecret_ref = "secret://channels/lark/default/appSecret"
+connectionMode = "websocket"
+```
+
+Matching `secrets.toml`:
+
+```toml
+[llm.deepseek]
+apiKey = "paste-your-deepseek-api-key-here"
+
+[channels.lark.default]
+appSecret = "paste-your-feishu-or-lark-app-secret-here"
+```
+
+### Template D: Tavily for web search and web fetch
 
 Use this when the user wants Pokoclaw to search the web or fetch web pages during normal use.
 

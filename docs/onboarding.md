@@ -40,7 +40,7 @@ Finish with a valid config under `~/.pokoclaw/system/`, including Feishu/Lark ch
 - `web search` finds current information or relevant pages on the internet.
 - `web fetch` opens a known page and reads its contents.
 - Example: use `web search` to find an official docs page, then use `web fetch` to read and summarize it.
-- During model choice, actively recommend a strong model. Best experience: GPT-5 or Claude Sonnet. Minimum acceptable floor: a strong mainstream model such as MiniMax 2.7 class.
+- During model choice, actively recommend a strong model. Best experience: GPT-5 or Claude Sonnet. Minimum acceptable floor: DeepSeek V4 Pro or a strong mainstream model such as MiniMax 2.7 class.
 - Do not present obviously weak models as a neutral default. Explain briefly that weak models often do not really save tokens or time; they mostly buy more retries, more steering, and more blood pressure.
 
 ## Phase 1: Repository setup
@@ -141,6 +141,7 @@ Use `docs/configuration.md` for the concrete config structure.
 Do not stop at "please configure a provider". Help the user pick one path first:
 
 - Codex local auth when applicable
+- DeepSeek direct provider
 - OpenRouter
 - an OpenAI-compatible API provider
 - an Anthropic-compatible API provider
@@ -150,7 +151,8 @@ If the user wants web search or web fetch during normal use, also plan a Tavily 
 Say the model recommendation clearly:
 
 - Best experience: GPT-5 or Claude Sonnet.
-- Acceptable floor: a strong mainstream model such as MiniMax 2.7 class.
+- Acceptable floor: DeepSeek V4 Pro or a strong mainstream model such as MiniMax 2.7 class.
+- DeepSeek V4 Pro is a practical lower-bound recommendation, not the best-experience tier.
 - Friendly warning: trying to save money with a weak model often does not actually save trouble. It usually just turns "wow" into "why is my blood pressure up?"
 
 ### 2. Create the minimal runnable config
