@@ -36,6 +36,7 @@
     "format": "biome check --write --error-on-warnings .",
     "test": "vitest run --passWithNoTests",
     "test:integration": "vitest run --passWithNoTests --config vitest.integration.config.ts",
+    "test:integration:llm": "vitest run --config vitest.integration.config.ts tests/integration/llm",
     "preflight": "pnpm build && pnpm format && pnpm lint && pnpm test",
     "prepare": "husky"
   },
@@ -58,8 +59,8 @@
   "dependencies": {
     "@danielwpz/sandbox-runtime": "0.0.43-pokeclaw.0",
     "@larksuiteoapi/node-sdk": "^1.60.0",
-    "@mariozechner/pi-agent-core": "0.58.0",
-    "@mariozechner/pi-ai": "0.58.0",
+    "@mariozechner/pi-agent-core": "0.70.2",
+    "@mariozechner/pi-ai": "0.70.2",
     "@sinclair/typebox": "^0.34.48",
     "@tavily/core": "^0.7.2",
     "better-sqlite3": "^12.8.0",

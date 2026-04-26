@@ -478,7 +478,7 @@ export function convertResponsesTools(
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: tool.parameters,
+    parameters: tool.parameters as Record<string, unknown>,
     strict,
   }));
 }

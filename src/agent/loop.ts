@@ -211,6 +211,7 @@ export interface AgentLoopDependencies {
   runtime?: RuntimeConfig;
   approvalTimeoutMs?: number;
   approvalGrantTtlMs?: number;
+  approvalFlow?: SessionApprovalFlowRegistry;
   runtimeControl?: Omit<ToolRuntimeControl, "submitApprovalDecision">;
   control?: RuntimeControlService;
   emitEvent?: (event: AgentRuntimeEvent) => void;
@@ -230,7 +231,7 @@ export class AgentLoop {
   private readonly bootstrapResolver: AgentBootstrapResolver;
   private readonly memoryResolver: AgentMemoryResolver;
   private readonly approvalWaits = new SessionApprovalWaitRegistry();
-  private readonly approvalFlow = new SessionApprovalFlowRegistry();
+  private readonly approvalFlow: SessionApprovalFlowRegistry;
   private readonly steerQueue = new SessionSteerQueueRegistry();
   private readonly defaultMaxTurns: number;
   private readonly approvalTimeoutMs: number;
@@ -244,6 +245,7 @@ export class AgentLoop {
     this.skillsResolver = deps.skillsResolver ?? new FilesystemAgentSkillsResolver();
     this.bootstrapResolver = deps.bootstrapResolver ?? new FilesystemAgentBootstrapResolver();
     this.memoryResolver = deps.memoryResolver ?? new FilesystemAgentMemoryResolver();
+    this.approvalFlow = deps.approvalFlow ?? new SessionApprovalFlowRegistry();
     this.defaultMaxTurns = deps.runtime?.maxTurns ?? DEFAULT_RUNTIME_MAX_TURNS;
     this.approvalTimeoutMs =
       deps.approvalTimeoutMs ??

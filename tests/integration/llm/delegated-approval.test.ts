@@ -6,6 +6,7 @@ import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
 import { AgentManager } from "@/src/orchestration/agent-manager.js";
 import { createMainAgentApprovalSessionId } from "@/src/orchestration/approval-session.js";
+import { SessionApprovalFlowRegistry } from "@/src/runtime/approval-flow.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
@@ -193,6 +194,7 @@ async function createHarness(input: {
     storage: input.handle.storage.db,
     securityConfig: input.fixture.config.security,
     compaction: input.fixture.config.compaction,
+    approvalFlow: new SessionApprovalFlowRegistry(0),
     emitEvent(event) {
       manager.emitRuntimeEvent(event);
     },

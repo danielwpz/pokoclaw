@@ -10,7 +10,6 @@ import {
   type Api,
   type AssistantMessage,
   type Context,
-  convertMessages,
   createAssistantMessageEventStream,
   type Model,
   type OpenAICompletionsCompat,
@@ -21,6 +20,7 @@ import {
   type Tool,
   type Usage,
 } from "@mariozechner/pi-ai";
+import { convertMessages } from "@mariozechner/pi-ai/openai-completions";
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
 import type {
@@ -87,6 +87,12 @@ type AssistantToolCallContent = Extract<AssistantContentItem, { type: "toolCall"
 type AssistantMessageWithRawError = AssistantMessage & {
   pokoclawRawError?: ReturnType<typeof buildAgentLlmRawErrorPayload>;
 };
+type ResolvedOpenAICompletionsCompat = Omit<
+  Required<OpenAICompletionsCompat>,
+  "cacheControlFormat"
+> & {
+  cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+};
 
 interface UpstreamCostParser {
   supports(model: Pick<Model<Api>, "baseUrl">): boolean;
@@ -125,7 +131,7 @@ const OPENROUTER_COST_PARSER: UpstreamCostParser = {
 
 const COST_PARSERS: UpstreamCostParser[] = [OPENROUTER_COST_PARSER];
 
-const DEFAULT_COMPAT: Required<OpenAICompletionsCompat> = {
+const DEFAULT_COMPAT: ResolvedOpenAICompletionsCompat = {
   supportsStore: true,
   supportsDeveloperRole: false,
   supportsReasoningEffort: true,
@@ -135,10 +141,15 @@ const DEFAULT_COMPAT: Required<OpenAICompletionsCompat> = {
   requiresToolResultName: false,
   requiresAssistantAfterToolResult: false,
   requiresThinkingAsText: false,
+  requiresReasoningContentOnAssistantMessages: false,
   thinkingFormat: "openai",
   openRouterRouting: {},
   vercelGatewayRouting: {},
+  zaiToolStream: false,
   supportsStrictMode: true,
+  cacheControlFormat: undefined,
+  sendSessionAffinityHeaders: false,
+  supportsLongCacheRetention: true,
 };
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
@@ -648,7 +659,7 @@ export function buildOpenAIResponsesParams(
   return params;
 }
 
-function resolveCompat(model: Model<"openai-completions">): Required<OpenAICompletionsCompat> {
+function resolveCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
   return {
     ...DEFAULT_COMPAT,
     ...(((model as Model<"openai-completions"> & { compat?: Partial<OpenAICompletionsCompat> })
