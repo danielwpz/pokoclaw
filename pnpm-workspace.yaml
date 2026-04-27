@@ -1,5 +1,2 @@
 onlyBuiltDependencies:
   - better-sqlite3
-
-overrides:
-  '@danielwpz/sandbox-runtime': link:../sandbox-runtime
