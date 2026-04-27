@@ -283,6 +283,24 @@ Matching `secrets.toml`:
 apiKey = "paste-your-tavily-api-key-here"
 ```
 
+### Runtime approval modes
+
+Pokoclaw normally asks before actions that need extra permission.
+
+- **YOLO mode** is per owner agent. It can be toggled for one agent without changing global config. The current Lark command is `/yolo`.
+- **Autopilot mode** is global. It is configured in `config.toml` and applies at startup.
+
+Both modes reduce approval prompts, but they do not bypass hard-deny policy or sandbox limits.
+
+To enable Autopilot:
+
+```toml
+[runtime]
+autopilot = true
+```
+
+Restart Pokoclaw after changing this value.
+
 ### If the user prefers file-based secrets
 
 Keep `config.toml` like this:

@@ -174,6 +174,8 @@ If the user wants web search or web fetch, also write:
 - `[tools.web.search]`
 - `[tools.web.fetch]`
 
+Do not enable `[runtime] autopilot = true` during onboarding unless the user explicitly asks for fewer approval prompts and accepts that Pokoclaw will skip eligible human approval waits.
+
 This phase is for LLM configuration. Complete channel setup separately in Phase 3C: Required Feishu/Lark setup.
 
 Default scenario rule:
