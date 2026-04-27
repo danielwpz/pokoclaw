@@ -291,7 +291,10 @@ describe("agent system prompt", () => {
       "Do not use `request_permissions` to recover a bash sandbox failure directly.",
     );
     expect(prompt).toContain(
-      'Use `sandboxMode: "full_access"` only when running outside the sandbox is genuinely necessary',
+      "`full_access` still runs inside a high-permission sandbox; system hard-deny filesystem and network boundaries continue to apply.",
+    );
+    expect(prompt).toContain(
+      'Use `sandboxMode: "full_access"` only when higher-permission sandboxed execution is genuinely necessary',
     );
     expect(prompt).toContain(
       "one short sentence explaining why this exact command needs broader execution right now",
