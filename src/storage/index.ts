@@ -46,6 +46,7 @@ export {
   type StorageDb,
 } from "@/src/storage/db/client.js";
 export { getProductionDatabasePath, getTestDatabasePath } from "@/src/storage/db/paths.js";
+export { AgentRuntimeModesRepo } from "@/src/storage/repos/agent-runtime-modes.repo.js";
 export { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 export { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 export { ChannelInstancesRepo } from "@/src/storage/repos/channel-instances.repo.js";

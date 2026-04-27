@@ -65,6 +65,7 @@ export interface RuntimeConfig {
   maxTurns: number;
   approvalTimeoutMs: number;
   approvalGrantTtlMs: number;
+  autopilot: boolean;
 }
 
 export interface MeditationConfig {
@@ -208,6 +209,7 @@ interface RuntimeConfigInput {
   maxTurns?: unknown;
   approvalTimeoutMs?: unknown;
   approvalGrantTtlMs?: unknown;
+  autopilot?: unknown;
 }
 
 interface MeditationConfigInput {
@@ -796,7 +798,7 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
   const config = input as RuntimeConfigInput;
   assertAllowedKeys(
     config,
-    new Set(["maxTurns", "approvalTimeoutMs", "approvalGrantTtlMs"]),
+    new Set(["maxTurns", "approvalTimeoutMs", "approvalGrantTtlMs", "autopilot"]),
     "config.toml runtime",
   );
 
@@ -812,6 +814,11 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
     approvalGrantTtlMs: validatePositiveInteger(
       config.approvalGrantTtlMs ?? defaults.approvalGrantTtlMs,
       "config.toml runtime.approvalGrantTtlMs",
+    ),
+    autopilot: validateOptionalBoolean(
+      config.autopilot,
+      defaults.autopilot,
+      "config.toml runtime.autopilot",
     ),
   };
 }

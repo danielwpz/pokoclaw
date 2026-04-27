@@ -55,6 +55,7 @@ describe("storage db bootstrap", () => {
       expect(tableNames).toContain("channel_surfaces");
       expect(tableNames).toContain("channel_threads");
       expect(tableNames).toContain("agents");
+      expect(tableNames).toContain("agent_runtime_modes");
       expect(tableNames).toContain("sessions");
       expect(tableNames).toContain("messages");
       expect(tableNames).toContain("cron_jobs");
@@ -80,7 +81,10 @@ describe("storage db bootstrap", () => {
         .prepare("SELECT version, name FROM schema_migrations ORDER BY version ASC")
         .all() as Array<{ version: number; name: string }>;
 
-      expect(rows).toEqual([{ version: 1, name: "init" }]);
+      expect(rows).toEqual([
+        { version: 1, name: "init" },
+        { version: 2, name: "agent_runtime_modes" },
+      ]);
     } finally {
       await destroyTestDatabase(handle);
     }

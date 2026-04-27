@@ -217,7 +217,10 @@ async function executeBashWithFullAccessIfAllowed(input: {
     }
   }
 
-  if (input.context.approvalState?.bashFullAccess?.approved === true) {
+  if (
+    input.context.approvalState?.bashFullAccess?.approved === true ||
+    input.context.approvalState?.runtimeModeAutoApproval != null
+  ) {
     return await executeFullAccessSandboxedBash({
       context: input.context,
       command: input.args.command,
@@ -231,6 +234,9 @@ async function executeBashWithFullAccessIfAllowed(input: {
       const access = input.security.checkBashFullAccess({
         ownerAgentId,
         commandPrefix: command.argv,
+        ...(input.context.approvalState?.ephemeralPermissionScopes == null
+          ? {}
+          : { ephemeralScopes: input.context.approvalState.ephemeralPermissionScopes }),
       });
       return access.result === "allow";
     });

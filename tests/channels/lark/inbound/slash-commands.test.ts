@@ -7,7 +7,9 @@ import {
 } from "@/src/channels/lark/inbound.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
+import { RuntimeModeService } from "@/src/runtime/runtime-modes.js";
 import type { RuntimeStatusService } from "@/src/runtime/status.js";
+import { AgentRuntimeModesRepo } from "@/src/storage/repos/agent-runtime-modes.repo.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
 import { makeTextEvent, seedFixture, withHandle } from "./fixtures.js";
@@ -250,6 +252,12 @@ describe("lark inbound slash commands", () => {
             supportsReasoning: true,
             source: "scenario_default" as const,
           },
+          runtimeMode: {
+            source: "normal" as const,
+            autopilotEnabled: false,
+            yoloEnabled: false,
+            skipHumanApproval: false,
+          },
           sessionUsage: {
             input: 1,
             output: 2,
@@ -376,6 +384,12 @@ describe("lark inbound slash commands", () => {
             supportsReasoning: true,
             source: "scenario_default" as const,
           },
+          runtimeMode: {
+            source: "normal" as const,
+            autopilotEnabled: false,
+            yoloEnabled: false,
+            skipHumanApproval: false,
+          },
           sessionUsage: {
             input: 1,
             output: 2,
@@ -475,6 +489,12 @@ describe("lark inbound slash commands", () => {
             supportsReasoning: true,
             source: "scenario_default" as const,
           },
+          runtimeMode: {
+            source: "normal" as const,
+            autopilotEnabled: false,
+            yoloEnabled: false,
+            skipHumanApproval: false,
+          },
           sessionUsage: {
             input: 100,
             output: 20,
@@ -546,6 +566,7 @@ describe("lark inbound slash commands", () => {
         .join("\n");
       expect(markdown).toContain("openrouter-gpt5.4");
       expect(markdown).toContain("**版本**");
+      expect(markdown).toContain("**运行模式**：🧸 手动审批");
     });
   });
 
@@ -614,8 +635,73 @@ describe("lark inbound slash commands", () => {
           "- /status — Show the current conversation status, model, usage, and active runs.",
           "- /model — Open the model switch card for the current conversation.",
           "- /stop — Stop the current conversation or session.",
+          "- /yolo — Toggle YOLO mode for this agent.",
         ].join("\n"),
       );
+    });
+  });
+
+  test("toggles /yolo for the current main chat owner agent", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      new ChannelSurfacesRepo(handle.storage.db).upsert({
+        id: "surface_yolo_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const create = vi.fn(async () => ({ data: { message_id: "om_yolo_1" } }));
+      const runtimeModes = new RuntimeModeService({
+        storage: handle.storage.db,
+        autopilotEnabled: false,
+      });
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        runtimeModes,
+        clients: {
+          getOrCreate: vi.fn(() => ({
+            sdk: {
+              im: {
+                message: {
+                  create,
+                  reply: vi.fn(),
+                },
+              },
+            },
+          })) as unknown as (installationId: string) => LarkSdkClient,
+        },
+      });
+
+      await handler(makeTextEvent("/yolo"));
+      await handler(makeTextEvent("/yolo"));
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(new AgentRuntimeModesRepo(handle.storage.db).isYoloEnabled("agent_main")).toBe(false);
+      expect(create).toHaveBeenCalledTimes(2);
+      const firstCall = create.mock.calls[0] as [Record<string, unknown>] | undefined;
+      const secondCall = create.mock.calls[1] as [Record<string, unknown>] | undefined;
+      expect(
+        JSON.parse(
+          String((firstCall?.[0] as { data?: { content?: string } } | undefined)?.data?.content),
+        ),
+      ).toEqual({
+        text: "⚠️ YOLO mode is on. Risky actions may run without asking first. Send /yolo again to turn it off.",
+      });
+      expect(
+        JSON.parse(
+          String((secondCall?.[0] as { data?: { content?: string } } | undefined)?.data?.content),
+        ),
+      ).toEqual({
+        text: "🔒 YOLO mode is off. Future privileged actions will ask for approval again.",
+      });
     });
   });
 });

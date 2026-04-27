@@ -3,6 +3,7 @@ import { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
+import { RuntimeModeService } from "@/src/runtime/runtime-modes.js";
 import {
   buildConversationStatusPresentation,
   formatConversationStatusText,
@@ -79,6 +80,7 @@ function createConfig(): AppConfig {
       maxTurns: 60,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
+      autopilot: false,
     },
     selfHarness: {
       meditation: {
@@ -201,10 +203,20 @@ describe("runtime status service", () => {
         scenario: "chat",
       });
 
+      const runtimeModes = new RuntimeModeService({
+        storage: handle.storage.db,
+        autopilotEnabled: false,
+      });
+      runtimeModes.toggleYolo({
+        ownerAgentId: "agent_1",
+        updatedAt: new Date("2026-03-28T00:05:00.000Z"),
+      });
+
       const service = new RuntimeStatusService({
         storage: handle.storage.db,
         control,
         models: new ProviderRegistry(createConfig()),
+        runtimeModes,
       });
 
       const snapshot = service.getConversationStatus({
@@ -256,10 +268,17 @@ describe("runtime status service", () => {
           approvalTarget: "user",
         }),
       ]);
+      expect(snapshot.runtimeMode).toMatchObject({
+        source: "yolo",
+        yoloEnabled: true,
+        autopilotEnabled: false,
+      });
 
       const text = formatConversationStatusText(snapshot);
       expect(text).toContain("当前状态");
       expect(text).toContain("openrouter-gpt5.4 / openai/gpt-5.4 / openrouter / openai-responses");
+      expect(text).toContain("运行模式：🐯 YOLO");
+      expect(text.indexOf("Reasoning: 支持")).toBeLessThan(text.indexOf("运行模式：🐯 YOLO"));
       expect(text).toContain("- 最近 3 天 session");
       expect(text).not.toContain("- 当前 session 累计");
       expect(text).toContain("  总 65 / 输入 50 / 输出 10");
@@ -273,6 +292,11 @@ describe("runtime status service", () => {
       expect(presentation.summary).toBe("存在活跃 run");
       expect(presentation.markdownSections.join("\n")).toContain("**版本**");
       expect(presentation.markdownSections.join("\n")).toContain("openrouter-gpt5.4");
+      expect(presentation.markdownSections.join("\n")).toContain("**运行模式**：🐯 YOLO");
+      const overviewSection = presentation.markdownSections[0] ?? "";
+      expect(overviewSection.indexOf("**Reasoning**: 支持")).toBeLessThan(
+        overviewSection.indexOf("**运行模式**：🐯 YOLO"),
+      );
       expect(presentation.markdownSections.join("\n")).toContain("**最近 3 天 session**");
       expect(presentation.markdownSections.join("\n")).not.toContain("**当前 session 累计**");
       expect(presentation.markdownSections.join("\n")).toContain("- 总 65 / 输入 50 / 输出 10");
@@ -315,6 +339,10 @@ describe("runtime status service", () => {
         storage: handle.storage.db,
         control: new RuntimeControlService(new SessionRunAbortRegistry()),
         models: new ProviderRegistry(config),
+        runtimeModes: new RuntimeModeService({
+          storage: handle.storage.db,
+          autopilotEnabled: true,
+        }),
       });
 
       const snapshot = service.getConversationStatus({
@@ -324,6 +352,8 @@ describe("runtime status service", () => {
       });
 
       expect(snapshot.model.supportsReasoning).toBe(false);
+      expect(snapshot.runtimeMode.source).toBe("autopilot");
+      expect(formatConversationStatusText(snapshot)).toContain("运行模式：🛸 Autopilot");
       expect(formatConversationStatusText(snapshot)).toContain("Reasoning: 不支持");
     });
   });

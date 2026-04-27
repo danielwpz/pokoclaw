@@ -38,8 +38,11 @@ export function createQuerySystemDbTool() {
       const access = security.checkDatabaseAccess({
         ownerAgentId,
         kind: "db.read",
+        ...(context.approvalState?.ephemeralPermissionScopes == null
+          ? {}
+          : { ephemeralScopes: context.approvalState.ephemeralPermissionScopes }),
       });
-      if (access.result !== "allow") {
+      if (access.result !== "allow" && context.approvalState?.runtimeModeAutoApproval == null) {
         throw toolRecoverableError(access.summary, {
           code: "db_read_not_granted",
           kind: "db.read",

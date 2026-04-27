@@ -153,10 +153,28 @@ function buildApprovalCardElements(state: LarkApprovalState): Array<Record<strin
     return elements;
   }
 
+  const runtimeNudgeElement = buildApprovalRuntimeNudgeElement(state);
+  if (runtimeNudgeElement != null) {
+    elements.push(runtimeNudgeElement);
+  }
   elements.push({ tag: "hr" });
   elements.push(buildApprovalActionButtons(state));
 
   return elements;
+}
+
+function buildApprovalRuntimeNudgeElement(
+  state: LarkApprovalState,
+): Record<string, unknown> | null {
+  if (state.runtimeNudges.length === 0) {
+    return null;
+  }
+
+  return {
+    tag: "markdown",
+    content: state.runtimeNudges.map((nudge) => `> ${nudge.message}`).join("\n"),
+    text_size: "normal",
+  };
 }
 
 function buildSubagentCreationRequestCardElements(
@@ -300,8 +318,6 @@ function buildApprovalCardBodyMarkdown(
       ...formatApprovalCommandLines(state.commandText),
       ...permissionSummaryLines,
       ...formatHumanDeadlineLines("有效期至", state.expiresAt),
-      "",
-      "> 你处理后，agent 才会继续执行。",
     ].join("\n");
   }
 

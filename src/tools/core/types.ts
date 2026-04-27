@@ -3,6 +3,7 @@ import { Errors } from "@sinclair/typebox/errors";
 import { Check, Clone, Default } from "@sinclair/typebox/value";
 import type { SecurityConfig } from "@/src/config/schema.js";
 import type { RunLiveObservabilitySnapshot } from "@/src/runtime/run-observability.js";
+import type { PermissionScope } from "@/src/security/scope.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 
 export type ToolContentBlock =
@@ -98,11 +99,15 @@ export interface ToolRuntimeControl {
 }
 
 export interface ToolExecutionApprovalState {
+  runtimeModeAutoApproval?: {
+    source: "yolo" | "autopilot";
+  };
   bashFullAccess?: {
     approved: true;
     mode: "one_shot";
     approvalId: number;
   };
+  ephemeralPermissionScopes?: PermissionScope[];
 }
 
 export interface ToolDefinition<TArgs = unknown, TDetails = unknown> {

@@ -25,12 +25,15 @@ import {
   type LarkModelSwitchCardState,
 } from "@/src/channels/lark/render.js";
 import type { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
+import { sendLarkTextMessage } from "@/src/channels/lark/text-message.js";
 import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
+import { handleLarkYoloCommand, isLarkYoloCommand } from "@/src/channels/lark/yolo-command.js";
 import type { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
 import { materializeForkedSessionSnapshotInStorage } from "@/src/orchestration/session-fork.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import type { SubmitMessageResult } from "@/src/runtime/ingress.js";
+import type { RuntimeModeService } from "@/src/runtime/runtime-modes.js";
 import {
   buildConversationStatusPresentation,
   type RuntimeStatusService,
@@ -93,6 +96,7 @@ export interface CreateLarkInboundRuntimeInput {
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
   status?: RuntimeStatusService;
+  runtimeModes?: RuntimeModeService;
   modelSwitch?: ScenarioModelSwitchService;
   clients?: {
     getOrCreate(installationId: string): LarkSdkClient;
@@ -333,6 +337,7 @@ export function createLarkMessageReceiveHandler(input: {
   ingress: LarkInboundIngress;
   control: RuntimeControlService;
   status?: RuntimeStatusService;
+  runtimeModes?: RuntimeModeService;
   modelSwitch?: ScenarioModelSwitchService;
   clients?: {
     getOrCreate(installationId: string): LarkSdkClient;
@@ -472,6 +477,19 @@ export function createLarkMessageReceiveHandler(input: {
         sessionId: route.sessionId,
         scenario: route.scenario,
         routeKind: route.kind,
+      });
+      return;
+    }
+
+    if (isLarkYoloCommand(hydrated.text)) {
+      await handleLarkYoloCommand({
+        text: hydrated.text,
+        installationId: input.installationId,
+        storage: input.storage,
+        ...(input.runtimeModes == null ? {} : { runtimeModes: input.runtimeModes }),
+        route,
+        message: hydrated,
+        ...(input.clients == null ? {} : { clients: input.clients }),
       });
       return;
     }
@@ -1131,6 +1149,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           control: input.control,
           ...(input.clients == null ? {} : { clients: input.clients }),
           ...(input.status == null ? {} : { status: input.status }),
+          ...(input.runtimeModes == null ? {} : { runtimeModes: input.runtimeModes }),
           ...(input.modelSwitch == null ? {} : { modelSwitch: input.modelSwitch }),
           ...(input.clients == null
             ? {}
@@ -2197,7 +2216,13 @@ function extractStartedSubmitMessageResult(
 }
 
 function isLarkThreadControlCommand(text: string): boolean {
-  return text === "/stop" || text === "/status" || text === "/model" || text === "/help";
+  return (
+    text === "/stop" ||
+    text === "/status" ||
+    text === "/model" ||
+    text === "/help" ||
+    isLarkYoloCommand(text)
+  );
 }
 
 function buildTaskRunCardObjectId(taskRunId: string): string {
@@ -3177,47 +3202,6 @@ async function sendLarkHelpMessage(input: {
     ...(input.replyToMessageId == null ? {} : { replyToMessageId: input.replyToMessageId }),
     text: presentation.plainText,
     ...(input.clients == null ? {} : { clients: input.clients }),
-  });
-}
-
-async function sendLarkTextMessage(input: {
-  installationId: string;
-  chatId: string;
-  replyToMessageId?: string | null;
-  text: string;
-  clients?: {
-    getOrCreate(installationId: string): LarkSdkClient;
-  };
-}): Promise<void> {
-  if (input.clients == null) {
-    logger.warn("cannot send lark text message because no sdk clients are configured", {
-      installationId: input.installationId,
-      chatId: input.chatId,
-    });
-    return;
-  }
-
-  const client = input.clients.getOrCreate(input.installationId);
-  const content = JSON.stringify({ text: input.text });
-  if (input.replyToMessageId != null && input.replyToMessageId.length > 0) {
-    await client.sdk.im.message.reply({
-      path: { message_id: input.replyToMessageId },
-      data: {
-        msg_type: "text",
-        content,
-        reply_in_thread: true,
-      },
-    });
-    return;
-  }
-
-  await client.sdk.im.message.create({
-    params: { receive_id_type: "chat_id" },
-    data: {
-      receive_id: input.chatId,
-      msg_type: "text",
-      content,
-    },
   });
 }
 

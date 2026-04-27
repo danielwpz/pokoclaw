@@ -74,6 +74,9 @@ export function createFilesystemAccessController(
       kind: input.kind,
       targetPath: input.targetPath,
       cwd,
+      ...(context.approvalState?.ephemeralPermissionScopes == null
+        ? {}
+        : { ephemeralScopes: context.approvalState.ephemeralPermissionScopes }),
     });
     const normalizedPath = normalizeToolTargetPath(input.targetPath, cwd);
 
@@ -121,6 +124,17 @@ export function createFilesystemAccessController(
           ...(context.toolCallId == null ? {} : { failedToolCallId: context.toolCallId }),
         }),
       );
+    }
+
+    if (context.approvalState?.runtimeModeAutoApproval != null) {
+      return decisions.map(({ normalizedPath }) => ({
+        access: {
+          result: "allow",
+          reason: "granted",
+          summary: `Access auto-approved by ${context.approvalState?.runtimeModeAutoApproval?.source} mode for ${normalizedPath}`,
+        },
+        normalizedPath,
+      }));
     }
 
     const requestedScopes = collectMissingFilesystemScopes(decisions);

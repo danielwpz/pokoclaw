@@ -280,12 +280,17 @@ describe("storage migrations", () => {
       const result = runStorageMigrations(sqlite, { now: () => FIXED_NOW });
 
       expect(result).toEqual({
-        latestVersion: 1,
-        newlyAppliedVersions: [],
+        latestVersion: 2,
+        newlyAppliedVersions: [2],
         stampedBaseline: true,
       });
       expect(listLedgerRows(sqlite)).toEqual([
         { version: 1, name: "init", applied_at: "2026-04-27T00:00:00.000Z" },
+        {
+          version: 2,
+          name: "agent_runtime_modes",
+          applied_at: "2026-04-27T00:00:00.000Z",
+        },
       ]);
     } finally {
       sqlite.close();

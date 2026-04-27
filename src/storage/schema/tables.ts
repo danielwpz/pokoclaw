@@ -129,6 +129,23 @@ export const agents = sqliteTable("agents", {
   archivedAt: text("archived_at"),
 });
 
+export const agentRuntimeModes = sqliteTable("agent_runtime_modes", {
+  ownerAgentId: text("owner_agent_id")
+    .primaryKey()
+    .references(() => agents.id, { onDelete: "cascade" }),
+  yoloEnabled: integer("yolo_enabled", { mode: "boolean" }).notNull().default(false),
+  yoloEnabledAt: text("yolo_enabled_at"),
+  yoloUpdatedAt: text("yolo_updated_at").notNull(),
+  yoloUpdatedBy: text("yolo_updated_by"),
+  approvalStreakCount: integer("approval_streak_count").notNull().default(0),
+  approvalStreakStartedAt: text("approval_streak_started_at"),
+  lastApprovalRequestedAt: text("last_approval_requested_at"),
+  lastYoloPromptedAt: text("last_yolo_prompted_at"),
+  yoloPromptCountToday: integer("yolo_prompt_count_today").notNull().default(0),
+  yoloPromptCountDay: text("yolo_prompt_count_day"),
+  yoloSnoozedUntil: text("yolo_snoozed_until"),
+});
+
 export const taskWorkstreams = sqliteTable(
   "task_workstreams",
   {

@@ -2,6 +2,7 @@ import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 
 import type {
   agentPermissionGrants,
+  agentRuntimeModes,
   agents,
   approvalLedger,
   authEvents,
@@ -38,6 +39,9 @@ export type NewChannelThread = InferInsertModel<typeof channelThreads>;
 
 export type Agent = InferSelectModel<typeof agents>;
 export type NewAgent = InferInsertModel<typeof agents>;
+
+export type AgentRuntimeMode = InferSelectModel<typeof agentRuntimeModes>;
+export type NewAgentRuntimeMode = InferInsertModel<typeof agentRuntimeModes>;
 
 export type TaskWorkstream = InferSelectModel<typeof taskWorkstreams>;
 export type NewTaskWorkstream = InferInsertModel<typeof taskWorkstreams>;

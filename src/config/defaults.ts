@@ -30,6 +30,7 @@ export const DEFAULT_CONFIG: RawConfig = {
     maxTurns: DEFAULT_RUNTIME_MAX_TURNS,
     approvalTimeoutMs: DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
     approvalGrantTtlMs: DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
+    autopilot: false,
   },
   selfHarness: {
     meditation: {
