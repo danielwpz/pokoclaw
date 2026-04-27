@@ -139,12 +139,16 @@ export function buildFullAccessSandboxConfigForAgent(
       writeMode: "deny_only",
       allowWrite: [],
       denyWrite: expandSandboxPathPatterns(hardDenyWritePatterns),
+      allowGitConfig: true,
     },
     network: {
       mode: "deny_only",
       allowedDomains: [],
       deniedDomains: dedupeStrings(systemPolicy.network.hardDenyHosts),
+      allowLocalBinding: true,
     },
+    allowPty: true,
+    enableWeakerNetworkIsolation: true,
   };
 }
 

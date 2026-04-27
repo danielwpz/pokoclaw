@@ -209,7 +209,7 @@ describe("sandbox config compilation", () => {
     expect(config.network.deniedDomains).toContain("internal.example.com");
   });
 
-  test("builds full-access sandbox config as read, write, and network deny-only", async () => {
+  test("builds full-access sandbox config as deny-only with host-like compatibility defaults", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
     tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
@@ -251,10 +251,14 @@ describe("sandbox config compilation", () => {
     expect(config.filesystem.denyWrite).toContain(
       `${normalizeFilesystemTargetPath(extraHardWrite)}/**`,
     );
+    expect(config.filesystem.allowGitConfig).toBe(true);
     expect(config.network.mode).toBe("deny_only");
     expect(config.network.allowedDomains).toEqual([]);
     expect(config.network.deniedDomains).toContain("169.254.169.254");
     expect(config.network.deniedDomains).toContain("internal.example.com");
+    expect(config.network.allowLocalBinding).toBe(true);
+    expect(config.allowPty).toBe(true);
+    expect(config.enableWeakerNetworkIsolation).toBe(true);
   });
 
   test("executes bash through the sandbox with sanitized env and compiled config", async () => {
@@ -422,7 +426,11 @@ describe("sandbox config compilation", () => {
     expect(options?.customConfig?.filesystem?.allowRead).toEqual([]);
     expect(options?.customConfig?.filesystem?.writeMode).toBe("deny_only");
     expect(options?.customConfig?.filesystem?.allowWrite).toEqual([]);
+    expect(options?.customConfig?.filesystem?.allowGitConfig).toBe(true);
     expect(options?.customConfig?.network?.mode).toBe("deny_only");
+    expect(options?.customConfig?.network?.allowLocalBinding).toBe(true);
+    expect(options?.customConfig?.allowPty).toBe(true);
+    expect(options?.customConfig?.enableWeakerNetworkIsolation).toBe(true);
   });
 
   test("rejects full-access sandbox cwd when it is hard denied", async () => {
