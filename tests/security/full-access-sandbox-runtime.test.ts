@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -26,9 +26,34 @@ function seedAgentFixture(handle: TestDatabaseHandle): void {
   `);
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 describe("full-access sandbox runtime", () => {
   let handle: TestDatabaseHandle | null = null;
   let tempDir: string | null = null;
+
+  async function runFullAccessCommand(command: string, timeoutMs = 10_000) {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-full-access-sandbox-"));
+
+    return await executeFullAccessSandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_main",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+      },
+      command,
+      cwd: tempDir,
+      timeoutMs,
+    });
+  }
 
   afterEach(async () => {
     if (handle != null) {
@@ -42,10 +67,6 @@ describe("full-access sandbox runtime", () => {
   });
 
   test("allows binding a random localhost port in full-access sandbox", async () => {
-    handle = await createTestDatabase(import.meta.url);
-    seedAgentFixture(handle);
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-full-access-sandbox-"));
-
     const script = [
       'const http = require("node:http");',
       'const server = http.createServer((request, response) => response.end("ok"));',
@@ -62,6 +83,46 @@ describe("full-access sandbox runtime", () => {
       'setTimeout(() => { console.error("timeout"); process.exit(2); }, 5000).unref();',
     ].join(" ");
 
+    const result = await runFullAccessCommand(`node -e '${script}'`);
+
+    if (tempDir == null) {
+      throw new Error("full-access sandbox test did not create a temporary directory");
+    }
+    expect(result.cwd).toBe(normalizeFilesystemTargetPath(tempDir));
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toMatch(/^listening:\d+\n$/);
+  });
+
+  test("allows writing git config in full-access sandbox", async () => {
+    const result = await runFullAccessCommand(
+      [
+        "mkdir -p .git",
+        "printf '%s\\n' '[core]' 'repositoryformatversion = 0' > .git/config",
+        "cat .git/config",
+      ].join(" && "),
+    );
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("[core]");
+    expect(result.stdout).toContain("repositoryformatversion = 0");
+  });
+
+  test("allows PTY allocation in full-access sandbox on macOS", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-full-access-sandbox-"));
+
+    const outputFile = path.join(tempDir, "pty-output.txt");
+    await mkdir(path.dirname(outputFile), { recursive: true });
+
     const result = await executeFullAccessSandboxedBash({
       context: {
         sessionId: "sess_1",
@@ -72,15 +133,15 @@ describe("full-access sandbox runtime", () => {
         storage: handle.storage.db,
         toolCallId: "tool_1",
       },
-      command: `node -e '${script}'`,
+      command: `script -q ${shellQuote(outputFile)} echo pty-works`,
       cwd: tempDir,
       timeoutMs: 10_000,
     });
 
-    expect(result.cwd).toBe(normalizeFilesystemTargetPath(tempDir));
     expect(result.exitCode, result.stderr).toBe(0);
     expect(result.signal).toBeNull();
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toMatch(/^listening:\d+\n$/);
+
+    const output = await readFile(outputFile, "utf8");
+    expect(output).toContain("pty-works");
   });
 });
