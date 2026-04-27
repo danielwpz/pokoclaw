@@ -16,7 +16,7 @@ export interface OpenStorageDatabaseOptions {
   databasePath?: string;
   initializeSchema?: boolean;
   migrationsDir?: string;
-  migrationNow?: () => Date;
+  migrationClock?: () => Date;
 }
 
 export interface StorageDatabase {
@@ -43,7 +43,7 @@ export function openStorageDatabase(options: OpenStorageDatabaseOptions = {}): S
     if (initializeSchema) {
       runStorageMigrations(sqlite, {
         ...(options.migrationsDir == null ? {} : { migrationsDir: options.migrationsDir }),
-        ...(options.migrationNow == null ? {} : { now: options.migrationNow }),
+        ...(options.migrationClock == null ? {} : { now: options.migrationClock }),
       });
     }
 

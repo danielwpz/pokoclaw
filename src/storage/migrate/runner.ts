@@ -56,7 +56,7 @@ export interface RunStorageMigrationsOptions {
 
 export interface RunStorageMigrationsResult {
   latestVersion: number;
-  appliedVersions: number[];
+  newlyAppliedVersions: number[];
   stampedBaseline: boolean;
 }
 
@@ -80,6 +80,9 @@ export function runStorageMigrations(
   let stampedBaseline = false;
 
   if (appliedRows.length === 0 && hasExistingBaselineSchema(sqlite)) {
+    // Pre-ledger databases cannot prove their original init SQL checksum, so
+    // baseline stamping relies on structural compatibility with the current
+    // baseline schema.
     assertBaselineSchemaCompatible(sqlite);
     insertAppliedMigration(sqlite, migrations[0], now());
     appliedRows = listAppliedMigrations(sqlite);
@@ -88,11 +91,11 @@ export function runStorageMigrations(
 
   validateAppliedMigrations(appliedRows, migrations);
 
-  const appliedVersions = new Set(appliedRows.map((row) => row.version));
+  const appliedVersionSet = new Set(appliedRows.map((row) => row.version));
   const newlyAppliedVersions: number[] = [];
 
   for (const migration of migrations) {
-    if (appliedVersions.has(migration.version)) {
+    if (appliedVersionSet.has(migration.version)) {
       continue;
     }
 
@@ -102,7 +105,7 @@ export function runStorageMigrations(
 
   return {
     latestVersion,
-    appliedVersions: newlyAppliedVersions,
+    newlyAppliedVersions,
     stampedBaseline,
   };
 }

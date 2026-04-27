@@ -50,7 +50,7 @@ describe("storage migrations", () => {
     const storage = openStorageDatabase({
       databasePath: dbPath,
       migrationsDir,
-      migrationNow: () => FIXED_NOW,
+      migrationClock: () => FIXED_NOW,
     });
 
     try {
@@ -63,6 +63,26 @@ describe("storage migrations", () => {
       expect(ledgerRows).toEqual([
         { version: 1, name: "init", applied_at: "2026-04-27T00:00:00.000Z" },
       ]);
+    } finally {
+      storage.close();
+    }
+  });
+
+  test("schema_migrations rejects invalid applied_at timestamps", async () => {
+    const migrationsDir = await createMigrationDir({
+      "0001_init.sql": "CREATE TABLE app_records (id TEXT PRIMARY KEY);",
+    });
+    const dbPath = await createDbPath(import.meta.url);
+    const storage = openStorageDatabase({ databasePath: dbPath, migrationsDir });
+
+    try {
+      expect(() =>
+        storage.sqlite
+          .prepare(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
+          )
+          .run(2, "manual_bad", "checksum", "2026/04/27 00:00:00"),
+      ).toThrow();
     } finally {
       storage.close();
     }
@@ -82,7 +102,7 @@ describe("storage migrations", () => {
     const firstStorage = openStorageDatabase({
       databasePath: dbPath,
       migrationsDir,
-      migrationNow: () => FIXED_NOW,
+      migrationClock: () => FIXED_NOW,
     });
     firstStorage.close();
 
@@ -94,7 +114,7 @@ describe("storage migrations", () => {
     const secondStorage = openStorageDatabase({
       databasePath: dbPath,
       migrationsDir,
-      migrationNow: () => FIXED_NOW,
+      migrationClock: () => FIXED_NOW,
     });
 
     try {
@@ -261,7 +281,7 @@ describe("storage migrations", () => {
 
       expect(result).toEqual({
         latestVersion: 1,
-        appliedVersions: [],
+        newlyAppliedVersions: [],
         stampedBaseline: true,
       });
       expect(listLedgerRows(sqlite)).toEqual([
