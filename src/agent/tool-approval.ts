@@ -17,6 +17,11 @@ import type {
   ApprovalWaitOutcome,
   SessionApprovalWaitRegistry,
 } from "@/src/runtime/approval-waits.js";
+import type {
+  EffectiveApprovalModeSource,
+  RuntimeModeService,
+} from "@/src/runtime/runtime-modes.js";
+import { YOLO_SUGGESTION_MESSAGE } from "@/src/runtime/runtime-modes.js";
 import { describePermissionScope, type PermissionRequest } from "@/src/security/scope.js";
 import type { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
@@ -45,6 +50,7 @@ export async function requestToolApproval(input: {
   };
   approvalTimeoutMs: number;
   approvalFlow: SessionApprovalFlowRegistry;
+  runtimeModes?: RuntimeModeService;
   runInput: RunAgentLoopInput;
   session: Session;
   toolCall: AgentToolCall;
@@ -58,7 +64,14 @@ export async function requestToolApproval(input: {
   signal: AbortSignal;
   recordEvent(event: AgentRuntimeEventInput): void;
   onRequested?: (input: { approvalId: number; createdAt: Date; expiresAt: Date }) => void;
-}): Promise<ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest }> {
+}): Promise<
+  ApprovalWaitOutcome & {
+    approvalId: number;
+    request: PermissionRequest;
+    skippedHumanApproval?: boolean;
+    approvalModeSource?: EffectiveApprovalModeSource;
+  }
+> {
   const approvalRoute = resolveApprovalRouteForSession({
     db: input.storage,
     session: input.session,
@@ -71,6 +84,17 @@ export async function requestToolApproval(input: {
     sessionId: input.runInput.sessionId,
     route: approvalRoute,
   });
+  const effectiveMode = input.runtimeModes?.getEffectiveApprovalMode(input.session.ownerAgentId);
+
+  if (effectiveMode?.skipHumanApproval === true) {
+    return approveWithoutHumanApproval({
+      ...input,
+      approvalFlowId,
+      approvalAttemptIndex: 1,
+      approvalTarget: approvalPlan.initialTarget,
+      effectiveMode,
+    });
+  }
 
   let currentApprovalId: number | null = null;
   input.sessions.updateStatus({
@@ -155,6 +179,87 @@ function buildApprovalTitle(): string {
   return "Approval required";
 }
 
+function approveWithoutHumanApproval(input: {
+  security: SecurityService;
+  approvalTimeoutMs: number;
+  runInput: RunAgentLoopInput;
+  session: Session;
+  toolCall: AgentToolCall;
+  turn: number;
+  runId: string;
+  request: PermissionRequest;
+  reasonText: string;
+  approvalFlowId: string;
+  approvalAttemptIndex: number;
+  approvalTarget: "user" | "main_agent";
+  effectiveMode: ReturnType<RuntimeModeService["getEffectiveApprovalMode"]>;
+}): ApprovalWaitOutcome & {
+  approvalId: number;
+  request: PermissionRequest;
+  approvalTarget: "user" | "main_agent";
+  skippedHumanApproval: true;
+  approvalModeSource: EffectiveApprovalModeSource;
+} {
+  const createdAt = new Date();
+  const expiresAt = new Date(createdAt.getTime() + input.approvalTimeoutMs);
+  const approvalId = input.security.createApprovalRequest({
+    ownerAgentId: input.session.ownerAgentId ?? "",
+    requestedBySessionId: input.runInput.sessionId,
+    request: input.request,
+    approvalTarget: input.approvalTarget,
+    reasonText: input.reasonText,
+    createdAt,
+    expiresAt,
+    resumePayloadJson: buildApprovalResumePayloadJson(input),
+  });
+  const decidedAt = new Date();
+  const actor = `system:${input.effectiveMode.source}`;
+  const reasonText =
+    input.effectiveMode.source === "autopilot"
+      ? "Skipped human approval because Autopilot is active."
+      : "Skipped human approval because YOLO mode is active.";
+
+  logger.info("approval skipped by runtime mode without user-visible approval event", {
+    sessionId: input.runInput.sessionId,
+    approvalId,
+    toolName: input.toolCall.name,
+    actor,
+    mode: input.effectiveMode.source,
+    runId: input.runId,
+    approvalFlowId: input.approvalFlowId,
+    approvalAttemptIndex: input.approvalAttemptIndex,
+  });
+
+  return {
+    decision: "approve",
+    actor,
+    rawInput: null,
+    grantedBy: null,
+    reasonText,
+    decidedAt,
+    queuedSteer: [],
+    approvalId,
+    request: input.request,
+    approvalTarget: input.approvalTarget,
+    skippedHumanApproval: true,
+    approvalModeSource: input.effectiveMode.source,
+  };
+}
+
+function buildApprovalResumePayloadJson(input: {
+  toolCall: AgentToolCall;
+  turn: number;
+  runId: string;
+}): string {
+  return JSON.stringify({
+    toolCallId: input.toolCall.id,
+    toolName: input.toolCall.name,
+    toolArgs: input.toolCall.args,
+    turn: input.turn,
+    runId: input.runId,
+  } satisfies ApprovalResumePayload);
+}
+
 async function requestApprovalRound(input: {
   storage: import("@/src/storage/db/client.js").StorageDb;
   security: SecurityService;
@@ -176,6 +281,7 @@ async function requestApprovalRound(input: {
   signal: AbortSignal;
   recordEvent(event: AgentRuntimeEventInput): void;
   onRequested?: (input: { approvalId: number; createdAt: Date; expiresAt: Date }) => void;
+  runtimeModes?: RuntimeModeService;
   approvalRoute: ReturnType<typeof resolveApprovalRouteForSession>;
   approvalFlowId: string;
   approvalAttemptIndex: number;
@@ -187,17 +293,13 @@ async function requestApprovalRound(input: {
     approvalId: number;
     request: PermissionRequest;
     approvalTarget: "user" | "main_agent";
+    skippedHumanApproval?: boolean;
+    approvalModeSource?: EffectiveApprovalModeSource;
   }
 > {
   const createdAt = new Date();
   const expiresAt = new Date(createdAt.getTime() + input.approvalTimeoutMs);
-  const resumePayloadJson = JSON.stringify({
-    toolCallId: input.toolCall.id,
-    toolName: input.toolCall.name,
-    toolArgs: input.toolCall.args,
-    turn: input.turn,
-    runId: input.runId,
-  } satisfies ApprovalResumePayload);
+  const resumePayloadJson = buildApprovalResumePayloadJson(input);
   const approvalId = input.security.createApprovalRequest({
     ownerAgentId: input.session.ownerAgentId ?? "",
     requestedBySessionId: input.runInput.sessionId,
@@ -230,12 +332,6 @@ async function requestApprovalRound(input: {
     expiresAt,
   });
 
-  const waitPromise = input.approvalWaits.beginWait({
-    sessionId: input.runInput.sessionId,
-    approvalId,
-    timeoutMs: input.approvalTimeoutMs,
-  });
-
   input.recordEvent({
     type: "approval_requested",
     approvalId: String(approvalId),
@@ -252,6 +348,39 @@ async function requestApprovalRound(input: {
     conversationId: input.session.conversationId,
     branchId: input.session.branchId,
     runId: input.runId,
+  });
+
+  const ownerAgentId = input.session.ownerAgentId;
+  if (
+    input.runtimeModes?.recordApprovalRequestForYoloSuggestion({
+      ownerAgentId,
+      approvalTarget: input.approvalTarget,
+      requestedAt: createdAt,
+    }) === true &&
+    ownerAgentId != null
+  ) {
+    input.recordEvent({
+      type: "runtime_nudge",
+      ownerAgentId,
+      anchor: {
+        type: "approval_flow",
+        id: input.approvalFlowId,
+      },
+      nudge: {
+        kind: "yolo_suggestion",
+        message: YOLO_SUGGESTION_MESSAGE,
+      },
+      sessionId: input.runInput.sessionId,
+      conversationId: input.session.conversationId,
+      branchId: input.session.branchId,
+      runId: input.runId,
+    });
+  }
+
+  const waitPromise = input.approvalWaits.beginWait({
+    sessionId: input.runInput.sessionId,
+    approvalId,
+    timeoutMs: input.approvalTimeoutMs,
   });
 
   const outcome = await waitPromise;

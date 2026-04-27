@@ -14,6 +14,7 @@ describe("slash command help presentation", () => {
         "- /status — Show the current conversation status, model, usage, and active runs.",
         "- /model — Open the model switch card for the current conversation.",
         "- /stop — Stop the current conversation or session.",
+        "- /yolo — Toggle YOLO mode for this agent.",
       ].join("\n"),
     );
   });

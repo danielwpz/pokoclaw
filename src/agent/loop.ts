@@ -7,6 +7,10 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  approvalBelongsToActiveRound,
+  parseApprovalResumeRunId,
+} from "@/src/agent/approval-round.js";
+import {
   type AgentBootstrapResolver,
   FilesystemAgentBootstrapResolver,
 } from "@/src/agent/bootstrap.js";
@@ -48,6 +52,10 @@ import {
 import { buildAgentSystemPrompt } from "@/src/agent/system-prompt.js";
 import { requestToolApproval } from "@/src/agent/tool-approval.js";
 import {
+  buildApprovedToolExecutionState,
+  buildRuntimeModeToolExecutionState,
+} from "@/src/agent/tool-approval-state.js";
+import {
   DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
   DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
   DEFAULT_RUNTIME_MAX_TURNS,
@@ -61,6 +69,7 @@ import {
 } from "@/src/runtime/approval-waits.js";
 import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
+import type { RuntimeModeService } from "@/src/runtime/runtime-modes.js";
 import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-queue.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import type { PermissionRequest } from "@/src/security/scope.js";
@@ -209,6 +218,7 @@ export interface AgentLoopDependencies {
   securityConfig: SecurityConfig;
   compaction: CompactionConfig;
   runtime?: RuntimeConfig;
+  runtimeModes?: RuntimeModeService;
   approvalTimeoutMs?: number;
   approvalGrantTtlMs?: number;
   approvalFlow?: SessionApprovalFlowRegistry;
@@ -222,6 +232,7 @@ interface ExecutedToolCall {
   isError: boolean;
   queuedSteer: SteerInput[];
   stopRemainingToolBatch: boolean;
+  approvalState?: ToolExecutionApprovalState;
 }
 
 export class AgentLoop {
@@ -571,6 +582,9 @@ export class AgentLoop {
       });
 
       let completed = false;
+      let runApprovalState = buildRuntimeModeToolExecutionState(
+        this.deps.runtimeModes?.getEffectiveApprovalMode(context.session.ownerAgentId),
+      );
       for (let turn = 0; turn < maxTurns; turn += 1) {
         throwIfAborted(handle.signal);
         let turnToolExecutions = 0;
@@ -1026,9 +1040,13 @@ export class AgentLoop {
               runId,
               events,
               signal: handle.signal,
+              ...(runApprovalState == null ? {} : { approvalState: runApprovalState }),
             });
 
             throwIfAborted(handle.signal);
+            if (executedTool.approvalState != null) {
+              runApprovalState = executedTool.approvalState;
+            }
 
             const toolResultMessageId = randomUUID();
             const toolResultMessage = appendMessageAndHydrate({
@@ -1443,9 +1461,10 @@ export class AgentLoop {
     runId: string;
     events: AgentRuntimeEvent[];
     signal: AbortSignal;
+    approvalState?: ToolExecutionApprovalState;
   }): Promise<ExecutedToolCall> {
     const queuedSteer: SteerInput[] = [];
-    let approvalState: ToolExecutionApprovalState | undefined;
+    let approvalState: ToolExecutionApprovalState | undefined = input.approvalState;
 
     while (true) {
       try {
@@ -1475,6 +1494,7 @@ export class AgentLoop {
           isError: false,
           queuedSteer,
           stopRemainingToolBatch: false,
+          ...(approvalState == null ? {} : { approvalState }),
         };
       } catch (error) {
         if (!isToolApprovalRequired(error)) {
@@ -1486,6 +1506,7 @@ export class AgentLoop {
           security: this.security,
           approvalWaits: this.approvalWaits,
           approvalFlow: this.approvalFlow,
+          ...(this.deps.runtimeModes == null ? {} : { runtimeModes: this.deps.runtimeModes }),
           sessions: this.deps.sessions,
           approvalTimeoutMs: this.approvalTimeoutMs,
           runInput: input.input,
@@ -1506,7 +1527,14 @@ export class AgentLoop {
 
         if (approval.decision === "approve") {
           queuedSteer.push(...approval.queuedSteer);
-          if (error.grantOnApprove) {
+          const nextApprovalState = buildApprovedToolExecutionState({
+            request: approval.request,
+            approvalId: approval.approvalId,
+            skippedHumanApproval: approval.skippedHumanApproval === true,
+            ...(error.approvalState == null ? {} : { baseState: error.approvalState }),
+          });
+
+          if (error.grantOnApprove && approval.skippedHumanApproval !== true) {
             const grantedBy = approval.grantedBy ?? "user";
             const grantExpiresAt =
               approval.expiresAt === undefined
@@ -1529,13 +1557,14 @@ export class AgentLoop {
             });
           }
 
-          approvalState = error.approvalState;
+          approvalState = nextApprovalState;
           this.markToolRunning(input.runId, input.toolCall);
 
           if (input.toolCall.name === "request_permissions") {
             return await this.finishPermissionRequestAfterApproval({
               input,
               approval,
+              ...(nextApprovalState == null ? {} : { approvalState: nextApprovalState }),
               queuedSteer,
               ...(error.retryToolCallId == null ? {} : { retryToolCallId: error.retryToolCallId }),
             });
@@ -1588,6 +1617,7 @@ export class AgentLoop {
           isError: true,
           queuedSteer: [...queuedSteer, ...approval.queuedSteer],
           stopRemainingToolBatch: approval.actor === "user:intervention",
+          ...(approvalState == null ? {} : { approvalState }),
         };
       }
     }
@@ -1606,6 +1636,7 @@ export class AgentLoop {
       signal: AbortSignal;
     };
     approval: ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest };
+    approvalState?: ToolExecutionApprovalState;
     queuedSteer: SteerInput[];
     retryToolCallId?: string;
   }): Promise<ExecutedToolCall> {
@@ -1630,6 +1661,7 @@ export class AgentLoop {
         isError: false,
         queuedSteer: input.queuedSteer,
         stopRemainingToolBatch: false,
+        ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
       };
     }
 
@@ -1656,6 +1688,7 @@ export class AgentLoop {
         isError: true,
         queuedSteer: input.queuedSteer,
         stopRemainingToolBatch: false,
+        ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
       };
     }
 
@@ -1684,6 +1717,7 @@ export class AgentLoop {
           ...(input.input.ownerAgent?.workdir == null
             ? {}
             : { cwd: input.input.ownerAgent.workdir }),
+          ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
         }),
         retryTarget.args,
       );
@@ -1719,6 +1753,7 @@ export class AgentLoop {
         isError: false,
         queuedSteer: input.queuedSteer,
         stopRemainingToolBatch: false,
+        ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
       };
     } catch (error) {
       const failure = normalizeToolFailure(error);
@@ -1766,6 +1801,7 @@ export class AgentLoop {
         isError: true,
         queuedSteer: input.queuedSteer,
         stopRemainingToolBatch: false,
+        ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
       };
     }
   }
@@ -1907,30 +1943,6 @@ export class AgentLoop {
       createdAt: input.decidedAt,
     });
   }
-}
-
-function parseApprovalResumeRunId(approval: ApprovalRecord | null): string | null {
-  if (approval?.resumePayloadJson == null || approval.resumePayloadJson.length === 0) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(approval.resumePayloadJson) as { runId?: unknown };
-    return typeof parsed.runId === "string" && parsed.runId.length > 0 ? parsed.runId : null;
-  } catch {
-    return null;
-  }
-}
-
-function approvalBelongsToActiveRound(
-  approval: ApprovalRecord,
-  activeRunId: string | null,
-): boolean {
-  if (activeRunId == null) {
-    return true;
-  }
-
-  return parseApprovalResumeRunId(approval) === activeRunId;
 }
 
 function buildAbortedToolBatchResult(): ToolResult {

@@ -190,6 +190,7 @@ describe("config loader", () => {
       maxTurns: 60,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
+      autopilot: false,
     });
     expect(config.selfHarness).toEqual({
       meditation: {
@@ -494,6 +495,7 @@ describe("config loader", () => {
         "maxTurns = 24",
         "approvalTimeoutMs = 240000",
         "approvalGrantTtlMs = 172800000",
+        "autopilot = true",
         "",
       ].join("\n"),
       "utf8",
@@ -505,7 +507,17 @@ describe("config loader", () => {
       maxTurns: 24,
       approvalTimeoutMs: 240_000,
       approvalGrantTtlMs: 172_800_000,
+      autopilot: true,
     });
+  });
+
+  test("rejects invalid runtime autopilot config", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(configPath, ["[runtime]", 'autopilot = "yes"', ""].join("\n"), "utf8");
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml runtime.autopilot must be a boolean",
+    );
   });
 
   test("rejects enabled web tools without a provider", async () => {

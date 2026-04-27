@@ -129,6 +129,9 @@ export function createRequestPermissionsTool() {
           kind: scope.kind,
           targetPath: scope.path,
           ...(context.cwd == null ? {} : { cwd: context.cwd }),
+          ...(context.approvalState?.ephemeralPermissionScopes == null
+            ? {}
+            : { ephemeralScopes: context.approvalState.ephemeralPermissionScopes }),
         });
         return access.result === "allow";
       });

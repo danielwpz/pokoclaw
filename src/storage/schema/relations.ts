@@ -2,6 +2,7 @@ import { relations } from "drizzle-orm";
 
 import {
   agentPermissionGrants,
+  agentRuntimeModes,
   agents,
   approvalLedger,
   authEvents,
@@ -84,6 +85,10 @@ export const agentsRelations = relations(agents, ({ one, many }) => ({
   taskRuns: many(taskRuns),
   approvals: many(approvalLedger),
   permissionGrants: many(agentPermissionGrants),
+  runtimeMode: one(agentRuntimeModes, {
+    fields: [agents.id],
+    references: [agentRuntimeModes.ownerAgentId],
+  }),
   authEvents: many(authEvents),
   harnessEvents: many(harnessEvents),
   subagentCreationRequests: many(subagentCreationRequests, {
@@ -91,6 +96,13 @@ export const agentsRelations = relations(agents, ({ one, many }) => ({
   }),
   createdFromRequests: many(subagentCreationRequests, {
     relationName: "subagent_creation_request_created_agent",
+  }),
+}));
+
+export const agentRuntimeModesRelations = relations(agentRuntimeModes, ({ one }) => ({
+  ownerAgent: one(agents, {
+    fields: [agentRuntimeModes.ownerAgentId],
+    references: [agents.id],
   }),
 }));
 

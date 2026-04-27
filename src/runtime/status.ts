@@ -14,6 +14,11 @@ import {
 } from "@/src/agent/llm/provider-registry-source.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import { resolveSessionLiveState } from "@/src/runtime/live-state.js";
+import type {
+  EffectiveApprovalMode,
+  EffectiveApprovalModeSource,
+  RuntimeModeService,
+} from "@/src/runtime/runtime-modes.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -66,10 +71,18 @@ export interface StatusPendingApprovalSnapshot {
   expiresAt: string | null;
 }
 
+export interface StatusRuntimeModeSnapshot {
+  source: EffectiveApprovalModeSource;
+  autopilotEnabled: boolean;
+  yoloEnabled: boolean;
+  skipHumanApproval: boolean;
+}
+
 export interface ConversationStatusSnapshot {
   conversationId: string;
   sessionId: string;
   model: StatusModelSnapshot;
+  runtimeMode: StatusRuntimeModeSnapshot;
   sessionUsage: StatusUsageSnapshot | null;
   latestTurnUsage: StatusUsageSnapshot | null;
   latestTurnErrorMessage: string | null;
@@ -89,6 +102,7 @@ export class RuntimeStatusService {
       storage: StorageDb;
       control: RuntimeControlService;
       models: ProviderRegistry | ProviderRegistrySource;
+      runtimeModes?: RuntimeModeService;
     },
   ) {}
 
@@ -157,11 +171,15 @@ export class RuntimeStatusService {
       });
 
     const latestTurnUsage = latestAssistant == null ? null : parseMessageUsage(latestAssistant);
+    const runtimeMode = toStatusRuntimeMode(
+      this.deps.runtimeModes?.getEffectiveApprovalMode(session.ownerAgentId),
+    );
 
     return {
       conversationId: input.conversationId,
       sessionId: input.sessionId,
       model,
+      runtimeMode,
       sessionUsage,
       latestTurnUsage,
       latestTurnErrorMessage:
@@ -190,6 +208,7 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
   if (snapshot.model.supportsReasoning != null) {
     lines.push(`Reasoning: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`);
   }
+  lines.push(`运行模式：${formatRuntimeModeLine(snapshot.runtimeMode)}`);
 
   lines.push("");
   lines.push("Usage");
@@ -251,6 +270,7 @@ export function buildConversationStatusPresentation(
         ...(snapshot.model.supportsReasoning == null
           ? []
           : [`**Reasoning**: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`]),
+        `**运行模式**：${formatRuntimeModeLine(snapshot.runtimeMode)}`,
       ].join("\n"),
       [
         "### Usage",
@@ -296,6 +316,30 @@ export function buildConversationStatusPresentation(
       ].join("\n"),
     ],
   };
+}
+
+function toStatusRuntimeMode(
+  mode: EffectiveApprovalMode | null | undefined,
+): StatusRuntimeModeSnapshot {
+  return (
+    mode ?? {
+      source: "normal",
+      autopilotEnabled: false,
+      yoloEnabled: false,
+      skipHumanApproval: false,
+    }
+  );
+}
+
+function formatRuntimeModeLine(mode: StatusRuntimeModeSnapshot): string {
+  switch (mode.source) {
+    case "autopilot":
+      return "🛸 Autopilot";
+    case "yolo":
+      return "🐯 YOLO";
+    case "normal":
+      return "🧸 手动审批";
+  }
 }
 
 function resolveStatusModel(input: {

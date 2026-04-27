@@ -71,6 +71,26 @@ export class SecurityService {
   getEffectivePermissions(ownerAgentId: string, activeAt?: Date): EffectivePermissions {
     const grants = this.grantsRepo.listActiveByOwner(ownerAgentId, activeAt);
     const scopes = parseGrantedScopes(grants.map((grant) => grant.scopeJson));
+    return this.buildEffectivePermissionsForScopes(ownerAgentId, scopes);
+  }
+
+  getEffectivePermissionsWithEphemeralScopes(input: {
+    ownerAgentId: string;
+    activeAt?: Date;
+    ephemeralScopes?: PermissionScope[];
+  }): EffectivePermissions {
+    const grants = this.grantsRepo.listActiveByOwner(input.ownerAgentId, input.activeAt);
+    const scopes = [
+      ...parseGrantedScopes(grants.map((grant) => grant.scopeJson)),
+      ...(input.ephemeralScopes ?? []),
+    ];
+    return this.buildEffectivePermissionsForScopes(input.ownerAgentId, scopes);
+  }
+
+  private buildEffectivePermissionsForScopes(
+    ownerAgentId: string,
+    scopes: PermissionScope[],
+  ): EffectivePermissions {
     return buildEffectivePermissions(
       scopes,
       this.systemPolicy,
@@ -84,11 +104,16 @@ export class SecurityService {
     targetPath: string;
     cwd?: string;
     activeAt?: Date;
+    ephemeralScopes?: PermissionScope[];
   }): PermissionCheckResult {
     return checkFilesystemPermission({
       kind: input.kind,
       targetPath: input.targetPath,
-      permissions: this.getEffectivePermissions(input.ownerAgentId, input.activeAt),
+      permissions: this.getEffectivePermissionsWithEphemeralScopes({
+        ownerAgentId: input.ownerAgentId,
+        ...(input.activeAt == null ? {} : { activeAt: input.activeAt }),
+        ...(input.ephemeralScopes == null ? {} : { ephemeralScopes: input.ephemeralScopes }),
+      }),
       ...(input.cwd == null ? {} : { cwd: input.cwd }),
     });
   }
@@ -97,10 +122,15 @@ export class SecurityService {
     ownerAgentId: string;
     kind: DbPermissionKind;
     activeAt?: Date;
+    ephemeralScopes?: PermissionScope[];
   }): PermissionCheckResult {
     return checkDatabasePermission({
       kind: input.kind,
-      permissions: this.getEffectivePermissions(input.ownerAgentId, input.activeAt),
+      permissions: this.getEffectivePermissionsWithEphemeralScopes({
+        ownerAgentId: input.ownerAgentId,
+        ...(input.activeAt == null ? {} : { activeAt: input.activeAt }),
+        ...(input.ephemeralScopes == null ? {} : { ephemeralScopes: input.ephemeralScopes }),
+      }),
     });
   }
 
@@ -108,10 +138,15 @@ export class SecurityService {
     ownerAgentId: string;
     commandPrefix: string[];
     activeAt?: Date;
+    ephemeralScopes?: PermissionScope[];
   }): PermissionCheckResult {
     return checkBashFullAccessPermission({
       commandPrefix: input.commandPrefix,
-      permissions: this.getEffectivePermissions(input.ownerAgentId, input.activeAt),
+      permissions: this.getEffectivePermissionsWithEphemeralScopes({
+        ownerAgentId: input.ownerAgentId,
+        ...(input.activeAt == null ? {} : { activeAt: input.activeAt }),
+        ...(input.ephemeralScopes == null ? {} : { ephemeralScopes: input.ephemeralScopes }),
+      }),
     });
   }
 

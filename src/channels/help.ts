@@ -30,6 +30,10 @@ const SLASH_COMMANDS: SlashCommandHelpEntry[] = [
     command: "/stop",
     description: "Stop the current conversation or session.",
   },
+  {
+    command: "/yolo",
+    description: "Toggle YOLO mode for this agent.",
+  },
 ];
 
 export function buildSlashCommandHelpPresentation(

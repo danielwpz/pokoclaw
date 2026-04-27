@@ -32,6 +32,7 @@ export interface BuildSandboxConfigForAgentInput {
   ownerAgentId: string;
   systemPolicy?: SystemPermissionPolicy;
   activeAt?: Date;
+  ephemeralScopes?: PermissionScope[];
 }
 
 export interface ExecuteSandboxedBashInput {
@@ -90,7 +91,11 @@ export function buildSandboxConfigForAgent(
 ): SandboxRuntimeConfig {
   const systemPolicy = input.systemPolicy ?? buildSystemPolicy();
   const security = new SecurityService(input.storage, systemPolicy);
-  const permissions = security.getEffectivePermissions(input.ownerAgentId, input.activeAt);
+  const permissions = security.getEffectivePermissionsWithEphemeralScopes({
+    ownerAgentId: input.ownerAgentId,
+    ...(input.activeAt == null ? {} : { activeAt: input.activeAt }),
+    ...(input.ephemeralScopes == null ? {} : { ephemeralScopes: input.ephemeralScopes }),
+  });
   const denyReadPatterns = [...permissions.fs.read.hardDeny, ...permissions.fs.read.deny];
   const allowReadPatterns = [
     ...permissions.fs.read.allow,
@@ -183,6 +188,9 @@ export async function executeSandboxedBash(
     storage: input.context.storage,
     ownerAgentId,
     systemPolicy,
+    ...(input.context.approvalState?.ephemeralPermissionScopes == null
+      ? {}
+      : { ephemeralScopes: input.context.approvalState.ephemeralPermissionScopes }),
   });
 
   return await executeBashInSandbox({
@@ -332,6 +340,9 @@ async function resolveSandboxCwd(input: {
     kind: "fs.read",
     targetPath: normalizedPath,
     cwd: fallbackCwd,
+    ...(input.context.approvalState?.ephemeralPermissionScopes == null
+      ? {}
+      : { ephemeralScopes: input.context.approvalState.ephemeralPermissionScopes }),
   });
 
   if (access.result === "deny" && access.reason === "hard_deny") {
@@ -505,7 +516,12 @@ function translateSandboxPermissionError(input: {
       kind: issue.kind,
       targetPath: issue.path,
       cwd: input.cwd,
-      permissions: input.security.getEffectivePermissions(input.ownerAgentId),
+      permissions: input.security.getEffectivePermissionsWithEphemeralScopes({
+        ownerAgentId: input.ownerAgentId,
+        ...(input.context.approvalState?.ephemeralPermissionScopes == null
+          ? {}
+          : { ephemeralScopes: input.context.approvalState.ephemeralPermissionScopes }),
+      }),
     });
 
     if (access.result === "deny" && access.reason === "hard_deny") {

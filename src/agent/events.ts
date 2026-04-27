@@ -187,6 +187,23 @@ export interface ApprovalResolvedEvent extends AgentRuntimeEventBase {
   flowContinues?: boolean;
 }
 
+export type RuntimeNudgeAnchor = {
+  type: "approval_flow";
+  id: string;
+};
+
+export interface RuntimeNudge {
+  kind: "yolo_suggestion";
+  message: string;
+}
+
+export interface RuntimeNudgeEvent extends AgentRuntimeEventBase {
+  type: "runtime_nudge";
+  ownerAgentId: string;
+  anchor: RuntimeNudgeAnchor;
+  nudge: RuntimeNudge;
+}
+
 export interface SteerMessageConsumedEvent extends AgentRuntimeEventBase {
   type: "steer_message_consumed";
   turn: number;
@@ -214,6 +231,7 @@ export type AgentRuntimeEvent =
   | CompactionFailedEvent
   | ApprovalRequestedEvent
   | ApprovalResolvedEvent
+  | RuntimeNudgeEvent
   | SteerMessageConsumedEvent;
 
 export type AgentRuntimeEventInput =
@@ -236,4 +254,5 @@ export type AgentRuntimeEventInput =
   | Omit<CompactionFailedEvent, "eventId" | "createdAt">
   | Omit<ApprovalRequestedEvent, "eventId" | "createdAt">
   | Omit<ApprovalResolvedEvent, "eventId" | "createdAt">
+  | Omit<RuntimeNudgeEvent, "eventId" | "createdAt">
   | Omit<SteerMessageConsumedEvent, "eventId" | "createdAt">;

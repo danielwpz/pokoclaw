@@ -5,7 +5,12 @@
  * attempts so channel rendering can present a stable card even when a task
  * approval times out and falls back to delegated review.
  */
-import type { ApprovalRequestedEvent, ApprovalResolvedEvent } from "@/src/agent/events.js";
+import type {
+  ApprovalRequestedEvent,
+  ApprovalResolvedEvent,
+  RuntimeNudge,
+  RuntimeNudgeEvent,
+} from "@/src/agent/events.js";
 import type { OrchestratedRuntimeEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import type { PermissionRequest } from "@/src/security/scope.js";
 
@@ -22,6 +27,11 @@ export interface LarkApprovalAttemptState {
   approvalTarget: "user" | "main_agent";
   status: "pending" | "timed_out" | "approved" | "denied";
   actor: string | null;
+}
+
+export interface LarkApprovalRuntimeNudge {
+  kind: RuntimeNudge["kind"];
+  message: string;
 }
 
 export interface LarkApprovalState {
@@ -47,6 +57,7 @@ export interface LarkApprovalState {
   decision: "approve" | "deny" | null;
   actor: string | null;
   sourceRunCardObjectId: string | null;
+  runtimeNudges: LarkApprovalRuntimeNudge[];
 }
 
 export function createLarkApprovalStateFromRequest(input: {
@@ -88,6 +99,7 @@ export function createLarkApprovalStateFromRequest(input: {
     decision: null,
     actor: null,
     sourceRunCardObjectId: input.sourceRunCardObjectId,
+    runtimeNudges: [],
   };
 }
 
@@ -121,6 +133,37 @@ export function shouldHandleLarkApprovalRuntimeEvent(
   return (
     envelope.event.type === "approval_requested" || envelope.event.type === "approval_resolved"
   );
+}
+
+export function addLarkApprovalRuntimeNudge(
+  state: LarkApprovalState,
+  event: RuntimeNudgeEvent,
+): LarkApprovalState {
+  if (
+    event.anchor.type !== "approval_flow" ||
+    event.anchor.id !== state.flowId ||
+    state.phase !== "waiting_user" ||
+    state.currentApprovalId == null ||
+    state.resolved
+  ) {
+    return state;
+  }
+
+  const nextNudge: LarkApprovalRuntimeNudge = {
+    kind: event.nudge.kind,
+    message: event.nudge.message,
+  };
+  const alreadyPresent = state.runtimeNudges.some(
+    (nudge) => nudge.kind === nextNudge.kind && nudge.message === nextNudge.message,
+  );
+  if (alreadyPresent) {
+    return state;
+  }
+
+  return {
+    ...state,
+    runtimeNudges: [...state.runtimeNudges, nextNudge],
+  };
 }
 
 function onApprovalRequested(
@@ -169,6 +212,7 @@ function onApprovalRequested(
     decision: null,
     actor: null,
     sourceRunCardObjectId: input?.sourceRunCardObjectId ?? previous.sourceRunCardObjectId ?? null,
+    runtimeNudges: previous.resolved ? [] : previous.runtimeNudges,
   };
 }
 

@@ -37,6 +37,7 @@ import {
   createRuntimeOrchestrationBridge,
   type RuntimeOrchestrationBridge,
 } from "@/src/runtime/orchestration-bridge.js";
+import { RuntimeModeService } from "@/src/runtime/runtime-modes.js";
 import { RuntimeStatusService } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -94,12 +95,17 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     taskRuns: new TaskRunsRepo(input.storage),
   });
   const scenarioModelSwitch = new ScenarioModelSwitchService(liveConfig);
+  const runtimeModes = new RuntimeModeService({
+    storage: input.storage,
+    autopilotEnabled: input.config.runtime.autopilot,
+  });
   const providerApiKeyResolver = new CodexProviderApiKeyResolver();
   const llmBridge = new PiBridge(providerApiKeyResolver);
   const status = new RuntimeStatusService({
     storage: input.storage,
     control,
     models: liveModels,
+    runtimeModes,
   });
   const loop = new AgentLoop({
     sessions: new AgentSessionService(sessions, messages),
@@ -112,6 +118,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     securityConfig: input.config.security,
     compaction: input.config.compaction,
     runtime: input.config.runtime,
+    runtimeModes,
     runtimeControl: bridge.runtimeControl,
     control,
     emitEvent: bridge.emitRuntimeEvent,
@@ -163,6 +170,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     ingress,
     control,
     status,
+    runtimeModes,
     modelSwitch: scenarioModelSwitch,
     outboundEventBus,
     clients: larkClients,

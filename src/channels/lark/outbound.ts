@@ -6,7 +6,9 @@
  * throttling, sequencing, and durable lark object bindings.
  */
 import { randomUUID } from "node:crypto";
+import type { RuntimeNudgeEvent } from "@/src/agent/events.js";
 import {
+  addLarkApprovalRuntimeNudge,
   type LarkApprovalState,
   reduceLarkApprovalState,
   shouldHandleLarkApprovalRuntimeEvent,
@@ -22,6 +24,7 @@ import {
   setCardkitSequenceFloorInMetadata,
 } from "@/src/channels/lark/cardkit-mutations.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
+import { listLarkDeliveryTargets, readStringValue } from "@/src/channels/lark/delivery-targets.js";
 import {
   addLarkMessageReaction,
   removeLarkMessageReaction,
@@ -53,7 +56,6 @@ import type { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.js";
-import { ChannelThreadsRepo } from "@/src/storage/repos/channel-threads.repo.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
 import { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
@@ -134,6 +136,7 @@ export function createLarkOutboundRuntime(
   const runStates = new Map<string, LarkRunState>();
   const taskStates = new Map<string, LarkRunState>();
   const approvalStates = new Map<string, LarkApprovalState>();
+  const pendingRuntimeNudgesByApprovalFlowId = new Map<string, RuntimeNudgeEvent[]>();
   const activeRunSegmentByRunId = new Map<string, string>();
   const latestRunSegmentByRunId = new Map<string, string>();
   const nextRunSegmentIndexByRunId = new Map<string, number>();
@@ -1487,12 +1490,17 @@ export function createLarkOutboundRuntime(
         }
       }
       const previousApprovalState = approvalStates.get(approvalFlowId) ?? null;
-      const nextApprovalState = reduceLarkApprovalState(previousApprovalState, envelope, {
+      let nextApprovalState = reduceLarkApprovalState(previousApprovalState, envelope, {
         sourceRunCardObjectId:
           sourceRunCardObjectId ?? previousApprovalState?.sourceRunCardObjectId ?? null,
       });
       if (nextApprovalState == null) {
         return;
+      }
+      const pendingNudges = pendingRuntimeNudgesByApprovalFlowId.get(approvalFlowId) ?? [];
+      pendingRuntimeNudgesByApprovalFlowId.delete(approvalFlowId);
+      for (const pendingNudge of pendingNudges) {
+        nextApprovalState = addLarkApprovalRuntimeNudge(nextApprovalState, pendingNudge);
       }
       approvalStates.set(approvalFlowId, nextApprovalState);
       latestApprovalByRunId.set(runId, approvalFlowId);
@@ -1555,6 +1563,41 @@ export function createLarkOutboundRuntime(
           decision: event.decision,
         });
         bumpVersionAndSchedule(`run:${previousApprovalState.sourceRunCardObjectId}`);
+      }
+    }
+  };
+
+  const handleRuntimeNudgeEvent = (envelope: OrchestratedRuntimeEventEnvelope) => {
+    if (envelope.event.type !== "runtime_nudge") {
+      return;
+    }
+
+    switch (envelope.event.anchor.type) {
+      case "approval_flow": {
+        const approvalFlowId = envelope.event.anchor.id;
+        const previousApprovalState = approvalStates.get(approvalFlowId);
+        if (previousApprovalState == null) {
+          const pendingNudges = pendingRuntimeNudgesByApprovalFlowId.get(approvalFlowId) ?? [];
+          pendingRuntimeNudgesByApprovalFlowId.set(approvalFlowId, [
+            ...pendingNudges,
+            envelope.event,
+          ]);
+          return;
+        }
+
+        const nextApprovalState = addLarkApprovalRuntimeNudge(
+          previousApprovalState,
+          envelope.event,
+        );
+        if (nextApprovalState === previousApprovalState) {
+          return;
+        }
+
+        approvalStates.set(approvalFlowId, nextApprovalState);
+        if (shouldCreateStandaloneLarkApprovalCard(nextApprovalState)) {
+          bumpVersionAndSchedule(`approval:${approvalFlowId}`);
+        }
+        return;
       }
     }
   };
@@ -1696,6 +1739,11 @@ export function createLarkOutboundRuntime(
           return;
         }
 
+        if (envelope.event.type === "runtime_nudge") {
+          handleRuntimeNudgeEvent(envelope);
+          return;
+        }
+
         if (shouldHandleLarkApprovalRuntimeEvent(envelope)) {
           handleApprovalEvent(envelope);
           return;
@@ -1834,6 +1882,7 @@ export function createLarkOutboundRuntime(
       runStates.clear();
       taskStates.clear();
       approvalStates.clear();
+      pendingRuntimeNudgesByApprovalFlowId.clear();
       activeRunSegmentByRunId.clear();
       latestRunSegmentByRunId.clear();
       nextRunSegmentIndexByRunId.clear();
@@ -1998,56 +2047,6 @@ async function maybeSendFullTaskTerminalMessageToThread(input: {
 
 function describeTaskTitleFallback(state: LarkRunState): string {
   return describeTaskRunKind(state.taskRunType);
-}
-
-function readStringValue(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function listLarkDeliveryTargets(
-  storage: StorageDb,
-  input: {
-    conversationId: string;
-    branchId: string;
-    taskRunId?: string | null;
-  },
-): Array<{
-  channelInstallationId: string;
-  surfaceObject: Record<string, unknown>;
-}> {
-  const surfaces = new ChannelSurfacesRepo(storage).listByConversationBranch({
-    channelType: LARK_CHANNEL_TYPE,
-    conversationId: input.conversationId,
-    branchId: input.branchId,
-  });
-  const taskRun =
-    input.taskRunId == null ? null : new TaskRunsRepo(storage).getById(input.taskRunId);
-  const channelThreadsRepo = new ChannelThreadsRepo(storage);
-
-  return surfaces.map((surface) => {
-    const threadBinding =
-      taskRun == null
-        ? null
-        : channelThreadsRepo.getByRootTaskRun({
-            channelType: LARK_CHANNEL_TYPE,
-            channelInstallationId: surface.channelInstallationId,
-            rootTaskRunId: taskRun.threadRootRunId ?? taskRun.id,
-          });
-
-    return {
-      channelInstallationId: surface.channelInstallationId,
-      surfaceObject:
-        threadBinding == null
-          ? parseSurfaceObject(surface.surfaceObjectJson)
-          : {
-              chat_id: threadBinding.externalChatId,
-              thread_id: threadBinding.externalThreadId,
-              ...(threadBinding.openedFromMessageId == null
-                ? {}
-                : { reply_to_message_id: threadBinding.openedFromMessageId }),
-            },
-    };
-  });
 }
 
 function listTaskCardDeliveryTargets(

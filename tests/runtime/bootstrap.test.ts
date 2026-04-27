@@ -34,6 +34,7 @@ function createConfig(): AppConfig {
       maxTurns: 60,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
+      autopilot: false,
     },
     selfHarness: {
       meditation: {
