@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@danielwpz/sandbox-runtime':
-        specifier: 0.0.43-pokeclaw.1
-        version: 0.0.43-pokeclaw.1
+        specifier: 0.0.43-pokeclaw.2
+        version: 0.0.43-pokeclaw.2
       '@larksuiteoapi/node-sdk':
         specifier: ^1.60.0
         version: 1.60.0
@@ -293,8 +293,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@danielwpz/sandbox-runtime@0.0.43-pokeclaw.1':
-    resolution: {integrity: sha512-mnYcIxD3BVS4vSEenLiyS1s3NS8GnhxM5v3AG4WPBTLSESUWii+mBjswi2FX/pkLpv60RKdnrayqsYi1vziYpA==}
+  '@danielwpz/sandbox-runtime@0.0.43-pokeclaw.2':
+    resolution: {integrity: sha512-sdR/4+fnXZqR/KGwATgOcAgda84808pCxskqDKobgaJE/xo3q3sR10udehvrrX0F9soaWFoIfA839s8S8+FrxA==}
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -2697,7 +2697,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.4.8':
     optional: true
 
-  '@danielwpz/sandbox-runtime@0.0.43-pokeclaw.1':
+  '@danielwpz/sandbox-runtime@0.0.43-pokeclaw.2':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       '@types/lodash-es': 4.17.12
