@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() => ({
+const { executeSandboxedBashMock, executeFullAccessSandboxedBashMock } = vi.hoisted(() => ({
   executeSandboxedBashMock: vi.fn(),
-  executeUnsandboxedBashMock: vi.fn(),
+  executeFullAccessSandboxedBashMock: vi.fn(),
 }));
 
 import type { AgentAssistantContentBlock } from "@/src/agent/llm/messages.js";
@@ -31,7 +31,7 @@ vi.mock("@/src/security/sandbox.js", async () => {
   return {
     ...actual,
     executeSandboxedBash: executeSandboxedBashMock,
-    executeUnsandboxedBash: executeUnsandboxedBashMock,
+    executeFullAccessSandboxedBash: executeFullAccessSandboxedBashMock,
   };
 });
 
@@ -120,7 +120,7 @@ describe("agent loop bash approval flow", () => {
 
   beforeEach(() => {
     executeSandboxedBashMock.mockReset();
-    executeUnsandboxedBashMock.mockReset();
+    executeFullAccessSandboxedBashMock.mockReset();
   });
 
   afterEach(async () => {
@@ -223,7 +223,7 @@ describe("agent loop bash approval flow", () => {
         },
       }),
     );
-    executeUnsandboxedBashMock.mockResolvedValueOnce({
+    executeFullAccessSandboxedBashMock.mockResolvedValueOnce({
       command: "echo hi > notes.txt",
       cwd: "/tmp",
       timeoutMs: 10_000,
@@ -267,7 +267,7 @@ describe("agent loop bash approval flow", () => {
     const result = await runPromise;
 
     expect(executeSandboxedBashMock).toHaveBeenCalledTimes(1);
-    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeFullAccessSandboxedBashMock).toHaveBeenCalledTimes(1);
     expect(result.events.some((event) => event.type === "approval_requested")).toBe(true);
     expect(
       result.events.some(
@@ -400,7 +400,7 @@ describe("agent loop bash approval flow", () => {
         },
       }),
     );
-    executeUnsandboxedBashMock.mockRejectedValueOnce(
+    executeFullAccessSandboxedBashMock.mockRejectedValueOnce(
       toolRecoverableError("Read access is missing for /tmp/two", {
         code: "permission_denied",
         requestable: true,

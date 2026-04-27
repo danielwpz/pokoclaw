@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -42,12 +41,7 @@ export interface ExecuteSandboxedBashInput {
   timeoutMs: number;
 }
 
-export interface ExecuteUnsandboxedBashInput {
-  context: ToolExecutionContext;
-  command: string;
-  cwd?: string;
-  timeoutMs: number;
-}
+export interface ExecuteFullAccessSandboxedBashInput extends ExecuteSandboxedBashInput {}
 
 export interface SandboxedBashResult extends SandboxExecResult {
   command: string;
@@ -125,6 +119,35 @@ export function buildSandboxConfigForAgent(
   };
 }
 
+export function buildFullAccessSandboxConfigForAgent(
+  input: BuildSandboxConfigForAgentInput,
+): SandboxRuntimeConfig {
+  const systemPolicy = input.systemPolicy ?? buildSystemPolicy();
+  const security = new SecurityService(input.storage, systemPolicy);
+  const permissions = security.getEffectivePermissions(input.ownerAgentId, input.activeAt);
+  const hardDenyReadPatterns = permissions.fs.read.hardDeny;
+  const hardDenyWritePatterns = permissions.fs.write.hardDeny;
+
+  return {
+    filesystem: {
+      readMode: "deny_only",
+      denyRead: expandSandboxPathPatterns([
+        ...hardDenyReadPatterns,
+        ...expandExactDirectoryReadChildren(hardDenyReadPatterns),
+      ]),
+      allowRead: [],
+      writeMode: "deny_only",
+      allowWrite: [],
+      denyWrite: expandSandboxPathPatterns(hardDenyWritePatterns),
+    },
+    network: {
+      mode: "deny_only",
+      allowedDomains: [],
+      deniedDomains: dedupeStrings(systemPolicy.network.hardDenyHosts),
+    },
+  };
+}
+
 function expandSandboxPathPatterns(patterns: readonly string[]): string[] {
   const expanded: string[] = [];
 
@@ -157,6 +180,58 @@ export async function executeSandboxedBash(
     ownerAgentId,
     systemPolicy,
   });
+
+  return await executeBashInSandbox({
+    context: input.context,
+    command: input.command,
+    cwd,
+    timeoutMs: input.timeoutMs,
+    ownerAgentId,
+    security,
+    sandboxConfig,
+    logPrefix: "bash sandbox exec",
+  });
+}
+
+export async function executeFullAccessSandboxedBash(
+  input: ExecuteFullAccessSandboxedBashInput,
+): Promise<SandboxedBashResult> {
+  const ownerAgentId = requireOwnerAgentId(input.context);
+  const systemPolicy = buildSystemPolicy({ security: input.context.securityConfig });
+  const security = new SecurityService(input.context.storage, systemPolicy);
+  const cwd = await resolveFullAccessSandboxCwd({
+    context: input.context,
+    security,
+    ...(input.cwd === undefined ? {} : { requestedCwd: input.cwd }),
+  });
+  const sandboxConfig = buildFullAccessSandboxConfigForAgent({
+    storage: input.context.storage,
+    ownerAgentId,
+    systemPolicy,
+  });
+
+  return await executeBashInSandbox({
+    context: input.context,
+    command: input.command,
+    cwd,
+    timeoutMs: input.timeoutMs,
+    ownerAgentId,
+    security,
+    sandboxConfig,
+    logPrefix: "bash full-access sandbox exec",
+  });
+}
+
+async function executeBashInSandbox(input: {
+  context: ToolExecutionContext;
+  command: string;
+  cwd: string;
+  timeoutMs: number;
+  ownerAgentId: string;
+  security: SecurityService;
+  sandboxConfig: SandboxRuntimeConfig;
+  logPrefix: string;
+}): Promise<SandboxedBashResult> {
   const timeout = Math.max(1, Math.floor(input.timeoutMs));
   const timeoutController = new AbortController();
   const timeoutHandle = setTimeout(() => timeoutController.abort(), timeout);
@@ -165,11 +240,11 @@ export async function executeSandboxedBash(
       ? timeoutController.signal
       : AbortSignal.any([input.context.abortSignal, timeoutController.signal]);
 
-  logger.info("bash sandbox exec start", {
+  logger.info(`${input.logPrefix} start`, {
     sessionId: input.context.sessionId,
-    ownerAgentId,
+    ownerAgentId: input.ownerAgentId,
     toolCallId: input.context.toolCallId,
-    cwd: shortenPathForLog(cwd),
+    cwd: shortenPathForLog(input.cwd),
     timeoutMs: timeout,
     command: truncateForLog(input.command),
   });
@@ -177,42 +252,42 @@ export async function executeSandboxedBash(
   try {
     const result = await executeSandboxedCommand(input.command, {
       binShell: DEFAULT_BASH_BINARY,
-      customConfig: sandboxConfig,
+      customConfig: input.sandboxConfig,
       abortSignal,
-      cwd,
+      cwd: input.cwd,
       env: sanitizeSandboxEnv(process.env),
     });
 
-    logger.info("bash sandbox exec done", {
+    logger.info(`${input.logPrefix} done`, {
       sessionId: input.context.sessionId,
-      ownerAgentId,
+      ownerAgentId: input.ownerAgentId,
       toolCallId: input.context.toolCallId,
       exitCode: result.exitCode,
       signal: result.signal,
-      cwd: shortenPathForLog(cwd),
+      cwd: shortenPathForLog(input.cwd),
     });
 
     return {
       ...result,
       command: input.command,
-      cwd,
+      cwd: input.cwd,
       timeoutMs: timeout,
     };
   } catch (error) {
     if (isSandboxPermissionError(error)) {
-      logger.info("bash sandbox exec blocked", {
+      logger.info(`${input.logPrefix} blocked`, {
         sessionId: input.context.sessionId,
-        ownerAgentId,
+        ownerAgentId: input.ownerAgentId,
         toolCallId: input.context.toolCallId,
         issueCount: error.issues.length,
         issue: describeSandboxIssueForLog(error.issues[0]),
       });
       throw translateSandboxPermissionError({
         context: input.context,
-        ownerAgentId,
-        security,
+        ownerAgentId: input.ownerAgentId,
+        security: input.security,
         error,
-        cwd,
+        cwd: input.cwd,
         command: input.command,
       });
     }
@@ -222,90 +297,17 @@ export async function executeSandboxedBash(
       timeoutController.signal.aborted &&
       !input.context.abortSignal?.aborted
     ) {
-      logger.info("bash sandbox exec timeout", {
+      logger.info(`${input.logPrefix} timeout`, {
         sessionId: input.context.sessionId,
-        ownerAgentId,
+        ownerAgentId: input.ownerAgentId,
         toolCallId: input.context.toolCallId,
         timeoutMs: timeout,
-        cwd: shortenPathForLog(cwd),
+        cwd: shortenPathForLog(input.cwd),
       });
       throw toolRecoverableError(`The bash command timed out after ${timeout}ms.`, {
         code: "bash_timeout",
         timeoutMs: timeout,
-        cwd,
-      });
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
-}
-
-export async function executeUnsandboxedBash(
-  input: ExecuteUnsandboxedBashInput,
-): Promise<SandboxedBashResult> {
-  const ownerAgentId = requireOwnerAgentId(input.context);
-  const cwd = await resolveUnsandboxedBashCwd({
-    context: input.context,
-    ...(input.cwd === undefined ? {} : { requestedCwd: input.cwd }),
-  });
-  const timeout = Math.max(1, Math.floor(input.timeoutMs));
-  const timeoutController = new AbortController();
-  const timeoutHandle = setTimeout(() => timeoutController.abort(), timeout);
-  const abortSignal =
-    input.context.abortSignal == null
-      ? timeoutController.signal
-      : AbortSignal.any([input.context.abortSignal, timeoutController.signal]);
-
-  logger.info("bash full-access exec start", {
-    sessionId: input.context.sessionId,
-    ownerAgentId,
-    toolCallId: input.context.toolCallId,
-    cwd: shortenPathForLog(cwd),
-    timeoutMs: timeout,
-    command: truncateForLog(input.command),
-  });
-
-  try {
-    const result = await runUnsandboxedShellCommand({
-      command: input.command,
-      cwd,
-      abortSignal,
-    });
-
-    logger.info("bash full-access exec done", {
-      sessionId: input.context.sessionId,
-      ownerAgentId,
-      toolCallId: input.context.toolCallId,
-      exitCode: result.exitCode,
-      signal: result.signal,
-      cwd: shortenPathForLog(cwd),
-    });
-
-    return {
-      ...result,
-      command: input.command,
-      cwd,
-      timeoutMs: timeout,
-    };
-  } catch (error) {
-    if (
-      isAbortError(error) &&
-      timeoutController.signal.aborted &&
-      !input.context.abortSignal?.aborted
-    ) {
-      logger.info("bash full-access exec timeout", {
-        sessionId: input.context.sessionId,
-        ownerAgentId,
-        toolCallId: input.context.toolCallId,
-        timeoutMs: timeout,
-        cwd: shortenPathForLog(cwd),
-      });
-      throw toolRecoverableError(`The bash command timed out after ${timeout}ms.`, {
-        code: "bash_timeout",
-        timeoutMs: timeout,
-        cwd,
+        cwd: input.cwd,
       });
     }
 
@@ -320,12 +322,7 @@ async function resolveSandboxCwd(input: {
   context: ToolExecutionContext;
   security: SecurityService;
 }): Promise<string> {
-  const fallbackCwd =
-    input.context.cwd == null || input.context.cwd.trim().length === 0
-      ? POKOCLAW_WORKSPACE_DIR
-      : input.context.cwd;
-  const candidate = input.requestedCwd == null ? fallbackCwd : input.requestedCwd;
-  const normalizedPath = normalizeFilesystemTargetPath(candidate, fallbackCwd);
+  const { fallbackCwd, normalizedPath } = resolveCandidateCwd(input);
   const access = input.security.checkFilesystemAccess({
     ownerAgentId: requireOwnerAgentId(input.context),
     kind: "fs.read",
@@ -379,33 +376,52 @@ async function resolveSandboxCwd(input: {
     );
   }
 
-  let cwdStats: Awaited<ReturnType<typeof stat>>;
-  try {
-    cwdStats = await stat(normalizedPath);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      throw toolRecoverableError(`Working directory not found: ${normalizedPath}`, {
-        code: "bash_cwd_not_found",
-        path: normalizedPath,
-      });
-    }
-    throw error;
-  }
-
-  if (!cwdStats.isDirectory()) {
-    throw toolRecoverableError(`Working directory is not a directory: ${normalizedPath}`, {
-      code: "bash_cwd_not_directory",
-      path: normalizedPath,
-    });
-  }
-
-  return normalizedPath;
+  return await assertExistingDirectoryCwd(normalizedPath);
 }
 
-async function resolveUnsandboxedBashCwd(input: {
+async function resolveFullAccessSandboxCwd(input: {
   requestedCwd?: string;
   context: ToolExecutionContext;
+  security: SecurityService;
 }): Promise<string> {
+  const { fallbackCwd, normalizedPath } = resolveCandidateCwd(input);
+  const access = input.security.checkFilesystemAccess({
+    ownerAgentId: requireOwnerAgentId(input.context),
+    kind: "fs.read",
+    targetPath: normalizedPath,
+    cwd: fallbackCwd,
+  });
+
+  if (access.result === "deny" && access.reason === "hard_deny") {
+    const scopes: PermissionScope[] = [{ kind: "fs.read", path: normalizedPath }];
+    const entries = compressPermissionScopesToEntries(scopes);
+    throw toolRecoverableError(
+      access.summary,
+      buildPermissionDeniedDetails({
+        requestable: true,
+        summary: access.summary,
+        guidance: BASH_SANDBOX_ESCALATION_GUIDANCE,
+        entries,
+        bashContext: {
+          command: "",
+          cwd: normalizedPath,
+          exitCode: null,
+          signal: null,
+          stdout: "",
+          stderr: "",
+        },
+        ...(input.context.toolCallId == null ? {} : { failedToolCallId: input.context.toolCallId }),
+      }),
+    );
+  }
+
+  return await assertExistingDirectoryCwd(normalizedPath);
+}
+
+function resolveCandidateCwd(input: { requestedCwd?: string; context: ToolExecutionContext }): {
+  fallbackCwd: string;
+  normalizedPath: string;
+} {
   const fallbackCwd =
     input.context.cwd == null || input.context.cwd.trim().length === 0
       ? POKOCLAW_WORKSPACE_DIR
@@ -413,6 +429,10 @@ async function resolveUnsandboxedBashCwd(input: {
   const candidate = input.requestedCwd == null ? fallbackCwd : input.requestedCwd;
   const normalizedPath = normalizeFilesystemTargetPath(candidate, fallbackCwd);
 
+  return { fallbackCwd, normalizedPath };
+}
+
+async function assertExistingDirectoryCwd(normalizedPath: string): Promise<string> {
   let cwdStats: Awaited<ReturnType<typeof stat>>;
   try {
     cwdStats = await stat(normalizedPath);
@@ -655,95 +675,6 @@ function shortenPathForLog(value: string): string {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
-}
-
-async function runUnsandboxedShellCommand(input: {
-  command: string;
-  cwd: string;
-  abortSignal: AbortSignal;
-}): Promise<SandboxExecResult> {
-  if (input.abortSignal.aborted) {
-    throw createAbortError();
-  }
-
-  return await new Promise<SandboxExecResult>((resolve, reject) => {
-    const child = spawn(DEFAULT_BASH_BINARY, ["-lc", input.command], {
-      cwd: input.cwd,
-      env: sanitizeSandboxEnv(process.env),
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    const finish = (fn: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      fn();
-    };
-
-    const killChild = () => {
-      if (child.exitCode != null || child.signalCode != null) {
-        return;
-      }
-
-      try {
-        if (process.platform !== "win32" && child.pid != null) {
-          process.kill(-child.pid, "SIGKILL");
-        } else {
-          child.kill("SIGKILL");
-        }
-      } catch {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore best-effort kill failures
-        }
-      }
-    };
-
-    const onAbort = () => {
-      killChild();
-      finish(() => reject(createAbortError()));
-    };
-
-    const cleanup = () => {
-      input.abortSignal.removeEventListener("abort", onAbort);
-      child.stdout?.removeAllListeners();
-      child.stderr?.removeAllListeners();
-      child.removeAllListeners();
-    };
-
-    input.abortSignal.addEventListener("abort", onAbort, { once: true });
-    child.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    });
-    child.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    });
-    child.once("error", (error) => finish(() => reject(error)));
-    child.once("close", (exitCode, signal) =>
-      finish(() =>
-        resolve({
-          stdout,
-          stderr,
-          exitCode,
-          signal,
-        }),
-      ),
-    );
-  });
-}
-
-function createAbortError(): Error {
-  const error = new Error("The operation was aborted.");
-  error.name = "AbortError";
-  return error;
 }
 
 function isMissingPathError(error: unknown): boolean {

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() => ({
+const { executeSandboxedBashMock, executeFullAccessSandboxedBashMock } = vi.hoisted(() => ({
   executeSandboxedBashMock: vi.fn(),
-  executeUnsandboxedBashMock: vi.fn(),
+  executeFullAccessSandboxedBashMock: vi.fn(),
 }));
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
@@ -25,7 +25,7 @@ vi.mock("@/src/security/sandbox.js", async () => {
   return {
     ...actual,
     executeSandboxedBash: executeSandboxedBashMock,
-    executeUnsandboxedBash: executeUnsandboxedBashMock,
+    executeFullAccessSandboxedBash: executeFullAccessSandboxedBashMock,
   };
 });
 
@@ -34,7 +34,7 @@ describe("bash tool", () => {
 
   beforeEach(() => {
     executeSandboxedBashMock.mockReset();
-    executeUnsandboxedBashMock.mockReset();
+    executeFullAccessSandboxedBashMock.mockReset();
   });
 
   afterEach(async () => {
@@ -598,7 +598,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       grantedBy: "user",
       scopes: [{ kind: "bash.full_access", prefix: ["npm", "run"] }],
     });
-    executeUnsandboxedBashMock.mockResolvedValue({
+    executeFullAccessSandboxedBashMock.mockResolvedValue({
       command: "FOO=1 npm run dev",
       cwd: "/tmp/work",
       timeoutMs: 10_000,
@@ -626,7 +626,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       },
     );
 
-    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeFullAccessSandboxedBashMock).toHaveBeenCalledTimes(1);
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
       command: "FOO=1 npm run dev",
@@ -643,7 +643,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       grantedBy: "user",
       scopes: [{ kind: "bash.full_access", prefix: ["agent-browser"] }],
     });
-    executeUnsandboxedBashMock.mockResolvedValue({
+    executeFullAccessSandboxedBashMock.mockResolvedValue({
       command:
         "agent-browser open https://example.com && agent-browser wait 2500 && agent-browser snapshot -s main > /tmp/browser.txt",
       cwd: "/tmp/work",
@@ -673,7 +673,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       },
     );
 
-    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeFullAccessSandboxedBashMock).toHaveBeenCalledTimes(1);
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
       command:
@@ -721,7 +721,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       },
     });
 
-    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+    expect(executeFullAccessSandboxedBashMock).not.toHaveBeenCalled();
   });
 
   test("allows a pure git compound workflow under a broad git prefix", async () => {
@@ -732,7 +732,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       grantedBy: "user",
       scopes: [{ kind: "bash.full_access", prefix: ["git"] }],
     });
-    executeUnsandboxedBashMock.mockResolvedValue({
+    executeFullAccessSandboxedBashMock.mockResolvedValue({
       command:
         "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && git branch -vv",
       cwd: "/tmp/work",
@@ -762,7 +762,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       },
     );
 
-    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeFullAccessSandboxedBashMock).toHaveBeenCalledTimes(1);
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
       command:
@@ -813,7 +813,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       },
     });
 
-    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+    expect(executeFullAccessSandboxedBashMock).not.toHaveBeenCalled();
   });
 
   test("still requests approval for a git compound workflow when it includes an ungranted echo command", async () => {
@@ -855,7 +855,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       },
     });
 
-    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+    expect(executeFullAccessSandboxedBashMock).not.toHaveBeenCalled();
   });
 
   test("rejects reusable full-access prefixes for complex shell commands", async () => {

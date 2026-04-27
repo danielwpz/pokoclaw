@@ -13,7 +13,12 @@ import { SandboxPermissionError } from "@danielwpz/sandbox-runtime";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
-import { buildSandboxConfigForAgent, executeSandboxedBash } from "@/src/security/sandbox.js";
+import {
+  buildFullAccessSandboxConfigForAgent,
+  buildSandboxConfigForAgent,
+  executeFullAccessSandboxedBash,
+  executeSandboxedBash,
+} from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
 import {
   POKOCLAW_REPO_DIR,
@@ -204,6 +209,54 @@ describe("sandbox config compilation", () => {
     expect(config.network.deniedDomains).toContain("internal.example.com");
   });
 
+  test("builds full-access sandbox config as read, write, and network deny-only", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
+    const extraHardRead = path.join(tempDir, "hard-read");
+    const extraHardWrite = path.join(tempDir, "hard-write");
+    await mkdir(extraHardRead);
+    await mkdir(extraHardWrite);
+    grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
+    grantFilesystemScope(handle, "agent_sub", { kind: "fs.write", path: `${tempDir}/**` });
+
+    const config = buildFullAccessSandboxConfigForAgent({
+      storage: handle.storage.db,
+      ownerAgentId: "agent_sub",
+      systemPolicy: buildSystemPolicy({
+        security: {
+          filesystem: {
+            overrideHardDenyRead: false,
+            overrideHardDenyWrite: false,
+            hardDenyRead: [`${extraHardRead}/**`],
+            hardDenyWrite: [`${extraHardWrite}/**`],
+          },
+          network: {
+            overrideHardDenyHosts: false,
+            hardDenyHosts: ["internal.example.com"],
+          },
+        },
+      }),
+    });
+
+    expect(config.filesystem.readMode).toBe("deny_only");
+    expect(config.filesystem.allowRead).toEqual([]);
+    expect(config.filesystem.denyRead).toContain(normalizeFilesystemTargetPath(extraHardRead));
+    expect(config.filesystem.denyRead).toContain(
+      `${normalizeFilesystemTargetPath(extraHardRead)}/**`,
+    );
+    expect(config.filesystem.writeMode).toBe("deny_only");
+    expect(config.filesystem.allowWrite).toEqual([]);
+    expect(config.filesystem.denyWrite).toContain(normalizeFilesystemTargetPath(extraHardWrite));
+    expect(config.filesystem.denyWrite).toContain(
+      `${normalizeFilesystemTargetPath(extraHardWrite)}/**`,
+    );
+    expect(config.network.mode).toBe("deny_only");
+    expect(config.network.allowedDomains).toEqual([]);
+    expect(config.network.deniedDomains).toContain("169.254.169.254");
+    expect(config.network.deniedDomains).toContain("internal.example.com");
+  });
+
   test("executes bash through the sandbox with sanitized env and compiled config", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
@@ -324,6 +377,94 @@ describe("sandbox config compilation", () => {
         process.env.PATH = originalPath;
       }
     }
+  });
+
+  test("executes full-access bash through a high-privilege deny-only sandbox", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
+    executeSandboxedCommandMock.mockResolvedValue({
+      stdout: "ready\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const result = await executeFullAccessSandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_2",
+        ownerAgentId: "agent_sub",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+      },
+      command: "npm run dev",
+      cwd: tempDir,
+      timeoutMs: 10_000,
+    });
+
+    expect(result).toMatchObject({
+      command: "npm run dev",
+      cwd: normalizeFilesystemTargetPath(tempDir),
+      timeoutMs: 10_000,
+      stdout: "ready\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+    expect(executeSandboxedCommandMock).toHaveBeenCalledTimes(1);
+    const [command, options] = executeSandboxedCommandMock.mock.calls[0] ?? [];
+    expect(command).toBe("npm run dev");
+    expect(options?.cwd).toBe(normalizeFilesystemTargetPath(tempDir));
+    expect(options?.customConfig?.filesystem?.readMode).toBe("deny_only");
+    expect(options?.customConfig?.filesystem?.allowRead).toEqual([]);
+    expect(options?.customConfig?.filesystem?.writeMode).toBe("deny_only");
+    expect(options?.customConfig?.filesystem?.allowWrite).toEqual([]);
+    expect(options?.customConfig?.network?.mode).toBe("deny_only");
+  });
+
+  test("rejects full-access sandbox cwd when it is hard denied", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-sandbox-test-"));
+    const hardDeniedCwd = path.join(tempDir, "hard-denied");
+    await mkdir(hardDeniedCwd);
+
+    await expect(
+      executeFullAccessSandboxedBash({
+        context: {
+          sessionId: "sess_1",
+          conversationId: "conv_2",
+          ownerAgentId: "agent_sub",
+          cwd: tempDir,
+          securityConfig: {
+            filesystem: {
+              overrideHardDenyRead: false,
+              overrideHardDenyWrite: false,
+              hardDenyRead: [`${hardDeniedCwd}/**`],
+              hardDenyWrite: [],
+            },
+            network: {
+              overrideHardDenyHosts: false,
+              hardDenyHosts: [],
+            },
+          },
+          storage: handle.storage.db,
+          toolCallId: "tool_1",
+        },
+        command: "pwd",
+        cwd: hardDeniedCwd,
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      message: expect.stringContaining("blocked by system policy"),
+    } satisfies Partial<ToolFailure>);
+
+    expect(executeSandboxedCommandMock).not.toHaveBeenCalled();
   });
 
   test("adds direct children of an exactly granted read directory to sandbox allowRead", async () => {
