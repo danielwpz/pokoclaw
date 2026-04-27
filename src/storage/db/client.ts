@@ -5,16 +5,18 @@ import Database from "better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
-import { type InitSchemaOptions, initSchemaIfNeeded } from "@/src/storage/db/init.js";
 import { getProductionDatabasePath } from "@/src/storage/db/paths.js";
 import { applyDefaultPragmas } from "@/src/storage/db/pragmas.js";
+import { runStorageMigrations } from "@/src/storage/migrate/runner.js";
 import * as schema from "@/src/storage/schema/index.js";
 
 export type StorageDb = BetterSQLite3Database<typeof schema>;
 
-export interface OpenStorageDatabaseOptions extends InitSchemaOptions {
+export interface OpenStorageDatabaseOptions {
   databasePath?: string;
   initializeSchema?: boolean;
+  migrationsDir?: string;
+  migrationNow?: () => Date;
 }
 
 export interface StorageDatabase {
@@ -37,21 +39,25 @@ export function openStorageDatabase(options: OpenStorageDatabaseOptions = {}): S
   const sqlite = new Database(databasePath);
   applyDefaultPragmas(sqlite);
 
-  if (initializeSchema) {
-    if (options.initSqlPath != null) {
-      initSchemaIfNeeded(sqlite, { initSqlPath: options.initSqlPath });
-    } else {
-      initSchemaIfNeeded(sqlite);
+  try {
+    if (initializeSchema) {
+      runStorageMigrations(sqlite, {
+        ...(options.migrationsDir == null ? {} : { migrationsDir: options.migrationsDir }),
+        ...(options.migrationNow == null ? {} : { now: options.migrationNow }),
+      });
     }
+
+    const db = drizzle(sqlite, { schema });
+
+    return {
+      sqlite,
+      db,
+      close: (): void => {
+        sqlite.close();
+      },
+    };
+  } catch (error) {
+    sqlite.close();
+    throw error;
   }
-
-  const db = drizzle(sqlite, { schema });
-
-  return {
-    sqlite,
-    db,
-    close: (): void => {
-      sqlite.close();
-    },
-  };
 }

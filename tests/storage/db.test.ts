@@ -66,6 +66,21 @@ describe("storage db bootstrap", () => {
       expect(tableNames).toContain("harness_events");
       expect(tableNames).toContain("lark_object_bindings");
       expect(tableNames).toContain("meditation_state");
+      expect(tableNames).toContain("schema_migrations");
+    } finally {
+      await destroyTestDatabase(handle);
+    }
+  });
+
+  test("records baseline migration version on open", async () => {
+    const handle = await createTestDatabase(import.meta.url);
+
+    try {
+      const rows = handle.storage.sqlite
+        .prepare("SELECT version, name FROM schema_migrations ORDER BY version ASC")
+        .all() as Array<{ version: number; name: string }>;
+
+      expect(rows).toEqual([{ version: 1, name: "init" }]);
     } finally {
       await destroyTestDatabase(handle);
     }
