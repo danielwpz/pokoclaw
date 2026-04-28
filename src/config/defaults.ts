@@ -3,6 +3,8 @@ import type { RawConfig } from "@/src/config/schema.js";
 export const DEFAULT_RUNTIME_MAX_TURNS = 60;
 export const DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS = 3 * 60 * 1000;
 export const DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const DEFAULT_PROJECT_CONTEXT_MAX_BYTES = 8192;
+export const DEFAULT_PROJECT_CONTEXT_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
 
 export const DEFAULT_CONFIG: RawConfig = {
   logging: {
@@ -31,6 +33,11 @@ export const DEFAULT_CONFIG: RawConfig = {
     approvalTimeoutMs: DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
     approvalGrantTtlMs: DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
     autopilot: false,
+  },
+  projectContext: {
+    enabled: true,
+    maxBytes: DEFAULT_PROJECT_CONTEXT_MAX_BYTES,
+    files: [...DEFAULT_PROJECT_CONTEXT_FILES],
   },
   selfHarness: {
     meditation: {

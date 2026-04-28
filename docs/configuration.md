@@ -85,6 +85,23 @@ The provider and model templates below cover the LLM side first. Complete the re
 
 If the user wants web search or web fetch, also configure a Tavily provider plus `[tools.web.search]` and `[tools.web.fetch]`.
 
+## Project context files
+
+Pokoclaw loads project guidance files for agent runs that have a workdir inside a git repository:
+
+- `<repo_root>/AGENTS.md`
+- `<repo_root>/CLAUDE.md`
+- `<workdir>/CLAUDE.md` when the workdir is nested below the repo root
+
+These files are injected into the model system prompt as project-specific context. The default maximum is 8192 bytes per file, with a truncation marker when a file is larger.
+
+```toml
+[project_context]
+enabled = true
+max_bytes = 8192
+files = ["AGENTS.md", "CLAUDE.md"]
+```
+
 The five scenario keys are:
 
 - `chat`

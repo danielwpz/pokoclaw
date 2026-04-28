@@ -192,6 +192,11 @@ describe("config loader", () => {
       approvalGrantTtlMs: 604_800_000,
       autopilot: false,
     });
+    expect(config.projectContext).toEqual({
+      enabled: true,
+      maxBytes: 8192,
+      files: ["AGENTS.md", "CLAUDE.md"],
+    });
     expect(config.selfHarness).toEqual({
       meditation: {
         enabled: true,
@@ -240,6 +245,38 @@ describe("config loader", () => {
 
     expect(config.logging.level).toBe("debug");
     expect(config.logging.useColors).toBe(false);
+  });
+
+  test("loads project_context config", () => {
+    const config = buildAppConfigFromInputs(
+      {
+        project_context: {
+          enabled: false,
+          max_bytes: 4096,
+          files: ["AGENTS.md", "CONTRIBUTING.md"],
+        },
+      },
+      undefined,
+    );
+
+    expect(config.projectContext).toEqual({
+      enabled: false,
+      maxBytes: 4096,
+      files: ["AGENTS.md", "CONTRIBUTING.md"],
+    });
+  });
+
+  test("rejects unsafe project_context file names", () => {
+    expect(() =>
+      buildAppConfigFromInputs(
+        {
+          project_context: {
+            files: ["../CLAUDE.md"],
+          },
+        },
+        undefined,
+      ),
+    ).toThrow("config.toml project_context.files entries must be simple file names");
   });
 
   test("resolves env _ref values during config build", () => {

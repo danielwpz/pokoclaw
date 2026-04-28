@@ -82,6 +82,11 @@ function createConfig(): AppConfig {
       approvalGrantTtlMs: 604_800_000,
       autopilot: false,
     },
+    projectContext: {
+      enabled: true,
+      maxBytes: 8192,
+      files: ["AGENTS.md", "CLAUDE.md"],
+    },
     selfHarness: {
       meditation: {
         enabled: true,
