@@ -41,6 +41,10 @@ import {
   resolveProviderRegistry,
 } from "@/src/agent/llm/provider-registry-source.js";
 import { type AgentMemoryResolver, FilesystemAgentMemoryResolver } from "@/src/agent/memory.js";
+import {
+  type AgentProjectContextResolver,
+  FilesystemAgentProjectContextResolver,
+} from "@/src/agent/project-context.js";
 import type { AgentSessionService } from "@/src/agent/session.js";
 import { assertToolAllowedForSession } from "@/src/agent/session-policy.js";
 import {
@@ -56,11 +60,17 @@ import {
   buildRuntimeModeToolExecutionState,
 } from "@/src/agent/tool-approval-state.js";
 import {
+  DEFAULT_CONFIG,
   DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
   DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
   DEFAULT_RUNTIME_MAX_TURNS,
 } from "@/src/config/defaults.js";
-import type { CompactionConfig, RuntimeConfig, SecurityConfig } from "@/src/config/schema.js";
+import type {
+  CompactionConfig,
+  ProjectContextConfig,
+  RuntimeConfig,
+  SecurityConfig,
+} from "@/src/config/schema.js";
 import { SessionApprovalFlowRegistry } from "@/src/runtime/approval-flow.js";
 import {
   type ApprovalResponseInput,
@@ -212,11 +222,13 @@ export interface AgentLoopDependencies {
   skillsResolver?: AgentSkillsResolver;
   bootstrapResolver?: AgentBootstrapResolver;
   memoryResolver?: AgentMemoryResolver;
+  projectContextResolver?: AgentProjectContextResolver;
   cancel: SessionRunAbortRegistry;
   modelRunner: AgentModelRunner;
   storage: StorageDb;
   securityConfig: SecurityConfig;
   compaction: CompactionConfig;
+  projectContext?: ProjectContextConfig;
   runtime?: RuntimeConfig;
   runtimeModes?: RuntimeModeService;
   approvalTimeoutMs?: number;
@@ -241,6 +253,7 @@ export class AgentLoop {
   private readonly skillsResolver: AgentSkillsResolver;
   private readonly bootstrapResolver: AgentBootstrapResolver;
   private readonly memoryResolver: AgentMemoryResolver;
+  private readonly projectContextResolver: AgentProjectContextResolver;
   private readonly approvalWaits = new SessionApprovalWaitRegistry();
   private readonly approvalFlow: SessionApprovalFlowRegistry;
   private readonly steerQueue = new SessionSteerQueueRegistry();
@@ -256,6 +269,11 @@ export class AgentLoop {
     this.skillsResolver = deps.skillsResolver ?? new FilesystemAgentSkillsResolver();
     this.bootstrapResolver = deps.bootstrapResolver ?? new FilesystemAgentBootstrapResolver();
     this.memoryResolver = deps.memoryResolver ?? new FilesystemAgentMemoryResolver();
+    this.projectContextResolver =
+      deps.projectContextResolver ??
+      new FilesystemAgentProjectContextResolver(
+        deps.projectContext ?? DEFAULT_CONFIG.projectContext,
+      );
     this.approvalFlow = deps.approvalFlow ?? new SessionApprovalFlowRegistry();
     this.defaultMaxTurns = deps.runtime?.maxTurns ?? DEFAULT_RUNTIME_MAX_TURNS;
     this.approvalTimeoutMs =
@@ -516,6 +534,12 @@ export class AgentLoop {
       sessionPurpose: context.session.purpose,
       agentKind: ownerAgent?.kind ?? null,
     });
+    const projectContextPrompt =
+      context.session.purpose === "approval"
+        ? ""
+        : this.projectContextResolver.resolveForRun({
+            workdir: ownerAgent?.workdir ?? null,
+          }).prompt;
     const resolvedSkillsSnapshot = this.skillsResolver.resolveForRun({
       workdir: ownerAgent?.workdir ?? null,
     });
@@ -546,6 +570,7 @@ export class AgentLoop {
       workdir: ownerAgent?.workdir ?? null,
       privateWorkspaceDir,
       bootstrapPrompt: bootstrapSnapshot?.prompt ?? null,
+      projectContextPrompt,
       memoryCatalog: memorySnapshot.prompt,
       skillsCatalog: readableSkillsSnapshot.prompt,
     });

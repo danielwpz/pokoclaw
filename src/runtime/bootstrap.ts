@@ -117,6 +117,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     storage: input.storage,
     securityConfig: input.config.security,
     compaction: input.config.compaction,
+    projectContext: input.config.projectContext,
     runtime: input.config.runtime,
     runtimeModes,
     runtimeControl: bridge.runtimeControl,

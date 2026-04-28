@@ -43,6 +43,7 @@ interface BuildAgentSystemPromptInput {
   workdir?: string | null;
   privateWorkspaceDir?: string | null;
   bootstrapPrompt?: string | null;
+  projectContextPrompt?: string | null;
   memoryCatalog?: string | null;
   currentDate?: string | null;
   timezone?: string | null;
@@ -61,7 +62,11 @@ function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
     }),
-    buildProjectContextSection(),
+    buildProjectContextSection({
+      ...(input.projectContextPrompt === undefined
+        ? {}
+        : { projectContextPrompt: input.projectContextPrompt }),
+    }),
     buildBootstrapSection({
       ...(input.bootstrapPrompt === undefined ? {} : { bootstrapPrompt: input.bootstrapPrompt }),
     }),
@@ -92,7 +97,11 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
     }),
-    buildProjectContextSection(),
+    buildProjectContextSection({
+      ...(input.projectContextPrompt === undefined
+        ? {}
+        : { projectContextPrompt: input.projectContextPrompt }),
+    }),
     buildBootstrapSection({
       ...(input.bootstrapPrompt === undefined ? {} : { bootstrapPrompt: input.bootstrapPrompt }),
     }),
@@ -130,7 +139,11 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
     }),
-    buildProjectContextSection(),
+    buildProjectContextSection({
+      ...(input.projectContextPrompt === undefined
+        ? {}
+        : { projectContextPrompt: input.projectContextPrompt }),
+    }),
     buildBootstrapSection({
       ...(input.bootstrapPrompt === undefined ? {} : { bootstrapPrompt: input.bootstrapPrompt }),
     }),
@@ -158,7 +171,11 @@ function buildApprovalAgentSystemPrompt(input: BuildAgentSystemPromptInput): str
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
     }),
-    buildProjectContextSection(),
+    buildProjectContextSection({
+      ...(input.projectContextPrompt === undefined
+        ? {}
+        : { projectContextPrompt: input.projectContextPrompt }),
+    }),
     buildBootstrapSection({
       ...(input.bootstrapPrompt === undefined ? {} : { bootstrapPrompt: input.bootstrapPrompt }),
     }),

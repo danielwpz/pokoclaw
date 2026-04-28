@@ -113,6 +113,32 @@ describe("agent system prompt", () => {
     expect(prompt.endsWith(bootstrapPrompt)).toBe(true);
   });
 
+  test("adds a dedicated Project Context section when project files are provided", () => {
+    const projectContextPrompt = [
+      "<project_context>",
+      "  <project_context_file>",
+      "    <source>repo_root</source>",
+      "    <path>/tmp/repo/AGENTS.md</path>",
+      "    <content>",
+      "      Run pnpm preflight before committing.",
+      "    </content>",
+      "  </project_context_file>",
+      "</project_context>",
+    ].join("\n");
+
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "sub",
+      projectContextPrompt,
+    });
+
+    expect(prompt).toContain("## Project Context");
+    expect(prompt).toContain("repo/workdir guidance files loaded for this run");
+    expect(prompt).toContain("If a loaded file is truncated");
+    expect(prompt).toContain(projectContextPrompt);
+    expect(prompt.indexOf("## Project Context")).toBeLessThan(prompt.indexOf("<project_context>"));
+  });
+
   test("adds a dedicated Skills section and appends the skill catalog at the end when provided", () => {
     const skillsCatalog = [
       "<skills_catalog>",

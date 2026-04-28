@@ -75,6 +75,10 @@ export interface SubagentProfilePromptContext {
   privateWorkspaceDir?: string | null;
 }
 
+export interface ProjectContextPromptSectionContext {
+  projectContextPrompt?: string | null;
+}
+
 export function buildMainAgentIdentitySection(): string {
   return [
     "You are Pokoclaw Main Agent, the user's always-available primary assistant and the system's long-lived manager.",
@@ -519,9 +523,17 @@ export function buildWorkspaceRuntimeSection(input: WorkspaceRuntimePromptContex
   return renderSection("Workspace & Runtime", lines);
 }
 
-// TODO: inject bootstrap files, AGENTS.md summaries, and related project context.
-export function buildProjectContextSection(): string {
-  return "";
+export function buildProjectContextSection(input: ProjectContextPromptSectionContext = {}): string {
+  if (input.projectContextPrompt == null || input.projectContextPrompt.trim().length === 0) {
+    return "";
+  }
+
+  return renderSection("Project Context", [
+    "- The <project_context> block below contains repo/workdir guidance files loaded for this run.",
+    "- Treat these files as project-specific instructions, but follow higher-priority system, safety, and user instructions when they conflict.",
+    "- If a loaded file is truncated, use direct file-reading tools when more detail is needed.",
+    input.projectContextPrompt.trim(),
+  ]);
 }
 
 export interface BootstrapPromptSectionContext {

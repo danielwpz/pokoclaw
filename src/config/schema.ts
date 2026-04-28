@@ -68,6 +68,12 @@ export interface RuntimeConfig {
   autopilot: boolean;
 }
 
+export interface ProjectContextConfig {
+  enabled: boolean;
+  maxBytes: number;
+  files: string[];
+}
+
 export interface MeditationConfig {
   enabled: boolean;
   cron: string;
@@ -131,6 +137,7 @@ export interface RawConfig {
   models: ModelsConfig;
   compaction: CompactionConfig;
   runtime: RuntimeConfig;
+  projectContext: ProjectContextConfig;
   selfHarness: SelfHarnessConfig;
   tools: ToolsConfig;
   security: SecurityConfig;
@@ -212,6 +219,12 @@ interface RuntimeConfigInput {
   autopilot?: unknown;
 }
 
+interface ProjectContextConfigInput {
+  enabled?: unknown;
+  max_bytes?: unknown;
+  files?: unknown;
+}
+
 interface MeditationConfigInput {
   enabled?: unknown;
   cron?: unknown;
@@ -273,6 +286,7 @@ interface FileConfigInput {
   models?: unknown;
   compaction?: unknown;
   runtime?: unknown;
+  project_context?: unknown;
   "self-harness"?: unknown;
   tools?: unknown;
   security?: unknown;
@@ -313,6 +327,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     "models",
     "compaction",
     "runtime",
+    "project_context",
     "self-harness",
     "tools",
     "security",
@@ -329,6 +344,10 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   const models = validateModelsConfig(config.models, defaults.models, providers);
   const compaction = validateCompactionConfig(config.compaction, defaults.compaction);
   const runtime = validateRuntimeConfig(config.runtime, defaults.runtime);
+  const projectContext = validateProjectContextConfig(
+    config.project_context,
+    defaults.projectContext,
+  );
   const selfHarness = validateSelfHarnessConfig(config["self-harness"], defaults.selfHarness);
   const tools = validateToolsConfig(config.tools, defaults.tools, providers);
   const security = validateSecurityConfig(config.security, defaults.security);
@@ -344,6 +363,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     models,
     compaction,
     runtime,
+    projectContext,
     selfHarness,
     tools,
     security,
@@ -372,6 +392,11 @@ function cloneRawConfig(config: RawConfig): RawConfig {
     },
     compaction: { ...config.compaction },
     runtime: { ...config.runtime },
+    projectContext: {
+      enabled: config.projectContext.enabled,
+      maxBytes: config.projectContext.maxBytes,
+      files: [...config.projectContext.files],
+    },
     selfHarness: {
       meditation: cloneMeditationConfig(config.selfHarness.meditation),
     },
@@ -819,6 +844,47 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
       config.autopilot,
       defaults.autopilot,
       "config.toml runtime.autopilot",
+    ),
+  };
+}
+
+function validateProjectContextConfig(
+  input: unknown,
+  defaults: ProjectContextConfig,
+): ProjectContextConfig {
+  if (input == null) {
+    return {
+      enabled: defaults.enabled,
+      maxBytes: defaults.maxBytes,
+      files: [...defaults.files],
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml project_context must be a table/object");
+  }
+
+  const config = input as ProjectContextConfigInput;
+  assertAllowedKeys(
+    config,
+    new Set(["enabled", "max_bytes", "files"]),
+    "config.toml project_context",
+  );
+
+  return {
+    enabled: validateOptionalBoolean(
+      config.enabled,
+      defaults.enabled,
+      "config.toml project_context.enabled",
+    ),
+    maxBytes: validatePositiveInteger(
+      config.max_bytes ?? defaults.maxBytes,
+      "config.toml project_context.max_bytes",
+    ),
+    files: validateProjectContextFiles(
+      config.files,
+      defaults.files,
+      "config.toml project_context.files",
     ),
   };
 }
@@ -1420,6 +1486,37 @@ function validateStringArray(input: unknown, defaults: string[], path: string): 
   }
 
   return input.map((value, index) => validateNonEmptyString(value, `${path}[${index}]`));
+}
+
+function validateProjectContextFiles(input: unknown, defaults: string[], path: string): string[] {
+  const files = validateStringArray(input, defaults, path);
+  const seen = new Set<string>();
+  for (const file of files) {
+    if (!isSafeProjectContextFileName(file)) {
+      throw new Error(`${path} entries must be simple file names without path separators`);
+    }
+    if (seen.has(file)) {
+      throw new Error(`${path} contains duplicate file name: ${file}`);
+    }
+    seen.add(file);
+  }
+  return files;
+}
+
+function isSafeProjectContextFileName(fileName: string): boolean {
+  return (
+    fileName !== "." &&
+    fileName !== ".." &&
+    fileName === pathSafeBasename(fileName) &&
+    !fileName.includes("/") &&
+    !fileName.includes("\\") &&
+    !fileName.includes("\u0000")
+  );
+}
+
+function pathSafeBasename(fileName: string): string {
+  const normalized = fileName.replaceAll("\\", "/");
+  return normalized.split("/").pop() ?? normalized;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
