@@ -10,6 +10,51 @@ import { RuntimeControlService } from "@/src/runtime/control.js";
 import { makeTextEvent, seedFixture, withHandle } from "./fixtures.js";
 
 describe("lark card actions", () => {
+  test("routes a2ui callbacks before built-in card actions", async () => {
+    const handleCardAction = vi.fn(async () => ({
+      toast: {
+        type: "success",
+        content: "a2ui handled",
+      },
+    }));
+    const submitApprovalDecision = vi.fn(() => true);
+    const handler = createLarkCardActionHandler({
+      installationId: "default",
+      ingress: {
+        submitMessage: vi.fn(async () => ({ status: "started" as const })),
+        submitApprovalDecision,
+      },
+      control: {} as RuntimeControlService,
+      a2uiCallbacks: {
+        handleCardAction,
+      },
+    });
+
+    const payload = {
+      action: {
+        value: {
+          __a2ui_lark: "v0_8",
+          surfaceId: "quiz",
+          sourceComponentId: "submit",
+          actionName: "submit_answer",
+        },
+      },
+    };
+    const result = await handler(payload);
+
+    expect(handleCardAction).toHaveBeenCalledExactlyOnceWith({
+      installationId: "default",
+      payload,
+    });
+    expect(submitApprovalDecision).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      toast: {
+        type: "success",
+        content: "a2ui handled",
+      },
+    });
+  });
+
   test("ignores unsupported card actions", async () => {
     const submitApprovalDecision = vi.fn(() => true);
     const handler = createLarkCardActionHandler({
