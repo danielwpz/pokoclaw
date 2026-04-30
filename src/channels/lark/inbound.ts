@@ -247,6 +247,10 @@ interface LarkInboundRoute {
 export function normalizeLarkTextMessage(
   data: unknown,
 ): NormalizedLarkTextMessage | { skipReason: string } {
+  logger.info("received lark inbound message payload", {
+    rawPayload: safeJson(data),
+  });
+
   if (!isRecord(data)) {
     return { skipReason: "event payload is not an object" };
   }
@@ -277,7 +281,10 @@ export function normalizeLarkTextMessage(
     readString(nestedMessage?.content) ??
     readString(isRecord(flatMessage?.body) ? flatMessage.body.content : null) ??
     "";
-  const text = parseLarkMessageContent(messageType, contentRaw);
+  const text =
+    messageType === "merge_forward"
+      ? buildLarkMergeForwardMessageNotice(messageId)
+      : parseLarkMessageContent(messageType, contentRaw);
   if (text.length === 0) {
     logger.debug("normalized lark message produced empty text", {
       messageShape: nestedMessage == null ? "raw" : "event",
@@ -2347,6 +2354,15 @@ function parseLarkMessageContent(messageType: string, content: string): string {
   }
 }
 
+function buildLarkMergeForwardMessageNotice(messageId: string): string {
+  return [
+    "The user sent a Lark merge_forward message, which is a merged forwarded chat-history message.",
+    `Lark message_id: ${messageId}`,
+    "",
+    "Do not assume the forwarded content is visible in this prompt. If you have Feishu/Lark message-reading capability, fetch the merge_forward content by message_id. If you do not have that capability, tell the user this merged-forward message cannot be previewed here and ask them to forward or paste the original messages.",
+  ].join("\n");
+}
+
 function parseLarkPostMessageContent(parsed: Record<string, unknown>): string {
   const body = unwrapLarkPostContent(parsed);
   if (body == null) {
@@ -2809,7 +2825,10 @@ export function createLarkQuoteMessageFetcher(input: {
           messageType,
         });
       }
-      const text = parseLarkMessageContent(messageType, rawContent);
+      const text =
+        messageType === "merge_forward"
+          ? buildLarkMergeForwardMessageNotice(messageId)
+          : parseLarkMessageContent(messageType, rawContent);
       if (text.length === 0) {
         logger.warn("lark quote message parsing produced empty text", {
           installationId: input.installationId,

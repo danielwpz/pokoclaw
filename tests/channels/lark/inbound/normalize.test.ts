@@ -114,4 +114,37 @@ describe("lark inbound message handling / normalize", () => {
       imageKeys: ["img_v3_post_1", "img_v3_post_2"],
     });
   });
+
+  test("normalizes merge forward messages into a fetchable notice", () => {
+    const normalized = normalizeLarkTextMessage({
+      schema: "2.0",
+      event_type: "im.message.receive_v1",
+      message: {
+        chat_id: "oc_chat_1",
+        chat_type: "group",
+        content: "Merged and Forwarded Message",
+        create_time: "1777545100937",
+        message_id: "om_merge_forward_1",
+        message_type: "merge_forward",
+      },
+      sender: {
+        sender_id: { open_id: "ou_sender" },
+        sender_type: "user",
+      },
+    });
+
+    expect(normalized).toMatchObject({
+      chatId: "oc_chat_1",
+      messageId: "om_merge_forward_1",
+      messageType: "merge_forward",
+      text: expect.stringContaining("Lark message_id: om_merge_forward_1"),
+    });
+    expect("skipReason" in normalized).toBe(false);
+    if (!("skipReason" in normalized)) {
+      expect(normalized.text).toContain("merged forwarded chat-history message");
+      expect(normalized.text).toContain("Do not assume the forwarded content is visible");
+      expect(normalized.text).toContain("ask them to forward or paste the original messages");
+      expect(normalized.text).not.toContain("Merged and Forwarded Message");
+    }
+  });
 });
