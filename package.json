@@ -66,6 +66,7 @@
     "better-sqlite3": "^12.8.0",
     "croner": "^10.0.1",
     "drizzle-orm": "^0.45.1",
+    "lark-a2ui-renderer": "link:../../a2ui/lark-a2ui-renderer",
     "openai": "6.26.0",
     "toml": "^3.0.0",
     "tree-sitter-bash": "^0.25.1",

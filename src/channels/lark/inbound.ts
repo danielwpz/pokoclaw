@@ -73,10 +73,13 @@ export interface LarkInboundIngress {
     content: string;
     userPayload?: AgentUserPayload;
     runtimeImages?: AgentUserRuntimeImagePayload[];
+    messageType?: string;
+    visibility?: string;
     channelMessageId?: string | null;
     channelParentMessageId?: string | null;
     channelThreadId?: string | null;
     createdAt?: Date;
+    maxTurns?: number;
     afterToolResultHook?: AgentLoopAfterToolResultHook;
   }): Promise<unknown>;
   submitApprovalDecision(input: {
@@ -107,6 +110,9 @@ export interface CreateLarkInboundRuntimeInput {
     deny(
       requestId: string,
     ): Promise<ResolveSubagentCreationRequestResult> | ResolveSubagentCreationRequestResult;
+  };
+  a2uiCallbacks?: {
+    handleCardAction(input: { installationId: string; payload: unknown }): Promise<unknown | null>;
   };
   taskThreads?: {
     createFollowupExecution(input: {
@@ -781,12 +787,21 @@ export function createLarkCardActionHandler(input: {
       requestId: string,
     ): Promise<ResolveSubagentCreationRequestResult> | ResolveSubagentCreationRequestResult;
   };
+  a2uiCallbacks?: CreateLarkInboundRuntimeInput["a2uiCallbacks"];
 }): (data: unknown) => Promise<unknown> {
   return async (data: unknown) => {
     logger.debug("received raw lark card action callback", {
       installationId: input.installationId,
       payloadPreview: truncateLogText(safeJson(data), LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH),
     });
+
+    const a2uiResult = await input.a2uiCallbacks?.handleCardAction({
+      installationId: input.installationId,
+      payload: data,
+    });
+    if (a2uiResult != null) {
+      return a2uiResult;
+    }
 
     const normalized = normalizeLarkCardAction(data);
     if ("skipReason" in normalized) {
@@ -1170,6 +1185,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           control: input.control,
           ...(input.modelSwitch == null ? {} : { modelSwitch: input.modelSwitch }),
           ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
+          ...(input.a2uiCallbacks == null ? {} : { a2uiCallbacks: input.a2uiCallbacks }),
         });
 
         const dispatcher = new Lark.EventDispatcher({}).register({

@@ -70,6 +70,9 @@ export interface CreateLarkChannelRuntimeInput {
       requestId: string,
     ): Promise<ResolveSubagentCreationRequestResult> | ResolveSubagentCreationRequestResult;
   };
+  a2uiCallbacks?: {
+    handleCardAction(input: { installationId: string; payload: unknown }): Promise<unknown | null>;
+  };
   taskThreads?: {
     createFollowupExecution(input: {
       rootTaskRunId: string;
@@ -116,6 +119,7 @@ export function createLarkChannelRuntime(input: CreateLarkChannelRuntimeInput): 
     clients,
     ...(input.wsClientFactory == null ? {} : { wsClientFactory: input.wsClientFactory }),
     ...(input.subagentRequests == null ? {} : { subagentRequests: input.subagentRequests }),
+    ...(input.a2uiCallbacks == null ? {} : { a2uiCallbacks: input.a2uiCallbacks }),
     ...(input.taskThreads == null ? {} : { taskThreads: input.taskThreads }),
     steerReactionState,
   });
