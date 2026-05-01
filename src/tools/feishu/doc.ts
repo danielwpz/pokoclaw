@@ -235,7 +235,19 @@ export function createFeishuDocTool(input: {
           throw error;
         }
         const message = error instanceof Error ? error.message : String(error);
-        throw toolRecoverableError(`feishu_doc failed: ${message}`, {
+
+        // Extract Feishu API error details from axios response
+        let detail = "";
+        const axiosErr = error as { response?: { data?: unknown } };
+        if (axiosErr.response?.data) {
+          try {
+            detail = ` | detail: ${JSON.stringify(axiosErr.response.data)}`;
+          } catch {
+            // ignore
+          }
+        }
+
+        throw toolRecoverableError(`feishu_doc failed: ${message}${detail}`, {
           code: "feishu_doc_error",
         });
       }

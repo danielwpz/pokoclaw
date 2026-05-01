@@ -206,7 +206,19 @@ export function createFeishuBaseTool(input: {
           throw error;
         }
         const message = error instanceof Error ? error.message : String(error);
-        throw toolRecoverableError(`feishu_base failed: ${message}`, {
+
+        // Extract Feishu API error details from axios response
+        let detail = "";
+        const axiosErr = error as { response?: { data?: unknown } };
+        if (axiosErr.response?.data) {
+          try {
+            detail = ` | detail: ${JSON.stringify(axiosErr.response.data)}`;
+          } catch {
+            // ignore
+          }
+        }
+
+        throw toolRecoverableError(`feishu_base failed: ${message}${detail}`, {
           code: "feishu_base_error",
         });
       }
