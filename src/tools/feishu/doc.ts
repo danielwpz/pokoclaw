@@ -152,6 +152,13 @@ type DocBlockChildrenApi = {
   }) => Promise<ApiResult<{ children?: unknown[] }>>;
 };
 
+type DocBlockDescendantApi = {
+  create: (payload: {
+    path: { document_id: string; block_id: string };
+    data: { children_id: string[]; descendants: unknown[]; index?: number };
+  }) => Promise<ApiResult<{ descendants?: unknown[] }>>;
+};
+
 export function createFeishuDocTool(input: {
   installationId: string;
   clientSource: FeishuClientSource;
@@ -204,8 +211,9 @@ export function createFeishuDocTool(input: {
               path: { document_id: string; block_id: string };
               data: Record<string, unknown>;
             }) => Promise<ApiResult<{ block?: unknown }>>;
-            children: DocBlockChildrenApi;
           };
+          documentBlockChildren: DocBlockChildrenApi;
+          documentBlockDescendant: DocBlockDescendantApi;
         };
 
         switch (args.action) {
@@ -365,7 +373,7 @@ async function handleGetBlock(
 
 async function handleGetChildren(
   docx: {
-    documentBlock: { children: DocBlockChildrenApi };
+    documentBlockChildren: DocBlockChildrenApi;
   },
   args: FeishuDocArgs,
 ) {
@@ -379,7 +387,7 @@ async function handleGetChildren(
   };
   if (args.page_token) params.page_token = args.page_token;
 
-  const result = await docx.documentBlock.children.get({
+  const result = await docx.documentBlockChildren.get({
     path: { document_id: requireDocumentId(args), block_id: args.block_id },
     params,
   });
@@ -388,7 +396,8 @@ async function handleGetChildren(
 
 async function handleCreateBlocks(
   docx: {
-    documentBlock: { children: DocBlockChildrenApi };
+    documentBlockChildren: DocBlockChildrenApi;
+    documentBlockDescendant: DocBlockDescendantApi;
   },
   args: FeishuDocArgs,
 ) {
@@ -403,13 +412,28 @@ async function handleCreateBlocks(
     });
   }
 
-  const children = args.blocks.map((b) => buildBlockPayload(b));
-
-  const result = await docx.documentBlock.children.create({
-    path: { document_id: requireDocumentId(args), block_id: args.block_id },
-    data: { children },
+  const timestamp = Date.now();
+  const descendants = args.blocks.map((b, i) => {
+    const tempId = `tmp_${timestamp}_${i}`;
+    const payload = buildBlockPayload(b);
+    return { block_id: tempId, ...payload };
   });
-  return jsonToolResult(extractFeishuData(result, "create_blocks"));
+  const childrenIds = descendants.map((d) => d.block_id);
+
+  const result = await docx.documentBlockDescendant.create({
+    path: { document_id: requireDocumentId(args), block_id: args.block_id },
+    data: { children_id: childrenIds, descendants, index: -1 },
+  });
+
+  // Extract descendants from result for consistent response format
+  const data = extractFeishuData(result, "create_blocks");
+  // Map descendants to children for backward compatibility
+  const mapped = data as Record<string, unknown>;
+  if (mapped.descendants && !mapped.children) {
+    mapped.children = mapped.descendants;
+    delete mapped.descendants;
+  }
+  return jsonToolResult(mapped);
 }
 
 function buildBlockPayload(block: {
@@ -441,13 +465,20 @@ function buildBlockPayload(block: {
       if (t.link) style.link = { url: t.link };
       if (Object.keys(style).length > 0) {
         textRun.text_element_style = style;
+      } else {
+        // Descendant API may require text_element_style for structured blocks
+        textRun.text_element_style = {};
       }
       return { text_run: textRun };
     });
 
-    const blockBody: Record<string, unknown> = { elements };
+    const blockBody: Record<string, unknown> = { elements, style: {} };
     const contentKey = blockTypeToContentKey(blockType);
     payload[contentKey] = blockBody;
+  } else {
+    // Blocks without text (divider, image placeholder) still need their content key
+    const contentKey = blockTypeToContentKey(blockType);
+    payload[contentKey] = {};
   }
 
   return payload;
@@ -463,15 +494,17 @@ function blockTypeToNumber(type: string): number {
     heading5: 7,
     heading6: 8,
     heading7: 9,
-    bullet: 10,
-    ordered: 11,
-    code: 12,
-    quote: 13,
-    callout: 14,
-    todo: 15,
-    divider: 16,
-    image: 17,
-    table: 18,
+    heading8: 10,
+    heading9: 11,
+    bullet: 12,
+    ordered: 13,
+    code: 14,
+    quote: 15,
+    callout: 19,
+    todo: 17,
+    divider: 22,
+    image: 27,
+    table: 31,
   };
   return map[type] ?? 2;
 }
@@ -486,11 +519,16 @@ function blockTypeToContentKey(type: string): string {
     heading5: "heading5",
     heading6: "heading6",
     heading7: "heading7",
+    heading8: "heading8",
+    heading9: "heading9",
     bullet: "bullet",
     ordered: "ordered",
     code: "code",
     quote: "quote",
     todo: "todo",
+    divider: "divider",
+    image: "image",
+    table: "table",
   };
   return map[type] ?? "text";
 }
