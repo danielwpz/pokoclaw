@@ -212,6 +212,14 @@ describe("config loader", () => {
           enabled: false,
         },
       },
+      feishu: {
+        doc: {
+          enabled: false,
+        },
+        base: {
+          enabled: false,
+        },
+      },
     });
     expect(config.security).toEqual({
       filesystem: {
@@ -468,6 +476,14 @@ describe("config loader", () => {
         fetch: {
           enabled: true,
           provider: "tavily",
+        },
+      },
+      feishu: {
+        doc: {
+          enabled: false,
+        },
+        base: {
+          enabled: false,
         },
       },
     });
