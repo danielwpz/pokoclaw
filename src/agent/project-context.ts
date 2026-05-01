@@ -81,12 +81,17 @@ export function loadAgentProjectContext(input: {
   }
 
   const repoRoot = findRepoRootFromGit(workdir);
-  if (repoRoot == null) {
-    return emptySnapshot(warnings);
-  }
+  const normalizedWorkdir = path.resolve(workdir);
 
-  const repoRootRealPath = tryRealpath(repoRoot);
-  if (repoRootRealPath == null) {
+  // Fall back to the workdir itself when not inside a git repo. This covers
+  // non-code project layouts (Obsidian vaults, document-only folders, etc.)
+  // where CLAUDE.md/AGENTS.md live next to the working files but no .git
+  // marker exists anywhere up the tree.
+  const effectiveRoot = repoRoot ?? normalizedWorkdir;
+  const rootSource: ProjectContextSource = repoRoot != null ? "repo_root" : "workdir";
+
+  const effectiveRootRealPath = tryRealpath(effectiveRoot);
+  if (effectiveRootRealPath == null) {
     return emptySnapshot(warnings);
   }
 
@@ -95,9 +100,9 @@ export function loadAgentProjectContext(input: {
 
   for (const fileName of input.config.files) {
     const entry = loadProjectContextFile({
-      source: "repo_root",
-      rootRealPath: repoRootRealPath,
-      baseDir: repoRoot,
+      source: rootSource,
+      rootRealPath: effectiveRootRealPath,
+      baseDir: effectiveRoot,
       fileName,
       maxBytes: input.config.maxBytes,
       warnings,
@@ -108,15 +113,15 @@ export function loadAgentProjectContext(input: {
     }
   }
 
-  const normalizedWorkdir = path.resolve(workdir);
   const shouldLoadWorkdirClaude =
+    repoRoot != null &&
     input.config.files.includes(WORKDIR_CLAUDE_FILE) &&
     normalizedWorkdir !== repoRoot &&
     isPathInside(repoRoot, normalizedWorkdir);
   if (shouldLoadWorkdirClaude) {
     const entry = loadProjectContextFile({
       source: "workdir",
-      rootRealPath: repoRootRealPath,
+      rootRealPath: effectiveRootRealPath,
       baseDir: normalizedWorkdir,
       fileName: WORKDIR_CLAUDE_FILE,
       maxBytes: input.config.maxBytes,
