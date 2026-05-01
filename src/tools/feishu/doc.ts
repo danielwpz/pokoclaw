@@ -174,7 +174,7 @@ export function createFeishuDocTool(input: {
     async execute(_context, args) {
       logger.info("executing feishu_doc", {
         action: args.action,
-        documentId: requireDocumentId(args),
+        documentId: args.document_id,
       });
 
       try {

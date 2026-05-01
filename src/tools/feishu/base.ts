@@ -166,7 +166,7 @@ export function createFeishuBaseTool(input: {
     async execute(_context, args) {
       logger.info("executing feishu_base", {
         action: args.action,
-        appToken: requireAppToken(args),
+        appToken: args.app_token,
       });
 
       try {
