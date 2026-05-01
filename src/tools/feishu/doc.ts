@@ -21,16 +21,30 @@ const FEISHU_DOC_SCHEMA = Type.Object(
         Type.Literal("get_blocks"),
         Type.Literal("get_block"),
         Type.Literal("get_children"),
+        Type.Literal("create"),
         Type.Literal("create_blocks"),
         Type.Literal("update_block"),
       ],
       { description: "Operation to perform on the document." },
     ),
-    document_id: Type.String({
-      minLength: 1,
-      description:
-        "The document ID (token). Obtain from the document URL: https://xxx.feishu.cn/docx/TOKEN.",
-    }),
+    document_id: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "The document ID (token). Obtain from the document URL: https://xxx.feishu.cn/docx/TOKEN. Not needed for create action.",
+      }),
+    ),
+    title: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Document title. Required for create action.",
+      }),
+    ),
+    folder_token: Type.Optional(
+      Type.String({
+        description: "Folder token to create the document in. Optional for create action.",
+      }),
+    ),
     block_id: Type.Optional(
       Type.String({
         minLength: 1,
@@ -150,8 +164,8 @@ export function createFeishuDocTool(input: {
       "Read and write Feishu/Lark documents (Docx). " +
       "Actions: get_info (document metadata), get_raw_content (plain text), " +
       "get_blocks (list blocks with pagination), get_block (single block), " +
-      "get_children (child blocks of a block), create_blocks (add blocks under a parent), " +
-      "update_block (update block text content). " +
+      "get_children (child blocks of a block), create (create a new document), " +
+      "create_blocks (add blocks under a parent), update_block (update block text content). " +
       "Block types: text, heading1-7, bullet, ordered, code, quote, todo.",
     inputSchema: FEISHU_DOC_SCHEMA,
     getInvocationTimeoutMs() {
@@ -160,7 +174,7 @@ export function createFeishuDocTool(input: {
     async execute(_context, args) {
       logger.info("executing feishu_doc", {
         action: args.action,
-        documentId: args.document_id,
+        documentId: requireDocumentId(args),
       });
 
       try {
@@ -172,6 +186,9 @@ export function createFeishuDocTool(input: {
             rawContent: (payload: {
               path: { document_id: string };
             }) => Promise<ApiResult<{ content?: string }>>;
+            create: (payload?: {
+              data?: { title?: string; folder_token?: string };
+            }) => Promise<ApiResult<{ document?: { document_id?: string; title?: string } }>>;
           };
           documentBlock: {
             list: (payload: {
@@ -202,6 +219,8 @@ export function createFeishuDocTool(input: {
             return await handleGetBlock(docx, args);
           case "get_children":
             return await handleGetChildren(docx, args);
+          case "create":
+            return await handleCreate(docx, args);
           case "create_blocks":
             return await handleCreateBlocks(docx, args);
           case "update_block":
@@ -224,6 +243,15 @@ export function createFeishuDocTool(input: {
   });
 }
 
+function requireDocumentId(args: FeishuDocArgs): string {
+  if (!args.document_id) {
+    throw toolRecoverableError("document_id is required for this action", {
+      code: "feishu_doc_missing_document_id",
+    });
+  }
+  return args.document_id;
+}
+
 async function handleGetInfo(
   docx: {
     document: {
@@ -233,9 +261,33 @@ async function handleGetInfo(
   args: FeishuDocArgs,
 ) {
   const result = await docx.document.get({
-    path: { document_id: args.document_id },
+    path: { document_id: requireDocumentId(args) },
   });
   return jsonToolResult(extractFeishuData(result, "get_info"));
+}
+
+async function handleCreate(
+  docx: {
+    document: {
+      create: (payload?: {
+        data?: { title?: string; folder_token?: string };
+      }) => Promise<ApiResult<{ document?: { document_id?: string; title?: string } }>>;
+    };
+  },
+  args: FeishuDocArgs,
+) {
+  if (!args.title) {
+    throw toolRecoverableError("title is required for create", {
+      code: "feishu_doc_missing_title",
+    });
+  }
+  const result = await docx.document.create({
+    data: {
+      title: args.title,
+      ...(args.folder_token ? { folder_token: args.folder_token } : {}),
+    },
+  });
+  return jsonToolResult(extractFeishuData(result, "create"));
 }
 
 async function handleGetRawContent(
@@ -249,7 +301,7 @@ async function handleGetRawContent(
   args: FeishuDocArgs,
 ) {
   const result = await docx.document.rawContent({
-    path: { document_id: args.document_id },
+    path: { document_id: requireDocumentId(args) },
   });
   const data = extractFeishuData(result, "get_raw_content");
   return textToolResult(data.content ?? "");
@@ -272,7 +324,7 @@ async function handleGetBlocks(
   if (args.page_token) params.page_token = args.page_token;
 
   const result = await docx.documentBlock.list({
-    path: { document_id: args.document_id },
+    path: { document_id: requireDocumentId(args) },
     params,
   });
   return jsonToolResult(extractFeishuData(result, "get_blocks"));
@@ -294,7 +346,7 @@ async function handleGetBlock(
     });
   }
   const result = await docx.documentBlock.get({
-    path: { document_id: args.document_id, block_id: args.block_id },
+    path: { document_id: requireDocumentId(args), block_id: args.block_id },
   });
   return jsonToolResult(extractFeishuData(result, "get_block"));
 }
@@ -316,7 +368,7 @@ async function handleGetChildren(
   if (args.page_token) params.page_token = args.page_token;
 
   const result = await docx.documentBlock.children.get({
-    path: { document_id: args.document_id, block_id: args.block_id },
+    path: { document_id: requireDocumentId(args), block_id: args.block_id },
     params,
   });
   return jsonToolResult(extractFeishuData(result, "get_children"));
@@ -342,7 +394,7 @@ async function handleCreateBlocks(
   const children = args.blocks.map((b) => buildBlockPayload(b));
 
   const result = await docx.documentBlock.children.create({
-    path: { document_id: args.document_id, block_id: args.block_id },
+    path: { document_id: requireDocumentId(args), block_id: args.block_id },
     data: { children },
   });
   return jsonToolResult(extractFeishuData(result, "create_blocks"));
@@ -454,7 +506,7 @@ async function handleUpdateBlock(
   }
 
   const result = await docx.documentBlock.patch({
-    path: { document_id: args.document_id, block_id: args.block_id },
+    path: { document_id: requireDocumentId(args), block_id: args.block_id },
     data: {
       update_text_elements: args.update_text_elements as unknown as Record<string, unknown>,
     },
