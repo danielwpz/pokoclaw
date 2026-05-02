@@ -54,6 +54,14 @@ export const DEFAULT_CONFIG: RawConfig = {
         enabled: false,
       },
     },
+    feishu: {
+      doc: {
+        enabled: false,
+      },
+      base: {
+        enabled: false,
+      },
+    },
   },
   security: {
     filesystem: {

@@ -47,6 +47,7 @@ import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import { createBuiltinToolRegistry } from "@/src/tools/builtins.js";
+import { createFeishuClientSource } from "@/src/tools/feishu/client.js";
 
 const logger = createSubsystemLogger("runtime-bootstrap");
 
@@ -82,10 +83,17 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const liveModels = new LiveProviderRegistrySource(liveConfig);
   const messages = new MessagesRepo(input.storage);
   const sessions = new SessionsRepo(input.storage);
-  const tools = createBuiltinToolRegistry({
-    providers: input.config.providers,
-    tools: input.config.tools,
-  });
+  const larkClients = new LarkClientRegistry(
+    listConfiguredLarkInstallations(input.config.channels.lark),
+  );
+  const feishuClientSource = createFeishuClientSource(larkClients);
+  const tools = createBuiltinToolRegistry(
+    {
+      providers: input.config.providers,
+      tools: input.config.tools,
+    },
+    feishuClientSource,
+  );
   const bridge = createRuntimeOrchestrationBridge();
   const outboundEventBus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
   const cancel = new SessionRunAbortRegistry();
@@ -129,9 +137,6 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     loop,
     messages,
   });
-  const larkClients = new LarkClientRegistry(
-    listConfiguredLarkInstallations(input.config.channels.lark),
-  );
   const manager = new AgentManager({
     storage: input.storage,
     ingress,

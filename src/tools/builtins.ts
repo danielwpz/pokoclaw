@@ -6,6 +6,9 @@ import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createCreateSubagentTool } from "@/src/tools/create-subagent.js";
 import { createScheduleTaskTool } from "@/src/tools/cron.js";
 import { createEditTool } from "@/src/tools/edit.js";
+import { createFeishuBaseTool } from "@/src/tools/feishu/base.js";
+import type { FeishuClientSource } from "@/src/tools/feishu/client.js";
+import { createFeishuDocTool } from "@/src/tools/feishu/doc.js";
 import { createFinishTaskTool } from "@/src/tools/finish-task.js";
 import { createGetRuntimeStatusTool } from "@/src/tools/get-runtime-status.js";
 import { createGrepTool } from "@/src/tools/grep.js";
@@ -23,6 +26,7 @@ import { createWriteTool } from "@/src/tools/write.js";
 
 export function createBuiltinToolRegistry(
   config?: Pick<AppConfig, "providers" | "tools">,
+  feishuClientSource?: FeishuClientSource,
 ): ToolRegistry {
   const providers = config?.providers ?? DEFAULT_CONFIG.providers;
   const toolsConfig = config?.tools ?? DEFAULT_CONFIG.tools;
@@ -70,5 +74,44 @@ export function createBuiltinToolRegistry(
       }),
     );
   }
+
+  // Feishu tools
+  if (toolsConfig.feishu.doc.enabled) {
+    if (feishuClientSource == null) {
+      throw new Error("tools.feishu.doc is enabled but feishu client source is not available.");
+    }
+    const installationId = toolsConfig.feishu.doc.installation;
+    if (installationId == null) {
+      throw new Error("tools.feishu.doc is enabled but installation is not specified.");
+    }
+    const docToolInput: {
+      installationId: string;
+      clientSource: FeishuClientSource;
+      collaboratorOpenId?: string;
+    } = {
+      installationId,
+      clientSource: feishuClientSource,
+    };
+    if (toolsConfig.feishu.doc.collaboratorOpenId != null) {
+      docToolInput.collaboratorOpenId = toolsConfig.feishu.doc.collaboratorOpenId;
+    }
+    registry.register(createFeishuDocTool(docToolInput));
+  }
+  if (toolsConfig.feishu.base.enabled) {
+    if (feishuClientSource == null) {
+      throw new Error("tools.feishu.base is enabled but feishu client source is not available.");
+    }
+    const installationId = toolsConfig.feishu.base.installation;
+    if (installationId == null) {
+      throw new Error("tools.feishu.base is enabled but installation is not specified.");
+    }
+    registry.register(
+      createFeishuBaseTool({
+        installationId,
+        clientSource: feishuClientSource,
+      }),
+    );
+  }
+
   return registry;
 }

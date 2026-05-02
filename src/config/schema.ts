@@ -93,8 +93,20 @@ export interface WebToolsConfig {
   fetch: WebToolConfig;
 }
 
+export interface FeishuToolConfig {
+  enabled: boolean;
+  installation?: string;
+  collaboratorOpenId?: string;
+}
+
+export interface FeishuToolsConfig {
+  doc: FeishuToolConfig;
+  base: FeishuToolConfig;
+}
+
 export interface ToolsConfig {
   web: WebToolsConfig;
+  feishu: FeishuToolsConfig;
 }
 
 export interface SecurityFilesystemConfig {
@@ -244,8 +256,20 @@ interface WebToolsConfigInput {
   fetch?: unknown;
 }
 
+interface FeishuToolConfigInput {
+  enabled?: unknown;
+  installation?: unknown;
+  collaboratorOpenId?: unknown;
+}
+
+interface FeishuToolsConfigInput {
+  doc?: unknown;
+  base?: unknown;
+}
+
 interface ToolsConfigInput {
   web?: unknown;
+  feishu?: unknown;
 }
 
 interface SecurityFilesystemConfigInput {
@@ -404,6 +428,10 @@ function cloneRawConfig(config: RawConfig): RawConfig {
       web: {
         search: cloneWebToolConfig(config.tools.web.search),
         fetch: cloneWebToolConfig(config.tools.web.fetch),
+      },
+      feishu: {
+        doc: cloneFeishuToolConfig(config.tools.feishu.doc),
+        base: cloneFeishuToolConfig(config.tools.feishu.base),
       },
     },
     security: {
@@ -948,6 +976,10 @@ function validateToolsConfig(
         search: cloneWebToolConfig(defaults.web.search),
         fetch: cloneWebToolConfig(defaults.web.fetch),
       },
+      feishu: {
+        doc: cloneFeishuToolConfig(defaults.feishu.doc),
+        base: cloneFeishuToolConfig(defaults.feishu.base),
+      },
     };
   }
 
@@ -956,10 +988,11 @@ function validateToolsConfig(
   }
 
   const config = input as ToolsConfigInput;
-  assertAllowedKeys(config, new Set(["web"]), "config.toml tools");
+  assertAllowedKeys(config, new Set(["web", "feishu"]), "config.toml tools");
 
   return {
     web: validateWebToolsConfig(config.web, defaults.web, providers),
+    feishu: validateFeishuToolsConfig(config.feishu, defaults.feishu),
   };
 }
 
@@ -1039,6 +1072,65 @@ function validateWebToolConfig(
 
   if (resolved.enabled && resolved.provider == null) {
     throw new Error(`${options.path}.provider is required when enabled = true`);
+  }
+
+  return resolved;
+}
+
+function validateFeishuToolsConfig(input: unknown, defaults: FeishuToolsConfig): FeishuToolsConfig {
+  if (input == null) {
+    return {
+      doc: cloneFeishuToolConfig(defaults.doc),
+      base: cloneFeishuToolConfig(defaults.base),
+    };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml tools.feishu must be a table/object");
+  }
+
+  const config = input as FeishuToolsConfigInput;
+  assertAllowedKeys(config, new Set(["doc", "base"]), "config.toml tools.feishu");
+
+  return {
+    doc: validateFeishuToolConfig(config.doc, defaults.doc, "config.toml tools.feishu.doc"),
+    base: validateFeishuToolConfig(config.base, defaults.base, "config.toml tools.feishu.base"),
+  };
+}
+
+function validateFeishuToolConfig(
+  input: unknown,
+  defaults: FeishuToolConfig,
+  path: string,
+): FeishuToolConfig {
+  if (input == null) {
+    return cloneFeishuToolConfig(defaults);
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error(`${path} must be a table/object`);
+  }
+
+  const config = input as FeishuToolConfigInput;
+  assertAllowedKeys(config, new Set(["enabled", "installation", "collaboratorOpenId"]), path);
+
+  const enabled = validateOptionalBoolean(config.enabled, defaults.enabled, `${path}.enabled`);
+  const installation = validateOptionalNonEmptyString(config.installation, `${path}.installation`);
+  const collaboratorOpenId = validateOptionalNonEmptyString(
+    config.collaboratorOpenId,
+    `${path}.collaboratorOpenId`,
+  );
+
+  if (enabled && installation == null) {
+    throw new Error(`${path}.installation is required when enabled = true`);
+  }
+
+  const resolved: FeishuToolConfig = { enabled };
+  if (installation != null) {
+    resolved.installation = installation;
+  }
+  if (collaboratorOpenId != null) {
+    resolved.collaboratorOpenId = collaboratorOpenId;
   }
 
   return resolved;
@@ -1324,6 +1416,17 @@ function cloneWebToolConfig(config: WebToolConfig): WebToolConfig {
   return config.provider == null
     ? { enabled: config.enabled }
     : { enabled: config.enabled, provider: config.provider };
+}
+
+function cloneFeishuToolConfig(config: FeishuToolConfig): FeishuToolConfig {
+  const cloned: FeishuToolConfig = { enabled: config.enabled };
+  if (config.installation != null) {
+    cloned.installation = config.installation;
+  }
+  if (config.collaboratorOpenId != null) {
+    cloned.collaboratorOpenId = config.collaboratorOpenId;
+  }
+  return cloned;
 }
 
 function cloneMeditationConfig(config: MeditationConfig): MeditationConfig {
