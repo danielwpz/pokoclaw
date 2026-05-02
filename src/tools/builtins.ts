@@ -84,12 +84,18 @@ export function createBuiltinToolRegistry(
     if (installationId == null) {
       throw new Error("tools.feishu.doc is enabled but installation is not specified.");
     }
-    registry.register(
-      createFeishuDocTool({
-        installationId,
-        clientSource: feishuClientSource,
-      }),
-    );
+    const docToolInput: {
+      installationId: string;
+      clientSource: FeishuClientSource;
+      collaboratorOpenId?: string;
+    } = {
+      installationId,
+      clientSource: feishuClientSource,
+    };
+    if (toolsConfig.feishu.doc.collaboratorOpenId != null) {
+      docToolInput.collaboratorOpenId = toolsConfig.feishu.doc.collaboratorOpenId;
+    }
+    registry.register(createFeishuDocTool(docToolInput));
   }
   if (toolsConfig.feishu.base.enabled) {
     if (feishuClientSource == null) {

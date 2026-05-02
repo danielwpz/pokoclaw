@@ -96,6 +96,7 @@ export interface WebToolsConfig {
 export interface FeishuToolConfig {
   enabled: boolean;
   installation?: string;
+  collaboratorOpenId?: string;
 }
 
 export interface FeishuToolsConfig {
@@ -258,6 +259,7 @@ interface WebToolsConfigInput {
 interface FeishuToolConfigInput {
   enabled?: unknown;
   installation?: unknown;
+  collaboratorOpenId?: unknown;
 }
 
 interface FeishuToolsConfigInput {
@@ -1110,10 +1112,14 @@ function validateFeishuToolConfig(
   }
 
   const config = input as FeishuToolConfigInput;
-  assertAllowedKeys(config, new Set(["enabled", "installation"]), path);
+  assertAllowedKeys(config, new Set(["enabled", "installation", "collaboratorOpenId"]), path);
 
   const enabled = validateOptionalBoolean(config.enabled, defaults.enabled, `${path}.enabled`);
   const installation = validateOptionalNonEmptyString(config.installation, `${path}.installation`);
+  const collaboratorOpenId = validateOptionalNonEmptyString(
+    config.collaboratorOpenId,
+    `${path}.collaboratorOpenId`,
+  );
 
   if (enabled && installation == null) {
     throw new Error(`${path}.installation is required when enabled = true`);
@@ -1122,6 +1128,9 @@ function validateFeishuToolConfig(
   const resolved: FeishuToolConfig = { enabled };
   if (installation != null) {
     resolved.installation = installation;
+  }
+  if (collaboratorOpenId != null) {
+    resolved.collaboratorOpenId = collaboratorOpenId;
   }
 
   return resolved;
@@ -1410,9 +1419,14 @@ function cloneWebToolConfig(config: WebToolConfig): WebToolConfig {
 }
 
 function cloneFeishuToolConfig(config: FeishuToolConfig): FeishuToolConfig {
-  return config.installation == null
-    ? { enabled: config.enabled }
-    : { enabled: config.enabled, installation: config.installation };
+  const cloned: FeishuToolConfig = { enabled: config.enabled };
+  if (config.installation != null) {
+    cloned.installation = config.installation;
+  }
+  if (config.collaboratorOpenId != null) {
+    cloned.collaboratorOpenId = config.collaboratorOpenId;
+  }
+  return cloned;
 }
 
 function cloneMeditationConfig(config: MeditationConfig): MeditationConfig {

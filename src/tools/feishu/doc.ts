@@ -24,6 +24,10 @@ const FEISHU_DOC_SCHEMA = Type.Object(
         Type.Literal("create"),
         Type.Literal("create_blocks"),
         Type.Literal("update_block"),
+        Type.Literal("convert_markdown"),
+        Type.Literal("delete_blocks"),
+        Type.Literal("append"),
+        Type.Literal("batch_update"),
       ],
       { description: "Operation to perform on the document." },
     ),
@@ -75,6 +79,87 @@ const FEISHU_DOC_SCHEMA = Type.Object(
                   },
                   { additionalProperties: false },
                 ),
+              ),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    index: Type.Optional(
+      Type.Number({
+        description:
+          "Insert position for create_blocks. -1 = end (default). 0 = beginning. N = after Nth child.",
+      }),
+    ),
+    content: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Markdown or HTML content for convert_markdown action.",
+      }),
+    ),
+    content_type: Type.Optional(
+      Type.String({
+        description: "Content type for convert_markdown: 'markdown' (default) or 'html'.",
+      }),
+    ),
+    start_index: Type.Optional(
+      Type.Number({
+        minimum: 0,
+        description: "Start index (inclusive) for delete_blocks. 0 = first child.",
+      }),
+    ),
+    end_index: Type.Optional(
+      Type.Number({
+        minimum: 1,
+        description:
+          "End index (exclusive) for delete_blocks. Deletes children [start_index, end_index).",
+      }),
+    ),
+    requests: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            block_id: Type.String({
+              minLength: 1,
+              description: "Block ID to update.",
+            }),
+            update_text_elements: Type.Optional(
+              Type.Object(
+                {
+                  elements: Type.Array(
+                    Type.Object(
+                      {
+                        text_run: Type.Object(
+                          {
+                            content: Type.String({ minLength: 1 }),
+                            text_element_style: Type.Optional(
+                              Type.Object(
+                                {
+                                  bold: Type.Optional(Type.Boolean()),
+                                  italic: Type.Optional(Type.Boolean()),
+                                  underline: Type.Optional(Type.Boolean()),
+                                  strikethrough: Type.Optional(Type.Boolean()),
+                                  inline_code: Type.Optional(Type.Boolean()),
+                                  link: Type.Optional(
+                                    Type.Object(
+                                      { url: Type.String({ minLength: 1 }) },
+                                      { additionalProperties: false },
+                                    ),
+                                  ),
+                                },
+                                { additionalProperties: false },
+                              ),
+                            ),
+                          },
+                          { additionalProperties: false },
+                        ),
+                      },
+                      { additionalProperties: false },
+                    ),
+                  ),
+                },
+                { additionalProperties: false },
               ),
             ),
           },
@@ -134,6 +219,33 @@ const FEISHU_DOC_SCHEMA = Type.Object(
         description: "Page token for paginated list actions.",
       }),
     ),
+    permission_members: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            member_type: Type.String({
+              description:
+                "Member type for permission: 'openid', 'unionid', 'email'. Required with member_id.",
+            }),
+            member_id: Type.String({
+              minLength: 1,
+              description: "Member ID matching the member_type (e.g. openid like 'ou_xxx').",
+            }),
+            perm: Type.Optional(
+              Type.String({
+                description:
+                  "Permission level: 'full_access' (可管理), 'edit' (可编辑), 'view' (可阅读/默认), 'comment' (可评论).",
+              }),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+        {
+          description:
+            "Collaborators to add to the document after creation. Each entry grants permission to one member. Requires drive:drive + docs:permission.member:create scopes.",
+        },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -150,6 +262,10 @@ type DocBlockChildrenApi = {
     path: { document_id: string; block_id: string };
     data: { children: unknown[] };
   }) => Promise<ApiResult<{ children?: unknown[] }>>;
+  batchDelete: (payload: {
+    path: { document_id: string; block_id: string };
+    data: { start_index: number; end_index: number };
+  }) => Promise<ApiResult<{ document_revision_id?: number }>>;
 };
 
 type DocBlockDescendantApi = {
@@ -162,18 +278,20 @@ type DocBlockDescendantApi = {
 export function createFeishuDocTool(input: {
   installationId: string;
   clientSource: FeishuClientSource;
+  collaboratorOpenId?: string;
 }) {
   const client = input.clientSource.getClient(input.installationId);
+  const collaboratorOpenId = input.collaboratorOpenId;
 
   return defineTool({
     name: "feishu_doc",
     description:
       "Read and write Feishu/Lark documents (Docx). " +
-      "Actions: get_info (document metadata), get_raw_content (plain text), " +
-      "get_blocks (list blocks with pagination), get_block (single block), " +
-      "get_children (child blocks of a block), create (create a new document), " +
-      "create_blocks (add blocks under a parent), update_block (update block text content). " +
-      "Block types: text, heading1-7, bullet, ordered, code, quote, todo.",
+      "Actions: get_info, get_raw_content, get_blocks, get_block, get_children, " +
+      "create, create_blocks, update_block, batch_update (batch update multiple blocks), " +
+      "convert_markdown (convert markdown to blocks), delete_blocks (batch delete children by index range), " +
+      "append (shorthand for create_blocks at document end). " +
+      "Block types: text, heading1-9, bullet, ordered, code, quote, todo, divider, image, table.",
     inputSchema: FEISHU_DOC_SCHEMA,
     getInvocationTimeoutMs() {
       return 30_000;
@@ -196,6 +314,9 @@ export function createFeishuDocTool(input: {
             create: (payload?: {
               data?: { title?: string; folder_token?: string };
             }) => Promise<ApiResult<{ document?: { document_id?: string; title?: string } }>>;
+            convert: (payload?: {
+              data: { content: string; content_type?: string };
+            }) => Promise<ApiResult<{ blocks?: unknown[]; first_level_block_ids?: string[] }>>;
           };
           documentBlock: {
             list: (payload: {
@@ -211,9 +332,23 @@ export function createFeishuDocTool(input: {
               path: { document_id: string; block_id: string };
               data: Record<string, unknown>;
             }) => Promise<ApiResult<{ block?: unknown }>>;
+            batchUpdate: (payload: {
+              path: { document_id: string };
+              data: { requests: Array<{ block_id: string; [key: string]: unknown }> };
+            }) => Promise<ApiResult<{ blocks?: unknown[] }>>;
           };
           documentBlockChildren: DocBlockChildrenApi;
           documentBlockDescendant: DocBlockDescendantApi;
+        };
+
+        const driveApi = client.drive as unknown as {
+          permissionMember: {
+            create: (payload: {
+              path: { token: string };
+              params: { type: string };
+              data: { member_type: string; member_id: string; perm?: string };
+            }) => Promise<ApiResult<unknown>>;
+          };
         };
 
         switch (args.action) {
@@ -228,11 +363,19 @@ export function createFeishuDocTool(input: {
           case "get_children":
             return await handleGetChildren(docx, args);
           case "create":
-            return await handleCreate(docx, args);
+            return await handleCreate(docx, driveApi, args, collaboratorOpenId);
           case "create_blocks":
             return await handleCreateBlocks(docx, args);
           case "update_block":
             return await handleUpdateBlock(docx, args);
+          case "convert_markdown":
+            return await handleConvertMarkdown(docx, args);
+          case "delete_blocks":
+            return await handleDeleteBlocks(docx, args);
+          case "append":
+            return await handleAppend(docx, args);
+          case "batch_update":
+            return await handleBatchUpdate(docx, args);
           default:
             throw toolRecoverableError(`Unknown action: ${(args as { action: string }).action}`, {
               code: "feishu_doc_unknown_action",
@@ -294,7 +437,17 @@ async function handleCreate(
       }) => Promise<ApiResult<{ document?: { document_id?: string; title?: string } }>>;
     };
   },
+  driveApi: {
+    permissionMember: {
+      create: (payload: {
+        path: { token: string };
+        params: { type: string };
+        data: { member_type: string; member_id: string; perm?: string };
+      }) => Promise<ApiResult<unknown>>;
+    };
+  },
   args: FeishuDocArgs,
+  collaboratorOpenId?: string,
 ) {
   if (!args.title) {
     throw toolRecoverableError("title is required for create", {
@@ -307,7 +460,63 @@ async function handleCreate(
       ...(args.folder_token ? { folder_token: args.folder_token } : {}),
     },
   });
-  return jsonToolResult(extractFeishuData(result, "create"));
+  const docData = extractFeishuData(result, "create");
+  const documentId = (docData as { document?: { document_id?: string } }).document?.document_id;
+
+  // Merge collaboratorOpenId config with explicit permission_members
+  const members: Array<{ member_type: string; member_id: string; perm: string }> = [];
+  if (collaboratorOpenId) {
+    members.push({ member_type: "openid", member_id: collaboratorOpenId, perm: "full_access" });
+  }
+  if (args.permission_members) {
+    for (const m of args.permission_members) {
+      members.push({ member_type: m.member_type, member_id: m.member_id, perm: m.perm ?? "view" });
+    }
+  }
+
+  // Add collaborators if any
+  if (members.length > 0 && documentId) {
+    const permResults: Array<{
+      member_type: string;
+      member_id: string;
+      success: boolean;
+      error?: string;
+    }> = [];
+    for (const member of members) {
+      try {
+        await driveApi.permissionMember.create({
+          path: { token: documentId },
+          params: { type: "docx" },
+          data: {
+            member_type: member.member_type,
+            member_id: member.member_id,
+            perm: member.perm,
+          },
+        });
+        permResults.push({
+          member_type: member.member_type,
+          member_id: member.member_id,
+          success: true,
+        });
+      } catch (permError) {
+        const msg = permError instanceof Error ? permError.message : String(permError);
+        logger.warn("failed to add permission member", {
+          documentId,
+          member_type: member.member_type,
+          error: msg,
+        });
+        permResults.push({
+          member_type: member.member_type,
+          member_id: member.member_id,
+          success: false,
+          error: msg,
+        });
+      }
+    }
+    return jsonToolResult({ document: docData, permissions: permResults });
+  }
+
+  return jsonToolResult(docData);
 }
 
 async function handleGetRawContent(
@@ -422,7 +631,7 @@ async function handleCreateBlocks(
 
   const result = await docx.documentBlockDescendant.create({
     path: { document_id: requireDocumentId(args), block_id: args.block_id },
-    data: { children_id: childrenIds, descendants, index: -1 },
+    data: { children_id: childrenIds, descendants, index: args.index ?? -1 },
   });
 
   // Extract descendants from result for consistent response format
@@ -562,4 +771,103 @@ async function handleUpdateBlock(
     },
   });
   return jsonToolResult(extractFeishuData(result, "update_block"));
+}
+
+async function handleConvertMarkdown(
+  docx: {
+    document: {
+      convert: (payload: {
+        data: { content: string; content_type?: string };
+      }) => Promise<ApiResult<{ blocks?: unknown[]; first_level_block_ids?: string[] }>>;
+    };
+  },
+  args: FeishuDocArgs,
+) {
+  if (!args.content) {
+    throw toolRecoverableError("content is required for convert_markdown", {
+      code: "feishu_doc_missing_content",
+    });
+  }
+
+  const result = await docx.document.convert({
+    data: { content: args.content, content_type: args.content_type ?? "markdown" },
+  });
+  return jsonToolResult(extractFeishuData(result, "convert_markdown"));
+}
+
+async function handleDeleteBlocks(
+  docx: {
+    documentBlockChildren: DocBlockChildrenApi;
+  },
+  args: FeishuDocArgs,
+) {
+  if (!args.block_id) {
+    throw toolRecoverableError("block_id is required for delete_blocks", {
+      code: "feishu_doc_missing_block_id",
+    });
+  }
+  if (args.start_index === undefined || args.start_index === null) {
+    throw toolRecoverableError("start_index is required for delete_blocks", {
+      code: "feishu_doc_missing_start_index",
+    });
+  }
+  if (args.end_index === undefined || args.end_index === null) {
+    throw toolRecoverableError("end_index is required for delete_blocks", {
+      code: "feishu_doc_missing_end_index",
+    });
+  }
+
+  const result = await docx.documentBlockChildren.batchDelete({
+    path: { document_id: requireDocumentId(args), block_id: args.block_id },
+    data: { start_index: args.start_index, end_index: args.end_index },
+  });
+  return jsonToolResult(extractFeishuData(result, "delete_blocks"));
+}
+
+async function handleAppend(
+  docx: {
+    documentBlockChildren: DocBlockChildrenApi;
+    documentBlockDescendant: DocBlockDescendantApi;
+  },
+  args: FeishuDocArgs,
+) {
+  // Append is create_blocks at document root with index=-1
+  const augmentedArgs = {
+    ...args,
+    block_id: (args.block_id ?? args.document_id) as string,
+    index: args.index ?? -1,
+  };
+  return await handleCreateBlocks(docx, augmentedArgs);
+}
+
+async function handleBatchUpdate(
+  docx: {
+    documentBlock: {
+      batchUpdate: (payload: {
+        path: { document_id: string };
+        data: { requests: Array<{ block_id: string; [key: string]: unknown }> };
+      }) => Promise<ApiResult<{ blocks?: unknown[] }>>;
+    };
+  },
+  args: FeishuDocArgs,
+) {
+  if (!args.requests || args.requests.length === 0) {
+    throw toolRecoverableError("requests is required for batch_update", {
+      code: "feishu_doc_missing_requests",
+    });
+  }
+
+  const requests = args.requests.map((r) => {
+    const req: Record<string, unknown> = { block_id: r.block_id };
+    if (r.update_text_elements) {
+      req.update_text_elements = r.update_text_elements as unknown as Record<string, unknown>;
+    }
+    return req as { block_id: string; [key: string]: unknown };
+  });
+
+  const result = await docx.documentBlock.batchUpdate({
+    path: { document_id: requireDocumentId(args) },
+    data: { requests },
+  });
+  return jsonToolResult(extractFeishuData(result, "batch_update"));
 }
