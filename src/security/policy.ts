@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AppConfig } from "@/src/config/schema.js";
+import { appendFsSubtreeSuffix } from "@/src/security/scope.js";
 import {
   POKOCLAW_REPO_DIR,
   POKOCLAW_SKILLS_DIR,
@@ -44,7 +45,7 @@ export interface AgentPermissionBaseline {
 }
 
 function subtree(value: string): string {
-  return path.join(value, "**");
+  return appendFsSubtreeSuffix(value);
 }
 
 const HOME_DIR = os.homedir();

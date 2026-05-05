@@ -317,7 +317,10 @@ describe("agent system prompt", () => {
       "Do not use `request_permissions` to recover a bash sandbox failure directly.",
     );
     expect(prompt).toContain(
-      "`full_access` still runs inside a high-permission sandbox; system hard-deny filesystem and network boundaries continue to apply.",
+      "On platforms supported by sandbox-runtime, `full_access` still runs inside a high-permission sandbox; system hard-deny filesystem and network boundaries continue to apply.",
+    );
+    expect(prompt).toContain(
+      "On Windows, `full_access` bash may fall back to the native shell when sandbox-runtime is unavailable; approval and policy checks still apply, but sandbox-runtime filesystem/network isolation may not be available.",
     );
     expect(prompt).toContain(
       'Use `sandboxMode: "full_access"` only when higher-permission sandboxed execution is genuinely necessary',

@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
-import type { PermissionScope } from "@/src/security/scope.js";
+import { appendFsSubtreeSuffix, type PermissionScope } from "@/src/security/scope.js";
 
 export type PermissionResource = "filesystem";
 export type PermissionEntryScope = "exact" | "subtree";
@@ -193,7 +192,7 @@ export function expandPermissionEntriesToScopes(
   const scopes: PermissionScope[] = [];
 
   for (const entry of entries) {
-    const scopePath = entry.scope === "subtree" ? path.join(entry.path, "**") : entry.path;
+    const scopePath = entry.scope === "subtree" ? appendFsSubtreeSuffix(entry.path) : entry.path;
     if (entry.access === "read" || entry.access === "read_write") {
       scopes.push({ kind: "fs.read", path: scopePath });
     }

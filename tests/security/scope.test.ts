@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  appendFsSubtreeSuffix,
   describePermissionRequest,
   describePermissionScope,
   isFsSubtreeScopePath,
@@ -32,6 +33,22 @@ describe("permission scope parsing", () => {
     expect(isFsSubtreeScopePath("/Users/example/.pokoclaw/workspace/**")).toBe(true);
   });
 
+  test.runIf(process.platform === "win32")("normalizes Windows subtree suffixes", () => {
+    expect(
+      parsePermissionScopeJson(
+        '{"kind":"fs.write","path":"C:\\\\Users\\\\example\\\\project\\\\**"}',
+      ),
+    ).toEqual({
+      kind: "fs.write",
+      path: "C:\\Users\\example\\project/**",
+    });
+    expect(isFsSubtreeScopePath("C:\\Users\\example\\project\\**")).toBe(true);
+  });
+
+  test("appends subtree suffix without using platform-specific separators", () => {
+    expect(appendFsSubtreeSuffix("/Users/example/project/")).toBe("/Users/example/project/**");
+  });
+
   test("parses db scopes", () => {
     expect(parsePermissionScopeJson('{"kind":"db.read","database":"system"}')).toEqual({
       kind: "db.read",
@@ -47,6 +64,12 @@ describe("permission scope parsing", () => {
 
   test("rejects filesystem root subtree scopes", () => {
     expect(() => parsePermissionScopeJson('{"kind":"fs.read","path":"/**"}')).toThrow(
+      "Invalid permission scope JSON: fs.read path must not target the filesystem root subtree",
+    );
+  });
+
+  test.runIf(process.platform === "win32")("rejects Windows drive root subtree scopes", () => {
+    expect(() => parsePermissionScopeJson('{"kind":"fs.read","path":"C:\\\\**"}')).toThrow(
       "Invalid permission scope JSON: fs.read path must not target the filesystem root subtree",
     );
   });

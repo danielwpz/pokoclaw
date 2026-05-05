@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +53,7 @@ export interface SandboxedBashResult extends SandboxExecResult {
 
 const logger = createSubsystemLogger("security/sandbox");
 const DEFAULT_BASH_BINARY = process.platform === "win32" ? "bash" : "/bin/bash";
+const WINDOWS_NATIVE_SHELL = process.env.ComSpec ?? "cmd.exe";
 const BLOCKED_ENV_VAR_NAMES = new Set<string>([
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
@@ -202,6 +204,7 @@ export async function executeSandboxedBash(
     security,
     sandboxConfig,
     logPrefix: "bash sandbox exec",
+    windowsNativeFallback: false,
   });
 }
 
@@ -231,6 +234,7 @@ export async function executeFullAccessSandboxedBash(
     security,
     sandboxConfig,
     logPrefix: "bash full-access sandbox exec",
+    windowsNativeFallback: true,
   });
 }
 
@@ -243,6 +247,7 @@ async function executeBashInSandbox(input: {
   security: SecurityService;
   sandboxConfig: SandboxRuntimeConfig;
   logPrefix: string;
+  windowsNativeFallback: boolean;
 }): Promise<SandboxedBashResult> {
   const timeout = Math.max(1, Math.floor(input.timeoutMs));
   const timeoutController = new AbortController();
@@ -262,6 +267,45 @@ async function executeBashInSandbox(input: {
   });
 
   try {
+    if (process.platform === "win32" && input.windowsNativeFallback) {
+      const result = await executeWindowsNativeShellCommand({
+        command: input.command,
+        cwd: input.cwd,
+        abortSignal,
+      });
+
+      if (timeoutController.signal.aborted && !input.context.abortSignal?.aborted) {
+        logger.info(`${input.logPrefix} timeout`, {
+          sessionId: input.context.sessionId,
+          ownerAgentId: input.ownerAgentId,
+          toolCallId: input.context.toolCallId,
+          timeoutMs: timeout,
+          cwd: shortenPathForLog(input.cwd),
+        });
+        throw toolRecoverableError(`The bash command timed out after ${timeout}ms.`, {
+          code: "bash_timeout",
+          timeoutMs: timeout,
+          cwd: input.cwd,
+        });
+      }
+
+      logger.info(`${input.logPrefix} done`, {
+        sessionId: input.context.sessionId,
+        ownerAgentId: input.ownerAgentId,
+        toolCallId: input.context.toolCallId,
+        exitCode: result.exitCode,
+        signal: result.signal,
+        cwd: shortenPathForLog(input.cwd),
+      });
+
+      return {
+        ...result,
+        command: input.command,
+        cwd: input.cwd,
+        timeoutMs: timeout,
+      };
+    }
+
     const result = await executeSandboxedCommand(input.command, {
       binShell: DEFAULT_BASH_BINARY,
       customConfig: input.sandboxConfig,
@@ -327,6 +371,86 @@ async function executeBashInSandbox(input: {
   } finally {
     clearTimeout(timeoutHandle);
   }
+}
+
+async function executeWindowsNativeShellCommand(input: {
+  command: string;
+  cwd: string;
+  abortSignal: AbortSignal;
+}): Promise<SandboxExecResult> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(WINDOWS_NATIVE_SHELL, ["/d", "/s", "/c", input.command], {
+      cwd: input.cwd,
+      env: sanitizeSandboxEnv(process.env),
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const cleanup = () => {
+      input.abortSignal.removeEventListener("abort", onAbort);
+    };
+
+    const finish = (result: SandboxExecResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const fail = (error: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const killTree = () => {
+      if (child.pid == null) {
+        return;
+      }
+      try {
+        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+          windowsHide: true,
+          stdio: "ignore",
+        });
+      } catch {
+        child.kill();
+      }
+    };
+
+    const onAbort = () => {
+      killTree();
+    };
+
+    input.abortSignal.addEventListener("abort", onAbort, { once: true });
+
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    child.on("error", fail);
+    child.on("close", (code, signal) => {
+      finish({
+        stdout,
+        stderr,
+        exitCode: code,
+        signal,
+      });
+    });
+  });
 }
 
 async function resolveSandboxCwd(input: {
