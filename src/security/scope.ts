@@ -28,6 +28,7 @@ export interface PermissionRequest {
 
 const GLOB_CHARS = /[*?[\]]/;
 const SUBTREE_SUFFIX = "/**";
+const WINDOWS_SUBTREE_SUFFIX = "\\**";
 
 function assertObject(value: unknown, context: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -51,11 +52,16 @@ function validateFsScopePath(value: unknown, context: string): string {
     throw new Error(`${context} must be an absolute path`);
   }
 
-  const pathWithoutSubtreeSuffix = candidatePath.endsWith(SUBTREE_SUFFIX)
+  const hasSubtreeSuffix =
+    candidatePath.endsWith(SUBTREE_SUFFIX) || candidatePath.endsWith(WINDOWS_SUBTREE_SUFFIX);
+  const pathWithoutSubtreeSuffix = hasSubtreeSuffix
     ? candidatePath.slice(0, -SUBTREE_SUFFIX.length)
     : candidatePath;
 
-  if (pathWithoutSubtreeSuffix.length === 0) {
+  if (
+    pathWithoutSubtreeSuffix.length === 0 ||
+    (hasSubtreeSuffix && isFilesystemRootSubtreeBase(candidatePath, pathWithoutSubtreeSuffix))
+  ) {
     throw new Error(`${context} must not target the filesystem root subtree`);
   }
 
@@ -65,7 +71,7 @@ function validateFsScopePath(value: unknown, context: string): string {
     );
   }
 
-  return candidatePath;
+  return hasSubtreeSuffix ? appendFsSubtreeSuffix(pathWithoutSubtreeSuffix) : candidatePath;
 }
 
 function parseFsScope(input: Record<string, unknown>, kind: FsPermissionKind): FsPermissionScope {
@@ -174,7 +180,27 @@ export function serializePermissionRequest(request: PermissionRequest): string {
 }
 
 export function isFsSubtreeScopePath(scopePath: string): boolean {
-  return scopePath.endsWith(SUBTREE_SUFFIX);
+  return scopePath.endsWith(SUBTREE_SUFFIX) || scopePath.endsWith(WINDOWS_SUBTREE_SUFFIX);
+}
+
+export function appendFsSubtreeSuffix(targetPath: string): string {
+  return `${targetPath.replace(/[\\/]+$/, "")}${SUBTREE_SUFFIX}`;
+}
+
+function isFilesystemRootSubtreeBase(candidatePath: string, subtreeBasePath: string): boolean {
+  if (process.platform === "win32" && /^[a-zA-Z]:$/.test(subtreeBasePath)) {
+    return true;
+  }
+
+  const root = path.parse(candidatePath).root;
+  if (root.length === 0) {
+    return false;
+  }
+
+  return (
+    path.normalize(subtreeBasePath).replace(/[\\/]+$/, "") ===
+    path.normalize(root).replace(/[\\/]+$/, "")
+  );
 }
 
 export function describePermissionScope(scope: PermissionScope): string {

@@ -244,7 +244,7 @@ describe("request_permissions tool", () => {
       name: "ToolApprovalRequired",
       reasonText: "Need to write the requested file.",
       request: {
-        scopes: [{ kind: "fs.write", path: "/tmp/requested.txt" }],
+        scopes: [{ kind: "fs.write", path: path.normalize("/tmp/requested.txt") }],
       },
     } satisfies Partial<ToolApprovalRequired>);
   });
@@ -367,7 +367,7 @@ describe("request_permissions tool", () => {
       name: "ToolApprovalRequired",
       reasonText: longJustification,
       request: {
-        scopes: [{ kind: "fs.read", path: "/tmp/requested.txt" }],
+        scopes: [{ kind: "fs.read", path: path.normalize("/tmp/requested.txt") }],
       },
     } satisfies Partial<ToolApprovalRequired>);
   });

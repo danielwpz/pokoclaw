@@ -9,7 +9,11 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { buildSystemPolicy } from "@/src/security/policy.js";
-import { type PermissionScope, serializePermissionScope } from "@/src/security/scope.js";
+import {
+  appendFsSubtreeSuffix,
+  type PermissionScope,
+  serializePermissionScope,
+} from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import {
@@ -669,7 +673,7 @@ function normalizeRequiredTrimmed(field: string, value: string): string {
 }
 
 function toSubtreePath(targetPath: string): string {
-  return path.join(targetPath, "**");
+  return appendFsSubtreeSuffix(targetPath);
 }
 
 function buildSubagentFinalizeFailureReason(input: {
