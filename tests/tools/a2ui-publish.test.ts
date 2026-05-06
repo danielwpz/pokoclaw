@@ -63,7 +63,6 @@ describe("publish_a2ui tool", () => {
       },
       {
         messages,
-        ttlSeconds: 5,
       },
     );
 
@@ -71,7 +70,6 @@ describe("publish_a2ui tool", () => {
       sessionId: "sess_chat",
       conversationId: "conv_1",
       messages,
-      ttlMs: 5000,
     });
     expect(result.content[0]).toEqual({
       type: "json",
@@ -162,7 +160,7 @@ function buildQuizMessages() {
                 primary: true,
                 action: {
                   name: "submit_answer",
-                  context: [{ key: "answer", value: { path: "/form/answer" } }],
+                  context: [{ key: "source", value: { literalString: "quiz" } }],
                 },
               },
             },

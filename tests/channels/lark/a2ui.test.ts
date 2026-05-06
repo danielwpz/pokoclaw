@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { LarkA2uiDemoService } from "@/src/channels/lark/a2ui-demo.js";
+import { LarkA2uiService } from "@/src/channels/lark/a2ui.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import {
   createTestDatabase,
@@ -8,7 +8,7 @@ import {
   type TestDatabaseHandle,
 } from "@/tests/storage/helpers/test-db.js";
 
-describe("lark a2ui demo service", () => {
+describe("lark a2ui service", () => {
   let handle: TestDatabaseHandle | null = null;
 
   afterEach(async () => {
@@ -25,7 +25,7 @@ describe("lark a2ui demo service", () => {
     const update = vi.fn(async (_input: unknown) => ({ code: 0 }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
     const submitMessage = vi.fn(async (_input: unknown) => ({ status: "started" as const }));
-    const service = new LarkA2uiDemoService({
+    const service = new LarkA2uiService({
       storage: handle.storage.db,
       clients: {
         getOrCreate: () =>
@@ -64,15 +64,47 @@ describe("lark a2ui demo service", () => {
       cardId: "card_a2ui_1",
       messageId: "msg_a2ui_1",
       sequence: 1,
-      dynamic: false,
     });
     expect(create).toHaveBeenCalledOnce();
     expect(messageCreate).toHaveBeenCalledOnce();
     expect(
       handle.storage.sqlite.prepare("SELECT COUNT(*) AS count FROM lark_object_bindings").get(),
     ).toEqual({ count: 0 });
+    expect(
+      handle.storage.sqlite
+        .prepare("SELECT COUNT(*) AS count FROM a2ui_surface_publications")
+        .get(),
+    ).toEqual({ count: 1 });
 
-    const callbackResult = await service.handleCardAction({
+    const restartedService = new LarkA2uiService({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create,
+                    update,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: messageCreate,
+                },
+              },
+            },
+          }) as unknown as LarkSdkClient,
+      },
+      ingress: {
+        submitMessage,
+        submitApprovalDecision: vi.fn(() => false),
+      },
+    });
+
+    const callbackResult = await restartedService.handleCardAction({
       installationId: "default",
       payload: {
         action: {
@@ -102,7 +134,23 @@ describe("lark a2ui demo service", () => {
       scenario: "chat",
       messageType: "a2ui_user_action",
     });
-    expect(submitted.content).toContain('"name": "submit_answer"');
+    const submittedEvent = JSON.parse(
+      submitted.content.replace(/^A2UI user action:\n/, ""),
+    ) as unknown;
+    expect(submittedEvent).toMatchObject({
+      userAction: {
+        name: "submit_answer",
+        surfaceId: "quiz",
+        sourceComponentId: "submit",
+        context: {
+          source: "quiz",
+        },
+        submittedValues: {
+          answer: ["b"],
+        },
+      },
+    });
+    expect(submitted.content).not.toContain("/form/answer");
 
     await vi.waitFor(() => expect(update).toHaveBeenCalledOnce());
     const updatePayload = update.mock.calls[0]?.[0] as {
@@ -113,7 +161,35 @@ describe("lark a2ui demo service", () => {
     expect(updatedCardJson).toContain("已提交");
     expect(updatedCardJson).not.toContain("submit_answer");
 
-    const duplicateCallbackResult = await service.handleCardAction({
+    const duplicateService = new LarkA2uiService({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create,
+                    update,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: messageCreate,
+                },
+              },
+            },
+          }) as unknown as LarkSdkClient,
+      },
+      ingress: {
+        submitMessage,
+        submitApprovalDecision: vi.fn(() => false),
+      },
+    });
+
+    const duplicateCallbackResult = await duplicateService.handleCardAction({
       installationId: "default",
       payload: {
         action: {
@@ -139,6 +215,8 @@ describe("lark a2ui demo service", () => {
     expect(submitMessage).toHaveBeenCalledOnce();
     expect(update).toHaveBeenCalledOnce();
     service.shutdown();
+    restartedService.shutdown();
+    duplicateService.shutdown();
   });
 
   test("acks a2ui callbacks before runtime submission completes", async () => {
@@ -149,7 +227,7 @@ describe("lark a2ui demo service", () => {
     const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
     const submission = createDeferred<unknown>();
     const submitMessage = vi.fn(() => submission.promise);
-    const service = new LarkA2uiDemoService({
+    const service = new LarkA2uiService({
       storage: handle.storage.db,
       clients: {
         getOrCreate: () =>
@@ -211,13 +289,13 @@ describe("lark a2ui demo service", () => {
     service.shutdown();
   });
 
-  test("updates dynamic grid cards from bash data sources", async () => {
+  test("rejects dynamic data sources before creating a card", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedLarkSurface(handle);
     const create = vi.fn(async () => ({ code: 0, data: { card_id: "card_clock_1" } }));
     const update = vi.fn(async () => ({ code: 0 }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_clock_1" } }));
-    const service = new LarkA2uiDemoService({
+    const service = new LarkA2uiService({
       storage: handle.storage.db,
       clients: {
         getOrCreate: () =>
@@ -245,23 +323,65 @@ describe("lark a2ui demo service", () => {
       },
     });
 
-    const result = await service.publish({
-      sessionId: "sess_1",
-      conversationId: "conv_1",
-      messages: buildDynamicGridMessages(),
-      ttlMs: 1000,
-    });
+    await expect(
+      service.publish({
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        messages: buildDynamicGridMessages(),
+      }),
+    ).rejects.toThrow("A2UI dynamic data sources are not supported in Pokoclaw A2UI 1.0.");
+    expect(create).not.toHaveBeenCalled();
+    expect(messageCreate).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    service.shutdown();
+  });
 
-    expect(result.dynamic).toBe(true);
-    await vi.waitFor(() => expect(update).toHaveBeenCalled(), { timeout: 1000 });
-    const firstUpdateCall = update.mock.calls.at(0);
-    expect(firstUpdateCall).toBeDefined();
-    expect(firstUpdateCall?.at(0)).toMatchObject({
-      path: { card_id: "card_clock_1" },
-      data: {
-        sequence: 2,
+  test("rejects callback path context before creating a card", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedLarkSurface(handle);
+    const create = vi.fn(async () => ({ code: 0, data: { card_id: "card_a2ui_1" } }));
+    const update = vi.fn(async () => ({ code: 0 }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
+    const service = new LarkA2uiService({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create,
+                    update,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: messageCreate,
+                },
+              },
+            },
+          }) as unknown as LarkSdkClient,
+      },
+      ingress: {
+        submitMessage: vi.fn(async (_input: unknown) => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
       },
     });
+
+    await expect(
+      service.publish({
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        messages: buildQuizMessages({ pathContext: true }),
+      }),
+    ).rejects.toThrow(
+      "A2UI callback context cannot reference dataModel paths in Pokoclaw A2UI 1.0.",
+    );
+    expect(create).not.toHaveBeenCalled();
+    expect(messageCreate).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
     service.shutdown();
   });
 });
@@ -288,7 +408,7 @@ function seedLarkSurface(handle: TestDatabaseHandle): void {
   `);
 }
 
-function buildQuizMessages() {
+function buildQuizMessages(input: { pathContext?: boolean } = {}) {
   return [
     {
       dataModelUpdate: {
@@ -345,7 +465,10 @@ function buildQuizMessages() {
                 primary: true,
                 action: {
                   name: "submit_answer",
-                  context: [{ key: "answer", value: { path: "/form/answer" } }],
+                  context:
+                    input.pathContext === true
+                      ? [{ key: "answer", value: { path: "/form/answer" } }]
+                      : [{ key: "source", value: { literalString: "quiz" } }],
                 },
               },
             },

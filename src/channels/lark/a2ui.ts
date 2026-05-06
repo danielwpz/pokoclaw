@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
 import {
-  type A2uiRuntimeMessage,
-  type Disposable,
-  DynamicDataRuntime,
+  type A2uiComponentNode,
+  type A2uiServerMessage,
+  type A2uiUserActionEvent,
+  type ActionContextEntry,
+  type BoundValue,
   extractLarkCallback,
   formatValidationIssues,
-  isDataSourceUpdateMessage,
   type NormalizedCallbackInput,
   normalizeCallback,
+  readComponentRef,
   renderSurface,
+  resolveBoundValue,
   type SurfaceState,
   SurfaceStore,
   validateA2uiMessages,
@@ -25,17 +28,21 @@ import { listLarkDeliveryTargets, readStringValue } from "@/src/channels/lark/de
 import type { LarkInboundIngress } from "@/src/channels/lark/inbound.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import { A2uiSurfacePublicationsRepo } from "@/src/storage/repos/a2ui-surface-publications.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import type { A2uiSurfacePublication as StoredA2uiSurfacePublication } from "@/src/storage/schema/types.js";
 
-const logger = createSubsystemLogger("channels/lark-a2ui-demo");
-const DEFAULT_DYNAMIC_TTL_MS = 60_000;
-const MAX_DYNAMIC_TTL_MS = 5 * 60_000;
+const logger = createSubsystemLogger("channels/lark-a2ui");
+const LARK_A2UI_CHANNEL_TYPE = "lark";
+const A2UI_DYNAMIC_DATA_UNSUPPORTED_MESSAGE =
+  "A2UI dynamic data sources are not supported in Pokoclaw A2UI 1.0.";
+const A2UI_PATH_CONTEXT_UNSUPPORTED_MESSAGE =
+  "A2UI callback context cannot reference dataModel paths in Pokoclaw A2UI 1.0.";
 
 export interface A2uiPublishInput {
   sessionId: string;
   conversationId: string;
   messages: unknown;
-  ttlMs?: number;
 }
 
 export interface A2uiPublishResult {
@@ -43,12 +50,11 @@ export interface A2uiPublishResult {
   cardId: string;
   messageId?: string;
   sequence: number;
-  dynamic: boolean;
-  expiresAt?: string;
   warnings: string[];
 }
 
-interface A2uiSurfacePublication {
+interface HydratedA2uiSurfacePublication {
+  id: string;
   surfaceId: string;
   sessionId: string;
   conversationId: string;
@@ -58,17 +64,13 @@ interface A2uiSurfacePublication {
   messageId?: string;
   sequence: number;
   store: SurfaceStore;
-  dynamicRuntime?: DynamicDataRuntime;
-  dynamicDisposer?: Disposable;
-  expiryTimer?: NodeJS.Timeout;
-  expiresAt?: Date;
-  updateChain?: Promise<void>;
-  updateCount?: number;
   consumedActionKeys: Set<string>;
 }
 
-export class LarkA2uiDemoService {
-  private readonly publications = new Map<string, A2uiSurfacePublication>();
+export class LarkA2uiService {
+  private readonly publicationRepo: A2uiSurfacePublicationsRepo;
+  private readonly updateChains = new Map<string, Promise<void>>();
+  private readonly updateCounts = new Map<string, number>();
 
   constructor(
     private readonly deps: {
@@ -78,45 +80,30 @@ export class LarkA2uiDemoService {
       };
       ingress: LarkInboundIngress;
     },
-  ) {}
+  ) {
+    this.publicationRepo = new A2uiSurfacePublicationsRepo(deps.storage);
+  }
 
   async publish(input: A2uiPublishInput): Promise<A2uiPublishResult> {
-    const validation = validateA2uiMessages(input.messages, {
-      allowDynamicDataSources: true,
-    });
+    if (containsDynamicDataSourceUpdate(input.messages)) {
+      throw new Error(A2UI_DYNAMIC_DATA_UNSUPPORTED_MESSAGE);
+    }
+
+    const validation = validateA2uiMessages(input.messages);
     if (!validation.ok) {
       throw new Error(`Invalid A2UI messages:\n${formatValidationIssues(validation.issues)}`);
     }
 
     const messages = normalizeMessages(input.messages);
     const store = new SurfaceStore();
-    const dynamicSourceRefs = listDynamicSourceRefs(messages);
-    const hasDynamicSources = dynamicSourceRefs.length > 0;
-    const dynamicRuntime = new DynamicDataRuntime(store, {
-      onDataModelChange: async (event) => {
-        await this.enqueueSurfaceUpdate(event.surfaceId);
-      },
-      log: (level, message) => logDynamicDataRuntime(level, message),
-    });
-    dynamicRuntime.applyMessages(messages);
+    store.applyMessages(messages);
 
     const surfaceId = chooseSurfaceId(validation.renderedSurfaceIds, store);
-    if (hasDynamicSources) {
-      for (const source of dynamicSourceRefs.filter((source) => source.surfaceId === surfaceId)) {
-        const event = await dynamicRuntime.runSourceOnce(source.surfaceId, source.sourceId);
-        logger.info("primed a2ui dynamic data source", {
-          surfaceId: source.surfaceId,
-          sourceId: source.sourceId,
-          targetPath: event.path,
-          valueSummary: summarizeValue(event.value),
-        });
-      }
-    }
+    assertSupportedCallbackContext(store);
     const surface = store.getSurface(surfaceId);
     const rendered = renderSurface(surface);
-    logger.info("rendered a2ui demo surface before publish", {
+    logger.info("rendered a2ui surface before publish", {
       surfaceId,
-      dynamic: hasDynamicSources,
       renderSummary: summarizeRenderedSurface(surface, rendered.card),
       warnings: rendered.warnings.map((warning) => warning.message),
     });
@@ -169,34 +156,23 @@ export class LarkA2uiDemoService {
       cardId,
     });
     const messageId = messageResp.data?.message_id ?? undefined;
-    const ttlMs = clampTtlMs(input.ttlMs);
-    const expiresAt = hasDynamicSources ? new Date(Date.now() + ttlMs) : undefined;
 
-    const publication: A2uiSurfacePublication = {
+    const publication = this.publicationRepo.upsert({
+      id: randomUUID(),
       surfaceId,
       sessionId: input.sessionId,
       conversationId: input.conversationId,
       branchId: session.branchId,
+      channelType: LARK_A2UI_CHANNEL_TYPE,
       channelInstallationId: target.channelInstallationId,
-      cardId,
-      ...(messageId === undefined ? {} : { messageId }),
-      sequence: 1,
-      updateCount: 0,
-      consumedActionKeys: new Set(),
-      store,
-      ...(hasDynamicSources ? { dynamicRuntime } : {}),
-      ...(expiresAt === undefined ? {} : { expiresAt }),
-    };
-    this.publications.set(surfaceId, publication);
+      channelArtifactId: cardId,
+      ...(messageId === undefined ? {} : { channelMessageId: messageId }),
+      channelSequence: 1,
+      surfaceStateJson: serializeSurfaceState(surface),
+      consumedActionKeysJson: "[]",
+    });
 
-    if (hasDynamicSources) {
-      publication.dynamicDisposer = dynamicRuntime.start(surfaceId);
-      publication.expiryTimer = setTimeout(() => {
-        this.disposeSurface(surfaceId, "ttl_expired");
-      }, ttlMs);
-    }
-
-    logger.info("published a2ui demo surface", {
+    logger.info("published a2ui surface", {
       surfaceId,
       sessionId: input.sessionId,
       conversationId: input.conversationId,
@@ -204,8 +180,6 @@ export class LarkA2uiDemoService {
       channelInstallationId: target.channelInstallationId,
       cardId,
       messageId: messageId ?? null,
-      dynamic: hasDynamicSources,
-      expiresAt: expiresAt?.toISOString() ?? null,
       renderSummary: summarizeRenderedSurface(surface, rendered.card),
     });
 
@@ -213,9 +187,7 @@ export class LarkA2uiDemoService {
       surfaceId,
       cardId,
       ...(messageId === undefined ? {} : { messageId }),
-      sequence: publication.sequence,
-      dynamic: hasDynamicSources,
-      ...(expiresAt === undefined ? {} : { expiresAt: expiresAt.toISOString() }),
+      sequence: publication.channelSequence,
       warnings: rendered.warnings.map((warning) => warning.message),
     };
   }
@@ -231,12 +203,31 @@ export class LarkA2uiDemoService {
       return null;
     }
 
-    const publication = this.publications.get(callback.envelope.surfaceId);
-    if (publication == null) {
+    const storedPublication = this.publicationRepo.getActiveByChannelSurface({
+      channelType: LARK_A2UI_CHANNEL_TYPE,
+      channelInstallationId: input.installationId,
+      surfaceId: callback.envelope.surfaceId,
+    });
+    if (storedPublication == null) {
       return {
         toast: {
           type: "error",
-          content: "A2UI demo state 已过期，请重新发送卡片。",
+          content: "A2UI state 已过期，请重新发送卡片。",
+        },
+      };
+    }
+    let publication: HydratedA2uiSurfacePublication;
+    try {
+      publication = hydrateA2uiPublication(storedPublication);
+    } catch (error) {
+      logger.warn("failed to hydrate stored a2ui publication", {
+        surfaceId: callback.envelope.surfaceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        toast: {
+          type: "error",
+          content: "A2UI state 无法恢复，请重新发送卡片。",
         },
       };
     }
@@ -250,11 +241,11 @@ export class LarkA2uiDemoService {
     }
 
     let event: ReturnType<typeof normalizeCallback>;
+    let agentEvent: A2uiAgentUserActionEvent;
     try {
-      event = normalizeCallback(
-        publication.store.getSurface(callback.envelope.surfaceId),
-        callback,
-      );
+      const surface = publication.store.getSurface(callback.envelope.surfaceId);
+      event = normalizeCallback(surface, callback);
+      agentEvent = buildAgentUserActionEvent(surface, event, callback);
     } catch (error) {
       logger.warn("failed to normalize a2ui callback", {
         surfaceId: callback.envelope.surfaceId,
@@ -288,7 +279,20 @@ export class LarkA2uiDemoService {
     }
 
     publication.consumedActionKeys.add(actionKey);
-    void this.enqueueSurfaceUpdate(publication.surfaceId).catch((error: unknown) => {
+    const persistedPublication = this.publicationRepo.patch({
+      id: publication.id,
+      surfaceStateJson: serializePublicationSurfaceState(publication),
+      consumedActionKeysJson: serializeConsumedActionKeys(publication.consumedActionKeys),
+    });
+    if (persistedPublication == null) {
+      return {
+        toast: {
+          type: "error",
+          content: "A2UI state 已过期，请重新发送卡片。",
+        },
+      };
+    }
+    void this.enqueueSurfaceUpdate(publication.id).catch((error: unknown) => {
       logger.warn("failed to update a2ui card after consuming action", {
         surfaceId: publication.surfaceId,
         sourceComponentId: event.userAction.sourceComponentId,
@@ -301,7 +305,7 @@ export class LarkA2uiDemoService {
       .submitMessage({
         sessionId: publication.sessionId,
         scenario: "chat",
-        content: `A2UI user action:\n${JSON.stringify(event, null, 2)}`,
+        content: `A2UI user action:\n${JSON.stringify(agentEvent, null, 2)}`,
         messageType: "a2ui_user_action",
         channelMessageId: `a2ui:${publication.surfaceId}:${randomUUID()}`,
         createdAt: new Date(),
@@ -330,35 +334,39 @@ export class LarkA2uiDemoService {
   }
 
   shutdown(): void {
-    for (const surfaceId of this.publications.keys()) {
-      this.disposeSurface(surfaceId, "shutdown");
-    }
+    this.updateChains.clear();
+    this.updateCounts.clear();
   }
 
-  private async enqueueSurfaceUpdate(surfaceId: string): Promise<void> {
-    const publication = this.publications.get(surfaceId);
-    if (publication == null) {
+  private async enqueueSurfaceUpdate(publicationId: string): Promise<void> {
+    const storedPublication = this.publicationRepo.getById(publicationId);
+    if (storedPublication?.status !== "active") {
       return;
     }
 
-    const previous = publication.updateChain ?? Promise.resolve();
+    const previous = this.updateChains.get(publicationId) ?? Promise.resolve();
     const next = previous
       .catch((error: unknown) => {
         logger.warn("previous a2ui surface update failed before queued update", {
-          surfaceId,
+          publicationId,
           error: error instanceof Error ? error.message : String(error),
         });
       })
-      .then(() => this.updateSurfaceNow(surfaceId));
-    publication.updateChain = next.catch(() => {});
+      .then(() => this.updateSurfaceNow(publicationId));
+    this.updateChains.set(
+      publicationId,
+      next.catch(() => {}),
+    );
     await next;
   }
 
-  private async updateSurfaceNow(surfaceId: string): Promise<void> {
-    const publication = this.publications.get(surfaceId);
-    if (publication == null) {
+  private async updateSurfaceNow(publicationId: string): Promise<void> {
+    const storedPublication = this.publicationRepo.getById(publicationId);
+    if (storedPublication?.status !== "active") {
       return;
     }
+    const publication = hydrateA2uiPublication(storedPublication);
+    const surfaceId = publication.surfaceId;
 
     const client = this.deps.clients.getOrCreate(publication.channelInstallationId);
     const cardkit = getCardkitSdk(client);
@@ -366,9 +374,9 @@ export class LarkA2uiDemoService {
     const rendered = renderSurface(surface);
     applyConsumedActionTransforms(rendered.card, publication.consumedActionKeys);
     const sequence = publication.sequence + 1;
-    const nextUpdateCount = (publication.updateCount ?? 0) + 1;
+    const nextUpdateCount = (this.updateCounts.get(publicationId) ?? 0) + 1;
     if (shouldLogUpdate(nextUpdateCount)) {
-      logger.info("updating a2ui demo surface", {
+      logger.info("updating a2ui surface", {
         surfaceId,
         updateCount: nextUpdateCount,
         currentSequence: publication.sequence,
@@ -401,10 +409,13 @@ export class LarkA2uiDemoService {
     });
 
     if (outcome.kind === "applied") {
-      publication.sequence = sequence;
-      publication.updateCount = nextUpdateCount;
+      this.publicationRepo.patch({
+        id: publicationId,
+        channelSequence: sequence,
+      });
+      this.updateCounts.set(publicationId, nextUpdateCount);
       if (shouldLogUpdate(nextUpdateCount)) {
-        logger.info("updated a2ui demo surface", {
+        logger.info("updated a2ui surface", {
           surfaceId,
           updateCount: nextUpdateCount,
           channelInstallationId: publication.channelInstallationId,
@@ -412,7 +423,7 @@ export class LarkA2uiDemoService {
           sequence,
         });
       }
-      logger.debug("updated a2ui demo surface debug", {
+      logger.debug("updated a2ui surface debug", {
         surfaceId,
         channelInstallationId: publication.channelInstallationId,
         cardId: publication.cardId,
@@ -421,51 +432,240 @@ export class LarkA2uiDemoService {
       return;
     }
 
-    publication.sequence = Math.max(publication.sequence, outcome.nextSequenceFloor - 1);
-    publication.updateCount = nextUpdateCount;
-    logger.warn("a2ui demo surface update needs sequence reconcile", {
+    const reconciledSequence = Math.max(publication.sequence, outcome.nextSequenceFloor - 1);
+    this.publicationRepo.patch({
+      id: publicationId,
+      channelSequence: reconciledSequence,
+    });
+    this.updateCounts.set(publicationId, nextUpdateCount);
+    logger.warn("a2ui surface update needs sequence reconcile", {
       surfaceId,
       updateCount: nextUpdateCount,
       nextSequenceFloor: outcome.nextSequenceFloor,
-      sequenceAfterReconcile: publication.sequence,
+      sequenceAfterReconcile: reconciledSequence,
       reason: outcome.reason,
     });
   }
-
-  private disposeSurface(surfaceId: string, reason: string): void {
-    const publication = this.publications.get(surfaceId);
-    if (publication == null) {
-      return;
-    }
-    publication.dynamicDisposer?.dispose();
-    if (publication.expiryTimer != null) {
-      clearTimeout(publication.expiryTimer);
-    }
-    publication.dynamicRuntime?.stopAll();
-    this.publications.delete(surfaceId);
-    logger.info("disposed a2ui demo surface", { surfaceId, reason });
-  }
 }
 
-function normalizeMessages(value: unknown): A2uiRuntimeMessage[] {
+interface SerializedA2uiSurfaceState {
+  surfaceId: string;
+  catalogId?: string;
+  root?: string;
+  styles: Record<string, unknown>;
+  components: A2uiComponentNode[];
+  dataModel: unknown;
+}
+
+function hydrateA2uiPublication(row: StoredA2uiSurfacePublication): HydratedA2uiSurfacePublication {
+  const surface = deserializeSurfaceState(row.surfaceStateJson);
+  if (surface.surfaceId !== row.surfaceId) {
+    throw new Error(
+      `Stored A2UI surface state '${surface.surfaceId}' does not match publication '${row.surfaceId}'`,
+    );
+  }
+  const store = new SurfaceStore();
+  store.surfaces.set(surface.surfaceId, surface);
+  return {
+    id: row.id,
+    surfaceId: row.surfaceId,
+    sessionId: row.sessionId,
+    conversationId: row.conversationId,
+    branchId: row.branchId,
+    channelInstallationId: row.channelInstallationId,
+    cardId: row.channelArtifactId,
+    ...(row.channelMessageId == null ? {} : { messageId: row.channelMessageId }),
+    sequence: row.channelSequence,
+    store,
+    consumedActionKeys: parseConsumedActionKeys(row.consumedActionKeysJson),
+  };
+}
+
+function serializePublicationSurfaceState(publication: HydratedA2uiSurfacePublication): string {
+  return serializeSurfaceState(publication.store.getSurface(publication.surfaceId));
+}
+
+function serializeSurfaceState(surface: SurfaceState): string {
+  const serialized: SerializedA2uiSurfaceState = {
+    surfaceId: surface.surfaceId,
+    ...(surface.catalogId === undefined ? {} : { catalogId: surface.catalogId }),
+    ...(surface.root === undefined ? {} : { root: surface.root }),
+    styles: surface.styles,
+    components: Array.from(surface.components.values()),
+    dataModel: surface.dataModel,
+  };
+  return JSON.stringify(serialized);
+}
+
+function deserializeSurfaceState(value: string): SurfaceState {
+  const parsed = JSON.parse(value) as unknown;
+  if (!isRecord(parsed) || typeof parsed.surfaceId !== "string") {
+    throw new Error("Stored A2UI surface state is invalid.");
+  }
+  if (!Array.isArray(parsed.components)) {
+    throw new Error("Stored A2UI surface state components must be an array.");
+  }
+  const components = new Map<string, A2uiComponentNode>();
+  for (const component of parsed.components) {
+    if (!isA2uiComponentNode(component)) {
+      throw new Error("Stored A2UI surface state contains an invalid component.");
+    }
+    components.set(component.id, component);
+  }
+
+  const surface: SurfaceState = {
+    surfaceId: parsed.surfaceId,
+    styles: isRecord(parsed.styles) ? parsed.styles : {},
+    components,
+    dataModel: "dataModel" in parsed ? parsed.dataModel : {},
+  };
+  if (typeof parsed.catalogId === "string") {
+    surface.catalogId = parsed.catalogId;
+  }
+  if (typeof parsed.root === "string") {
+    surface.root = parsed.root;
+  }
+  return surface;
+}
+
+function isA2uiComponentNode(value: unknown): value is A2uiComponentNode {
+  if (!isRecord(value) || typeof value.id !== "string" || !isRecord(value.component)) {
+    return false;
+  }
+  return value.weight === undefined || typeof value.weight === "number";
+}
+
+function serializeConsumedActionKeys(value: Set<string>): string {
+  return JSON.stringify(Array.from(value).sort());
+}
+
+function parseConsumedActionKeys(value: string): Set<string> {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+    throw new Error("Stored A2UI consumed action keys are invalid.");
+  }
+  return new Set(parsed);
+}
+
+function normalizeMessages(value: unknown): A2uiServerMessage[] {
   if (!Array.isArray(value)) {
     throw new Error("publish_a2ui.messages must be an array of A2UI runtime messages.");
   }
-  return value as A2uiRuntimeMessage[];
+  return value as A2uiServerMessage[];
 }
 
-function listDynamicSourceRefs(
-  messages: A2uiRuntimeMessage[],
-): Array<{ surfaceId: string; sourceId: string }> {
-  return messages.flatMap((message) => {
-    if (!isDataSourceUpdateMessage(message)) {
-      return [];
+function containsDynamicDataSourceUpdate(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((message) => isRecord(message) && "dataSourceUpdate" in message);
+}
+
+interface A2uiAgentUserActionEvent {
+  userAction: {
+    name: string;
+    surfaceId: string;
+    sourceComponentId: string;
+    timestamp: string;
+    context: Record<string, unknown>;
+    submittedValues: Record<string, unknown>;
+  };
+}
+
+function buildAgentUserActionEvent(
+  surface: SurfaceState,
+  event: A2uiUserActionEvent,
+  callback: NormalizedCallbackInput,
+): A2uiAgentUserActionEvent {
+  return {
+    userAction: {
+      name: event.userAction.name,
+      surfaceId: event.userAction.surfaceId,
+      sourceComponentId: event.userAction.sourceComponentId,
+      timestamp: event.userAction.timestamp,
+      context: resolveLiteralActionContext(
+        readButtonActionContext(surface, event.userAction.sourceComponentId),
+        surface.surfaceId,
+        event.userAction.sourceComponentId,
+      ),
+      submittedValues: callback.submittedValues ?? {},
+    },
+  };
+}
+
+function assertSupportedCallbackContext(store: SurfaceStore): void {
+  for (const surface of store.surfaces.values()) {
+    for (const component of surface.components.values()) {
+      const ref = readComponentRef(surface, component.id);
+      if (ref.type !== "Button") {
+        continue;
+      }
+      const context = readButtonActionContext(surface, ref.id);
+      for (const entry of context) {
+        if (hasPathBoundValue(entry.value)) {
+          throw new Error(
+            `${A2UI_PATH_CONTEXT_UNSUPPORTED_MESSAGE} surfaceId=${surface.surfaceId} componentId=${ref.id} key=${entry.key}`,
+          );
+        }
+      }
     }
-    return message.dataSourceUpdate.sources.map((source) => ({
-      surfaceId: message.dataSourceUpdate.surfaceId,
-      sourceId: source.id,
-    }));
-  });
+  }
+}
+
+function readButtonActionContext(surface: SurfaceState, componentId: string): ActionContextEntry[] {
+  const ref = readComponentRef(surface, componentId);
+  if (ref.type !== "Button") {
+    return [];
+  }
+  const action = ref.props.action;
+  if (!isRecord(action) || !Array.isArray(action.context)) {
+    return [];
+  }
+  return action.context.filter(isActionContextEntry);
+}
+
+function resolveLiteralActionContext(
+  context: ActionContextEntry[],
+  surfaceId: string,
+  componentId: string,
+): Record<string, unknown> {
+  const resolved: Record<string, unknown> = {};
+  for (const entry of context) {
+    if (hasPathBoundValue(entry.value)) {
+      throw new Error(
+        `${A2UI_PATH_CONTEXT_UNSUPPORTED_MESSAGE} surfaceId=${surfaceId} componentId=${componentId} key=${entry.key}`,
+      );
+    }
+    resolved[entry.key] = resolveBoundValue(entry.value, {});
+  }
+  return resolved;
+}
+
+function isActionContextEntry(value: unknown): value is ActionContextEntry {
+  return (
+    isRecord(value) &&
+    typeof value.key === "string" &&
+    isRecord(value.value) &&
+    isBoundValue(value.value)
+  );
+}
+
+function isBoundValue(value: unknown): value is BoundValue {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.path === "string" ||
+    typeof value.literalString === "string" ||
+    typeof value.literalNumber === "number" ||
+    typeof value.literalBoolean === "boolean" ||
+    (Array.isArray(value.literalArray) &&
+      value.literalArray.every((entry) => typeof entry === "string"))
+  );
+}
+
+function hasPathBoundValue(value: BoundValue): boolean {
+  return typeof value.path === "string";
 }
 
 function chooseSurfaceId(renderedSurfaceIds: string[], store: SurfaceStore): string {
@@ -483,30 +683,6 @@ function chooseSurfaceId(renderedSurfaceIds: string[], store: SurfaceStore): str
 
 function isRenderableSurface(surface: SurfaceState): boolean {
   return typeof surface.root === "string" && surface.root.length > 0;
-}
-
-function clampTtlMs(value: number | undefined): number {
-  if (value == null || !Number.isFinite(value)) {
-    return DEFAULT_DYNAMIC_TTL_MS;
-  }
-  return Math.max(1_000, Math.min(Math.trunc(value), MAX_DYNAMIC_TTL_MS));
-}
-
-function logDynamicDataRuntime(level: "debug" | "info" | "warn" | "error", message: string): void {
-  switch (level) {
-    case "debug":
-      logger.debug(message);
-      return;
-    case "info":
-      logger.info(message);
-      return;
-    case "warn":
-      logger.warn(message);
-      return;
-    case "error":
-      logger.error(message);
-      return;
-  }
 }
 
 function buildConsumedActionKey(sourceComponentId: string, actionName: string): string {
@@ -655,20 +831,6 @@ function summarizeColorMatrix(value: unknown): Record<string, unknown> {
     nonWhiteCells,
     uniqueColors: Array.from(colors).slice(0, 12),
     firstRowPreview: firstRow,
-  };
-}
-
-function summarizeValue(value: unknown): Record<string, unknown> {
-  if (isRecord(value) && Array.isArray(value.pixels)) {
-    return {
-      keys: Object.keys(value),
-      time: typeof value.time === "string" ? value.time : null,
-      pixels: summarizeColorMatrix(value.pixels),
-    };
-  }
-  return {
-    type: Array.isArray(value) ? "array" : typeof value,
-    preview: JSON.stringify(value).slice(0, 500),
   };
 }
 

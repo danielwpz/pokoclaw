@@ -1,5 +1,10 @@
+import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, test } from "vitest";
 
+import { openStorageDatabase } from "@/src/storage/db/client.js";
 import { getProductionDatabasePath } from "@/src/storage/db/paths.js";
 import {
   createTestDatabase,
@@ -53,6 +58,7 @@ describe("storage db bootstrap", () => {
       expect(tableNames).toContain("conversations");
       expect(tableNames).toContain("conversation_branches");
       expect(tableNames).toContain("channel_surfaces");
+      expect(tableNames).toContain("a2ui_surface_publications");
       expect(tableNames).toContain("channel_threads");
       expect(tableNames).toContain("agents");
       expect(tableNames).toContain("agent_runtime_modes");
@@ -84,9 +90,56 @@ describe("storage db bootstrap", () => {
       expect(rows).toEqual([
         { version: 1, name: "init" },
         { version: 2, name: "agent_runtime_modes" },
+        { version: 3, name: "a2ui_surface_publications" },
       ]);
     } finally {
       await destroyTestDatabase(handle);
+    }
+  });
+
+  test("applies a2ui migration to an existing v2 database", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-a2ui-migration-"));
+    const legacyMigrationsDir = path.join(tmpDir, "legacy-migrations");
+    const dbPath = path.join(tmpDir, "pokoclaw.db");
+    const sourceMigrationsDir = path.resolve(process.cwd(), "src/storage/migrate/files");
+
+    try {
+      await mkdir(legacyMigrationsDir, { recursive: true });
+      await copyFile(
+        path.join(sourceMigrationsDir, "0001_init.sql"),
+        path.join(legacyMigrationsDir, "0001_init.sql"),
+      );
+      await copyFile(
+        path.join(sourceMigrationsDir, "0002_agent_runtime_modes.sql"),
+        path.join(legacyMigrationsDir, "0002_agent_runtime_modes.sql"),
+      );
+
+      const legacyStorage = openStorageDatabase({
+        databasePath: dbPath,
+        migrationsDir: legacyMigrationsDir,
+      });
+      legacyStorage.close();
+
+      const upgradedStorage = openStorageDatabase({ databasePath: dbPath });
+      try {
+        const rows = upgradedStorage.sqlite
+          .prepare("SELECT version, name FROM schema_migrations ORDER BY version ASC")
+          .all() as Array<{ version: number; name: string }>;
+        expect(rows).toEqual([
+          { version: 1, name: "init" },
+          { version: 2, name: "agent_runtime_modes" },
+          { version: 3, name: "a2ui_surface_publications" },
+        ]);
+
+        const table = upgradedStorage.sqlite
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get("a2ui_surface_publications");
+        expect(table).toEqual({ name: "a2ui_surface_publications" });
+      } finally {
+        upgradedStorage.close();
+      }
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
     }
   });
 

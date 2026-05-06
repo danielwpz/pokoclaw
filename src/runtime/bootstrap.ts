@@ -10,7 +10,7 @@ import { LiveProviderRegistrySource } from "@/src/agent/llm/provider-registry-so
 import { CodexProviderApiKeyResolver } from "@/src/agent/llm/providers/codex/resolver.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
-import { LarkA2uiDemoService } from "@/src/channels/lark/a2ui-demo.js";
+import { LarkA2uiService } from "@/src/channels/lark/a2ui.js";
 import { createLarkChannelRuntime, type LarkChannelRuntime } from "@/src/channels/lark/channel.js";
 import { LarkClientRegistry } from "@/src/channels/lark/client.js";
 import { createLarkSubagentConversationSurfaceProvisioner } from "@/src/channels/lark/subagent-provisioner.js";
@@ -86,7 +86,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const larkClients = new LarkClientRegistry(
     listConfiguredLarkInstallations(input.config.channels.lark),
   );
-  let a2uiDemo: LarkA2uiDemoService | null = null;
+  let a2ui: LarkA2uiService | null = null;
   const tools = createBuiltinToolRegistry(
     {
       providers: input.config.providers,
@@ -95,10 +95,10 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     {
       a2uiPublisher: {
         publish: (publishInput) => {
-          if (a2uiDemo == null) {
-            throw new Error("A2UI demo service is not ready.");
+          if (a2ui == null) {
+            throw new Error("A2UI service is not ready.");
           }
-          return a2uiDemo.publish(publishInput);
+          return a2ui.publish(publishInput);
         },
       },
     },
@@ -158,7 +158,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       }),
   });
   bridge.attachManager(manager);
-  a2uiDemo = new LarkA2uiDemoService({
+  a2ui = new LarkA2uiService({
     storage: input.storage,
     clients: larkClients,
     ingress,
@@ -194,7 +194,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     modelSwitch: scenarioModelSwitch,
     outboundEventBus,
     clients: larkClients,
-    a2uiCallbacks: a2uiDemo,
+    a2uiCallbacks: a2ui,
     subagentRequests: {
       approve: (requestId: string) =>
         manager.resolveApproveSubagentCreationRequest({
@@ -304,7 +304,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
           inFlightMeditationRuns: meditation.status().inFlightRuns,
         });
         heartbeat.stop();
-        a2uiDemo?.shutdown();
+        a2ui?.shutdown();
         await lark.shutdown();
         meditation.stop();
         cron.stop();

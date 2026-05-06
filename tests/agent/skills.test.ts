@@ -180,7 +180,7 @@ describe("agent skills catalog", () => {
     expect(roots.map((root) => root.source)).toEqual(["global", "workspace", "builtin"]);
   });
 
-  test("loads the real builtin system-observe skill from the repository skills directory", () => {
+  test("loads real builtin skills from the repository skills directory", () => {
     const builtinRoot = resolveDefaultSkillRoots(process.cwd()).find(
       (root) => root.source === "builtin",
     );
@@ -200,6 +200,7 @@ describe("agent skills catalog", () => {
 
     expect(snapshot.entries.some((entry) => entry.name === "system-observe")).toBe(true);
     expect(snapshot.entries.some((entry) => entry.name === "claude-session-observe")).toBe(true);
+    expect(snapshot.entries.some((entry) => entry.name === "a2ui-author")).toBe(true);
   });
 
   async function createTempDir(): Promise<string> {
