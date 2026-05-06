@@ -319,6 +319,19 @@ export class LarkA2uiService {
           sessionId: publication.sessionId,
           error: error instanceof Error ? error.message : String(error),
         });
+        void this.restoreConsumedActionAfterSubmissionFailure({
+          publicationId: publication.id,
+          actionKey,
+          surfaceId: publication.surfaceId,
+          sourceComponentId: event.userAction.sourceComponentId,
+          actionName: event.userAction.name,
+        }).catch((restoreError: unknown) => {
+          logger.warn("failed to restore a2ui consumed action after ingress failure", {
+            surfaceId: publication.surfaceId,
+            sessionId: publication.sessionId,
+            error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+          });
+        });
       });
 
     logger.info("accepted a2ui callback for asynchronous runtime submission", {
@@ -338,6 +351,36 @@ export class LarkA2uiService {
   shutdown(): void {
     this.updateChains.clear();
     this.updateCounts.clear();
+  }
+
+  private async restoreConsumedActionAfterSubmissionFailure(input: {
+    publicationId: string;
+    actionKey: string;
+    surfaceId: string;
+    sourceComponentId: string;
+    actionName: string;
+  }): Promise<void> {
+    const storedPublication = this.publicationRepo.getById(input.publicationId);
+    if (storedPublication?.status !== "active") {
+      return;
+    }
+    const publication = hydrateA2uiPublication(storedPublication);
+    if (!publication.consumedActionKeys.delete(input.actionKey)) {
+      return;
+    }
+
+    this.publicationRepo.patch({
+      id: publication.id,
+      surfaceStateJson: serializePublicationSurfaceState(publication),
+      consumedActionKeysJson: serializeConsumedActionKeys(publication.consumedActionKeys),
+    });
+    logger.warn("restored a2ui consumed action after ingress submission failure", {
+      surfaceId: input.surfaceId,
+      publicationId: input.publicationId,
+      sourceComponentId: input.sourceComponentId,
+      actionName: input.actionName,
+    });
+    await this.enqueueSurfaceUpdate(input.publicationId);
   }
 
   private async enqueueSurfaceUpdate(publicationId: string): Promise<void> {

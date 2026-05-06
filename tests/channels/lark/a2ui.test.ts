@@ -300,6 +300,91 @@ describe("lark a2ui service", () => {
     service.shutdown();
   });
 
+  test("restores consumed action when runtime submission fails", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedLarkSurface(handle);
+    const create = vi.fn(async (_input: unknown) => ({
+      code: 0,
+      data: { card_id: "card_a2ui_1" },
+    }));
+    const update = vi.fn(async (_input: unknown) => ({ code: 0 }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
+    const submitMessage = vi.fn(async (_input: unknown) => {
+      throw new Error("ingress unavailable");
+    });
+    const service = new LarkA2uiService({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create,
+                    update,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: messageCreate,
+                },
+              },
+            },
+          }) as unknown as LarkSdkClient,
+      },
+      ingress: {
+        submitMessage,
+        submitApprovalDecision: vi.fn(() => false),
+      },
+    });
+
+    await service.publish({
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      messages: buildQuizMessages(),
+    });
+    const publicationId = readPublicationIdFromCardCreateInput(create.mock.calls[0]?.[0]);
+
+    const callbackResult = await service.handleCardAction({
+      installationId: "default",
+      payload: {
+        action: {
+          value: {
+            __a2ui_lark: "v0_8",
+            surfaceId: "quiz",
+            sourceComponentId: "submit",
+            actionName: "submit_answer",
+            publicationId,
+          },
+          form_value: {
+            answer: ["b"],
+          },
+        },
+      },
+    });
+
+    expect(callbackResult).toEqual({
+      toast: {
+        type: "success",
+        content: "已收到",
+      },
+    });
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(
+      handle.storage.sqlite
+        .prepare("SELECT consumed_action_keys_json FROM a2ui_surface_publications WHERE id = ?")
+        .get(publicationId),
+    ).toEqual({ consumed_action_keys_json: "[]" });
+    const restoredUpdate = update.mock.calls[1]?.[0] as {
+      data: { card: { data: string } };
+    };
+    expect(restoredUpdate.data.card.data).toContain("Submit");
+    expect(restoredUpdate.data.card.data).not.toContain("已提交");
+    service.shutdown();
+  });
+
   test("routes repeated surface ids by publication id", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedLarkSurface(handle);
