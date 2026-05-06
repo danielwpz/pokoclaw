@@ -150,14 +150,46 @@ Prefer the narrowest relevant test command first. Run `pnpm preflight` for large
 - If a real-LLM integration test fails, prove which layer is wrong before changing prompts or runtime logic.
 - Before creating a commit, run `pnpm preflight`.
 
-## Review Behavior
+## Review Guidelines
 
-- If the user asks for a review, prioritize:
-  - correctness
-  - regressions
-  - missing tests
-  - operational and security risks
-- Keep review comments practical and decision-oriented.
+When the user asks for a review, use a comprehensive code-review stance and report only merge-relevant issues. Assume the PR's stated problem is real, then judge whether the change fixes that problem in a way that fits Pokoclaw's existing product model, architecture, and workflows.
+
+Focus on these areas, in this order:
+
+1. Product fit and system consistency
+   - whether the change actually addresses the stated problem
+   - whether the solution fits Pokoclaw's existing product model and user workflows
+   - whether the behavior is consistent with nearby features and established interaction patterns
+   - whether the change conflicts with existing setup, runtime, security, or channel assumptions
+
+2. Functional correctness
+   - whether the intended behavior is implemented correctly
+   - whether the end-to-end flow can actually work, not just isolated pieces
+   - whether there are missing edge cases, broken integrations, or incorrect state transitions
+
+3. Engineering and design quality
+   - whether the design is sufficiently complete and robust for the scope of the change
+   - whether there are meaningful security, reliability, privacy, or operational risks
+   - whether important failure modes, data consistency issues, or observability concerns were missed
+
+4. Code quality and maintainability
+   - whether the structure is clear and appropriately modular
+   - whether the change respects runtime/orchestration/security/channel boundaries
+   - whether the change introduces unnecessary coupling, fragile logic, or technical debt
+   - whether abstractions are appropriate for current needs without being over-engineered
+
+5. Tests, docs, and change clarity
+   - whether important behavior changes have adequate test coverage
+   - whether necessary docs, config examples, comments, or migration notes were added
+   - whether the change is understandable enough for future maintainers to debug and extend
+
+Review style:
+
+- Lead with findings ordered by severity, with concrete file/line references when possible.
+- For each finding, explain what is wrong, why it matters, and the concrete fix direction.
+- Do not report minor style nits or speculative nice-to-haves.
+- If there are no meaningful issues, say so clearly and mention any residual test or operational risk.
+- Keep review comments concise, practical, and decision-oriented.
 
 ## Repo Notes
 
