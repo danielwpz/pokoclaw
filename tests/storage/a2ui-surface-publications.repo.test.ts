@@ -72,13 +72,33 @@ describe("a2ui surface publications repo", () => {
       consumedActionKeysJson: "[]",
     });
 
-    expect(
-      repo.getActiveByChannelSurface({
-        channelType: "lark",
-        channelInstallationId: "default",
-        surfaceId: "quiz",
-      }),
-    ).toMatchObject({
+    expect(repo.getById("a2ui_pub_1")).toMatchObject({
+      surfaceId: "quiz",
+      channelArtifactId: "card_1",
+    });
+
+    const sameSurface = repo.upsert({
+      id: "a2ui_pub_2",
+      surfaceId: "quiz",
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      channelArtifactId: "card_2",
+      channelMessageId: "msg_2",
+      surfaceStateJson: '{"surfaceId":"quiz","components":[]}',
+      consumedActionKeysJson: "[]",
+      createdAt: new Date("2026-05-06T00:00:30.000Z"),
+      updatedAt: new Date("2026-05-06T00:00:30.000Z"),
+    });
+
+    expect(sameSurface).toMatchObject({
+      id: "a2ui_pub_2",
+      surfaceId: "quiz",
+      channelArtifactId: "card_2",
+    });
+    expect(repo.getById("a2ui_pub_1")).toMatchObject({
       surfaceId: "quiz",
       channelArtifactId: "card_1",
     });
@@ -100,13 +120,6 @@ describe("a2ui surface publications repo", () => {
     });
 
     repo.markStale("a2ui_pub_1", new Date("2026-05-06T00:02:00.000Z"));
-    expect(
-      repo.getActiveByChannelSurface({
-        channelType: "lark",
-        channelInstallationId: "default",
-        surfaceId: "quiz",
-      }),
-    ).toBeNull();
     expect(repo.getById("a2ui_pub_1")).toMatchObject({
       surfaceId: "quiz",
       status: "stale",

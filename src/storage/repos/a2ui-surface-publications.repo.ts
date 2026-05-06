@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
@@ -80,11 +80,7 @@ export class A2uiSurfacePublicationsRepo {
       .insert(a2uiSurfacePublications)
       .values(row)
       .onConflictDoUpdate({
-        target: [
-          a2uiSurfacePublications.channelType,
-          a2uiSurfacePublications.channelInstallationId,
-          a2uiSurfacePublications.surfaceId,
-        ],
+        target: a2uiSurfacePublications.id,
         set: {
           sessionId: row.sessionId,
           conversationId: row.conversationId,
@@ -100,11 +96,7 @@ export class A2uiSurfacePublicationsRepo {
       })
       .run();
 
-    const publication = this.getByChannelSurface({
-      channelType: input.channelType,
-      channelInstallationId: input.channelInstallationId,
-      surfaceId: input.surfaceId,
-    });
+    const publication = this.getById(input.id);
     if (publication == null) {
       throw new Error(`A2UI surface publication ${input.id} disappeared after upsert`);
     }
@@ -133,35 +125,6 @@ export class A2uiSurfacePublicationsRepo {
         .where(eq(a2uiSurfacePublications.id, id))
         .get() ?? null
     );
-  }
-
-  getByChannelSurface(input: {
-    channelType: string;
-    channelInstallationId: string;
-    surfaceId: string;
-  }): A2uiSurfacePublication | null {
-    return (
-      this.db
-        .select()
-        .from(a2uiSurfacePublications)
-        .where(
-          and(
-            eq(a2uiSurfacePublications.channelType, input.channelType),
-            eq(a2uiSurfacePublications.channelInstallationId, input.channelInstallationId),
-            eq(a2uiSurfacePublications.surfaceId, input.surfaceId),
-          ),
-        )
-        .get() ?? null
-    );
-  }
-
-  getActiveByChannelSurface(input: {
-    channelType: string;
-    channelInstallationId: string;
-    surfaceId: string;
-  }): A2uiSurfacePublication | null {
-    const row = this.getByChannelSurface(input);
-    return row?.status === "active" ? row : null;
   }
 
   patch(input: PatchA2uiSurfacePublicationInput): A2uiSurfacePublication | null {

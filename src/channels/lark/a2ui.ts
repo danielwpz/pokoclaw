@@ -5,6 +5,7 @@ import {
   type A2uiUserActionEvent,
   type ActionContextEntry,
   type BoundValue,
+  CALLBACK_ENVELOPE_VERSION,
   extractLarkCallback,
   formatValidationIssues,
   type NormalizedCallbackInput,
@@ -38,6 +39,7 @@ const A2UI_DYNAMIC_DATA_UNSUPPORTED_MESSAGE =
   "A2UI dynamic data sources are not supported in Pokoclaw A2UI 1.0.";
 const A2UI_PATH_CONTEXT_UNSUPPORTED_MESSAGE =
   "A2UI callback context cannot reference dataModel paths in Pokoclaw A2UI 1.0.";
+const A2UI_PUBLICATION_ID_KEY = "publicationId";
 
 export interface A2uiPublishInput {
   sessionId: string;
@@ -102,6 +104,8 @@ export class LarkA2uiService {
     assertSupportedCallbackContext(store);
     const surface = store.getSurface(surfaceId);
     const rendered = renderSurface(surface);
+    const publicationId = randomUUID();
+    attachPublicationIdToCard(rendered.card, publicationId);
     logger.info("rendered a2ui surface before publish", {
       surfaceId,
       renderSummary: summarizeRenderedSurface(surface, rendered.card),
@@ -158,7 +162,7 @@ export class LarkA2uiService {
     const messageId = messageResp.data?.message_id ?? undefined;
 
     const publication = this.publicationRepo.upsert({
-      id: randomUUID(),
+      id: publicationId,
       surfaceId,
       sessionId: input.sessionId,
       conversationId: input.conversationId,
@@ -203,12 +207,10 @@ export class LarkA2uiService {
       return null;
     }
 
-    const storedPublication = this.publicationRepo.getActiveByChannelSurface({
-      channelType: LARK_A2UI_CHANNEL_TYPE,
-      channelInstallationId: input.installationId,
-      surfaceId: callback.envelope.surfaceId,
-    });
-    if (storedPublication == null) {
+    const publicationId = readPublicationIdFromLarkPayload(input.payload);
+    const storedPublication =
+      publicationId == null ? null : this.publicationRepo.getById(publicationId);
+    if (storedPublication?.status !== "active") {
       return {
         toast: {
           type: "error",
@@ -559,6 +561,69 @@ function containsDynamicDataSourceUpdate(value: unknown): boolean {
     return false;
   }
   return value.some((message) => isRecord(message) && "dataSourceUpdate" in message);
+}
+
+function attachPublicationIdToCard(value: unknown, publicationId: string): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      attachPublicationIdToCard(entry, publicationId);
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+
+  if (isA2uiCallbackEnvelope(value.value)) {
+    value.value[A2UI_PUBLICATION_ID_KEY] = publicationId;
+  }
+
+  for (const child of Object.values(value)) {
+    attachPublicationIdToCard(child, publicationId);
+  }
+}
+
+function readPublicationIdFromLarkPayload(payload: unknown): string | null {
+  const root = isRecord(payload) ? payload : null;
+  const event =
+    root != null && isRecord(root.event) && isRecord(root.event.action)
+      ? root.event
+      : root != null && isRecord(root.action)
+        ? root
+        : null;
+  if (event == null || !isRecord(event.action)) {
+    return null;
+  }
+
+  const value = parseMaybeJson(event.action.value);
+  if (
+    isA2uiCallbackEnvelope(value) &&
+    typeof value[A2UI_PUBLICATION_ID_KEY] === "string" &&
+    value[A2UI_PUBLICATION_ID_KEY].length > 0
+  ) {
+    return value[A2UI_PUBLICATION_ID_KEY];
+  }
+  return null;
+}
+
+function parseMaybeJson(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function isA2uiCallbackEnvelope(value: unknown): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    value.__a2ui_lark === CALLBACK_ENVELOPE_VERSION &&
+    typeof value.surfaceId === "string" &&
+    typeof value.sourceComponentId === "string"
+  );
 }
 
 interface A2uiAgentUserActionEvent {

@@ -21,7 +21,10 @@ describe("lark a2ui service", () => {
   test("publishes through CardKit without creating lark object bindings", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedLarkSurface(handle);
-    const create = vi.fn(async () => ({ code: 0, data: { card_id: "card_a2ui_1" } }));
+    const create = vi.fn(async (_input: unknown) => ({
+      code: 0,
+      data: { card_id: "card_a2ui_1" },
+    }));
     const update = vi.fn(async (_input: unknown) => ({ code: 0 }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
     const submitMessage = vi.fn(async (_input: unknown) => ({ status: "started" as const }));
@@ -75,6 +78,7 @@ describe("lark a2ui service", () => {
         .prepare("SELECT COUNT(*) AS count FROM a2ui_surface_publications")
         .get(),
     ).toEqual({ count: 1 });
+    const publicationId = readPublicationIdFromCardCreateInput(create.mock.calls[0]?.[0]);
 
     const restartedService = new LarkA2uiService({
       storage: handle.storage.db,
@@ -113,6 +117,7 @@ describe("lark a2ui service", () => {
             surfaceId: "quiz",
             sourceComponentId: "submit",
             actionName: "submit_answer",
+            publicationId,
           },
           form_value: {
             answer: ["b"],
@@ -198,6 +203,7 @@ describe("lark a2ui service", () => {
             surfaceId: "quiz",
             sourceComponentId: "submit",
             actionName: "submit_answer",
+            publicationId,
           },
           form_value: {
             answer: ["b"],
@@ -222,7 +228,10 @@ describe("lark a2ui service", () => {
   test("acks a2ui callbacks before runtime submission completes", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedLarkSurface(handle);
-    const create = vi.fn(async () => ({ code: 0, data: { card_id: "card_a2ui_1" } }));
+    const create = vi.fn(async (_input: unknown) => ({
+      code: 0,
+      data: { card_id: "card_a2ui_1" },
+    }));
     const update = vi.fn(async (_input: unknown) => ({ code: 0 }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
     const submission = createDeferred<unknown>();
@@ -260,6 +269,7 @@ describe("lark a2ui service", () => {
       conversationId: "conv_1",
       messages: buildQuizMessages(),
     });
+    const publicationId = readPublicationIdFromCardCreateInput(create.mock.calls[0]?.[0]);
 
     const callbackResult = await service.handleCardAction({
       installationId: "default",
@@ -270,6 +280,7 @@ describe("lark a2ui service", () => {
             surfaceId: "quiz",
             sourceComponentId: "submit",
             actionName: "submit_answer",
+            publicationId,
           },
           form_value: {
             answer: ["b"],
@@ -289,10 +300,98 @@ describe("lark a2ui service", () => {
     service.shutdown();
   });
 
+  test("routes repeated surface ids by publication id", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedLarkSurface(handle);
+    const cardIds = ["card_a2ui_1", "card_a2ui_2"];
+    let nextCardIndex = 0;
+    const create = vi.fn(async (_input: unknown) => ({
+      code: 0,
+      data: { card_id: cardIds[nextCardIndex++] },
+    }));
+    const update = vi.fn(async (_input: unknown) => ({ code: 0 }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui" } }));
+    const submitMessage = vi.fn(async (_input: unknown) => ({ status: "started" as const }));
+    const service = new LarkA2uiService({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create,
+                    update,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: messageCreate,
+                },
+              },
+            },
+          }) as unknown as LarkSdkClient,
+      },
+      ingress: {
+        submitMessage,
+        submitApprovalDecision: vi.fn(() => false),
+      },
+    });
+
+    await service.publish({
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      messages: buildQuizMessages(),
+    });
+    const firstPublicationId = readPublicationIdFromCardCreateInput(create.mock.calls[0]?.[0]);
+    await service.publish({
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      messages: buildQuizMessages(),
+    });
+    const secondPublicationId = readPublicationIdFromCardCreateInput(create.mock.calls[1]?.[0]);
+
+    expect(firstPublicationId).not.toBe(secondPublicationId);
+    expect(
+      handle.storage.sqlite
+        .prepare("SELECT COUNT(*) AS count FROM a2ui_surface_publications")
+        .get(),
+    ).toEqual({ count: 2 });
+
+    await service.handleCardAction({
+      installationId: "default",
+      payload: {
+        action: {
+          value: {
+            __a2ui_lark: "v0_8",
+            surfaceId: "quiz",
+            sourceComponentId: "submit",
+            actionName: "submit_answer",
+            publicationId: firstPublicationId,
+          },
+          form_value: {
+            answer: ["b"],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(update).toHaveBeenCalledOnce());
+    const updatePayload = update.mock.calls[0]?.[0] as { path: { card_id: string } };
+    expect(updatePayload.path.card_id).toBe("card_a2ui_1");
+    expect(submitMessage).toHaveBeenCalledOnce();
+    service.shutdown();
+  });
+
   test("rejects dynamic data sources before creating a card", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedLarkSurface(handle);
-    const create = vi.fn(async () => ({ code: 0, data: { card_id: "card_clock_1" } }));
+    const create = vi.fn(async (_input: unknown) => ({
+      code: 0,
+      data: { card_id: "card_clock_1" },
+    }));
     const update = vi.fn(async () => ({ code: 0 }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_clock_1" } }));
     const service = new LarkA2uiService({
@@ -339,7 +438,10 @@ describe("lark a2ui service", () => {
   test("rejects callback path context before creating a card", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedLarkSurface(handle);
-    const create = vi.fn(async () => ({ code: 0, data: { card_id: "card_a2ui_1" } }));
+    const create = vi.fn(async (_input: unknown) => ({
+      code: 0,
+      data: { card_id: "card_a2ui_1" },
+    }));
     const update = vi.fn(async () => ({ code: 0 }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
     const service = new LarkA2uiService({
@@ -385,6 +487,52 @@ describe("lark a2ui service", () => {
     service.shutdown();
   });
 });
+
+function readPublicationIdFromCardCreateInput(input: unknown): string {
+  const card = readCardJsonFromCreateInput(input);
+  const value = findA2uiCallbackValue(card);
+  const publicationId = value?.publicationId;
+  if (typeof publicationId !== "string" || publicationId.length === 0) {
+    throw new Error("Published A2UI card does not include publicationId in callback value.");
+  }
+  return publicationId;
+}
+
+function readCardJsonFromCreateInput(input: unknown): unknown {
+  if (!isRecord(input) || !isRecord(input.data) || typeof input.data.data !== "string") {
+    throw new Error("Invalid Lark CardKit create input.");
+  }
+  return JSON.parse(input.data.data) as unknown;
+}
+
+function findA2uiCallbackValue(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findA2uiCallbackValue(entry);
+      if (found != null) {
+        return found;
+      }
+    }
+    return null;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (isRecord(value.value) && value.value.__a2ui_lark === "v0_8") {
+    return value.value;
+  }
+  for (const child of Object.values(value)) {
+    const found = findA2uiCallbackValue(child);
+    if (found != null) {
+      return found;
+    }
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value != null && !Array.isArray(value);
+}
 
 function seedLarkSurface(handle: TestDatabaseHandle): void {
   handle.storage.sqlite.exec(`

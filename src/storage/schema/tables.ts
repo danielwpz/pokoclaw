@@ -285,7 +285,7 @@ export const a2uiSurfacePublications = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("uidx_a2ui_publications_channel_surface").on(
+    index("idx_a2ui_publications_channel_surface").on(
       table.channelType,
       table.channelInstallationId,
       table.surfaceId,
