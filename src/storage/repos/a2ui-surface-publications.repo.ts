@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
@@ -39,6 +39,28 @@ export interface PatchA2uiSurfacePublicationInput {
   status?: A2uiSurfacePublicationStatus | undefined;
   updatedAt?: Date | undefined;
 }
+
+export type ConsumeA2uiSurfacePublicationActionResult =
+  | {
+      status: "consumed";
+      publication: A2uiSurfacePublication;
+    }
+  | {
+      status: "duplicate";
+      publication: A2uiSurfacePublication;
+    }
+  | {
+      status: "missing";
+    };
+
+export interface ConsumeA2uiSurfacePublicationActionInput {
+  id: string;
+  actionKey: string;
+  surfaceStateJson: string;
+  updatedAt?: Date | undefined;
+}
+
+const MAX_CONSUME_ACTION_CAS_RETRIES = 5;
 
 export class A2uiSurfacePublicationsRepo {
   constructor(private readonly db: StorageDb) {}
@@ -127,6 +149,57 @@ export class A2uiSurfacePublicationsRepo {
     );
   }
 
+  consumeAction(
+    input: ConsumeA2uiSurfacePublicationActionInput,
+  ): ConsumeA2uiSurfacePublicationActionResult {
+    for (let attempt = 0; attempt < MAX_CONSUME_ACTION_CAS_RETRIES; attempt += 1) {
+      const current = this.getById(input.id);
+      if (current?.status !== "active") {
+        return { status: "missing" };
+      }
+
+      const consumedActionKeys = parseConsumedActionKeysJson(current.consumedActionKeysJson);
+      if (consumedActionKeys.has(input.actionKey)) {
+        return {
+          status: "duplicate",
+          publication: current,
+        };
+      }
+
+      consumedActionKeys.add(input.actionKey);
+      const nextConsumedActionKeysJson = serializeConsumedActionKeysJson(consumedActionKeys);
+      const updatedAt = toCanonicalUtcIsoTimestamp(input.updatedAt ?? new Date());
+      const result = this.db
+        .update(a2uiSurfacePublications)
+        .set({
+          surfaceStateJson: input.surfaceStateJson,
+          consumedActionKeysJson: nextConsumedActionKeysJson,
+          updatedAt,
+        })
+        .where(
+          and(
+            eq(a2uiSurfacePublications.id, input.id),
+            eq(a2uiSurfacePublications.status, "active"),
+            eq(a2uiSurfacePublications.consumedActionKeysJson, current.consumedActionKeysJson),
+          ),
+        )
+        .run();
+
+      if ((result.changes ?? 0) > 0) {
+        const publication = this.getById(input.id);
+        if (publication == null) {
+          return { status: "missing" };
+        }
+        return {
+          status: "consumed",
+          publication,
+        };
+      }
+    }
+
+    throw new Error(`Failed to consume A2UI action '${input.actionKey}' after CAS retries.`);
+  }
+
   patch(input: PatchA2uiSurfacePublicationInput): A2uiSurfacePublication | null {
     const updatedAt = toCanonicalUtcIsoTimestamp(input.updatedAt ?? new Date());
     this.db
@@ -155,4 +228,16 @@ export class A2uiSurfacePublicationsRepo {
       updatedAt,
     });
   }
+}
+
+function parseConsumedActionKeysJson(value: string): Set<string> {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+    throw new Error("Stored A2UI consumed action keys are invalid.");
+  }
+  return new Set(parsed);
+}
+
+function serializeConsumedActionKeysJson(value: Set<string>): string {
+  return JSON.stringify(Array.from(value).sort());
 }

@@ -265,7 +265,12 @@ export class LarkA2uiService {
       event.userAction.sourceComponentId,
       event.userAction.name,
     );
-    if (publication.consumedActionKeys.has(actionKey)) {
+    const consumeResult = this.publicationRepo.consumeAction({
+      id: publication.id,
+      actionKey,
+      surfaceStateJson: serializePublicationSurfaceState(publication),
+    });
+    if (consumeResult.status === "duplicate") {
       logger.info("ignored duplicate a2ui callback for consumed action", {
         surfaceId: publication.surfaceId,
         sessionId: publication.sessionId,
@@ -280,13 +285,7 @@ export class LarkA2uiService {
       };
     }
 
-    publication.consumedActionKeys.add(actionKey);
-    const persistedPublication = this.publicationRepo.patch({
-      id: publication.id,
-      surfaceStateJson: serializePublicationSurfaceState(publication),
-      consumedActionKeysJson: serializeConsumedActionKeys(publication.consumedActionKeys),
-    });
-    if (persistedPublication == null) {
+    if (consumeResult.status === "missing") {
       return {
         toast: {
           type: "error",

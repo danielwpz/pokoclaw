@@ -119,6 +119,38 @@ describe("a2ui surface publications repo", () => {
       updatedAt: "2026-05-06T00:01:00.000Z",
     });
 
+    const consumeAction = repo.consumeAction({
+      id: "a2ui_pub_2",
+      actionKey: "submit\u0000submit_answer",
+      surfaceStateJson: '{"surfaceId":"quiz","components":["submit"],"dataModel":{"answer":"b"}}',
+      updatedAt: new Date("2026-05-06T00:01:30.000Z"),
+    });
+    expect(consumeAction).toMatchObject({
+      status: "consumed",
+      publication: {
+        id: "a2ui_pub_2",
+        consumedActionKeysJson: '["submit\\u0000submit_answer"]',
+        surfaceStateJson: '{"surfaceId":"quiz","components":["submit"],"dataModel":{"answer":"b"}}',
+        updatedAt: "2026-05-06T00:01:30.000Z",
+      },
+    });
+
+    const duplicateAction = repo.consumeAction({
+      id: "a2ui_pub_2",
+      actionKey: "submit\u0000submit_answer",
+      surfaceStateJson: '{"surfaceId":"quiz","components":["stale-overwrite"]}',
+      updatedAt: new Date("2026-05-06T00:01:45.000Z"),
+    });
+    expect(duplicateAction).toMatchObject({
+      status: "duplicate",
+      publication: {
+        id: "a2ui_pub_2",
+        consumedActionKeysJson: '["submit\\u0000submit_answer"]',
+        surfaceStateJson: '{"surfaceId":"quiz","components":["submit"],"dataModel":{"answer":"b"}}',
+        updatedAt: "2026-05-06T00:01:30.000Z",
+      },
+    });
+
     repo.markStale("a2ui_pub_1", new Date("2026-05-06T00:02:00.000Z"));
     expect(repo.getById("a2ui_pub_1")).toMatchObject({
       surfaceId: "quiz",
