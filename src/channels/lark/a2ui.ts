@@ -417,6 +417,7 @@ export class LarkA2uiService {
     const cardkit = getCardkitSdk(client);
     const surface = publication.store.getSurface(surfaceId);
     const rendered = renderSurface(surface);
+    attachPublicationIdToCard(rendered.card, publication.id);
     applyConsumedActionTransforms(rendered.card, publication.consumedActionKeys);
     const sequence = publication.sequence + 1;
     const nextUpdateCount = (this.updateCounts.get(publicationId) ?? 0) + 1;

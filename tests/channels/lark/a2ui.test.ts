@@ -470,6 +470,93 @@ describe("lark a2ui service", () => {
     service.shutdown();
   });
 
+  test("keeps publication id on unconsumed buttons after card update", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedLarkSurface(handle);
+    const create = vi.fn(async (_input: unknown) => ({
+      code: 0,
+      data: { card_id: "card_a2ui_1" },
+    }));
+    const update = vi.fn(async (_input: unknown) => ({ code: 0 }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
+    const submitMessage = vi.fn(async (_input: unknown) => ({ status: "started" as const }));
+    const service = new LarkA2uiService({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create,
+                    update,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: messageCreate,
+                },
+              },
+            },
+          }) as unknown as LarkSdkClient,
+      },
+      ingress: {
+        submitMessage,
+        submitApprovalDecision: vi.fn(() => false),
+      },
+    });
+
+    await service.publish({
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      messages: buildTwoButtonMessages(),
+    });
+    const publicationId = readPublicationIdFromCardCreateInput(create.mock.calls[0]?.[0]);
+
+    await service.handleCardAction({
+      installationId: "default",
+      payload: {
+        action: {
+          value: {
+            __a2ui_lark: "v0_8",
+            surfaceId: "quiz",
+            sourceComponentId: "first",
+            actionName: "first_action",
+            publicationId,
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(update).toHaveBeenCalledOnce());
+    const updatePayload = update.mock.calls[0]?.[0] as {
+      data: { card: { data: string } };
+    };
+    const updatedCard = JSON.parse(updatePayload.data.card.data) as unknown;
+    const secondValue = findA2uiCallbackValueByComponentId(updatedCard, "second");
+    expect(secondValue).toMatchObject({
+      __a2ui_lark: "v0_8",
+      surfaceId: "quiz",
+      sourceComponentId: "second",
+      actionName: "second_action",
+      publicationId,
+    });
+
+    await service.handleCardAction({
+      installationId: "default",
+      payload: {
+        action: {
+          value: secondValue,
+        },
+      },
+    });
+
+    expect(submitMessage).toHaveBeenCalledTimes(2);
+    service.shutdown();
+  });
+
   test("rejects dynamic data sources before creating a card", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedLarkSurface(handle);
@@ -615,6 +702,45 @@ function findA2uiCallbackValue(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function findA2uiCallbackValueByComponentId(
+  value: unknown,
+  componentId: string,
+): Record<string, unknown> {
+  const found = findA2uiCallbackValueByComponentIdOrNull(value, componentId);
+  if (found == null) {
+    throw new Error(`A2UI callback value for component '${componentId}' was not found.`);
+  }
+  return found;
+}
+
+function findA2uiCallbackValueByComponentIdOrNull(
+  value: unknown,
+  componentId: string,
+): Record<string, unknown> | null {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findA2uiCallbackValueByComponentIdOrNull(entry, componentId);
+      if (found != null) {
+        return found;
+      }
+    }
+    return null;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (value.name === componentId && isRecord(value.value) && value.value.__a2ui_lark === "v0_8") {
+    return value.value;
+  }
+  for (const child of Object.values(value)) {
+    const found = findA2uiCallbackValueByComponentIdOrNull(child, componentId);
+    if (found != null) {
+      return found;
+    }
+  }
+  return null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value != null && !Array.isArray(value);
 }
@@ -702,6 +828,70 @@ function buildQuizMessages(input: { pathContext?: boolean } = {}) {
                     input.pathContext === true
                       ? [{ key: "answer", value: { path: "/form/answer" } }]
                       : [{ key: "source", value: { literalString: "quiz" } }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+    {
+      beginRendering: {
+        surfaceId: "quiz",
+        catalogId: "urn:a2ui:catalog:lark-card:v0_8",
+        root: "root",
+      },
+    },
+  ];
+}
+
+function buildTwoButtonMessages() {
+  return [
+    {
+      surfaceUpdate: {
+        surfaceId: "quiz",
+        components: [
+          {
+            id: "root",
+            component: {
+              Column: {
+                children: { explicitList: ["first", "second"] },
+              },
+            },
+          },
+          {
+            id: "first_label",
+            component: {
+              Text: { text: { literalString: "First" } },
+            },
+          },
+          {
+            id: "first",
+            component: {
+              Button: {
+                child: "first_label",
+                primary: true,
+                action: {
+                  name: "first_action",
+                  context: [{ key: "source", value: { literalString: "first" } }],
+                },
+              },
+            },
+          },
+          {
+            id: "second_label",
+            component: {
+              Text: { text: { literalString: "Second" } },
+            },
+          },
+          {
+            id: "second",
+            component: {
+              Button: {
+                child: "second_label",
+                action: {
+                  name: "second_action",
+                  context: [{ key: "source", value: { literalString: "second" } }],
                 },
               },
             },
