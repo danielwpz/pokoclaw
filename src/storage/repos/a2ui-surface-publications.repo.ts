@@ -60,7 +60,26 @@ export interface ConsumeA2uiSurfacePublicationActionInput {
   updatedAt?: Date | undefined;
 }
 
-const MAX_CONSUME_ACTION_CAS_RETRIES = 5;
+export type RestoreA2uiSurfacePublicationActionResult =
+  | {
+      status: "restored";
+      publication: A2uiSurfacePublication;
+    }
+  | {
+      status: "not_consumed";
+      publication: A2uiSurfacePublication;
+    }
+  | {
+      status: "missing";
+    };
+
+export interface RestoreA2uiSurfacePublicationActionInput {
+  id: string;
+  actionKey: string;
+  updatedAt?: Date | undefined;
+}
+
+const MAX_CONSUMED_ACTION_CAS_RETRIES = 5;
 
 export class A2uiSurfacePublicationsRepo {
   constructor(private readonly db: StorageDb) {}
@@ -152,7 +171,7 @@ export class A2uiSurfacePublicationsRepo {
   consumeAction(
     input: ConsumeA2uiSurfacePublicationActionInput,
   ): ConsumeA2uiSurfacePublicationActionResult {
-    for (let attempt = 0; attempt < MAX_CONSUME_ACTION_CAS_RETRIES; attempt += 1) {
+    for (let attempt = 0; attempt < MAX_CONSUMED_ACTION_CAS_RETRIES; attempt += 1) {
       const current = this.getById(input.id);
       if (current?.status !== "active") {
         return { status: "missing" };
@@ -198,6 +217,55 @@ export class A2uiSurfacePublicationsRepo {
     }
 
     throw new Error(`Failed to consume A2UI action '${input.actionKey}' after CAS retries.`);
+  }
+
+  restoreConsumedAction(
+    input: RestoreA2uiSurfacePublicationActionInput,
+  ): RestoreA2uiSurfacePublicationActionResult {
+    for (let attempt = 0; attempt < MAX_CONSUMED_ACTION_CAS_RETRIES; attempt += 1) {
+      const current = this.getById(input.id);
+      if (current?.status !== "active") {
+        return { status: "missing" };
+      }
+
+      const consumedActionKeys = parseConsumedActionKeysJson(current.consumedActionKeysJson);
+      if (!consumedActionKeys.delete(input.actionKey)) {
+        return {
+          status: "not_consumed",
+          publication: current,
+        };
+      }
+
+      const nextConsumedActionKeysJson = serializeConsumedActionKeysJson(consumedActionKeys);
+      const updatedAt = toCanonicalUtcIsoTimestamp(input.updatedAt ?? new Date());
+      const result = this.db
+        .update(a2uiSurfacePublications)
+        .set({
+          consumedActionKeysJson: nextConsumedActionKeysJson,
+          updatedAt,
+        })
+        .where(
+          and(
+            eq(a2uiSurfacePublications.id, input.id),
+            eq(a2uiSurfacePublications.status, "active"),
+            eq(a2uiSurfacePublications.consumedActionKeysJson, current.consumedActionKeysJson),
+          ),
+        )
+        .run();
+
+      if ((result.changes ?? 0) > 0) {
+        const publication = this.getById(input.id);
+        if (publication == null) {
+          return { status: "missing" };
+        }
+        return {
+          status: "restored",
+          publication,
+        };
+      }
+    }
+
+    throw new Error(`Failed to restore A2UI action '${input.actionKey}' after CAS retries.`);
   }
 
   patch(input: PatchA2uiSurfacePublicationInput): A2uiSurfacePublication | null {

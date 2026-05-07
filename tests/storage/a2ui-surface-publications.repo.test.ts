@@ -158,4 +158,47 @@ describe("a2ui surface publications repo", () => {
       updatedAt: "2026-05-06T00:02:00.000Z",
     });
   });
+
+  test("restores one consumed action without dropping later consumed actions", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    const repo = new A2uiSurfacePublicationsRepo(handle.storage.db);
+
+    repo.upsert({
+      id: "a2ui_pub_restore",
+      surfaceId: "quiz",
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      channelArtifactId: "card_restore",
+      channelMessageId: "msg_restore",
+      surfaceStateJson: '{"surfaceId":"quiz","components":["current"]}',
+      consumedActionKeysJson: '["first\\u0000submit","second\\u0000submit"]',
+      createdAt: new Date("2026-05-06T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-06T00:02:00.000Z"),
+    });
+
+    const restored = repo.restoreConsumedAction({
+      id: "a2ui_pub_restore",
+      actionKey: "first\u0000submit",
+      updatedAt: new Date("2026-05-06T00:03:00.000Z"),
+    });
+
+    expect(restored).toMatchObject({
+      status: "restored",
+      publication: {
+        id: "a2ui_pub_restore",
+        consumedActionKeysJson: '["second\\u0000submit"]',
+        surfaceStateJson: '{"surfaceId":"quiz","components":["current"]}',
+        updatedAt: "2026-05-06T00:03:00.000Z",
+      },
+    });
+
+    expect(repo.getById("a2ui_pub_restore")).toMatchObject({
+      consumedActionKeysJson: '["second\\u0000submit"]',
+      surfaceStateJson: '{"surfaceId":"quiz","components":["current"]}',
+    });
+  });
 });

@@ -359,20 +359,14 @@ export class LarkA2uiService {
     sourceComponentId: string;
     actionName: string;
   }): Promise<void> {
-    const storedPublication = this.publicationRepo.getById(input.publicationId);
-    if (storedPublication?.status !== "active") {
-      return;
-    }
-    const publication = hydrateA2uiPublication(storedPublication);
-    if (!publication.consumedActionKeys.delete(input.actionKey)) {
+    const restoreResult = this.publicationRepo.restoreConsumedAction({
+      id: input.publicationId,
+      actionKey: input.actionKey,
+    });
+    if (restoreResult.status !== "restored") {
       return;
     }
 
-    this.publicationRepo.patch({
-      id: publication.id,
-      surfaceStateJson: serializePublicationSurfaceState(publication),
-      consumedActionKeysJson: serializeConsumedActionKeys(publication.consumedActionKeys),
-    });
     logger.warn("restored a2ui consumed action after ingress submission failure", {
       surfaceId: input.surfaceId,
       publicationId: input.publicationId,
@@ -578,10 +572,6 @@ function isA2uiComponentNode(value: unknown): value is A2uiComponentNode {
     return false;
   }
   return value.weight === undefined || typeof value.weight === "number";
-}
-
-function serializeConsumedActionKeys(value: Set<string>): string {
-  return JSON.stringify(Array.from(value).sort());
 }
 
 function parseConsumedActionKeys(value: string): Set<string> {
