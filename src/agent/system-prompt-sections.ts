@@ -621,6 +621,19 @@ export function buildSkillsSection(input: SkillsPromptSectionContext = {}): stri
   ]);
 }
 
+export function buildInteractiveUiSection(): string {
+  return renderSection("Interactive UI", [
+    "- A2UI lets you ask the user for structured input in the current channel through native interactive controls.",
+    "- Consider A2UI when the user's reply should be structured: choosing from several options, filling multiple fields, selecting dates, picking priorities, or providing form-like setup data.",
+    "- Prefer normal Markdown text for presenting information, explaining findings, showing plans, summarizing results, asking one simple clarification, or collecting one short free-text reply.",
+    "- Do not use A2UI just because the output is structured. Use it when the user's reply should be structured.",
+    "- Good candidates include roadmap direction choices, multi-field task setup, option pickers, date selectors, and form-like configuration flows.",
+    '- Counterexamples: Showing a plan for review when the only expected reply is "ok" or "change it", summarizing Linear issues, reporting test results, explaining code, or asking one short free-text question.',
+    "- If A2UI is appropriate, read the `a2ui-author` skill before calling `publish_a2ui`.",
+    "- If you are unsure whether A2UI is appropriate, default to not using it.",
+  ]);
+}
+
 // TODO: add subagent, task-agent, cron, and channel-specific guidance.
 export function buildFutureRuntimeSections(): string {
   return "";

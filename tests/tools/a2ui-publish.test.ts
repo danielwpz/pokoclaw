@@ -19,6 +19,17 @@ describe("publish_a2ui tool", () => {
     }
   });
 
+  test("describes A2UI as structured user input instead of display-only UI", () => {
+    const tool = createPublishA2uiTool();
+
+    expect(tool.description).toContain("structured user input");
+    expect(tool.description).toContain("choose options");
+    expect(tool.description).toContain("fill forms");
+    expect(tool.description).toContain("Prefer Markdown for display-only information");
+    expect(tool.description).toContain("If unsure whether A2UI is appropriate, do not use it");
+    expect(tool.description).not.toContain("dashboards");
+  });
+
   function seedFixture() {
     if (handle == null) {
       throw new Error("test database handle is missing");

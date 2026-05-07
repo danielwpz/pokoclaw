@@ -12,6 +12,7 @@ import {
   buildBashFullAccessSection,
   buildBootstrapSection,
   buildFutureRuntimeSections,
+  buildInteractiveUiSection,
   buildMainAgentIdentitySection,
   buildMainAgentOperatingModelSection,
   buildMainAgentScheduledTasksSection,
@@ -92,6 +93,7 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildToolUsageSection(),
     buildPermissionsSection(),
     buildBashFullAccessSection(),
+    buildInteractiveUiSection(),
     buildSafetySection(),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
@@ -134,6 +136,7 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
     buildToolUsageSection(),
     buildPermissionsSection(),
     buildBashFullAccessSection(),
+    buildInteractiveUiSection(),
     buildSafetySection(),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),

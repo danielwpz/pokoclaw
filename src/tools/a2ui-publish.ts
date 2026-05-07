@@ -29,7 +29,7 @@ export function createPublishA2uiTool(input: { publisher?: A2uiPublisher } = {})
   return defineTool({
     name: "publish_a2ui",
     description:
-      "Validate A2UI v0.8 runtime messages, render them as an interactive surface in the current channel, and route A2UI callbacks back into this agent conversation. Use this when the user asks for an interactive UI, forms, choice flows, or dashboards. The tool accepts static A2UI runtime JSON, not raw channel card JSON or dynamic data sources.",
+      "Validate A2UI v0.8 runtime messages, render them as an interactive surface in the current channel, and route structured user input back into this agent conversation. Use this when the user should choose options, fill forms, select dates, or provide other structured input. Prefer Markdown for display-only information, explanations, summaries, simple questions, or plan review with a single free-text reply. The tool accepts static A2UI runtime JSON, not raw channel card JSON or dynamic data sources. If unsure whether A2UI is appropriate, do not use it.",
     inputSchema: PUBLISH_A2UI_TOOL_SCHEMA,
     async execute(context, args) {
       if (input.publisher == null) {

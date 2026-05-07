@@ -173,6 +173,22 @@ describe("agent system prompt", () => {
     expect(prompt.indexOf("## Skills")).toBeLessThan(prompt.indexOf("<available_skills>"));
   });
 
+  test("guides agents to use A2UI only for structured user input", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+    });
+
+    expect(prompt).toContain("## Interactive UI");
+    expect(prompt).toContain("A2UI lets you ask the user for structured input");
+    expect(prompt).toContain("Do not use A2UI just because the output is structured");
+    expect(prompt).toContain(
+      "If you are unsure whether A2UI is appropriate, default to not using it",
+    );
+    expect(prompt).toContain("read the `a2ui-author` skill before calling `publish_a2ui`");
+    expect(prompt).toContain("Showing a plan for review when the only expected reply is");
+  });
+
   test("defaults chat sessions without agentKind to the main-agent prompt", () => {
     const prompt = buildAgentSystemPrompt({
       sessionPurpose: "chat",
@@ -198,6 +214,7 @@ describe("agent system prompt", () => {
     const toolUsageIndex = prompt.indexOf("## Tool Usage");
     const permissionsIndex = prompt.indexOf("## Permissions");
     const bashIndex = prompt.indexOf("## Bash Tool");
+    const interactiveUiIndex = prompt.indexOf("## Interactive UI");
     const safetyIndex = prompt.indexOf("## Safety");
     const runtimeIndex = prompt.indexOf("## Workspace & Runtime");
 
@@ -209,7 +226,8 @@ describe("agent system prompt", () => {
     expect(toolUsageIndex).toBeGreaterThan(subagentIndex);
     expect(permissionsIndex).toBeGreaterThan(toolUsageIndex);
     expect(bashIndex).toBeGreaterThan(permissionsIndex);
-    expect(safetyIndex).toBeGreaterThan(bashIndex);
+    expect(interactiveUiIndex).toBeGreaterThan(bashIndex);
+    expect(safetyIndex).toBeGreaterThan(interactiveUiIndex);
     expect(runtimeIndex).toBe(-1);
   });
 
