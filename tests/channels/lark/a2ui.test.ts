@@ -557,6 +557,57 @@ describe("lark a2ui service", () => {
     service.shutdown();
   });
 
+  test("refuses to publish when lark delivery target is ambiguous", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedLarkSurface(handle);
+    seedSecondLarkSurface(handle);
+    const create = vi.fn(async (_input: unknown) => ({
+      code: 0,
+      data: { card_id: "card_a2ui_1" },
+    }));
+    const update = vi.fn(async () => ({ code: 0 }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "msg_a2ui_1" } }));
+    const service = new LarkA2uiService({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create,
+                    update,
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: messageCreate,
+                },
+              },
+            },
+          }) as unknown as LarkSdkClient,
+      },
+      ingress: {
+        submitMessage: vi.fn(async (_input: unknown) => ({ status: "started" as const })),
+        submitApprovalDecision: vi.fn(() => false),
+      },
+    });
+
+    await expect(
+      service.publish({
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        messages: buildQuizMessages(),
+      }),
+    ).rejects.toThrow("Multiple Lark delivery targets are paired for this conversation.");
+    expect(create).not.toHaveBeenCalled();
+    expect(messageCreate).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    service.shutdown();
+  });
+
   test("rejects dynamic data sources before creating a card", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedLarkSurface(handle);
@@ -764,6 +815,13 @@ function seedLarkSurface(handle: TestDatabaseHandle): void {
 
     INSERT INTO channel_surfaces (id, channel_type, channel_installation_id, conversation_id, branch_id, surface_key, surface_object_json, created_at, updated_at)
     VALUES ('surf_1', 'lark', 'default', 'conv_1', 'branch_1', 'chat:chat_1', '{"chat_id":"chat_1"}', '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z');
+  `);
+}
+
+function seedSecondLarkSurface(handle: TestDatabaseHandle): void {
+  handle.storage.sqlite.exec(`
+    INSERT INTO channel_surfaces (id, channel_type, channel_installation_id, conversation_id, branch_id, surface_key, surface_object_json, created_at, updated_at)
+    VALUES ('surf_2', 'lark', 'secondary', 'conv_1', 'branch_1', 'chat:chat_2', '{"chat_id":"chat_2"}', '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z');
   `);
 }
 

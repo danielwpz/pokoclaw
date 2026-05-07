@@ -116,10 +116,16 @@ export class LarkA2uiService {
       throw new Error(`Unknown session: ${input.sessionId}`);
     }
 
-    const target = listLarkDeliveryTargets(this.deps.storage, {
+    const deliveryTargets = listLarkDeliveryTargets(this.deps.storage, {
       conversationId: input.conversationId,
       branchId: session.branchId,
-    })[0];
+    });
+    if (deliveryTargets.length > 1) {
+      throw new Error(
+        "Multiple Lark delivery targets are paired for this conversation. A2UI publish requires an unambiguous current Lark surface.",
+      );
+    }
+    const target = deliveryTargets[0];
     if (target == null) {
       throw new Error("No Lark delivery target is paired for this conversation.");
     }
