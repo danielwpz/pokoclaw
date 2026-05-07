@@ -1,6 +1,7 @@
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 
 import type {
+  a2uiSurfacePublications,
   agentPermissionGrants,
   agentRuntimeModes,
   agents,
@@ -33,6 +34,9 @@ export type NewConversationBranch = InferInsertModel<typeof conversationBranches
 
 export type ChannelSurface = InferSelectModel<typeof channelSurfaces>;
 export type NewChannelSurface = InferInsertModel<typeof channelSurfaces>;
+
+export type A2uiSurfacePublication = InferSelectModel<typeof a2uiSurfacePublications>;
+export type NewA2uiSurfacePublication = InferInsertModel<typeof a2uiSurfacePublications>;
 
 export type ChannelThread = InferSelectModel<typeof channelThreads>;
 export type NewChannelThread = InferInsertModel<typeof channelThreads>;

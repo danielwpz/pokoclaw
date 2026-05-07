@@ -10,6 +10,7 @@ import { LiveProviderRegistrySource } from "@/src/agent/llm/provider-registry-so
 import { CodexProviderApiKeyResolver } from "@/src/agent/llm/providers/codex/resolver.js";
 import { AgentLoop } from "@/src/agent/loop.js";
 import { AgentSessionService } from "@/src/agent/session.js";
+import { LarkA2uiService } from "@/src/channels/lark/a2ui.js";
 import { createLarkChannelRuntime, type LarkChannelRuntime } from "@/src/channels/lark/channel.js";
 import { LarkClientRegistry } from "@/src/channels/lark/client.js";
 import { createLarkSubagentConversationSurfaceProvisioner } from "@/src/channels/lark/subagent-provisioner.js";
@@ -82,10 +83,26 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const liveModels = new LiveProviderRegistrySource(liveConfig);
   const messages = new MessagesRepo(input.storage);
   const sessions = new SessionsRepo(input.storage);
-  const tools = createBuiltinToolRegistry({
-    providers: input.config.providers,
-    tools: input.config.tools,
-  });
+  const larkClients = new LarkClientRegistry(
+    listConfiguredLarkInstallations(input.config.channels.lark),
+  );
+  let a2ui: LarkA2uiService | null = null;
+  const tools = createBuiltinToolRegistry(
+    {
+      providers: input.config.providers,
+      tools: input.config.tools,
+    },
+    {
+      a2uiPublisher: {
+        publish: (publishInput) => {
+          if (a2ui == null) {
+            throw new Error("A2UI service is not ready.");
+          }
+          return a2ui.publish(publishInput);
+        },
+      },
+    },
+  );
   const bridge = createRuntimeOrchestrationBridge();
   const outboundEventBus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
   const cancel = new SessionRunAbortRegistry();
@@ -129,9 +146,6 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     loop,
     messages,
   });
-  const larkClients = new LarkClientRegistry(
-    listConfiguredLarkInstallations(input.config.channels.lark),
-  );
   const manager = new AgentManager({
     storage: input.storage,
     ingress,
@@ -144,6 +158,11 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       }),
   });
   bridge.attachManager(manager);
+  a2ui = new LarkA2uiService({
+    storage: input.storage,
+    clients: larkClients,
+    ingress,
+  });
 
   const cron = new CronService({
     storage: input.storage,
@@ -175,6 +194,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     modelSwitch: scenarioModelSwitch,
     outboundEventBus,
     clients: larkClients,
+    a2uiCallbacks: a2ui,
     subagentRequests: {
       approve: (requestId: string) =>
         manager.resolveApproveSubagentCreationRequest({
@@ -284,6 +304,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
           inFlightMeditationRuns: meditation.status().inFlightRuns,
         });
         heartbeat.stop();
+        a2ui?.shutdown();
         await lark.shutdown();
         meditation.stop();
         cron.stop();

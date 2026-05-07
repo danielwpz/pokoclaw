@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm";
 
 import {
+  a2uiSurfacePublications,
   agentPermissionGrants,
   agentRuntimeModes,
   agents,
@@ -33,6 +34,7 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   }),
   branches: many(conversationBranches),
   channelSurfaces: many(channelSurfaces),
+  a2uiSurfacePublications: many(a2uiSurfacePublications),
   channelThreads: many(channelThreads),
   larkObjectBindings: many(larkObjectBindings),
   sessions: many(sessions),
@@ -48,6 +50,7 @@ export const conversationBranchesRelations = relations(conversationBranches, ({ 
     references: [conversations.id],
   }),
   channelSurfaces: many(channelSurfaces),
+  a2uiSurfacePublications: many(a2uiSurfacePublications),
   channelThreads: many(channelThreads),
   larkObjectBindings: many(larkObjectBindings),
   sessions: many(sessions),
@@ -63,6 +66,21 @@ export const channelSurfacesRelations = relations(channelSurfaces, ({ one }) => 
   }),
   branch: one(conversationBranches, {
     fields: [channelSurfaces.branchId],
+    references: [conversationBranches.id],
+  }),
+}));
+
+export const a2uiSurfacePublicationsRelations = relations(a2uiSurfacePublications, ({ one }) => ({
+  session: one(sessions, {
+    fields: [a2uiSurfacePublications.sessionId],
+    references: [sessions.id],
+  }),
+  conversation: one(conversations, {
+    fields: [a2uiSurfacePublications.conversationId],
+    references: [conversations.id],
+  }),
+  branch: one(conversationBranches, {
+    fields: [a2uiSurfacePublications.branchId],
     references: [conversationBranches.id],
   }),
 }));
@@ -152,6 +170,7 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
     references: [agents.id],
   }),
   messages: many(messages),
+  a2uiSurfacePublications: many(a2uiSurfacePublications),
   approvals: many(approvalLedger),
   subagentCreationRequests: many(subagentCreationRequests),
   harnessEvents: many(harnessEvents),

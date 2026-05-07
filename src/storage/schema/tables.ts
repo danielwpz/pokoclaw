@@ -259,6 +259,47 @@ export const sessions = sqliteTable(
   ],
 );
 
+export const a2uiSurfacePublications = sqliteTable(
+  "a2ui_surface_publications",
+  {
+    id: text("id").primaryKey(),
+    surfaceId: text("surface_id").notNull(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    branchId: text("branch_id")
+      .notNull()
+      .references(() => conversationBranches.id, { onDelete: "cascade" }),
+    channelType: text("channel_type").notNull(),
+    channelInstallationId: text("channel_installation_id").notNull(),
+    channelArtifactId: text("channel_artifact_id").notNull(),
+    channelMessageId: text("channel_message_id"),
+    channelSequence: integer("channel_sequence").notNull().default(1),
+    surfaceStateJson: text("surface_state_json").notNull(),
+    consumedActionKeysJson: text("consumed_action_keys_json").notNull().default("[]"),
+    status: text("status").notNull().default("active"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("idx_a2ui_publications_channel_surface").on(
+      table.channelType,
+      table.channelInstallationId,
+      table.surfaceId,
+    ),
+    uniqueIndex("uidx_a2ui_publications_channel_artifact").on(
+      table.channelType,
+      table.channelInstallationId,
+      table.channelArtifactId,
+    ),
+    index("idx_a2ui_publications_conversation_branch").on(table.conversationId, table.branchId),
+    index("idx_a2ui_publications_session").on(table.sessionId),
+  ],
+);
+
 export const messages = sqliteTable(
   "messages",
   {

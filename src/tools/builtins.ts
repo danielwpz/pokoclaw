@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
+import { type A2uiPublisher, createPublishA2uiTool } from "@/src/tools/a2ui-publish.js";
 import { createBackgroundTaskTool } from "@/src/tools/background-task.js";
 import { createBashTool } from "@/src/tools/bash.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
@@ -23,6 +24,9 @@ import { createWriteTool } from "@/src/tools/write.js";
 
 export function createBuiltinToolRegistry(
   config?: Pick<AppConfig, "providers" | "tools">,
+  integrations: {
+    a2uiPublisher?: A2uiPublisher;
+  } = {},
 ): ToolRegistry {
   const providers = config?.providers ?? DEFAULT_CONFIG.providers;
   const toolsConfig = config?.tools ?? DEFAULT_CONFIG.tools;
@@ -44,6 +48,11 @@ export function createBuiltinToolRegistry(
   registry.register(createBackgroundTaskTool());
   registry.register(createWaitTaskTool());
   registry.register(createListBackgroundTasksTool());
+  registry.register(
+    createPublishA2uiTool(
+      integrations.a2uiPublisher == null ? {} : { publisher: integrations.a2uiPublisher },
+    ),
+  );
   if (toolsConfig.web.search.enabled) {
     const providerId = toolsConfig.web.search.provider;
     const providerConfig = providerId == null ? null : (providers[providerId] ?? null);
