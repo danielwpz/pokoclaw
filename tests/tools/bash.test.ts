@@ -988,9 +988,10 @@ Use this exact bash argument object on the next retry if full access is warrante
     };
 
     for (const command of [
-      "git log --oneline -50 | head -n 5 && echo '--- status ---' && git status --short",
-      "git diff --stat | tail -n 20 && echo '--- branches ---' && git branch -vv | head -n 10",
+      "git log --oneline -50 | head --quiet -n 5 && echo '--- status ---' && git status --short",
+      "git diff --stat | tail -q -n 20 && echo '--- branches ---' && git branch -vv | head -n 10",
       "near view contract method '{}' | jq -r .result | head -n 20 && echo '--- repo ---' && git status --short",
+      "near view contract method '{}' | jq '.result[] | .name' | head -n 20",
       "git status --short && echo '--- recent ---' && git log --oneline -20 | tail -n 5 | wc -l",
     ]) {
       const result = await registry.execute("bash", context, {
@@ -1005,7 +1006,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       });
     }
 
-    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(4);
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(5);
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
   });
 
@@ -1034,6 +1035,9 @@ Use this exact bash argument object on the next retry if full access is warrante
       "git pull | head file.txt",
       "git pull | jq --rawfile k ~/.ssh/id_rsa .",
       "git pull | jq . file.json",
+      "git pull | jq 'env.TEST_JQ_SECRET'",
+      "git pull | jq 'import \"secrets\" as $s; .'",
+      "git pull | jq 'include \"secrets\"; .'",
       "git pull | tee out.txt",
       "git pull | xargs rm",
       "git pull && echo '---' > /tmp/marker",
