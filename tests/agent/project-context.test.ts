@@ -47,7 +47,7 @@ describe("agent project context", () => {
     expect(snapshot.prompt).toContain("Package Claude guidance");
   });
 
-  test("returns empty context when disabled or no git root is found", async () => {
+  test("returns empty context when disabled or no context files exist", async () => {
     const dir = await createTempDir("pokoclaw-project-context-miss-");
 
     expect(
@@ -69,6 +69,27 @@ describe("agent project context", () => {
         },
       }).entries,
     ).toEqual([]);
+  });
+
+  test("falls back to workdir context files when not inside a git repo", async () => {
+    // Covers non-code project layouts (Obsidian vaults, document-only folders)
+    // where CLAUDE.md / AGENTS.md sit beside the working files but no .git
+    // marker exists anywhere up the tree.
+    const workdir = await createTempDir("pokoclaw-project-context-nogit-");
+    await writeFile(path.join(workdir, "CLAUDE.md"), "Vault project rules", "utf8");
+    await writeFile(path.join(workdir, "AGENTS.md"), "Vault agent guidance", "utf8");
+
+    const snapshot = loadAgentProjectContext({
+      workdir,
+      config: DEFAULT_CONFIG.projectContext,
+    });
+
+    expect(snapshot.entries.map((entry) => [entry.source, path.basename(entry.path)])).toEqual([
+      ["workdir", "AGENTS.md"],
+      ["workdir", "CLAUDE.md"],
+    ]);
+    expect(snapshot.prompt).toContain("Vault project rules");
+    expect(snapshot.prompt).toContain("Vault agent guidance");
   });
 
   test("truncates large files with a clear head and tail marker", async () => {

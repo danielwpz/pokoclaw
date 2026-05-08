@@ -87,11 +87,11 @@ If the user wants web search or web fetch, also configure a Tavily provider plus
 
 ## Project context files
 
-Pokoclaw loads project guidance files for agent runs that have a workdir inside a git repository:
+Pokoclaw loads project guidance files for agent runs from the configured workdir:
 
-- `<repo_root>/AGENTS.md`
-- `<repo_root>/CLAUDE.md`
-- `<workdir>/CLAUDE.md` when the workdir is nested below the repo root
+- when the workdir is inside a git repository, configured files load from the repo root, such as `<repo_root>/AGENTS.md` and `<repo_root>/CLAUDE.md`
+- when the workdir is not inside a git repository, configured files load from the workdir itself, such as `<workdir>/AGENTS.md` and `<workdir>/CLAUDE.md`
+- `<workdir>/CLAUDE.md` also loads when the workdir is nested below the repo root
 
 These files are injected into the model system prompt as project-specific context. The default maximum is 8192 bytes per file, with a truncation marker when a file is larger.
 
