@@ -49,6 +49,20 @@ Treat these as expected skills.sh project state, not as install failure:
 
 Report these side effects in the final answer.
 
+## Provenance Rule
+
+If the final Pokoclaw target is managed directly by the same project-level skills.sh install, the matching entry in `<repo>/skills-lock.json` is acceptable provenance.
+
+If you copy or symlink a skills.sh-installed skill into another final target, especially `~/.pokoclaw/skills/<skill>`, also copy the matching `skills-lock.json` entry into the final skill directory as:
+
+```text
+<final-skill-dir>/.skills-sh/origin.json
+```
+
+Create the `.skills-sh/` directory if needed. The provenance file must be JSON and must include the raw matching lock entry plus enough wrapper fields to identify the skill name, source, source type, skill path when available, and computed hash when available.
+
+Reason: skills.sh stores source metadata in `skills-lock.json`. If the final target is separated from that lock file, the installed skill otherwise loses its update/source provenance.
+
 ## Pokoclaw Repo Warning
 
 If the current repo is Pokoclaw itself, do not commit a `skills/<skill>` symlink created by skills.sh.

@@ -31,7 +31,9 @@ The install is not complete until all checks pass:
 - `SKILL.md` frontmatter has non-empty `name` and `description`.
 - The actual skill identity is taken from `SKILL.md` frontmatter, not only from the store slug or display title.
 - Setup-relevant files were inspected but not executed.
-- Store provenance was preserved when available.
+- Store provenance was preserved when available:
+  - for global installs, provenance is stored inside the final skill directory;
+  - for project-local installs, provenance is either stored inside the final skill directory or in a project lock file that remains with the project.
 - Temporary install or staging files were cleaned up.
 - Any broader environment change was skipped unless the user approved it.
 
@@ -88,7 +90,11 @@ Reason: Pokoclaw currently reads its own global root and repo-local `.agents/ski
    - use only metadata you can verify from the store, repository, downloaded package, or installed files;
    - do not invent setup requirements, hooks, environment variables, or dependencies.
 
-3. Refuse to overwrite an existing target directory unless the user explicitly approves.
+3. If the target directory already exists, inspect it before modifying it:
+   - if it already passes the acceptance checks and matches the requested skill identity plus any source/version constraints, report that the skill is already installed;
+   - if it passes the acceptance checks but the source or version differs from the request, report the conflict and ask before replacing or updating it;
+   - if it is invalid or incomplete, report the failed checks and ask before replacing, updating, or merging it;
+   - do not overwrite an existing target directory unless the user explicitly approves.
 
 4. Install or materialize the skill into the selected Pokoclaw target:
    - use a verified channel-specific direct target option when one exists;
@@ -97,12 +103,13 @@ Reason: Pokoclaw currently reads its own global root and repo-local `.agents/ski
 
 5. Preserve provenance when available:
    - keep store metadata files such as `_meta.json`, `.clawhub/origin.json`, lock entries, or source metadata if they are part of the installed skill;
+   - if provenance exists only in an external lock or staging file and the final target will not include that file, write a per-skill provenance file inside the final skill directory;
    - do not copy unrelated store caches or registry state into the skill directory.
 
 6. Inspect after installation:
    - read `SKILL.md` frontmatter;
    - report the installed skill name, description, source, version if known, and final target path;
-   - list setup-relevant files such as `README.md`, `references/`, `scripts/`, `hooks/`, `assets/`, or setup scripts.
+   - run the setup inspection checklist below.
 
 7. Do not run setup scripts, enable hooks, edit shell profiles, install extra CLIs, or change broader environment state unless the user explicitly approves.
 
@@ -122,3 +129,28 @@ For an unverified store or installer:
 5. Record any verified channel behavior if the user is asking you to improve installer support.
 
 Do not rely on store branding, command names, or current working directory to infer where files landed. Verify the actual files.
+
+## Setup Inspection Checklist
+
+Inspect these files and paths when they exist in the installed skill. Do not execute them unless the user explicitly approves.
+
+- `README*`
+- `package.json`
+- `setup*`
+- `install*`
+- `hooks/`
+- `hook*`
+- `scripts/`
+- `references/`
+- `assets/`
+- `*.sh`
+- `*.js`
+- `*.ts`
+- `_meta*`
+- `metadata*`
+- `.clawhub/origin.json`
+- `.skills-sh/origin.json`
+- `.skillhub/origin.json`
+- store-specific lock or provenance files, including copied per-skill lock entries
+
+Reason: setup requirements and executable side effects are often documented in these files, and different stores package them differently.

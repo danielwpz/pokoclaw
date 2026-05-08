@@ -37,9 +37,11 @@ Reason: `--dir` is a top-level SkillHub option, not an `install` subcommand opti
 
 ## CLI Availability
 
-If `skillhub` is not installed, ask before installing the SkillHub CLI.
+If `skillhub` is not installed and the user did not already authorize CLI installation, ask before installing the SkillHub CLI.
 
-If the user pasted instructions that say to install SkillHub first, install only the CLI needed for this skill-store operation. Do not set SkillHub as a broader preferred source or change shell configuration unless the user explicitly approves.
+If the user explicitly authorized "install SkillHub if missing" or pasted instructions that say to install SkillHub first, do not ask again before installing the CLI. Install only the CLI needed for this skill-store operation.
+
+Do not set SkillHub as a broader preferred source, change shell configuration, or run extra initialization unless the user explicitly approves those broader changes.
 
 Reason: installing a CLI and changing the user's preferred source are broader environment changes.
 
