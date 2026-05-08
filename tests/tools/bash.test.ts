@@ -1038,6 +1038,8 @@ Use this exact bash argument object on the next retry if full access is warrante
       "git pull | jq 'env.TEST_JQ_SECRET'",
       "git pull | jq 'import \"secrets\" as $s; .'",
       "git pull | jq 'include \"secrets\"; .'",
+      "git pull | jq --arg home ~ .result",
+      "git pull | jq --indent ~ .result",
       "git pull | tee out.txt",
       "git pull | xargs rm",
       "git pull && echo '---' > /tmp/marker",
@@ -1046,6 +1048,8 @@ Use this exact bash argument object on the next retry if full access is warrante
       "git pull && echo *",
       "git pull && echo ~",
       "git pull && echo HOME=~",
+      "git pull && echo PATH=a:~",
+      "git pull && echo foo@(bar)",
       "git pull && echo {a,b}",
     ]) {
       await expect(

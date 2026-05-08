@@ -8,7 +8,14 @@ import {
 
 describe("classifyBashApprovalHelper", () => {
   test("allows echo helpers only for literal output markers", () => {
-    for (const command of ["echo", "echo foo", "echo '--- status ---'", "echo ==== done ===="]) {
+    for (const command of [
+      "echo",
+      "echo foo",
+      "echo '--- status ---'",
+      "echo ==== done ====",
+      "echo plain:~root",
+      "echo A-B=~",
+    ]) {
       expect(classifyOnlySegment(command)).toBe("standalone");
     }
   });
@@ -22,6 +29,11 @@ describe("classifyBashApprovalHelper", () => {
       "echo ~/workspace",
       "echo HOME=~",
       "echo X=~root",
+      "echo PATH=a:~",
+      "echo PATH=a:~root",
+      "echo foo@(bar)",
+      "echo foo!(bar)",
+      "echo foo+(bar)",
       "echo {a,b}",
     ]) {
       expect(classifyOnlySegment(command)).toBeNull();
@@ -56,8 +68,23 @@ describe("classifyBashApprovalHelper", () => {
       "git pull | jq '.result | length'",
       "git pull | jq '.result, .other'",
       "git pull | jq '.items[:]'",
+      "git pull | jq --arg home ~ .result",
+      "git pull | jq --arg key value .result",
+      "git pull | jq --argjson key 1 .result",
+      "git pull | jq --indent ~ .result",
+      "git pull | jq --indent 8 .result",
     ]) {
       expect(classifyLastSegment(command)).toBeNull();
+    }
+  });
+
+  test("allows jq formatting options that cannot read host context", () => {
+    for (const command of [
+      "near view contract method '{}' | jq --indent 0 .result",
+      "near view contract method '{}' | jq --indent 2 .result",
+      "near view contract method '{}' | jq --indent 7 .result",
+    ]) {
+      expect(classifyLastSegment(command)).toBe("pipeline");
     }
   });
 

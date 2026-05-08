@@ -31,10 +31,8 @@ const JQ_ALLOWED_FLAG_OPTIONS = new Set([
   "-a",
 ]);
 
-const JQ_ALLOWED_VALUE_OPTIONS = new Map<string, number>([
-  ["--arg", 2],
-  ["--argjson", 2],
-  ["--indent", 1],
+const JQ_ALLOWED_VALUE_OPTIONS = new Map<string, (values: string[]) => boolean>([
+  ["--indent", ([value]) => value != null && /^[0-7]$/.test(value)],
 ]);
 
 const WC_ALLOWED_LONG_OPTIONS = new Set([
@@ -184,9 +182,11 @@ function isStdinJq(segment: BashCommandSegment): boolean {
       return false;
     }
 
-    const valueOptionArity = JQ_ALLOWED_VALUE_OPTIONS.get(arg);
-    if (valueOptionArity != null) {
-      if (index + valueOptionArity >= segment.argv.length) {
+    const valueOptionValidator = JQ_ALLOWED_VALUE_OPTIONS.get(arg);
+    if (valueOptionValidator != null) {
+      const valueOptionArity = 1;
+      const values = segment.argv.slice(index + 1, index + 1 + valueOptionArity);
+      if (values.length !== valueOptionArity || !valueOptionValidator(values)) {
         return false;
       }
       index += valueOptionArity;
@@ -234,12 +234,25 @@ function isCountValue(value: string): boolean {
 }
 
 function isLiteralEchoArgument(arg: string): boolean {
-  return !(
-    arg.startsWith("~") ||
-    arg.includes("=~") ||
-    /[*?[\]{}]/.test(arg) ||
-    /^[!@+]\(/.test(arg)
-  );
+  return !hasBashTildeExpansion(arg) && !hasBashPatternExpansion(arg);
+}
+
+function hasBashTildeExpansion(arg: string): boolean {
+  if (arg.startsWith("~")) {
+    return true;
+  }
+
+  const assignmentMatch = arg.match(/^[A-Za-z_][A-Za-z0-9_]*=(.*)$/);
+  if (assignmentMatch == null) {
+    return false;
+  }
+
+  const value = assignmentMatch[1] ?? "";
+  return value.split(":").some((entry) => entry.startsWith("~"));
+}
+
+function hasBashPatternExpansion(arg: string): boolean {
+  return /[*?[\]{}]/.test(arg) || /[!@+]\(/.test(arg);
 }
 
 // jq helper mode intentionally accepts selectors, not jq programs. That keeps
