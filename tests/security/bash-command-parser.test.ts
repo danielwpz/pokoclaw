@@ -14,6 +14,9 @@ describe("parseConservativeBashCommandSequence", () => {
         {
           envAssignments: ["FOO=1", "BAR=two"],
           argv: ["python", "-m", "agent_browser_cli", "--url", "https://example.com"],
+          redirects: [],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
         },
       ],
     });
@@ -30,6 +33,9 @@ describe("parseConservativeBashCommandSequence", () => {
         {
           envAssignments: [],
           argv: ["python", "-m", "agent_browser_cli", "--url", "https://example.com"],
+          redirects: [],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
         },
       ],
     });
@@ -42,20 +48,29 @@ describe("parseConservativeBashCommandSequence", () => {
         {
           envAssignments: [],
           argv: ["npm", "test"],
+          redirects: [],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
         },
         {
           envAssignments: [],
           argv: ["echo", "done"],
+          redirects: [],
+          stdinFromPipe: false,
+          stdoutToPipe: true,
         },
         {
           envAssignments: [],
           argv: ["cat"],
+          redirects: [],
+          stdinFromPipe: true,
+          stdoutToPipe: false,
         },
       ],
     });
   });
 
-  test("accepts supported output redirections without changing argv extraction", () => {
+  test("accepts supported output redirections and preserves redirect metadata", () => {
     expect(
       parseConservativeBashCommandSequence(
         "agent-browser snapshot -s main > /tmp/browser.txt 2>&1",
@@ -66,6 +81,80 @@ describe("parseConservativeBashCommandSequence", () => {
         {
           envAssignments: [],
           argv: ["agent-browser", "snapshot", "-s", "main"],
+          redirects: [
+            { operator: ">", destination: "/tmp/browser.txt" },
+            { operator: ">&", destination: "1" },
+          ],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
+        },
+      ],
+    });
+  });
+
+  test("preserves pipe and redirection metadata for approval checks", () => {
+    expect(parseConservativeBashCommandSequence("git pull | tail -n 5")).toEqual({
+      kind: "compound",
+      commands: [
+        {
+          envAssignments: [],
+          argv: ["git", "pull"],
+          redirects: [],
+          stdinFromPipe: false,
+          stdoutToPipe: true,
+        },
+        {
+          envAssignments: [],
+          argv: ["tail", "-n", "5"],
+          redirects: [],
+          stdinFromPipe: true,
+          stdoutToPipe: false,
+        },
+      ],
+    });
+
+    expect(parseConservativeBashCommandSequence("echo '---' > /tmp/marker")).toEqual({
+      kind: "simple",
+      commands: [
+        {
+          envAssignments: [],
+          argv: ["echo", "---"],
+          redirects: [{ operator: ">", destination: "/tmp/marker" }],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
+        },
+      ],
+    });
+  });
+
+  test("conservatively attaches statement redirection to every command in a redirected list", () => {
+    expect(
+      parseConservativeBashCommandSequence(
+        "git status && echo '---' > /tmp/marker && git diff --stat",
+      ),
+    ).toEqual({
+      kind: "compound",
+      commands: [
+        {
+          envAssignments: [],
+          argv: ["git", "status"],
+          redirects: [{ operator: ">", destination: "/tmp/marker" }],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
+        },
+        {
+          envAssignments: [],
+          argv: ["echo", "---"],
+          redirects: [{ operator: ">", destination: "/tmp/marker" }],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
+        },
+        {
+          envAssignments: [],
+          argv: ["git", "diff", "--stat"],
+          redirects: [],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
         },
       ],
     });

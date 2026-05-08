@@ -15,6 +15,9 @@ describe("bash prefix normalization", () => {
     expect(parseSimpleBashCommand("FOO=1 BAR=2 npm run dev")).toEqual({
       envAssignments: ["FOO=1", "BAR=2"],
       argv: ["npm", "run", "dev"],
+      redirects: [],
+      stdinFromPipe: false,
+      stdoutToPipe: false,
     });
   });
 

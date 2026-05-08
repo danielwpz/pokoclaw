@@ -6,6 +6,7 @@ const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() =
 }));
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import type { ExecuteUnsandboxedBashInput } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
 import { createBashTool } from "@/src/tools/bash.js";
 import { type ToolFailure, toolRecoverableError } from "@/src/tools/core/errors.js";
@@ -816,7 +817,7 @@ Use this exact bash argument object on the next retry if full access is warrante
     expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
 
-  test("still requests approval for a git compound workflow when it includes an ungranted echo command", async () => {
+  test("allows a literal echo separator inside an otherwise approved compound workflow", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
     new SecurityService(handle.storage.db).grantScopes({
@@ -824,9 +825,250 @@ Use this exact bash argument object on the next retry if full access is warrante
       grantedBy: "user",
       scopes: [{ kind: "bash.full_access", prefix: ["git"] }],
     });
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command:
+        "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
 
     const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command:
+          "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+        sandboxMode: "full_access",
+        justification:
+          "Need to sync the branch, inspect status, and print a separator before branch output.",
+      },
+    );
 
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      command:
+        "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
+  test("allows stdin-only output helpers after an approved full-access command", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["git", "pull"] }],
+    });
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command: "git pull | tail -n 5 | wc -l",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "5\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "git pull | tail -n 5 | wc -l",
+        sandboxMode: "full_access",
+        justification: "Need to update the branch and inspect the summarized output.",
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      command: "git pull | tail -n 5 | wc -l",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
+  test("allows jq stdin filtering after an approved full-access command", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["near", "view"] }],
+    });
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command: "near view contract method '{}' | jq -r .result",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "near view contract method '{}' | jq -r .result",
+        sandboxMode: "full_access",
+        justification: "Need to query the contract and extract the result field.",
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      command: "near view contract method '{}' | jq -r .result",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
+  test("allows mixed approved commands and output helpers in realistic chained workflows", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [
+        { kind: "bash.full_access", prefix: ["git"] },
+        { kind: "bash.full_access", prefix: ["near", "view"] },
+      ],
+    });
+    executeUnsandboxedBashMock.mockImplementation(async (input: ExecuteUnsandboxedBashInput) => ({
+      command: input.command,
+      cwd: input.cwd ?? input.context.cwd ?? "/tmp/work",
+      timeoutMs: input.timeoutMs,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    }));
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const context = {
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      ownerAgentId: "agent_1",
+      cwd: "/tmp/work",
+      securityConfig: DEFAULT_CONFIG.security,
+      storage: handle.storage.db,
+    };
+
+    for (const command of [
+      "git log --oneline -50 | head -n 5 && echo '--- status ---' && git status --short",
+      "git diff --stat | tail -n 20 && echo '--- branches ---' && git branch -vv | head -n 10",
+      "near view contract method '{}' | jq -r .result | head -n 20 && echo '--- repo ---' && git status --short",
+      "git status --short && echo '--- recent ---' && git log --oneline -20 | tail -n 5 | wc -l",
+    ]) {
+      const result = await registry.execute("bash", context, {
+        command,
+        sandboxMode: "full_access",
+        justification: "Need to run the approved workflow and format the output.",
+      });
+      expect(result.details).toMatchObject({
+        command,
+        cwd: "/tmp/work",
+        exitCode: 0,
+      });
+    }
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(4);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("still requests approval when helper-shaped commands introduce file or execution capability", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["git", "pull"] }],
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const context = {
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      ownerAgentId: "agent_1",
+      cwd: "/tmp/work",
+      securityConfig: DEFAULT_CONFIG.security,
+      storage: handle.storage.db,
+    };
+
+    for (const command of [
+      "git pull | tail ~/.ssh/id_rsa",
+      "git pull | tail -f",
+      "git pull | head file.txt",
+      "git pull | jq --rawfile k ~/.ssh/id_rsa .",
+      "git pull | jq . file.json",
+      "git pull | tee out.txt",
+      "git pull | xargs rm",
+      "git pull && echo '---' > /tmp/marker",
+      "git pull && echo $TOKEN",
+      'git pull && echo "$(cat ~/.ssh/id_rsa)"',
+    ]) {
+      await expect(
+        registry.execute("bash", context, {
+          command,
+          sandboxMode: "full_access",
+          justification: "Need to run the requested compound workflow.",
+        }),
+      ).rejects.toMatchObject({
+        name: "ToolApprovalRequired",
+        grantOnApprove: false,
+        approvalTitle: "Approval required: run bash command with full access",
+        request: {
+          scopes: [{ kind: "bash.full_access", prefix: ["bash", "-lc"] }],
+        },
+      });
+    }
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("still requests approval when an unapproved command remains after helper allowance", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["git", "fetch"] }],
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
     await expect(
       registry.execute(
         "bash",
@@ -839,11 +1081,9 @@ Use this exact bash argument object on the next retry if full access is warrante
           storage: handle.storage.db,
         },
         {
-          command:
-            "git fetch --prune origin && git checkout main && git pull --ff-only origin main && git status --short && echo '---' && git branch -vv",
+          command: "git fetch --prune origin && echo '---' && git status --short",
           sandboxMode: "full_access",
-          justification:
-            "Need to sync the branch, inspect status, and print a separator before branch output.",
+          justification: "Need to fetch and inspect the repository state.",
         },
       ),
     ).rejects.toMatchObject({
@@ -854,6 +1094,85 @@ Use this exact bash argument object on the next retry if full access is warrante
         scopes: [{ kind: "bash.full_access", prefix: ["bash", "-lc"] }],
       },
     });
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("allows standalone literal echo helpers without an existing prefix grant", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeUnsandboxedBashMock.mockImplementation(async (input: ExecuteUnsandboxedBashInput) => ({
+      command: input.command,
+      cwd: input.cwd ?? input.context.cwd ?? "/tmp/work",
+      timeoutMs: input.timeoutMs,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    }));
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const context = {
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      ownerAgentId: "agent_1",
+      cwd: "/tmp/work",
+      securityConfig: DEFAULT_CONFIG.security,
+      storage: handle.storage.db,
+    };
+
+    for (const command of ["echo '---'", "echo foo && echo bar", "echo foo | tail -n 1"]) {
+      const result = await registry.execute("bash", context, {
+        command,
+        sandboxMode: "full_access",
+        justification: "Need to print literal output markers.",
+      });
+      expect(result.details).toMatchObject({
+        command,
+        cwd: "/tmp/work",
+        exitCode: 0,
+      });
+    }
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(3);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("does not allow stdin-only helpers by name without a pipeline input", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const context = {
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      ownerAgentId: "agent_1",
+      cwd: "/tmp/work",
+      securityConfig: DEFAULT_CONFIG.security,
+      storage: handle.storage.db,
+    };
+
+    for (const [command, prefix] of [
+      ["jq .result", ["jq", ".result"]],
+      ["tail -n 5", ["tail", "-n", "5"]],
+      ["head -n 5", ["head", "-n", "5"]],
+      ["wc -l", ["wc", "-l"]],
+    ] as const) {
+      await expect(
+        registry.execute("bash", context, {
+          command,
+          sandboxMode: "full_access",
+          justification: "Need to run the requested helper command.",
+        }),
+      ).rejects.toMatchObject({
+        name: "ToolApprovalRequired",
+        grantOnApprove: false,
+        approvalTitle: "Approval required: run bash command with full access",
+        request: {
+          scopes: [{ kind: "bash.full_access", prefix }],
+        },
+      });
+    }
 
     expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
