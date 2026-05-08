@@ -234,7 +234,12 @@ function isCountValue(value: string): boolean {
 }
 
 function isLiteralEchoArgument(arg: string): boolean {
-  return !(arg.startsWith("~") || /[*?[\]{}]/.test(arg) || /^[!@+]\(/.test(arg));
+  return !(
+    arg.startsWith("~") ||
+    arg.includes("=~") ||
+    /[*?[\]{}]/.test(arg) ||
+    /^[!@+]\(/.test(arg)
+  );
 }
 
 // jq helper mode intentionally accepts selectors, not jq programs. That keeps

@@ -1045,6 +1045,7 @@ Use this exact bash argument object on the next retry if full access is warrante
       'git pull && echo "$(cat ~/.ssh/id_rsa)"',
       "git pull && echo *",
       "git pull && echo ~",
+      "git pull && echo HOME=~",
       "git pull && echo {a,b}",
     ]) {
       await expect(

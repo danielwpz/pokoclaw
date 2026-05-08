@@ -20,6 +20,8 @@ describe("classifyBashApprovalHelper", () => {
       "echo [abc]",
       "echo ~",
       "echo ~/workspace",
+      "echo HOME=~",
+      "echo X=~root",
       "echo {a,b}",
     ]) {
       expect(classifyOnlySegment(command)).toBeNull();
