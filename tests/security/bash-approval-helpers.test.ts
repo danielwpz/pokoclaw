@@ -7,6 +7,25 @@ import {
 } from "@/src/security/bash-prefix.js";
 
 describe("classifyBashApprovalHelper", () => {
+  test("allows echo helpers only for literal output markers", () => {
+    for (const command of ["echo", "echo foo", "echo '--- status ---'", "echo ==== done ===="]) {
+      expect(classifyOnlySegment(command)).toBe("standalone");
+    }
+  });
+
+  test("rejects echo helpers with shell-expanded argument shapes", () => {
+    for (const command of [
+      "echo *",
+      "echo file?.txt",
+      "echo [abc]",
+      "echo ~",
+      "echo ~/workspace",
+      "echo {a,b}",
+    ]) {
+      expect(classifyOnlySegment(command)).toBeNull();
+    }
+  });
+
   test("allows jq stdin selectors that preserve the common JSON inspection workflow", () => {
     for (const command of [
       "near view contract method '{}' | jq .result",
@@ -56,6 +75,19 @@ describe("classifyBashApprovalHelper", () => {
 
 function classifyLastSegment(command: string) {
   return classifyBashApprovalHelper(lastSegment(command));
+}
+
+function classifyOnlySegment(command: string) {
+  const sequence = parseConservativeBashCommandSequence(command);
+  if (sequence == null) {
+    return null;
+  }
+
+  const segment = sequence?.commands[0];
+  if (sequence.commands.length !== 1 || segment == null) {
+    throw new Error(`Expected exactly one parsed command: ${command}`);
+  }
+  return classifyBashApprovalHelper(segment);
 }
 
 function lastSegment(command: string): BashCommandSegment {

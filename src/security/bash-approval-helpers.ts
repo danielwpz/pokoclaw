@@ -78,7 +78,7 @@ function hasExecutionContext(segment: BashCommandSegment): boolean {
 }
 
 function isLiteralEcho(segment: BashCommandSegment): boolean {
-  return segment.argv.length >= 1;
+  return segment.argv.slice(1).every(isLiteralEchoArgument);
 }
 
 function isStdinHeadOrTail(segment: BashCommandSegment): boolean {
@@ -231,6 +231,10 @@ function isAllowedJqShortFlagCluster(arg: string): boolean {
 
 function isCountValue(value: string): boolean {
   return /^\+?[0-9]+$/.test(value);
+}
+
+function isLiteralEchoArgument(arg: string): boolean {
+  return !(arg.startsWith("~") || /[*?[\]{}]/.test(arg) || /^[!@+]\(/.test(arg));
 }
 
 // jq helper mode intentionally accepts selectors, not jq programs. That keeps
