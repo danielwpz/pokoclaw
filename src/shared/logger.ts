@@ -207,6 +207,11 @@ export async function resetRuntimeLoggingForTests(): Promise<void> {
   await closeRuntimeLogStream();
 }
 
+export async function shutdownRuntimeLogging(): Promise<void> {
+  runtimeFileSinkEnabled = false;
+  await closeRuntimeLogStream();
+}
+
 export function createSubsystemLogger(subsystem: string): Logger {
   let logger =
     resolvedLoggingConfig == null

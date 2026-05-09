@@ -16,6 +16,7 @@ import {
   configureRuntimeLogging,
   createBootstrapLogger,
   createSubsystemLogger,
+  shutdownRuntimeLogging,
 } from "@/src/shared/logger.js";
 import { POKOCLAW_RUNTIME_LOG_PATH } from "@/src/shared/paths.js";
 import type { StorageDatabase } from "@/src/storage/index.js";
@@ -67,6 +68,7 @@ export async function main(): Promise<void> {
     storage.close();
     storage = null;
     logger.info("shutdown complete", { signal });
+    await shutdownRuntimeLogging();
   } finally {
     if (runtime != null) {
       try {
@@ -109,13 +111,19 @@ async function initializeSandboxRuntime(securityConfig: AppConfig["security"]): 
   });
 }
 
-main().catch((error: unknown) => {
-  const bootstrapLogger = createBootstrapLogger({ subsystem: "bootstrap" });
-  bootstrapLogger.error("startup failed", {
-    error: error instanceof Error ? error.message : String(error),
+main()
+  .then(() => {
+    // The Lark SDK keeps an internal cache interval alive after WSClient.close().
+    process.exit(0);
+  })
+  .catch(async (error: unknown) => {
+    const bootstrapLogger = createBootstrapLogger({ subsystem: "bootstrap" });
+    bootstrapLogger.error("startup failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await shutdownRuntimeLogging().catch(() => {});
+    process.exit(1);
   });
-  process.exitCode = 1;
-});
 
 function waitForShutdownSignal(): Promise<NodeJS.Signals> {
   return new Promise((resolve) => {
