@@ -1,6 +1,8 @@
 import { type Static, Type } from "@sinclair/typebox";
 
+import { classifyBashApprovalHelper } from "@/src/security/bash-approval-helpers.js";
 import {
+  type BashCommandSegment,
   bashPrefixMatchesCommand,
   normalizeBashCommandPrefix,
   type ParsedBashCommandSequence,
@@ -230,16 +232,15 @@ async function executeBashWithFullAccessIfAllowed(input: {
   }
 
   if (input.parsedCommandSequence != null) {
-    const hasFullAccess = input.parsedCommandSequence.commands.every((command) => {
-      const access = input.security.checkBashFullAccess({
+    const segmentApprovals = input.parsedCommandSequence.commands.map((command) =>
+      classifyBashFullAccessSegment({
+        context: input.context,
         ownerAgentId,
-        commandPrefix: command.argv,
-        ...(input.context.approvalState?.ephemeralPermissionScopes == null
-          ? {}
-          : { ephemeralScopes: input.context.approvalState.ephemeralPermissionScopes }),
-      });
-      return access.result === "allow";
-    });
+        security: input.security,
+        command,
+      }),
+    );
+    const hasFullAccess = segmentApprovals.every((approval) => approval !== "denied");
     if (hasFullAccess) {
       return await executeUnsandboxedBash({
         context: input.context,
@@ -275,6 +276,40 @@ async function executeBashWithFullAccessIfAllowed(input: {
         }
       : {}),
   });
+}
+
+type BashFullAccessSegmentApproval =
+  | "approved"
+  | "standalone_helper"
+  | "pipeline_helper"
+  | "denied";
+
+function classifyBashFullAccessSegment(input: {
+  context: ToolExecutionContext;
+  ownerAgentId: string;
+  security: SecurityService;
+  command: BashCommandSegment;
+}): BashFullAccessSegmentApproval {
+  const access = input.security.checkBashFullAccess({
+    ownerAgentId: input.ownerAgentId,
+    commandPrefix: input.command.argv,
+    ...(input.context.approvalState?.ephemeralPermissionScopes == null
+      ? {}
+      : { ephemeralScopes: input.context.approvalState.ephemeralPermissionScopes }),
+  });
+  if (access.result === "allow") {
+    return "approved";
+  }
+
+  const helperKind = classifyBashApprovalHelper(input.command);
+  if (helperKind === "standalone") {
+    return "standalone_helper";
+  }
+  if (helperKind === "pipeline") {
+    return "pipeline_helper";
+  }
+
+  return "denied";
 }
 
 function detectUnsupportedBackgroundSyntax(command: string): string | null {

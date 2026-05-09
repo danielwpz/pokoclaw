@@ -18,9 +18,20 @@ export interface SimpleBashCommand {
   argv: string[];
 }
 
+export interface BashCommandRedirect {
+  operator: string;
+  destination: string;
+}
+
+export interface BashCommandSegment extends SimpleBashCommand {
+  redirects: BashCommandRedirect[];
+  stdinFromPipe: boolean;
+  stdoutToPipe: boolean;
+}
+
 export interface ParsedBashCommandSequence {
   kind: "simple" | "compound";
-  commands: SimpleBashCommand[];
+  commands: BashCommandSegment[];
 }
 
 type BashParserState =
@@ -52,7 +63,11 @@ export function parseConservativeBashCommandSequence(
     }
 
     try {
-      const commands = extractCommandSequence(tree.rootNode);
+      const commands = extractCommandSequence(tree.rootNode, {
+        inheritedRedirects: [],
+        stdinFromPipe: false,
+        stdoutToPipe: false,
+      });
       if (commands == null || commands.length === 0) {
         return null;
       }
@@ -75,7 +90,7 @@ export function parseConservativeBashCommandSequence(
   }
 }
 
-export function parseSimpleBashCommand(command: string): SimpleBashCommand | null {
+export function parseSimpleBashCommand(command: string): BashCommandSegment | null {
   const parsed = parseConservativeBashCommandSequence(command);
   if (parsed?.kind !== "simple") {
     return null;
@@ -129,14 +144,34 @@ async function initializeBashParserState(): Promise<BashParserState> {
   }
 }
 
-function extractCommandSequence(node: Node): SimpleBashCommand[] | null {
+interface BashCommandExtractContext {
+  inheritedRedirects: BashCommandRedirect[];
+  stdinFromPipe: boolean;
+  stdoutToPipe: boolean;
+}
+
+function extractCommandSequence(
+  node: Node,
+  context: BashCommandExtractContext,
+): BashCommandSegment[] | null {
   switch (node.type) {
     case "program":
-    case "list":
+    case "list": {
+      return extractFlatCommandSequence(node.namedChildren, context);
+    }
     case "pipeline": {
-      const commands: SimpleBashCommand[] = [];
-      for (const child of node.namedChildren) {
-        const extracted = extractCommandSequence(child);
+      const commands: BashCommandSegment[] = [];
+      const children = node.namedChildren;
+      for (let index = 0; index < children.length; index += 1) {
+        const child = children[index];
+        if (child == null) {
+          return null;
+        }
+        const extracted = extractCommandSequence(child, {
+          ...context,
+          stdinFromPipe: context.stdinFromPipe || index > 0,
+          stdoutToPipe: context.stdoutToPipe || index < children.length - 1,
+        });
         if (extracted == null) {
           return null;
         }
@@ -145,15 +180,39 @@ function extractCommandSequence(node: Node): SimpleBashCommand[] | null {
       return commands;
     }
     case "redirected_statement": {
-      return extractRedirectedStatement(node);
+      return extractRedirectedStatement(node, context);
     }
     case "command": {
       const command = extractPlainCommand(node);
-      return command == null ? null : [command];
+      return command == null
+        ? null
+        : [
+            {
+              ...command,
+              redirects: [...context.inheritedRedirects],
+              stdinFromPipe: context.stdinFromPipe,
+              stdoutToPipe: context.stdoutToPipe,
+            },
+          ];
     }
     default:
       return null;
   }
+}
+
+function extractFlatCommandSequence(
+  nodes: readonly Node[],
+  context: BashCommandExtractContext,
+): BashCommandSegment[] | null {
+  const commands: BashCommandSegment[] = [];
+  for (const child of nodes) {
+    const extracted = extractCommandSequence(child, context);
+    if (extracted == null) {
+      return null;
+    }
+    commands.push(...extracted);
+  }
+  return commands;
 }
 
 function extractPlainCommand(node: Node): SimpleBashCommand | null {
@@ -197,24 +256,33 @@ function extractPlainCommand(node: Node): SimpleBashCommand | null {
   };
 }
 
-function extractRedirectedStatement(node: Node): SimpleBashCommand[] | null {
+function extractRedirectedStatement(
+  node: Node,
+  context: BashCommandExtractContext,
+): BashCommandSegment[] | null {
   const body = node.childForFieldName("body");
   if (body == null) {
     return null;
   }
 
-  const redirects = node.childrenForFieldName("redirect");
+  const redirects = node.namedChildren.filter((child) => child.type === "file_redirect");
   if (redirects.length === 0) {
     return null;
   }
 
+  const parsedRedirects: BashCommandRedirect[] = [];
   for (const redirect of redirects) {
-    if (!isSupportedOutputRedirect(redirect)) {
+    const parsedRedirect = extractSupportedOutputRedirect(redirect);
+    if (parsedRedirect == null) {
       return null;
     }
+    parsedRedirects.push(parsedRedirect);
   }
 
-  return extractCommandSequence(body);
+  return extractCommandSequence(body, {
+    ...context,
+    inheritedRedirects: [...context.inheritedRedirects, ...parsedRedirects],
+  });
 }
 
 function extractVariableAssignment(node: Node): string | null {
@@ -284,14 +352,14 @@ function extractStringLiteral(node: Node): string | null {
   return node.namedChildren.map((child) => child.text).join("");
 }
 
-function isSupportedOutputRedirect(node: Node): boolean {
+function extractSupportedOutputRedirect(node: Node): BashCommandRedirect | null {
   if (node.type !== "file_redirect") {
-    return false;
+    return null;
   }
 
   const operator = readRedirectOperator(node);
   if (operator == null) {
-    return false;
+    return null;
   }
 
   switch (operator) {
@@ -299,12 +367,14 @@ function isSupportedOutputRedirect(node: Node): boolean {
     case ">>":
     case ">|":
     case "&>":
-    case "&>>":
-      return hasLiteralRedirectDestination(node);
+    case "&>>": {
+      const destination = readLiteralRedirectDestination(node);
+      return destination == null ? null : { operator, destination };
+    }
     case ">&":
-      return isFileDescriptorDuplication(node);
+      return readFileDescriptorDuplicationDestination(node, operator);
     default:
-      return false;
+      return null;
   }
 }
 
@@ -321,22 +391,41 @@ function readRedirectOperator(node: Node): string | null {
   return null;
 }
 
-function hasLiteralRedirectDestination(node: Node): boolean {
-  const destination = node.childrenForFieldName("destination");
+function readLiteralRedirectDestination(node: Node): string | null {
+  const destination = readRedirectDestinationNodes(node);
   if (destination.length === 0) {
-    return false;
+    return null;
   }
 
-  return destination.every((entry) => extractLiteralWord(entry) != null);
+  const literalDestinations = destination.map((entry) => extractLiteralWord(entry));
+  if (literalDestinations.some((entry) => entry == null)) {
+    return null;
+  }
+
+  return literalDestinations.join(" ");
 }
 
-function isFileDescriptorDuplication(node: Node): boolean {
-  const destination = node.childrenForFieldName("destination");
+function readFileDescriptorDuplicationDestination(
+  node: Node,
+  operator: string,
+): BashCommandRedirect | null {
+  const destination = readRedirectDestinationNodes(node);
   if (destination.length !== 1) {
-    return false;
+    return null;
   }
 
-  return destination[0]?.type === "number";
+  const [entry] = destination;
+  return entry?.type === "number" ? { operator, destination: entry.text } : null;
+}
+
+function readRedirectDestinationNodes(node: Node): Node[] {
+  const destination = node.childrenForFieldName("destination");
+  if (destination.length > 0) {
+    return destination;
+  }
+
+  const lastNamedChild = node.namedChildren.at(-1);
+  return lastNamedChild == null ? [] : [lastNamedChild];
 }
 
 function containsUnsupportedExpansion(node: Node): boolean {
