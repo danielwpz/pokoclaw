@@ -170,13 +170,24 @@ In **Event Subscription**:
 
 Do not guide the user into webhook mode for normal onboarding.
 
-### 3C-8. Publish the app
+### 3C-8. Configure callback subscription
+
+In **Event Subscription**, switch from **Event Configuration** to **Callback Configuration**:
+
+1. Choose **Use long connection to receive callbacks**.
+2. Click **Add callback**.
+3. Select the **Card** category.
+4. Enable **Card action interaction**.
+
+This callback is required for interactive cards. It is the source of the `card.action.trigger` callback key used by Pokoclaw.
+
+### 3C-9. Publish the app
 
 1. Create a version in **Version Management & Release**.
 2. Submit for review and publish.
 3. Wait for approval if the tenant requires it.
 
-### 3C-9. Configure Pokoclaw
+### 3C-10. Configure Pokoclaw
 
 This is a required part of runnable onboarding, not an optional integration step.
 
@@ -199,7 +210,7 @@ appSecret = "paste-your-feishu-or-lark-app-secret-here"
 
 Only write the real App Secret into a file if the user explicitly asks you to do that.
 
-### 3C-10. Start Pokoclaw
+### 3C-11. Start Pokoclaw
 
 Run:
 
@@ -212,6 +223,6 @@ pnpm start
 
 Pokoclaw does not yet provide a built-in background service or automatic restart path in this setup flow, so `pnpm start` is the normal launch path.
 
-### 3C-11. Return to normal onboarding
+### 3C-12. Return to normal onboarding
 
 Once Pokoclaw has started successfully, continue with `docs/onboarding.md`, Phase 4: Validation and first run.
