@@ -3,6 +3,7 @@ design-docs/
 
 # dependencies
 node_modules/
+.pnpm-store/
 
 # build output
 dist/

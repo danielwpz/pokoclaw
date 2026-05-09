@@ -38,6 +38,11 @@
     "test": "vitest run --passWithNoTests",
     "test:integration": "vitest run --passWithNoTests --config vitest.integration.config.ts",
     "test:integration:llm": "vitest run --config vitest.integration.config.ts tests/integration/llm",
+    "linux:docker": "scripts/linux-docker.sh",
+    "linux:preflight": "scripts/linux-docker.sh preflight",
+    "linux:preflight:local-sandbox": "scripts/linux-docker.sh preflight:local-sandbox",
+    "linux:shell": "scripts/linux-docker.sh shell",
+    "linux:shell:local-sandbox": "scripts/linux-docker.sh shell:local-sandbox",
     "preflight": "pnpm build && pnpm format && pnpm lint && pnpm test",
     "prepare": "husky"
   },
@@ -58,7 +63,7 @@
     "vitest": "^4.1.0"
   },
   "dependencies": {
-    "@danielwpz/sandbox-runtime": "0.0.43-pokeclaw.2",
+    "@danielwpz/sandbox-runtime": "0.0.43-pokeclaw.3",
     "@larksuiteoapi/node-sdk": "^1.60.0",
     "@mariozechner/pi-agent-core": "0.70.2",
     "@mariozechner/pi-ai": "0.70.2",
