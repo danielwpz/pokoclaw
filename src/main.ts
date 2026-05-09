@@ -5,9 +5,13 @@
  * start runtime bootstrap, listen for shutdown signals, and perform graceful
  * teardown. Business logic lives in runtime/orchestration/channel modules.
  */
+import { SandboxManager } from "@danielwpz/sandbox-runtime";
+
 import { getDefaultConfigPaths, loadConfig } from "@/src/config/load.js";
+import type { AppConfig } from "@/src/config/schema.js";
 import { createRuntimeBootstrap } from "@/src/runtime/bootstrap.js";
 import { readLastRuntimeLogTimestamp } from "@/src/runtime/runtime-log.js";
+import { buildSystemPolicy } from "@/src/security/policy.js";
 import {
   configureRuntimeLogging,
   createBootstrapLogger,
@@ -25,6 +29,7 @@ export async function main(): Promise<void> {
 
   let storage: StorageDatabase | null = null;
   let runtime: ReturnType<typeof createRuntimeBootstrap> | null = null;
+  let sandboxRuntimeInitialized = false;
 
   try {
     const configPaths = getDefaultConfigPaths();
@@ -35,6 +40,9 @@ export async function main(): Promise<void> {
       providers: Object.keys(config.providers).length,
       models: config.models.catalog.length,
     });
+
+    await initializeSandboxRuntime(config.security);
+    sandboxRuntimeInitialized = true;
 
     storage = await initializeStorageOnStartup();
     runtime = createRuntimeBootstrap({
@@ -52,6 +60,10 @@ export async function main(): Promise<void> {
 
     await runtime.shutdown();
     runtime = null;
+    if (sandboxRuntimeInitialized) {
+      await SandboxManager.reset();
+      sandboxRuntimeInitialized = false;
+    }
     storage.close();
     storage = null;
     logger.info("shutdown complete", { signal });
@@ -62,12 +74,39 @@ export async function main(): Promise<void> {
       } catch {}
     }
 
+    if (sandboxRuntimeInitialized) {
+      try {
+        await SandboxManager.reset();
+      } catch {}
+    }
+
     if (storage != null) {
       try {
         storage.close();
       } catch {}
     }
   }
+}
+
+async function initializeSandboxRuntime(securityConfig: AppConfig["security"]): Promise<void> {
+  const systemPolicy = buildSystemPolicy({ security: securityConfig });
+  await SandboxManager.initialize({
+    filesystem: {
+      readMode: "deny_only",
+      denyRead: [],
+      allowRead: [],
+      allowWrite: [],
+      denyWrite: [],
+    },
+    network: {
+      mode: "deny_only",
+      allowedDomains: [],
+      deniedDomains: systemPolicy.network.hardDenyHosts,
+    },
+  });
+  logger.info("sandbox runtime initialized", {
+    networkHardDenyHosts: systemPolicy.network.hardDenyHosts.length,
+  });
 }
 
 main().catch((error: unknown) => {

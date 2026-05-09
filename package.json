@@ -27,7 +27,8 @@
   "packageManager": "pnpm@10.15.0",
   "scripts": {
     "dev": "tsx watch src/main.ts",
-    "start": "tsx src/main.ts",
+    "start": "pnpm run doctor && tsx src/main.ts",
+    "doctor": "bash scripts/doctor.sh",
     "meditation:backtest": "tsx src/script/meditation-backtest.ts",
     "meditation:episode-study": "tsx src/script/meditation-episode-study.ts",
     "skills:sync-a2ui": "tsx src/script/sync-a2ui-builtin-skill.ts",

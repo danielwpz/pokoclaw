@@ -61,13 +61,67 @@ Use the repo's declared tooling:
 
 The repo currently declares `pnpm@10.15.0`.
 
-### 3. Install dependencies
+### 3. Run the host doctor
+
+Run the host doctor before installing or starting Pokoclaw:
+
+```bash
+pnpm doctor
+```
+
+If `pnpm` is not ready yet but the repo files are present, run the script directly:
+
+```bash
+scripts/doctor.sh
+```
+
+The doctor is a lightweight, no-side-effect host check. It prints diagnostics and repair suggestions, but it must not install packages, change file permissions, or modify system security settings by itself.
+
+Current checks:
+
+- common host checks:
+  - Node.js 20+
+  - `pnpm`
+  - `rg` from `ripgrep`
+- macOS:
+  - common checks only for now
+- Linux:
+  - common checks
+  - `bwrap` from the `bubblewrap` package, used by sandboxed bash
+  - `socat`, used by sandbox-runtime Linux networking
+  - bubblewrap filesystem smoke
+  - bubblewrap network namespace smoke
+- Windows and WSL:
+  - currently unsupported; the doctor exits with a clear message and points contributors to the GitHub repository
+
+Required Linux host capability:
+
+- `bwrap` must be able to create the namespaces Pokoclaw needs. This usually means either unprivileged user namespaces are allowed, or the `bwrap` binary is configured setuid root. Merely having `/usr/bin/bwrap` on disk is not enough.
+
+Do not install unrelated convenience tools such as `zsh` during onboarding. Keep the Linux host close to a normal user/server environment so later compatibility failures remain reproducible.
+
+On Debian or Ubuntu, if the doctor reports missing Linux dependencies, ask the user before installing and use:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y bubblewrap socat ripgrep
+```
+
+On some Ubuntu 24.04 servers, making `bwrap` setuid is required for these smoke checks to pass:
+
+```bash
+sudo chmod u+s "$(command -v bwrap)"
+```
+
+Only run that with explicit user approval, then rerun both smoke checks. If the user's organization has a stricter security policy, follow their approved `bubblewrap` / user namespace setup instead.
+
+### 4. Install dependencies
 
 ```bash
 pnpm install
 ```
 
-### 4. Run an early environment check
+### 5. Run an early environment check
 
 ```bash
 pnpm build
@@ -75,7 +129,7 @@ pnpm build
 
 Use this as a repo and toolchain check after install. It is useful early, but it does not validate the user's runtime config yet.
 
-### 5. Know the main commands
+### 6. Know the main commands
 
 ```bash
 pnpm build
@@ -208,7 +262,7 @@ After LLM config and Feishu/Lark config both exist, and the user has filled any 
 pnpm start
 ```
 
-This is the final onboarding check because startup loads config from `~/.pokoclaw/system/`.
+`pnpm start` runs the host doctor first, then starts the app. This is the final onboarding check because startup loads config from `~/.pokoclaw/system/`.
 
 ### 2. Use broader repo checks when useful
 
@@ -232,6 +286,12 @@ Check these first:
 - inconsistent provider or model IDs
 - a provider with no usable model mapping
 - an empty scenario list for a setup that is supposed to be runnable
+- on Linux, sandbox setup failures:
+  - missing `bwrap`, `socat`, or `rg`
+  - bubblewrap namespace or setuid failures from Phase 1
+  - sandboxed bash network/DNS failures such as `curl` exit code 6 or `Could not resolve host`
+
+For Linux sandbox failures, do not install unrelated packages or change shells. Re-run the Phase 1 Linux host checks first, then inspect Pokoclaw startup logs and sandbox-runtime initialization if host checks pass.
 
 When something is unclear, explain the gap and ask the user for a decision instead of guessing.
 

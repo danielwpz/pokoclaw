@@ -13,6 +13,7 @@ RUN apt-get -o Acquire::Retries=5 update \
     procps \
     python3 \
     ripgrep \
+    socat \
   && rm -rf /var/lib/apt/lists/* \
   && chmod u+s /usr/bin/bwrap
 
