@@ -1514,12 +1514,13 @@ export class AgentLoop {
           input.toolCall.args,
         );
 
+        const nextRunApprovalState = buildSubsequentToolCallApprovalState(approvalState);
         return {
           result,
           isError: false,
           queuedSteer,
           stopRemainingToolBatch: false,
-          ...(approvalState == null ? {} : { approvalState }),
+          ...(nextRunApprovalState == null ? {} : { approvalState: nextRunApprovalState }),
         };
       } catch (error) {
         if (!isToolApprovalRequired(error)) {
@@ -1605,6 +1606,7 @@ export class AgentLoop {
           decidedAt: approval.decidedAt,
         });
 
+        const nextRunApprovalState = buildSubsequentToolCallApprovalState(approvalState);
         return {
           result:
             input.toolCall.name === "request_permissions"
@@ -1642,7 +1644,7 @@ export class AgentLoop {
           isError: true,
           queuedSteer: [...queuedSteer, ...approval.queuedSteer],
           stopRemainingToolBatch: approval.actor === "user:intervention",
-          ...(approvalState == null ? {} : { approvalState }),
+          ...(nextRunApprovalState == null ? {} : { approvalState: nextRunApprovalState }),
         };
       }
     }
@@ -1672,6 +1674,7 @@ export class AgentLoop {
         toolName: input.input.toolCall.name,
         runId: input.input.runId,
       });
+      const approvalState = buildSubsequentToolCallApprovalState(input.approvalState);
       return {
         result: textToolResult(
           renderPermissionRequestResultBlock({
@@ -1686,7 +1689,7 @@ export class AgentLoop {
         isError: false,
         queuedSteer: input.queuedSteer,
         stopRemainingToolBatch: false,
-        ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
+        ...(approvalState == null ? {} : { approvalState }),
       };
     }
 
@@ -1698,6 +1701,7 @@ export class AgentLoop {
         retryToolCallId: input.retryToolCallId,
         runId: input.input.runId,
       });
+      const approvalState = buildSubsequentToolCallApprovalState(input.approvalState);
       return {
         result: textToolResult(
           `${renderPermissionRequestResultBlock({
@@ -1713,7 +1717,7 @@ export class AgentLoop {
         isError: true,
         queuedSteer: input.queuedSteer,
         stopRemainingToolBatch: false,
-        ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
+        ...(approvalState == null ? {} : { approvalState }),
       };
     }
 
@@ -1755,6 +1759,7 @@ export class AgentLoop {
         runId: input.input.runId,
       });
 
+      const approvalState = buildSubsequentToolCallApprovalState(input.approvalState);
       return {
         result: {
           content: [
@@ -1778,7 +1783,7 @@ export class AgentLoop {
         isError: false,
         queuedSteer: input.queuedSteer,
         stopRemainingToolBatch: false,
-        ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
+        ...(approvalState == null ? {} : { approvalState }),
       };
     } catch (error) {
       const failure = normalizeToolFailure(error);
@@ -1795,6 +1800,7 @@ export class AgentLoop {
         runId: input.input.runId,
       });
 
+      const approvalState = buildSubsequentToolCallApprovalState(input.approvalState);
       return {
         result: {
           content: [
@@ -1826,7 +1832,7 @@ export class AgentLoop {
         isError: true,
         queuedSteer: input.queuedSteer,
         stopRemainingToolBatch: false,
-        ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
+        ...(approvalState == null ? {} : { approvalState }),
       };
     }
   }
@@ -2259,6 +2265,23 @@ function collectAgentToolCalls(content: AgentAssistantContentBlock[]): AgentTool
         ]
       : [],
   );
+}
+
+function buildSubsequentToolCallApprovalState(
+  state: ToolExecutionApprovalState | undefined,
+): ToolExecutionApprovalState | undefined {
+  if (state == null) {
+    return undefined;
+  }
+
+  return {
+    ...(state.runtimeModeAutoApproval == null
+      ? {}
+      : { runtimeModeAutoApproval: state.runtimeModeAutoApproval }),
+    ...(state.ephemeralPermissionScopes == null
+      ? {}
+      : { ephemeralPermissionScopes: state.ephemeralPermissionScopes }),
+  };
 }
 
 function findAssistantToolCallById(messages: Message[], toolCallId: string): AgentToolCall | null {

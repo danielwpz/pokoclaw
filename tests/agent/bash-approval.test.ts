@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() => ({
@@ -12,11 +13,13 @@ import { AgentSessionService } from "@/src/agent/session.js";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
+import type { ExecuteUnsandboxedBashInput } from "@/src/security/sandbox.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { createBashTool } from "@/src/tools/bash.js";
 import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { defineTool, textToolResult } from "@/src/tools/core/types.js";
 import {
   createTestDatabase,
   destroyTestDatabase,
@@ -113,6 +116,26 @@ async function waitForApprovalRequested(
 
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+async function waitForApprovalRequestCount(
+  events: Array<{ type: string; approvalId?: string }>,
+  count: number,
+): Promise<string[]> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const approvalIds = events
+      .filter((event) => event.type === "approval_requested")
+      .map((event) => event.approvalId)
+      .filter((approvalId): approvalId is string => approvalId != null);
+    if (approvalIds.length >= count) {
+      return approvalIds;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  throw new Error(`Timed out waiting for ${count} approval request(s)`);
 }
 
 describe("agent loop bash approval flow", () => {
@@ -305,5 +328,247 @@ describe("agent loop bash approval flow", () => {
         },
       ]),
     });
+  });
+
+  test("clears one-shot bash approval before subsequent tool calls", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"open and wait"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "bash",
+                arguments: {
+                  command: "agent-browser open https://example.com",
+                  sandboxMode: "full_access",
+                  justification: "Open the page for inspection.",
+                },
+              },
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "bash",
+                arguments: {
+                  command: "agent-browser wait 5000",
+                  sandboxMode: "full_access",
+                  justification: "Wait for the page to finish loading.",
+                },
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    executeUnsandboxedBashMock.mockImplementation(async (input: ExecuteUnsandboxedBashInput) => ({
+      command: input.command,
+      cwd: input.cwd,
+      timeoutMs: input.timeoutMs,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    }));
+
+    const tools = new ToolRegistry([createBashTool()]);
+    const emittedEvents: Array<{ type: string; approvalId?: string; decision?: string }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    const firstApprovalId = Number((await waitForApprovalRequestCount(emittedEvents, 1))[0]);
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId: firstApprovalId,
+        decision: "approve",
+        actor: "user",
+        rawInput: "approve",
+        grantedBy: "user",
+        expiresAt: null,
+      }),
+    ).toBe(true);
+
+    const secondApprovalId = Number((await waitForApprovalRequestCount(emittedEvents, 2))[1]);
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId: secondApprovalId,
+        decision: "approve",
+        actor: "user",
+        rawInput: "approve",
+        grantedBy: "user",
+        expiresAt: null,
+      }),
+    ).toBe(true);
+
+    await runPromise;
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(2);
+    expect(executeUnsandboxedBashMock.mock.calls.map((call) => call[0].command)).toEqual([
+      "agent-browser open https://example.com",
+      "agent-browser wait 5000",
+    ]);
+    expect(emittedEvents.filter((event) => event.type === "approval_requested")).toHaveLength(2);
+  });
+
+  test("does not expose consumed one-shot bash approval to the following tool", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"open then inspect"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "bash",
+                arguments: {
+                  command: "agent-browser open https://example.com",
+                  sandboxMode: "full_access",
+                  justification: "Open the page for inspection.",
+                },
+              },
+              {
+                type: "toolCall",
+                id: "tool_2",
+                name: "inspect_approval_state",
+                arguments: {},
+              },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    executeUnsandboxedBashMock.mockResolvedValueOnce({
+      command: "agent-browser open https://example.com",
+      cwd: "/tmp",
+      timeoutMs: 10_000,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    let followingToolSawOneShotApproval = false;
+    const tools = new ToolRegistry([
+      createBashTool(),
+      defineTool({
+        name: "inspect_approval_state",
+        description: "Inspects approval state propagation",
+        inputSchema: Type.Object({}, { additionalProperties: false }),
+        execute(context) {
+          followingToolSawOneShotApproval =
+            context.approvalState?.bashFullAccess?.approved === true;
+          return textToolResult("ok");
+        },
+      }),
+    ]);
+    const emittedEvents: Array<{ type: string; approvalId?: string; decision?: string }> = [];
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      emitEvent(event) {
+        emittedEvents.push(event);
+      },
+    });
+
+    const runPromise = loop.run({ sessionId: "sess_1", scenario: "chat" });
+    const approvalId = Number((await waitForApprovalRequestCount(emittedEvents, 1))[0]);
+
+    expect(
+      loop.submitApprovalResponse({
+        approvalId,
+        decision: "approve",
+        actor: "user",
+        rawInput: "approve",
+        grantedBy: "user",
+        expiresAt: null,
+      }),
+    ).toBe(true);
+
+    await runPromise;
+
+    expect(followingToolSawOneShotApproval).toBe(false);
   });
 });

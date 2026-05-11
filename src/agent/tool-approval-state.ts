@@ -42,6 +42,9 @@ export function buildApprovedToolExecutionState(input: {
       approved: true,
       mode: "one_shot",
       approvalId: input.approvalId,
+      ...(input.baseState?.bashFullAccess?.toolCallId == null
+        ? {}
+        : { toolCallId: input.baseState.bashFullAccess.toolCallId }),
     };
   }
 
