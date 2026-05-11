@@ -53,7 +53,7 @@ export async function main(): Promise<void> {
       configPaths,
     });
 
-    runtime.start();
+    await runtime.start();
     logger.info("startup complete");
 
     const signal = await waitForShutdownSignal();

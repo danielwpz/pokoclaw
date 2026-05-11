@@ -496,7 +496,7 @@ function parseMcpToolName(toolName: string): { serverName: string; toolName: str
   }
 
   const body = toolName.slice(prefix.length);
-  const separatorIndex = body.indexOf("__");
+  const separatorIndex = body.lastIndexOf("__");
   if (separatorIndex <= 0 || separatorIndex >= body.length - 2) {
     return null;
   }

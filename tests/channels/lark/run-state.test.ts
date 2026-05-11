@@ -1245,6 +1245,35 @@ describe("lark run state", () => {
     expect(cardText).toContain('\\"query\\": \\"MCP\\"');
   });
 
+  test("renders MCP tool calls by splitting server and tool on the last delimiter", () => {
+    const state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_mcp_delimiter_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_mcp_delimiter_1",
+        toolName: "mcp__team__alpha__search_records",
+        args: {
+          query: "MCP",
+        },
+      }),
+    );
+
+    const card = renderLarkRunCard(state);
+    const header = findFirstToolHeaderContent(card);
+    expect(header).toBe("⏳ **MCP · Team alpha · Search records** — MCP");
+
+    const cardText = JSON.stringify(card);
+    expect(cardText).toContain("Server: `team__alpha`");
+    expect(cardText).toContain("Tool: `search_records`");
+  });
+
   test("renders review_permission_request header when approvalId is a string", () => {
     const state = reduceLarkRunState(
       null,

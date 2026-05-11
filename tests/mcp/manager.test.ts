@@ -104,6 +104,53 @@ describe("McpClientManager", () => {
     });
   });
 
+  test("rejects startup when a globally required server fails", async () => {
+    const manager = new McpClientManager({
+      config: makeConfig(
+        {
+          remote: makeStreamableServerConfig({
+            bearerToken: "secret-token",
+          }),
+        },
+        { failStartupOnRequired: true },
+      ),
+      transportFactory: {
+        createTransport: () => {
+          throw new Error("auth failed: secret-token");
+        },
+      },
+    });
+
+    await expect(manager.start()).rejects.toThrow("MCP server remote failed to start");
+    expect(manager.getStatusSnapshot().servers[0]).toMatchObject({
+      name: "remote",
+      state: "failed",
+      lastError: "auth failed: [redacted]",
+    });
+  });
+
+  test("rejects startup when a server-level required server fails", async () => {
+    const manager = new McpClientManager({
+      config: makeConfig({
+        remote: makeStreamableServerConfig({
+          failStartupOnRequired: true,
+        }),
+      }),
+      transportFactory: {
+        createTransport: () => {
+          throw new Error("network unavailable");
+        },
+      },
+    });
+
+    await expect(manager.start()).rejects.toThrow("MCP server remote failed to start");
+    expect(manager.getStatusSnapshot().servers[0]).toMatchObject({
+      name: "remote",
+      state: "failed",
+      lastError: "network unavailable",
+    });
+  });
+
   test("times out slow server startup", async () => {
     const transport = new HangingTransport();
     const manager = new McpClientManager({

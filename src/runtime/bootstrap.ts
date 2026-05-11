@@ -21,6 +21,7 @@ import { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.j
 import type { AppConfig } from "@/src/config/schema.js";
 import { CronService } from "@/src/cron/service.js";
 import { McpCatalogService } from "@/src/mcp/catalog.js";
+import { computeStableFingerprint } from "@/src/mcp/fingerprint.js";
 import { McpClientManager } from "@/src/mcp/manager.js";
 import { McpToolSource } from "@/src/mcp/tool-source.js";
 import { MeditationPipelineRunner } from "@/src/meditation/runner.js";
@@ -69,7 +70,7 @@ export interface RuntimeBootstrap {
   readonly control: RuntimeControlService;
   readonly status: RuntimeStatusService;
   readonly outboundEventBus: RuntimeEventBus<OrchestratedOutboundEventEnvelope>;
-  start(): void;
+  start(): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -238,11 +239,25 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   });
 
   let started = false;
+  let starting: Promise<void> | null = null;
   let shuttingDown: Promise<void> | null = null;
+  let mcpConfigFingerprint = computeStableFingerprint(input.config.mcp);
   const unsubscribeMcpConfig = liveConfig.subscribe((event) => {
+    const nextMcpConfigFingerprint = computeStableFingerprint(event.snapshot.mcp);
+    if (nextMcpConfigFingerprint === mcpConfigFingerprint) {
+      logger.debug("mcp config reload skipped because mcp snapshot was unchanged", {
+        reason: event.reason,
+        version: event.version,
+      });
+      return;
+    }
+
     void mcp
       .reload(event.snapshot.mcp, event.reason)
-      .then(() => mcpCatalog.refreshAll())
+      .then(async () => {
+        mcpConfigFingerprint = nextMcpConfigFingerprint;
+        await mcpCatalog.refreshAll();
+      })
       .catch((error: unknown) => {
         logger.warn("mcp config reload failed", {
           reason: event.reason,
@@ -269,7 +284,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     start() {
       if (started) {
         logger.debug("runtime bootstrap start skipped because it is already running");
-        return;
+        return starting ?? Promise.resolve();
       }
 
       let preparedBackOnline: PreparedBackOnlineRecovery = {
@@ -290,13 +305,23 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       }
 
       liveConfig.startWatching();
-      void mcp
+      starting = mcp
         .start()
-        .then(() => mcpCatalog.refreshAll())
+        .then(() => {
+          void mcpCatalog.refreshAll().catch((error: unknown) => {
+            logger.warn("mcp startup catalog refresh failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        })
         .catch((error: unknown) => {
           logger.warn("mcp manager startup failed", {
             error: error instanceof Error ? error.message : String(error),
           });
+          throw error;
+        })
+        .finally(() => {
+          starting = null;
         });
       lark.start();
       cron.start();
@@ -320,6 +345,8 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
           error: error instanceof Error ? error.message : String(error),
         });
       });
+
+      return starting;
     },
     shutdown() {
       if (shuttingDown != null) {

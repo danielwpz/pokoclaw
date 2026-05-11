@@ -388,13 +388,14 @@ export class McpClientManager {
       });
     } catch (error) {
       await closeMcpConnection(client, transport);
+      const sanitizedError = sanitizeMcpErrorMessage(error, serverConfig);
       this.updateStatus(runtime.status, {
         state: "failed",
         readyAt: null,
         catalogVersion: null,
         catalogFetchedAt: null,
         catalogExpiresAt: null,
-        lastError: sanitizeMcpErrorMessage(error, serverConfig),
+        lastError: sanitizedError,
       });
       logger.warn("mcp server failed to start", {
         serverName: name,
@@ -402,6 +403,9 @@ export class McpClientManager {
         generation: input.generation,
         error: runtime.status.lastError,
       });
+      if (isRequiredStartupServer(input.config, serverConfig)) {
+        throw new Error(`MCP server ${name} failed to start: ${sanitizedError}`);
+      }
     }
   }
 
@@ -503,6 +507,10 @@ export class McpClientManager {
     Object.assign(status, patch);
     status.updatedAt = nowIso();
   }
+}
+
+function isRequiredStartupServer(config: McpConfig, serverConfig: McpServerConfig): boolean {
+  return config.failStartupOnRequired || serverConfig.failStartupOnRequired;
 }
 
 function getAuthStatus(config: McpServerConfig): McpAuthStatus {
