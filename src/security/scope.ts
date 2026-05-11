@@ -219,7 +219,7 @@ export function describePermissionScope(scope: PermissionScope): string {
     case "bash.full_access":
       return `Run bash commands with full access for prefix: ${scope.prefix.join(" ")}`;
     case "mcp.tool":
-      return `Call MCP tool ${scope.server}/${scope.tool}`;
+      return formatMcpToolDisplayName(scope.server, scope.tool);
   }
 }
 
@@ -232,4 +232,28 @@ export function describePermissionRequest(
   options?: { separator?: string },
 ): string {
   return describePermissionRequestLines(request).join(options?.separator ?? "; ");
+}
+
+export function formatMcpToolDisplayName(serverName: string, toolName: string): string {
+  return `MCP · ${humanizeNameFragment(serverName)} · ${humanizeNameFragment(toolName)}`;
+}
+
+function humanizeNameFragment(value: string): string {
+  const normalized = value.replace(/[_-]+/g, " ").trim();
+  if (normalized.length === 0) {
+    return value;
+  }
+
+  return normalized
+    .split(/\s+/)
+    .map((part, index) => (index === 0 ? capitalizeAscii(part) : part))
+    .join(" ");
+}
+
+function capitalizeAscii(value: string): string {
+  if (value.length === 0) {
+    return value;
+  }
+
+  return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
 }

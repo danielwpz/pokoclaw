@@ -131,6 +131,35 @@ describe("delegated approval orchestration", () => {
     expect(text).toContain("<command_cwd>/tmp/demo</command_cwd>");
   });
 
+  test("renders delegated MCP approvals without internal tool metadata", () => {
+    const catalogVersion = "0651af2c20aaf14f6be8f5d1588e98c53930c2fded8b65e0dbe51a8e28d7d8a4";
+    const text = renderDelegatedApprovalMessage({
+      approvalId: 14,
+      ownerAgentId: "agent_sub",
+      reasonText: "Need to update the Linear issue from the task.",
+      requestedScopeJson: JSON.stringify({
+        scopes: [
+          {
+            kind: "mcp.tool",
+            server: "linear",
+            tool: "save_issue",
+            serverFingerprint: "linear-remote",
+            catalogVersion,
+          },
+        ],
+      }),
+    });
+
+    expect(text).toContain("<delegated_approval_request>");
+    expect(text).toContain("MCP · Linear · Save issue");
+    expect(text).toContain("Need to update the Linear issue from the task.");
+    expect(text).not.toContain("mcp__linear__save_issue");
+    expect(text).not.toContain("remote_tool");
+    expect(text).not.toContain("catalog");
+    expect(text).not.toContain(catalogVersion);
+    expect(text).not.toContain("<requested_command>");
+  });
+
   test("delivers a main-agent-targeted approval request into a dedicated approval session", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);

@@ -228,7 +228,8 @@ describe("McpToolSource", () => {
           catalogVersion: expect.any(String),
         },
       ]);
-      expect(error.approvalTitle).toBe("Approval required: MCP linear/create_issue");
+      expect(error.approvalTitle).toBe("Approval required: MCP · Linear · Create issue");
+      expect(error.approvalCommand).toBeUndefined();
       return true;
     });
   });

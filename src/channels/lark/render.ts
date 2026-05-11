@@ -311,7 +311,7 @@ function buildApprovalCardBodyMarkdown(
 ): string {
   if (state.phase === "waiting_user") {
     return [
-      "### 授权运行命令",
+      formatApprovalRequestHeading(state),
       "",
       "**原因**",
       state.reasonText,
@@ -323,7 +323,7 @@ function buildApprovalCardBodyMarkdown(
 
   if (state.phase === "handoff_to_delegate" || state.phase === "waiting_delegate") {
     return [
-      "### 授权运行命令",
+      formatApprovalRequestHeading(state),
       "",
       ...formatApprovalDelegateStatusLines(state),
       "",
@@ -350,6 +350,14 @@ function buildApprovalCardBodyMarkdown(
     "",
     `**结果**：${describeDeniedApprovalResult(state.actor)}`,
   ].join("\n");
+}
+
+function formatApprovalRequestHeading(state: LarkApprovalState): string {
+  return isMcpOnlyPermissionRequest(state.request) ? "### 授权调用 MCP 工具" : "### 授权运行命令";
+}
+
+function isMcpOnlyPermissionRequest(request: LarkApprovalState["request"]): boolean {
+  return request.scopes.length > 0 && request.scopes.every((scope) => scope.kind === "mcp.tool");
 }
 
 function formatApprovalDelegateStatusLines(state: LarkApprovalState): string[] {

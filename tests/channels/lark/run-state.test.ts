@@ -1313,6 +1313,49 @@ describe("lark run state", () => {
     expect(cardText).toContain("拒绝");
   });
 
+  test("renders MCP approval cards without internal command metadata", () => {
+    const approvalState = createLarkApprovalStateFromRequest({
+      event: {
+        type: "approval_requested",
+        eventId: "evt_mcp_approval_card_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        approvalId: "approval_1",
+        approvalFlowId: "approval_1",
+        approvalAttemptIndex: 1,
+        approvalTarget: "user",
+        title: "Approval required: MCP · Linear · Save issue",
+        request: {
+          scopes: [
+            {
+              kind: "mcp.tool",
+              server: "linear",
+              tool: "save_issue",
+              serverFingerprint: "server-fingerprint",
+              catalogVersion: "0651af2c20aaf14f6be8f5d1588e98c53930c2fded8b65e0dbe51a8e28d7d8a4",
+            },
+          ],
+        },
+        reasonText: "需要授权 MCP 工具 MCP · Linear · Save issue。",
+        expiresAt: null,
+      },
+      sourceRunCardObjectId: "run_1:seg:1",
+    });
+
+    const cardText = JSON.stringify(buildLarkRenderedApprovalCard(approvalState).card);
+    expect(cardText).toContain("### 授权调用 MCP 工具");
+    expect(cardText).toContain("MCP · Linear · Save issue");
+    expect(cardText).toContain("**权限**");
+    expect(cardText).not.toContain("**命令**");
+    expect(cardText).not.toContain("mcp__linear__save_issue");
+    expect(cardText).not.toContain(
+      "0651af2c20aaf14f6be8f5d1588e98c53930c2fded8b65e0dbe51a8e28d7d8a4",
+    );
+  });
+
   test("reuses one approval flow card across timeout fallback and final delegated approval", () => {
     let approvalState = reduceLarkApprovalState(
       null,

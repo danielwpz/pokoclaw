@@ -3,6 +3,7 @@ import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamable
 import type { McpToolPolicy } from "@/src/config/schema.js";
 import type { McpCatalogService, McpCatalogTool } from "@/src/mcp/catalog.js";
 import type { McpClientManager } from "@/src/mcp/manager.js";
+import { formatMcpToolDisplayName } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/core/errors.js";
 import { ajvJsonSchemaToolInputSchema } from "@/src/tools/core/json-schema.js";
@@ -186,9 +187,8 @@ export class McpToolSource implements ToolSource {
 
     throw toolApprovalRequired({
       request,
-      reasonText: `MCP tool ${tool.serverName}/${tool.remoteName} requires approval.`,
-      approvalTitle: `Approval required: MCP ${tool.serverName}/${tool.remoteName}`,
-      approvalCommand: renderMcpApprovalCommand(tool, scope.catalogVersion),
+      reasonText: `需要授权 MCP 工具 ${formatMcpToolDisplayName(tool.serverName, tool.remoteName)}。`,
+      approvalTitle: `Approval required: ${formatMcpToolDisplayName(tool.serverName, tool.remoteName)}`,
       grantOnApprove: true,
       ...(context.approvalState == null ? {} : { approvalState: context.approvalState }),
     });
@@ -215,15 +215,6 @@ function isAutoAllowedMcpTool(policy: McpToolPolicy, tool: McpCatalogTool): bool
     tool.annotations.destructiveHint !== true &&
     tool.annotations.openWorldHint !== true
   );
-}
-
-function renderMcpApprovalCommand(tool: McpCatalogTool, catalogVersion: string): string {
-  return [
-    `tool: ${tool.name}`,
-    `server: ${tool.serverName}`,
-    `remote_tool: ${tool.remoteName}`,
-    `catalog: ${catalogVersion}`,
-  ].join("\n");
 }
 
 function toToolResult(input: { tool: McpCatalogTool; result: McpCallToolResult }): ToolResult {
