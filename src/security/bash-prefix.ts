@@ -233,6 +233,7 @@ function extractPlainCommand(node: Node): SimpleBashCommand | null {
       case "word":
       case "raw_string":
       case "string":
+      case "concatenation":
       case "number": {
         const literal = extractLiteralWord(child);
         if (literal == null) {
@@ -314,6 +315,8 @@ function extractLiteralWord(node: Node): string | null {
       return extractRawStringLiteral(node);
     case "string":
       return extractStringLiteral(node);
+    case "concatenation":
+      return extractConcatenatedLiteral(node);
     case "number":
       return node.text;
     default:
@@ -350,6 +353,20 @@ function extractStringLiteral(node: Node): string | null {
   }
 
   return node.namedChildren.map((child) => child.text).join("");
+}
+
+function extractConcatenatedLiteral(node: Node): string | null {
+  const parts: string[] = [];
+
+  for (const child of node.namedChildren) {
+    const part = extractLiteralWord(child);
+    if (part == null) {
+      return null;
+    }
+    parts.push(part);
+  }
+
+  return parts.join("");
 }
 
 function extractSupportedOutputRedirect(node: Node): BashCommandRedirect | null {

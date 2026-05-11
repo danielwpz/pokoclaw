@@ -41,6 +41,33 @@ describe("parseConservativeBashCommandSequence", () => {
     });
   });
 
+  test("parses concatenated literal arguments such as gh field values", () => {
+    expect(
+      parseConservativeBashCommandSequence(
+        "gh api repos/nearai/chat-api/pulls/271/comments/3216162798/replies --method POST -f body='Fixed. The user email is now loaded and email_verification_challenges rows are deleted by email before the users row is removed, all within the same transaction.'",
+      ),
+    ).toEqual({
+      kind: "simple",
+      commands: [
+        {
+          envAssignments: [],
+          argv: [
+            "gh",
+            "api",
+            "repos/nearai/chat-api/pulls/271/comments/3216162798/replies",
+            "--method",
+            "POST",
+            "-f",
+            "body=Fixed. The user email is now loaded and email_verification_challenges rows are deleted by email before the users row is removed, all within the same transaction.",
+          ],
+          redirects: [],
+          stdinFromPipe: false,
+          stdoutToPipe: false,
+        },
+      ],
+    });
+  });
+
   test("parses compound commands and preserves each subcommand argv", () => {
     expect(parseConservativeBashCommandSequence("npm test && echo done | cat")).toEqual({
       kind: "compound",
@@ -163,6 +190,9 @@ describe("parseConservativeBashCommandSequence", () => {
   test("rejects unsupported shell expansions", () => {
     expect(parseConservativeBashCommandSequence("FOO=$BAR npm test")).toBeNull();
     expect(parseConservativeBashCommandSequence("npm run $(cat cmd.txt)")).toBeNull();
+    expect(
+      parseConservativeBashCommandSequence("gh api repos/example -f body=$(cat body.txt)"),
+    ).toBeNull();
     expect(parseConservativeBashCommandSequence('echo "$' + "{HOME}" + '"')).toBeNull();
   });
 
