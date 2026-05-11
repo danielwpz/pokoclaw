@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Type } from "@sinclair/typebox";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import { CompositeToolRegistry } from "@/src/tools/core/composite-registry.js";
 import type { ToolFailure } from "@/src/tools/core/errors.js";
 import { toolApprovalRequired } from "@/src/tools/core/errors.js";
 import {
@@ -9,6 +10,8 @@ import {
   TOOL_RESULT_TRUNCATION_NOTICE,
   ToolRegistry,
 } from "@/src/tools/core/registry.js";
+import { jsonSchemaToolInputSchema } from "@/src/tools/core/schema.js";
+import { StaticToolSource } from "@/src/tools/core/source.js";
 import { defineTool, jsonToolResult, textToolResult } from "@/src/tools/core/types.js";
 import {
   createTestDatabase,
@@ -231,6 +234,166 @@ describe("tool registry", () => {
         toolName: "missing",
       },
     } satisfies Partial<ToolFailure>);
+  });
+
+  test("validates raw json-schema tools through the schema boundary", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const registry = new ToolRegistry([
+      {
+        name: "external_echo",
+        description: "Echo text from an external source",
+        inputSchemaSpec: jsonSchemaToolInputSchema<{ text: string }>({
+          schema: {
+            type: "object",
+            properties: {
+              text: { type: "string" },
+            },
+            required: ["text"],
+            additionalProperties: false,
+          },
+          validate(input) {
+            if (
+              typeof input === "object" &&
+              input != null &&
+              !Array.isArray(input) &&
+              typeof (input as { text?: unknown }).text === "string"
+            ) {
+              return {
+                ok: true,
+                value: { text: (input as { text: string }).text },
+              };
+            }
+
+            return {
+              ok: false,
+              issues: [{ path: "/text", message: "Expected string" }],
+              allowedFields: ["text"],
+            };
+          },
+        }),
+        execute(_context, args) {
+          return textToolResult((args as { text: string }).text);
+        },
+      },
+    ]);
+
+    await expect(
+      registry.execute(
+        "external_echo",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        { text: 123 },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "invalid_tool_args",
+        toolName: "external_echo",
+        allowedFields: ["text"],
+        issues: [{ path: "/text", message: "Expected string" }],
+      },
+    } satisfies Partial<ToolFailure>);
+
+    const result = await registry.execute(
+      "external_echo",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      { text: "ok" },
+    );
+
+    expect(result).toEqual(textToolResult("ok"));
+  });
+
+  test("composes multiple tool sources and preserves source metadata for dispatch", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const firstSource = new StaticToolSource({
+      metadata: { kind: "test", id: "source_a", diagnosticsName: "source-a" },
+      tools: [
+        defineTool({
+          name: "source_a_tool",
+          description: "A tool from source A",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("from source A");
+          },
+        }),
+      ],
+    });
+    const secondSource = new StaticToolSource({
+      metadata: { kind: "test", id: "source_b", diagnosticsName: "source-b" },
+      tools: [
+        defineTool({
+          name: "mcp__demo__source_b_tool",
+          description: "A prefixed tool from source B",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("from source B");
+          },
+        }),
+      ],
+    });
+    const registry = new CompositeToolRegistry([firstSource, secondSource]);
+
+    expect(registry.list().map((tool) => [tool.name, tool.source?.id])).toEqual([
+      ["source_a_tool", "source_a"],
+      ["mcp__demo__source_b_tool", "source_b"],
+    ]);
+
+    await expect(
+      registry.execute(
+        "mcp__demo__source_b_tool",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {},
+      ),
+    ).resolves.toEqual(textToolResult("from source B"));
+  });
+
+  test("rejects duplicate tools across composed sources", () => {
+    const sourceA = new StaticToolSource({
+      metadata: { kind: "test", id: "source_a" },
+      tools: [
+        defineTool({
+          name: "duplicate",
+          description: "First duplicate",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("a");
+          },
+        }),
+      ],
+    });
+    const sourceB = new StaticToolSource({
+      metadata: { kind: "test", id: "source_b" },
+      tools: [
+        defineTool({
+          name: "duplicate",
+          description: "Second duplicate",
+          inputSchema: NO_ARGS_TOOL_SCHEMA,
+          execute() {
+            return textToolResult("b");
+          },
+        }),
+      ],
+    });
+    const registry = new CompositeToolRegistry([sourceA, sourceB]);
+
+    expect(() => registry.list()).toThrow(
+      "Tool already registered: duplicate from source_a and source_b",
+    );
   });
 
   test("truncates oversized text tool results with the global default limit", async () => {

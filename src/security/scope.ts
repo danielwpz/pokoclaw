@@ -3,7 +3,12 @@ import path from "node:path";
 export type FsPermissionKind = "fs.read" | "fs.write";
 export type DbPermissionKind = "db.read" | "db.write";
 export type BashPermissionKind = "bash.full_access";
-export type PermissionKind = FsPermissionKind | DbPermissionKind | BashPermissionKind;
+export type McpPermissionKind = "mcp.tool";
+export type PermissionKind =
+  | FsPermissionKind
+  | DbPermissionKind
+  | BashPermissionKind
+  | McpPermissionKind;
 
 export interface FsPermissionScope {
   kind: FsPermissionKind;
@@ -20,7 +25,19 @@ export interface BashFullAccessScope {
   prefix: string[];
 }
 
-export type PermissionScope = FsPermissionScope | DbPermissionScope | BashFullAccessScope;
+export interface McpToolPermissionScope {
+  kind: McpPermissionKind;
+  server: string;
+  tool: string;
+  serverFingerprint: string;
+  catalogVersion: string;
+}
+
+export type PermissionScope =
+  | FsPermissionScope
+  | DbPermissionScope
+  | BashFullAccessScope
+  | McpToolPermissionScope;
 
 export interface PermissionRequest {
   scopes: PermissionScope[];
@@ -107,6 +124,16 @@ function parseBashScope(input: Record<string, unknown>): BashFullAccessScope {
   };
 }
 
+function parseMcpToolScope(input: Record<string, unknown>): McpToolPermissionScope {
+  return {
+    kind: "mcp.tool",
+    server: assertString(input.server, "mcp.tool server"),
+    tool: assertString(input.tool, "mcp.tool tool"),
+    serverFingerprint: assertString(input.serverFingerprint, "mcp.tool serverFingerprint"),
+    catalogVersion: assertString(input.catalogVersion, "mcp.tool catalogVersion"),
+  };
+}
+
 export function parsePermissionScope(input: unknown): PermissionScope {
   const scope = assertObject(input, "permission scope");
   const kind = assertString(scope.kind, "permission scope kind") as PermissionKind;
@@ -120,6 +147,8 @@ export function parsePermissionScope(input: unknown): PermissionScope {
       return parseDbScope(scope, kind);
     case "bash.full_access":
       return parseBashScope(scope);
+    case "mcp.tool":
+      return parseMcpToolScope(scope);
     default:
       throw new Error(`Unsupported permission scope kind: ${kind}`);
   }
@@ -189,6 +218,8 @@ export function describePermissionScope(scope: PermissionScope): string {
       return "Write system database";
     case "bash.full_access":
       return `Run bash commands with full access for prefix: ${scope.prefix.join(" ")}`;
+    case "mcp.tool":
+      return `Call MCP tool ${scope.server}/${scope.tool}`;
   }
 }
 

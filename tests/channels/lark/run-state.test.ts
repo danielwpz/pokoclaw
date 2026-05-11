@@ -1211,6 +1211,40 @@ describe("lark run state", () => {
     expect(listDirHeader).not.toContain("列出");
   });
 
+  test("renders MCP tool calls with friendly server and tool labels", () => {
+    const state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_mcp_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_mcp_1",
+        toolName: "mcp__linear__list_issues",
+        args: {
+          query: "MCP",
+          team: "Pokoclaw",
+          limit: 20,
+        },
+      }),
+    );
+
+    const card = renderLarkRunCard(state);
+    const header = findFirstToolHeaderContent(card);
+    expect(header).toBe("⏳ **MCP · Linear · List issues** — MCP · Pokoclaw");
+    expect(header).not.toContain("mcp__linear__list_issues");
+
+    const cardText = JSON.stringify(card);
+    expect(cardText).toContain("Server: `linear`");
+    expect(cardText).toContain("Tool: `list_issues`");
+    expect(cardText).toContain("**Parameters**");
+    expect(cardText).toContain('\\"query\\": \\"MCP\\"');
+  });
+
   test("renders review_permission_request header when approvalId is a string", () => {
     const state = reduceLarkRunState(
       null,

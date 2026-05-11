@@ -97,6 +97,48 @@ export interface ToolsConfig {
   web: WebToolsConfig;
 }
 
+export type McpTransport = "stdio" | "streamable_http";
+export type McpToolPolicy = "auto" | "ask" | "always_allow";
+
+export interface McpServerBaseConfig {
+  enabled: boolean;
+  transport: McpTransport;
+  toolPolicy: McpToolPolicy;
+  startupTimeoutMs: number;
+  toolTimeoutMs: number;
+  catalogTtlMs: number;
+  failureWindowMs: number;
+  degradeAfterConsecutiveFailures: number;
+  failStartupOnRequired: boolean;
+}
+
+export interface McpStdioServerConfig extends McpServerBaseConfig {
+  transport: "stdio";
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+export interface McpStreamableHttpServerConfig extends McpServerBaseConfig {
+  transport: "streamable_http";
+  url: string;
+  bearerToken?: string;
+  headers: Record<string, string>;
+}
+
+export type McpServerConfig = McpStdioServerConfig | McpStreamableHttpServerConfig;
+
+export interface McpConfig {
+  enabled: boolean;
+  catalogTtlMs: number;
+  startupTimeoutMs: number;
+  toolTimeoutMs: number;
+  failureWindowMs: number;
+  degradeAfterConsecutiveFailures: number;
+  failStartupOnRequired: boolean;
+  servers: Record<string, McpServerConfig>;
+}
+
 export interface SecurityFilesystemConfig {
   overrideHardDenyRead: boolean;
   overrideHardDenyWrite: boolean;
@@ -140,6 +182,7 @@ export interface RawConfig {
   projectContext: ProjectContextConfig;
   selfHarness: SelfHarnessConfig;
   tools: ToolsConfig;
+  mcp: McpConfig;
   security: SecurityConfig;
   channels: ChannelsConfig;
 }
@@ -248,6 +291,34 @@ interface ToolsConfigInput {
   web?: unknown;
 }
 
+interface McpConfigInput {
+  catalog_ttl_ms?: unknown;
+  startup_timeout_ms?: unknown;
+  tool_timeout_ms?: unknown;
+  failure_window_ms?: unknown;
+  degrade_after_consecutive_failures?: unknown;
+  fail_startup_on_required?: unknown;
+  servers?: unknown;
+}
+
+interface McpServerConfigInput {
+  enabled?: unknown;
+  transport?: unknown;
+  tool_policy?: unknown;
+  startup_timeout_ms?: unknown;
+  tool_timeout_ms?: unknown;
+  catalog_ttl_ms?: unknown;
+  failure_window_ms?: unknown;
+  degrade_after_consecutive_failures?: unknown;
+  fail_startup_on_required?: unknown;
+  command?: unknown;
+  args?: unknown;
+  env?: unknown;
+  url?: unknown;
+  bearer_token?: unknown;
+  headers?: unknown;
+}
+
 interface SecurityFilesystemConfigInput {
   overrideHardDenyRead?: unknown;
   overrideHardDenyWrite?: unknown;
@@ -289,6 +360,7 @@ interface FileConfigInput {
   project_context?: unknown;
   "self-harness"?: unknown;
   tools?: unknown;
+  mcp?: unknown;
   security?: unknown;
   channels?: unknown;
 }
@@ -306,6 +378,9 @@ const MODEL_SCENARIOS = [
 const LARK_CONNECTION_MODES: readonly LarkConnectionMode[] = ["websocket", "webhook"];
 const PROVIDER_AUTH_SOURCES: readonly ProviderAuthSource[] = ["config", "codex-local"];
 const REASONING_EFFORTS: readonly ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
+const MCP_TRANSPORTS: readonly McpTransport[] = ["stdio", "streamable_http"];
+const MCP_TOOL_POLICIES: readonly McpToolPolicy[] = ["auto", "ask", "always_allow"];
+const MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export function isLogLevel(value: unknown): value is LogLevel {
   return typeof value === "string" && LOG_LEVELS.includes(value as LogLevel);
@@ -330,6 +405,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     "project_context",
     "self-harness",
     "tools",
+    "mcp",
     "security",
     "channels",
   ]);
@@ -350,6 +426,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   );
   const selfHarness = validateSelfHarnessConfig(config["self-harness"], defaults.selfHarness);
   const tools = validateToolsConfig(config.tools, defaults.tools, providers);
+  const mcp = validateMcpConfig(config.mcp, defaults.mcp);
   const security = validateSecurityConfig(config.security, defaults.security);
   const channels = validateChannelsConfig(config.channels, defaults.channels);
 
@@ -366,6 +443,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     projectContext,
     selfHarness,
     tools,
+    mcp,
     security,
     channels,
   };
@@ -406,6 +484,7 @@ function cloneRawConfig(config: RawConfig): RawConfig {
         fetch: cloneWebToolConfig(config.tools.web.fetch),
       },
     },
+    mcp: cloneMcpConfig(config.mcp),
     security: {
       filesystem: {
         overrideHardDenyRead: config.security.filesystem.overrideHardDenyRead,
@@ -1044,6 +1123,241 @@ function validateWebToolConfig(
   return resolved;
 }
 
+function validateMcpConfig(input: unknown, defaults: McpConfig): McpConfig {
+  if (input == null) {
+    return cloneMcpConfig(defaults);
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml mcp must be a table/object");
+  }
+
+  const config = input as McpConfigInput;
+  assertAllowedKeys(
+    config,
+    new Set([
+      "catalog_ttl_ms",
+      "startup_timeout_ms",
+      "tool_timeout_ms",
+      "failure_window_ms",
+      "degrade_after_consecutive_failures",
+      "fail_startup_on_required",
+      "servers",
+    ]),
+    "config.toml mcp",
+  );
+
+  const base: Omit<McpConfig, "servers"> = {
+    enabled: true,
+    catalogTtlMs: validatePositiveInteger(
+      config.catalog_ttl_ms ?? defaults.catalogTtlMs,
+      "config.toml mcp.catalog_ttl_ms",
+    ),
+    startupTimeoutMs: validatePositiveInteger(
+      config.startup_timeout_ms ?? defaults.startupTimeoutMs,
+      "config.toml mcp.startup_timeout_ms",
+    ),
+    toolTimeoutMs: validatePositiveInteger(
+      config.tool_timeout_ms ?? defaults.toolTimeoutMs,
+      "config.toml mcp.tool_timeout_ms",
+    ),
+    failureWindowMs: validatePositiveInteger(
+      config.failure_window_ms ?? defaults.failureWindowMs,
+      "config.toml mcp.failure_window_ms",
+    ),
+    degradeAfterConsecutiveFailures: validatePositiveInteger(
+      config.degrade_after_consecutive_failures ?? defaults.degradeAfterConsecutiveFailures,
+      "config.toml mcp.degrade_after_consecutive_failures",
+    ),
+    failStartupOnRequired: validateOptionalBoolean(
+      config.fail_startup_on_required,
+      defaults.failStartupOnRequired,
+      "config.toml mcp.fail_startup_on_required",
+    ),
+  };
+
+  return {
+    ...base,
+    servers: validateMcpServersConfig(config.servers, defaults.servers, base),
+  };
+}
+
+function validateMcpServersConfig(
+  input: unknown,
+  defaults: Record<string, McpServerConfig>,
+  base: Omit<McpConfig, "servers">,
+): Record<string, McpServerConfig> {
+  if (input == null) {
+    return Object.fromEntries(
+      Object.entries(defaults).map(([serverName, server]) => [serverName, cloneMcpServer(server)]),
+    );
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml mcp.servers must be a table/object");
+  }
+
+  const servers: Record<string, McpServerConfig> = {};
+  for (const [serverName, rawServer] of Object.entries(input)) {
+    if (serverName.trim().length === 0) {
+      throw new Error("config.toml mcp.servers contains an empty server name");
+    }
+    if (!MCP_SERVER_NAME_PATTERN.test(serverName)) {
+      throw new Error(
+        `config.toml mcp.servers.${serverName} name must contain only letters, numbers, underscores, or hyphens`,
+      );
+    }
+    servers[serverName] = validateMcpServerConfig(
+      serverName,
+      rawServer,
+      defaults[serverName],
+      base,
+    );
+  }
+
+  return servers;
+}
+
+function validateMcpServerConfig(
+  serverName: string,
+  input: unknown,
+  defaults: McpServerConfig | undefined,
+  base: Omit<McpConfig, "servers">,
+): McpServerConfig {
+  const path = `config.toml mcp.servers.${serverName}`;
+  if (!isPlainObject(input)) {
+    throw new Error(`${path} must be a table/object`);
+  }
+
+  const config = input as McpServerConfigInput;
+  assertAllowedKeys(
+    config,
+    new Set([
+      "enabled",
+      "transport",
+      "tool_policy",
+      "startup_timeout_ms",
+      "tool_timeout_ms",
+      "catalog_ttl_ms",
+      "failure_window_ms",
+      "degrade_after_consecutive_failures",
+      "fail_startup_on_required",
+      "command",
+      "args",
+      "env",
+      "url",
+      "bearer_token",
+      "headers",
+    ]),
+    path,
+  );
+
+  const transport = validateMcpTransport(
+    config.transport ?? defaults?.transport,
+    `${path}.transport`,
+  );
+  const common: McpServerBaseConfig = {
+    enabled: validateOptionalBoolean(config.enabled, defaults?.enabled ?? true, `${path}.enabled`),
+    transport,
+    toolPolicy: validateMcpToolPolicy(
+      config.tool_policy ?? defaults?.toolPolicy ?? "ask",
+      `${path}.tool_policy`,
+    ),
+    startupTimeoutMs: validatePositiveInteger(
+      config.startup_timeout_ms ?? defaults?.startupTimeoutMs ?? base.startupTimeoutMs,
+      `${path}.startup_timeout_ms`,
+    ),
+    toolTimeoutMs: validatePositiveInteger(
+      config.tool_timeout_ms ?? defaults?.toolTimeoutMs ?? base.toolTimeoutMs,
+      `${path}.tool_timeout_ms`,
+    ),
+    catalogTtlMs: validatePositiveInteger(
+      config.catalog_ttl_ms ?? defaults?.catalogTtlMs ?? base.catalogTtlMs,
+      `${path}.catalog_ttl_ms`,
+    ),
+    failureWindowMs: validatePositiveInteger(
+      config.failure_window_ms ?? defaults?.failureWindowMs ?? base.failureWindowMs,
+      `${path}.failure_window_ms`,
+    ),
+    degradeAfterConsecutiveFailures: validatePositiveInteger(
+      config.degrade_after_consecutive_failures ??
+        defaults?.degradeAfterConsecutiveFailures ??
+        base.degradeAfterConsecutiveFailures,
+      `${path}.degrade_after_consecutive_failures`,
+    ),
+    failStartupOnRequired: validateOptionalBoolean(
+      config.fail_startup_on_required,
+      defaults?.failStartupOnRequired ?? base.failStartupOnRequired,
+      `${path}.fail_startup_on_required`,
+    ),
+  };
+
+  switch (transport) {
+    case "stdio":
+      rejectMcpFields(config, ["url", "bearer_token", "headers"], path, transport);
+      return {
+        ...common,
+        transport,
+        command: validateNonEmptyString(
+          config.command ?? getDefaultMcpCommand(defaults),
+          `${path}.command`,
+        ),
+        args: validateStringArray(config.args, getDefaultMcpArgs(defaults), `${path}.args`),
+        env: validateStringRecord(config.env, getDefaultMcpEnv(defaults), `${path}.env`),
+      };
+    case "streamable_http": {
+      rejectMcpFields(config, ["command", "args", "env"], path, transport);
+      const server: McpStreamableHttpServerConfig = {
+        ...common,
+        transport,
+        url: validateNonEmptyString(config.url ?? getDefaultMcpUrl(defaults), `${path}.url`),
+        headers: validateStringRecord(
+          config.headers,
+          getDefaultMcpHeaders(defaults),
+          `${path}.headers`,
+        ),
+      };
+      const bearerToken = validateOptionalNonEmptyString(
+        config.bearer_token ?? getDefaultMcpBearerToken(defaults),
+        `${path}.bearer_token`,
+      );
+      if (bearerToken != null) {
+        server.bearerToken = bearerToken;
+      }
+      return server;
+    }
+    default:
+      return assertNever(transport);
+  }
+}
+
+function validateMcpTransport(value: unknown, path: string): McpTransport {
+  if (typeof value !== "string" || !MCP_TRANSPORTS.includes(value as McpTransport)) {
+    throw new Error(`${path} must be one of: stdio, streamable_http`);
+  }
+  return value as McpTransport;
+}
+
+function validateMcpToolPolicy(value: unknown, path: string): McpToolPolicy {
+  if (typeof value !== "string" || !MCP_TOOL_POLICIES.includes(value as McpToolPolicy)) {
+    throw new Error(`${path} must be one of: auto, ask, always_allow`);
+  }
+  return value as McpToolPolicy;
+}
+
+function rejectMcpFields(
+  config: McpServerConfigInput,
+  fields: string[],
+  path: string,
+  transport: McpTransport,
+): void {
+  for (const field of fields) {
+    if (Object.hasOwn(config, field)) {
+      throw new Error(`${path}.${field} cannot be set when transport = "${transport}"`);
+    }
+  }
+}
+
 function validateSecurityConfig(input: unknown, defaults: SecurityConfig): SecurityConfig {
   if (input == null) {
     return {
@@ -1326,6 +1640,63 @@ function cloneWebToolConfig(config: WebToolConfig): WebToolConfig {
     : { enabled: config.enabled, provider: config.provider };
 }
 
+function cloneMcpConfig(config: McpConfig): McpConfig {
+  return {
+    enabled: config.enabled,
+    catalogTtlMs: config.catalogTtlMs,
+    startupTimeoutMs: config.startupTimeoutMs,
+    toolTimeoutMs: config.toolTimeoutMs,
+    failureWindowMs: config.failureWindowMs,
+    degradeAfterConsecutiveFailures: config.degradeAfterConsecutiveFailures,
+    failStartupOnRequired: config.failStartupOnRequired,
+    servers: Object.fromEntries(
+      Object.entries(config.servers).map(([serverName, server]) => [
+        serverName,
+        cloneMcpServer(server),
+      ]),
+    ),
+  };
+}
+
+function cloneMcpServer(server: McpServerConfig): McpServerConfig {
+  const common = {
+    enabled: server.enabled,
+    transport: server.transport,
+    toolPolicy: server.toolPolicy,
+    startupTimeoutMs: server.startupTimeoutMs,
+    toolTimeoutMs: server.toolTimeoutMs,
+    catalogTtlMs: server.catalogTtlMs,
+    failureWindowMs: server.failureWindowMs,
+    degradeAfterConsecutiveFailures: server.degradeAfterConsecutiveFailures,
+    failStartupOnRequired: server.failStartupOnRequired,
+  };
+
+  switch (server.transport) {
+    case "stdio":
+      return {
+        ...common,
+        transport: "stdio",
+        command: server.command,
+        args: [...server.args],
+        env: { ...server.env },
+      };
+    case "streamable_http": {
+      const cloned: McpStreamableHttpServerConfig = {
+        ...common,
+        transport: "streamable_http",
+        url: server.url,
+        headers: { ...server.headers },
+      };
+      if (server.bearerToken != null) {
+        cloned.bearerToken = server.bearerToken;
+      }
+      return cloned;
+    }
+    default:
+      return assertNever(server);
+  }
+}
+
 function cloneMeditationConfig(config: MeditationConfig): MeditationConfig {
   return {
     enabled: config.enabled,
@@ -1488,6 +1859,30 @@ function validateStringArray(input: unknown, defaults: string[], path: string): 
   return input.map((value, index) => validateNonEmptyString(value, `${path}[${index}]`));
 }
 
+function validateStringRecord(
+  input: unknown,
+  defaults: Record<string, string>,
+  path: string,
+): Record<string, string> {
+  if (input == null) {
+    return { ...defaults };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error(`${path} must be a table/object`);
+  }
+
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (key.trim().length === 0) {
+      throw new Error(`${path} contains an empty key`);
+    }
+    result[key] = validateNonEmptyString(value, `${path}.${key}`);
+  }
+
+  return result;
+}
+
 function validateProjectContextFiles(input: unknown, defaults: string[], path: string): string[] {
   const files = validateStringArray(input, defaults, path);
   const seen = new Set<string>();
@@ -1501,6 +1896,34 @@ function validateProjectContextFiles(input: unknown, defaults: string[], path: s
     seen.add(file);
   }
   return files;
+}
+
+function getDefaultMcpCommand(defaults: McpServerConfig | undefined): string | undefined {
+  return defaults?.transport === "stdio" ? defaults.command : undefined;
+}
+
+function getDefaultMcpArgs(defaults: McpServerConfig | undefined): string[] {
+  return defaults?.transport === "stdio" ? defaults.args : [];
+}
+
+function getDefaultMcpEnv(defaults: McpServerConfig | undefined): Record<string, string> {
+  return defaults?.transport === "stdio" ? defaults.env : {};
+}
+
+function getDefaultMcpUrl(defaults: McpServerConfig | undefined): string | undefined {
+  return defaults?.transport === "streamable_http" ? defaults.url : undefined;
+}
+
+function getDefaultMcpHeaders(defaults: McpServerConfig | undefined): Record<string, string> {
+  return defaults?.transport === "streamable_http" ? defaults.headers : {};
+}
+
+function getDefaultMcpBearerToken(defaults: McpServerConfig | undefined): string | undefined {
+  return defaults?.transport === "streamable_http" ? defaults.bearerToken : undefined;
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unexpected value: ${String(value)}`);
 }
 
 function isSafeProjectContextFileName(fileName: string): boolean {

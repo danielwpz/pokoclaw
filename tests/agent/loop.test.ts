@@ -2948,21 +2948,7 @@ describe("agent loop", () => {
     };
 
     const tools = new ToolRegistry([createRequestPermissionsTool()]);
-    const emittedEvents: Array<{
-      type: string;
-      approvalId?: string;
-      decision?: string;
-      title?: string;
-      request?: {
-        scopes: Array<
-          | { kind: "fs.read"; path: string }
-          | { kind: "fs.write"; path: string }
-          | { kind: "db.read"; database: "system" }
-          | { kind: "db.write"; database: "system" }
-          | { kind: "bash.full_access"; prefix: string[] }
-        >;
-      };
-    }> = [];
+    const emittedEvents: AgentRuntimeEvent[] = [];
     const loop = new AgentLoop({
       sessions: new AgentSessionService(sessionsRepo, messagesRepo),
       messages: messagesRepo,

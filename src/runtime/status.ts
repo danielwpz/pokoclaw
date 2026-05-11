@@ -12,6 +12,7 @@ import {
   type ProviderRegistrySource,
   resolveProviderRegistry,
 } from "@/src/agent/llm/provider-registry-source.js";
+import type { McpManagerStatusSnapshot } from "@/src/mcp/types.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import { resolveSessionLiveState } from "@/src/runtime/live-state.js";
 import type {
@@ -88,6 +89,7 @@ export interface ConversationStatusSnapshot {
   latestTurnErrorMessage: string | null;
   activeRuns: StatusActiveRunSnapshot[];
   pendingApprovals: StatusPendingApprovalSnapshot[];
+  mcp: McpManagerStatusSnapshot | null;
 }
 
 export interface StatusPresentationSnapshot {
@@ -103,6 +105,9 @@ export class RuntimeStatusService {
       control: RuntimeControlService;
       models: ProviderRegistry | ProviderRegistrySource;
       runtimeModes?: RuntimeModeService;
+      mcp?: {
+        getStatusSnapshot(): McpManagerStatusSnapshot;
+      };
     },
   ) {}
 
@@ -188,6 +193,7 @@ export class RuntimeStatusService {
           : null,
       activeRuns,
       pendingApprovals,
+      mcp: this.deps.mcp?.getStatusSnapshot() ?? null,
     };
   }
 }
@@ -209,6 +215,9 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
     lines.push(`Reasoning: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`);
   }
   lines.push(`运行模式：${formatRuntimeModeLine(snapshot.runtimeMode)}`);
+  if (snapshot.mcp != null) {
+    lines.push(...formatMcpTextLines(snapshot.mcp));
+  }
 
   lines.push("");
   lines.push("Usage");
@@ -256,6 +265,41 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
   return lines.join("\n");
 }
 
+function formatMcpTextLines(snapshot: McpManagerStatusSnapshot): string[] {
+  if (!snapshot.enabled) {
+    return ["MCP：关闭"];
+  }
+
+  if (snapshot.servers.length === 0) {
+    return ["MCP：开启，无已配置 server"];
+  }
+
+  return ["MCP：开启", ...snapshot.servers.map((server) => `- ${formatMcpServerTextLine(server)}`)];
+}
+
+function formatMcpMarkdownLines(snapshot: McpManagerStatusSnapshot): string[] {
+  if (!snapshot.enabled) {
+    return ["**MCP**：关闭"];
+  }
+
+  if (snapshot.servers.length === 0) {
+    return ["**MCP**：开启，无已配置 server"];
+  }
+
+  return [
+    "**MCP**：开启",
+    ...snapshot.servers.map((server) => `- ${formatMcpServerMarkdownLine(server)}`),
+  ];
+}
+
+function formatMcpServerTextLine(server: McpManagerStatusSnapshot["servers"][number]): string {
+  return `${server.name}: ${server.state} / ${server.transport}`;
+}
+
+function formatMcpServerMarkdownLine(server: McpManagerStatusSnapshot["servers"][number]): string {
+  return `\`${server.name}\`: ${server.state} / ${server.transport}`;
+}
+
 export function buildConversationStatusPresentation(
   snapshot: ConversationStatusSnapshot,
 ): StatusPresentationSnapshot {
@@ -271,6 +315,7 @@ export function buildConversationStatusPresentation(
           ? []
           : [`**Reasoning**: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`]),
         `**运行模式**：${formatRuntimeModeLine(snapshot.runtimeMode)}`,
+        ...(snapshot.mcp == null ? [] : formatMcpMarkdownLines(snapshot.mcp)),
       ].join("\n"),
       [
         "### Usage",

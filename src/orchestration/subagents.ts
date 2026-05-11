@@ -702,6 +702,13 @@ function dedupeScopes(scopes: PermissionScope[]): PermissionScope[] {
       unique.set(`${scope.kind}:${scope.prefix.join("\u0000")}`, scope);
       continue;
     }
+    if (scope.kind === "mcp.tool") {
+      unique.set(
+        `${scope.kind}:${scope.server}:${scope.tool}:${scope.serverFingerprint}:${scope.catalogVersion}`,
+        scope,
+      );
+      continue;
+    }
     unique.set(`${scope.kind}:${scope.database}`, scope);
   }
 

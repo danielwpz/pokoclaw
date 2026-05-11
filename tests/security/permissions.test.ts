@@ -40,11 +40,19 @@ describe("effective permissions", () => {
         '{"kind":"fs.read","path":"/Users/example/.pokoclaw/workspace/**"}',
         '{"kind":"db.read","database":"system"}',
         '{"kind":"bash.full_access","prefix":["git","push"]}',
+        '{"kind":"mcp.tool","server":"linear","tool":"create_issue","serverFingerprint":"server-v1","catalogVersion":"catalog-v1"}',
       ]),
     ).toEqual([
       { kind: "fs.read", path: "/Users/example/.pokoclaw/workspace/**" },
       { kind: "db.read", database: "system" },
       { kind: "bash.full_access", prefix: ["git", "push"] },
+      {
+        kind: "mcp.tool",
+        server: "linear",
+        tool: "create_issue",
+        serverFingerprint: "server-v1",
+        catalogVersion: "catalog-v1",
+      },
     ]);
   });
 
@@ -100,6 +108,32 @@ describe("effective permissions", () => {
     );
 
     expect(permissions.bash.fullAccessPrefixes).toEqual([["python", "-m", "agent_browser_cli"]]);
+  });
+
+  test("buildEffectivePermissions keeps MCP tool grants separate from filesystem and bash", () => {
+    const permissions = buildEffectivePermissions(
+      [
+        {
+          kind: "mcp.tool",
+          server: "linear",
+          tool: "create_issue",
+          serverFingerprint: "server-v1",
+          catalogVersion: "catalog-v1",
+        },
+      ],
+      buildSystemPolicy(),
+      buildAgentPermissionBaseline("subagent"),
+    );
+
+    expect(permissions.mcp.tools).toEqual([
+      {
+        kind: "mcp.tool",
+        server: "linear",
+        tool: "create_issue",
+        serverFingerprint: "server-v1",
+        catalogVersion: "catalog-v1",
+      },
+    ]);
   });
 });
 

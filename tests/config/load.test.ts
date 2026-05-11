@@ -213,6 +213,16 @@ describe("config loader", () => {
         },
       },
     });
+    expect(config.mcp).toEqual({
+      enabled: false,
+      catalogTtlMs: 86_400_000,
+      startupTimeoutMs: 30_000,
+      toolTimeoutMs: 120_000,
+      failureWindowMs: 300_000,
+      degradeAfterConsecutiveFailures: 3,
+      failStartupOnRequired: false,
+      servers: {},
+    });
     expect(config.security).toEqual({
       filesystem: {
         overrideHardDenyRead: false,
@@ -471,6 +481,172 @@ describe("config loader", () => {
         },
       },
     });
+  });
+
+  test("loads MCP server config with secret and env refs", () => {
+    const config = buildAppConfigFromInputs(
+      {
+        mcp: {
+          catalog_ttl_ms: 86_400_000,
+          startup_timeout_ms: 30_000,
+          tool_timeout_ms: 120_000,
+          failure_window_ms: 300_000,
+          degrade_after_consecutive_failures: 3,
+          servers: {
+            linear: {
+              enabled: true,
+              transport: "streamable_http",
+              url: "https://mcp.linear.app/mcp",
+              bearer_token_ref: "secret://mcp/linear/apiKey",
+              tool_policy: "auto",
+              headers: {
+                "X-Workspace_ref": "env://MCP_WORKSPACE",
+              },
+            },
+            local_fs: {
+              enabled: true,
+              transport: "stdio",
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+              env: {
+                HOME_ref: "env://HOME",
+              },
+              tool_policy: "ask",
+            },
+          },
+        },
+      },
+      {
+        mcp: {
+          linear: {
+            apiKey: "linear-token",
+          },
+        },
+      },
+      {
+        MCP_WORKSPACE: "default",
+        HOME: "/Users/example",
+      },
+    );
+
+    expect(config.mcp).toEqual({
+      enabled: true,
+      catalogTtlMs: 86_400_000,
+      startupTimeoutMs: 30_000,
+      toolTimeoutMs: 120_000,
+      failureWindowMs: 300_000,
+      degradeAfterConsecutiveFailures: 3,
+      failStartupOnRequired: false,
+      servers: {
+        linear: {
+          enabled: true,
+          transport: "streamable_http",
+          url: "https://mcp.linear.app/mcp",
+          bearerToken: "linear-token",
+          headers: {
+            "X-Workspace": "default",
+          },
+          toolPolicy: "auto",
+          startupTimeoutMs: 30_000,
+          toolTimeoutMs: 120_000,
+          catalogTtlMs: 86_400_000,
+          failureWindowMs: 300_000,
+          degradeAfterConsecutiveFailures: 3,
+          failStartupOnRequired: false,
+        },
+        local_fs: {
+          enabled: true,
+          transport: "stdio",
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+          env: {
+            HOME: "/Users/example",
+          },
+          toolPolicy: "ask",
+          startupTimeoutMs: 30_000,
+          toolTimeoutMs: 120_000,
+          catalogTtlMs: 86_400_000,
+          failureWindowMs: 300_000,
+          degradeAfterConsecutiveFailures: 3,
+          failStartupOnRequired: false,
+        },
+      },
+    });
+  });
+
+  test("enables MCP when the mcp table is configured", () => {
+    const config = buildAppConfigFromInputs(
+      {
+        mcp: {
+          servers: {
+            linear: {
+              transport: "streamable_http",
+              url: "https://mcp.linear.app/mcp",
+            },
+          },
+        },
+      },
+      undefined,
+    );
+
+    expect(config.mcp.enabled).toBe(true);
+    expect(config.mcp.servers.linear).toMatchObject({
+      enabled: true,
+      transport: "streamable_http",
+      url: "https://mcp.linear.app/mcp",
+    });
+  });
+
+  test("rejects top-level MCP enabled switch", () => {
+    expect(() =>
+      buildAppConfigFromInputs(
+        {
+          mcp: {
+            enabled: true,
+          },
+        },
+        undefined,
+      ),
+    ).toThrow("config.toml mcp contains unknown key: enabled");
+  });
+
+  test("rejects MCP transport-specific fields", () => {
+    expect(() =>
+      buildAppConfigFromInputs(
+        {
+          mcp: {
+            servers: {
+              bad: {
+                transport: "stdio",
+                command: "node",
+                url: "https://mcp.example.com/mcp",
+              },
+            },
+          },
+        },
+        undefined,
+      ),
+    ).toThrow('config.toml mcp.servers.bad.url cannot be set when transport = "stdio"');
+  });
+
+  test("rejects MCP server names that cannot be used in stable tool names", () => {
+    expect(() =>
+      buildAppConfigFromInputs(
+        {
+          mcp: {
+            servers: {
+              "bad.name": {
+                transport: "stdio",
+                command: "node",
+              },
+            },
+          },
+        },
+        undefined,
+      ),
+    ).toThrow(
+      "config.toml mcp.servers.bad.name name must contain only letters, numbers, underscores, or hyphens",
+    );
   });
 
   test("loads secrets.toml when present", async () => {

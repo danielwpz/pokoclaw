@@ -38,7 +38,8 @@ import { filterVisibleToolsForSession } from "@/src/agent/session-policy.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessageUsage } from "@/src/storage/repos/messages.repo.js";
 import type { Message } from "@/src/storage/schema/types.js";
-import type { ToolRegistry } from "@/src/tools/core/registry.js";
+import type { ToolRegistryLike } from "@/src/tools/core/registry.js";
+import { getModelVisibleToolInputSchema } from "@/src/tools/core/schema.js";
 
 const COMPACTION_SUMMARY_PREFIX = "[Context Summary]";
 const PERMISSIVE_TOOL_PARAMETERS = Type.Object({}, { additionalProperties: true });
@@ -64,7 +65,7 @@ export interface PiBridgeRunTurnInput {
   compactSummary: string | null;
   messages: Message[];
   resolveRuntimeImages?: AgentModelTurnInput["resolveRuntimeImages"];
-  tools: ToolRegistry;
+  tools: ToolRegistryLike;
   sessionPurpose?: string;
   agentKind?: string | null;
   signal: AbortSignal;
@@ -285,7 +286,7 @@ export class PiBridge {
 export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunner {
   constructor(
     private readonly bridge: PiBridge,
-    private readonly tools: ToolRegistry,
+    private readonly tools: ToolRegistryLike,
   ) {}
 
   runTurn(input: AgentModelTurnInput): Promise<AgentModelTurnResult> {
@@ -348,7 +349,7 @@ function buildPiContextMessages(
 }
 
 function buildPiTools(
-  registry: ToolRegistry,
+  registry: ToolRegistryLike,
   sessionPurpose?: string,
   agentKind?: string | null,
 ): Tool[] {
@@ -362,8 +363,8 @@ function buildPiTools(
   return visibleTools.map((tool) => ({
     name: tool.name,
     description: tool.description,
-    parameters: isObject(tool.inputSchema)
-      ? (tool.inputSchema as Tool["parameters"])
+    parameters: isObject(getModelVisibleToolInputSchema(tool))
+      ? (getModelVisibleToolInputSchema(tool) as Tool["parameters"])
       : PERMISSIVE_TOOL_PARAMETERS,
   }));
 }

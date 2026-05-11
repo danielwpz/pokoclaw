@@ -65,6 +65,14 @@ function dedupePermissionScopes(scopes: PermissionScope[]): PermissionScope[] {
       continue;
     }
 
+    if (scope.kind === "mcp.tool") {
+      unique.set(
+        `${scope.kind}:${scope.server}:${scope.tool}:${scope.serverFingerprint}:${scope.catalogVersion}`,
+        scope,
+      );
+      continue;
+    }
+
     unique.set(`${scope.kind}:${scope.database}`, scope);
   }
 

@@ -5,6 +5,7 @@ import type { SecurityConfig } from "@/src/config/schema.js";
 import type { RunLiveObservabilitySnapshot } from "@/src/runtime/run-observability.js";
 import type { PermissionScope } from "@/src/security/scope.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import type { ToolInputSchema } from "@/src/tools/core/schema.js";
 
 export type ToolContentBlock =
   | {
@@ -111,9 +112,18 @@ export interface ToolExecutionApprovalState {
   ephemeralPermissionScopes?: PermissionScope[];
 }
 
+export interface ToolSourceMetadata {
+  kind: "builtin" | "mcp" | "custom" | "test" | string;
+  id: string;
+  displayName?: string;
+  diagnosticsName?: string;
+}
+
 export interface ToolDefinition<TArgs = unknown, TDetails = unknown> {
   name: string;
   description: string;
+  source?: ToolSourceMetadata;
+  inputSchemaSpec?: ToolInputSchema<TArgs>;
   inputSchema?: TSchema;
   getInvocationTimeoutMs?(context: ToolExecutionContext, args: TArgs): number;
   getResultMaxChars?(context: ToolExecutionContext, args: TArgs): number;

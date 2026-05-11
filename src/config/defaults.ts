@@ -55,6 +55,16 @@ export const DEFAULT_CONFIG: RawConfig = {
       },
     },
   },
+  mcp: {
+    enabled: false,
+    catalogTtlMs: 24 * 60 * 60 * 1000,
+    startupTimeoutMs: 30_000,
+    toolTimeoutMs: 120_000,
+    failureWindowMs: 5 * 60 * 1000,
+    degradeAfterConsecutiveFailures: 3,
+    failStartupOnRequired: false,
+    servers: {},
+  },
   security: {
     filesystem: {
       overrideHardDenyRead: false,

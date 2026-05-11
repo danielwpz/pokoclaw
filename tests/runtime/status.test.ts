@@ -103,6 +103,16 @@ function createConfig(): AppConfig {
         },
       },
     },
+    mcp: {
+      enabled: false,
+      catalogTtlMs: 86_400_000,
+      startupTimeoutMs: 30_000,
+      toolTimeoutMs: 120_000,
+      failureWindowMs: 300_000,
+      degradeAfterConsecutiveFailures: 3,
+      failStartupOnRequired: false,
+      servers: {},
+    },
     security: {
       filesystem: {
         overrideHardDenyRead: false,
@@ -222,6 +232,46 @@ describe("runtime status service", () => {
         control,
         models: new ProviderRegistry(createConfig()),
         runtimeModes,
+        mcp: {
+          getStatusSnapshot: () => ({
+            enabled: true,
+            generation: 1,
+            servers: [
+              {
+                name: "linear",
+                state: "ready",
+                enabled: true,
+                transport: "streamable_http",
+                toolPolicy: "ask",
+                configFingerprint: "fingerprint",
+                authStatus: "bearer",
+                startedAt: "2026-04-05T11:00:00.000Z",
+                readyAt: "2026-04-05T11:00:01.000Z",
+                catalogVersion: "catalog",
+                catalogFetchedAt: "2026-04-05T11:00:02.000Z",
+                catalogExpiresAt: "2026-04-06T11:00:02.000Z",
+                updatedAt: "2026-04-05T11:00:02.000Z",
+                lastError: null,
+              },
+              {
+                name: "local",
+                state: "failed",
+                enabled: true,
+                transport: "stdio",
+                toolPolicy: "ask",
+                configFingerprint: "fingerprint",
+                authStatus: "none",
+                startedAt: "2026-04-05T11:00:00.000Z",
+                readyAt: null,
+                catalogVersion: null,
+                catalogFetchedAt: null,
+                catalogExpiresAt: null,
+                updatedAt: "2026-04-05T11:00:02.000Z",
+                lastError: "failed",
+              },
+            ],
+          }),
+        },
       });
 
       const snapshot = service.getConversationStatus({
@@ -278,11 +328,18 @@ describe("runtime status service", () => {
         yoloEnabled: true,
         autopilotEnabled: false,
       });
+      expect(snapshot.mcp).toMatchObject({
+        enabled: true,
+        generation: 1,
+      });
 
       const text = formatConversationStatusText(snapshot);
       expect(text).toContain("当前状态");
       expect(text).toContain("openrouter-gpt5.4 / openai/gpt-5.4 / openrouter / openai-responses");
       expect(text).toContain("运行模式：🐯 YOLO");
+      expect(text).toContain("MCP：开启");
+      expect(text).toContain("- linear: ready / streamable_http");
+      expect(text).toContain("- local: failed / stdio");
       expect(text.indexOf("Reasoning: 支持")).toBeLessThan(text.indexOf("运行模式：🐯 YOLO"));
       expect(text).toContain("- 最近 3 天 session");
       expect(text).not.toContain("- 当前 session 累计");
@@ -298,6 +355,11 @@ describe("runtime status service", () => {
       expect(presentation.markdownSections.join("\n")).toContain("**版本**");
       expect(presentation.markdownSections.join("\n")).toContain("openrouter-gpt5.4");
       expect(presentation.markdownSections.join("\n")).toContain("**运行模式**：🐯 YOLO");
+      expect(presentation.markdownSections.join("\n")).toContain("**MCP**：开启");
+      expect(presentation.markdownSections.join("\n")).toContain(
+        "- `linear`: ready / streamable_http",
+      );
+      expect(presentation.markdownSections.join("\n")).toContain("- `local`: failed / stdio");
       const overviewSection = presentation.markdownSections[0] ?? "";
       expect(overviewSection.indexOf("**Reasoning**: 支持")).toBeLessThan(
         overviewSection.indexOf("**运行模式**：🐯 YOLO"),

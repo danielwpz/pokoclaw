@@ -6,6 +6,7 @@ import {
   checkBashFullAccessPermission,
   checkDatabasePermission,
   checkFilesystemPermission,
+  checkMcpToolPermission,
   type EffectivePermissions,
   type PermissionCheckResult,
   parseGrantedScopes,
@@ -20,6 +21,7 @@ import {
 import {
   type DbPermissionKind,
   type FsPermissionKind,
+  type McpToolPermissionScope,
   type PermissionRequest,
   type PermissionScope,
   parsePermissionRequestJson,
@@ -142,6 +144,28 @@ export class SecurityService {
   }): PermissionCheckResult {
     return checkBashFullAccessPermission({
       commandPrefix: input.commandPrefix,
+      permissions: this.getEffectivePermissionsWithEphemeralScopes({
+        ownerAgentId: input.ownerAgentId,
+        ...(input.activeAt == null ? {} : { activeAt: input.activeAt }),
+        ...(input.ephemeralScopes == null ? {} : { ephemeralScopes: input.ephemeralScopes }),
+      }),
+    });
+  }
+
+  checkMcpToolAccess(input: {
+    ownerAgentId: string;
+    server: string;
+    tool: string;
+    serverFingerprint: string;
+    catalogVersion: string;
+    activeAt?: Date;
+    ephemeralScopes?: PermissionScope[];
+  }): PermissionCheckResult {
+    return checkMcpToolPermission({
+      server: input.server,
+      tool: input.tool,
+      serverFingerprint: input.serverFingerprint,
+      catalogVersion: input.catalogVersion,
       permissions: this.getEffectivePermissionsWithEphemeralScopes({
         ownerAgentId: input.ownerAgentId,
         ...(input.activeAt == null ? {} : { activeAt: input.activeAt }),
@@ -287,6 +311,10 @@ function describeScopeForLog(scope: PermissionScope): string {
     return `${scope.kind}:${scope.prefix.join(" ")}`;
   }
 
+  if (isMcpToolScope(scope)) {
+    return `${scope.kind}:${scope.server}/${scope.tool}:${scope.serverFingerprint}:${scope.catalogVersion}`;
+  }
+
   return `${scope.kind}:${scope.database}`;
 }
 
@@ -302,6 +330,11 @@ function expandUserApprovedFilesystemScopes(scopes: PermissionScope[]): Permissi
 
     if ("prefix" in scope) {
       expanded.set(`${scope.kind}:${scope.prefix.join("\u0000")}`, scope);
+      continue;
+    }
+
+    if (isMcpToolScope(scope)) {
+      expanded.set(mcpToolScopeKey(scope), scope);
       continue;
     }
 
@@ -325,8 +358,21 @@ function dedupeScopes(scopes: PermissionScope[]): PermissionScope[] {
       continue;
     }
 
+    if (isMcpToolScope(scope)) {
+      unique.set(mcpToolScopeKey(scope), scope);
+      continue;
+    }
+
     unique.set(`${scope.kind}:${scope.database}`, scope);
   }
 
   return [...unique.values()];
+}
+
+function isMcpToolScope(scope: PermissionScope): scope is McpToolPermissionScope {
+  return scope.kind === "mcp.tool";
+}
+
+function mcpToolScopeKey(scope: McpToolPermissionScope): string {
+  return `${scope.kind}:${scope.server}:${scope.tool}:${scope.serverFingerprint}:${scope.catalogVersion}`;
 }

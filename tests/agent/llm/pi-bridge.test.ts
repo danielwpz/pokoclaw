@@ -6,6 +6,7 @@ import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import { PiBridge } from "@/src/agent/llm/pi-bridge.js";
 import type { Message } from "@/src/storage/schema/types.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { jsonSchemaToolInputSchema } from "@/src/tools/core/schema.js";
 import { defineTool } from "@/src/tools/core/types.js";
 
 const { completeSimpleMock, streamSimpleMock } = vi.hoisted(() => ({
@@ -311,6 +312,81 @@ describe("pi bridge", () => {
       { maxTokens?: number },
     ];
     expect(options.maxTokens).toBe(128_000);
+  });
+
+  test("exposes raw json-schema tool parameters without converting through TypeBox", async () => {
+    const finalMessage = {
+      role: "assistant" as const,
+      api: "anthropic-messages" as const,
+      provider: "anthropic_main",
+      model: "claude-sonnet-4-5-20250929",
+      stopReason: "stop" as const,
+      content: [{ type: "text" as const, text: "ok" }],
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+    streamSimpleMock.mockReturnValue(
+      createAssistantEventStream(
+        [{ type: "done", reason: "stop", message: finalMessage }],
+        finalMessage,
+      ),
+    );
+    const rawJsonSchema = {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    };
+
+    const bridge = new PiBridge();
+    await bridge.streamTurn({
+      model: createResolvedModel(),
+      compactSummary: null,
+      messages: [createStoredUserMessage()],
+      tools: new ToolRegistry([
+        {
+          name: "mcp__search__query",
+          description: "Search through an external MCP source",
+          inputSchemaSpec: jsonSchemaToolInputSchema({
+            schema: rawJsonSchema,
+            validate(input) {
+              return { ok: true, value: input };
+            },
+          }),
+          execute() {
+            throw new Error("not used");
+          },
+        },
+      ]),
+      signal: new AbortController().signal,
+    });
+
+    const [, context] = streamSimpleMock.mock.calls[0] as [
+      ResolvedModel,
+      { tools: Array<{ name: string; parameters: unknown }> },
+    ];
+    expect(context.tools).toEqual([
+      {
+        name: "mcp__search__query",
+        description: "Search through an external MCP source",
+        parameters: rawJsonSchema,
+      },
+    ]);
   });
 
   test("derives a default baseUrl for anthropic providers", async () => {

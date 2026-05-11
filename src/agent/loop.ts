@@ -103,7 +103,7 @@ import {
   isToolFailure,
   normalizeToolFailure,
 } from "@/src/tools/core/errors.js";
-import type { ToolRegistry } from "@/src/tools/core/registry.js";
+import type { ToolRegistryLike } from "@/src/tools/core/registry.js";
 import {
   type ToolExecutionApprovalState,
   type ToolExecutionContext,
@@ -218,7 +218,7 @@ export interface AgentLoopDependencies {
   sessions: AgentSessionService;
   messages: MessagesRepo;
   models: ProviderRegistry | ProviderRegistrySource;
-  tools: ToolRegistry;
+  tools: ToolRegistryLike;
   skillsResolver?: AgentSkillsResolver;
   bootstrapResolver?: AgentBootstrapResolver;
   memoryResolver?: AgentMemoryResolver;

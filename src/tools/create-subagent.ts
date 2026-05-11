@@ -1,5 +1,9 @@
 import { type Static, Type } from "@sinclair/typebox";
-import { type PermissionScope, parsePermissionScope } from "@/src/security/scope.js";
+import {
+  type McpToolPermissionScope,
+  type PermissionScope,
+  parsePermissionScope,
+} from "@/src/security/scope.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { toolInternalError, toolRecoverableError } from "@/src/tools/core/errors.js";
@@ -159,6 +163,12 @@ export function createCreateSubagentTool() {
 
 function normalizeInitialExtraScopes(
   scopes: CreateSubagentToolArgs["initialExtraScopes"],
-): PermissionScope[] {
-  return (scopes ?? []).map((scope) => parsePermissionScope(scope));
+): Array<Exclude<PermissionScope, McpToolPermissionScope>> {
+  return (scopes ?? []).map((scope) => {
+    const parsed = parsePermissionScope(scope);
+    if (parsed.kind === "mcp.tool") {
+      throw new Error("create_subagent initialExtraScopes does not support mcp.tool scopes");
+    }
+    return parsed;
+  });
 }

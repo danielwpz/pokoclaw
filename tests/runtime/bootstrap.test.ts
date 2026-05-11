@@ -57,6 +57,16 @@ function createConfig(): AppConfig {
         },
       },
     },
+    mcp: {
+      enabled: false,
+      catalogTtlMs: 86_400_000,
+      startupTimeoutMs: 30_000,
+      toolTimeoutMs: 120_000,
+      failureWindowMs: 300_000,
+      degradeAfterConsecutiveFailures: 3,
+      failStartupOnRequired: false,
+      servers: {},
+    },
     security: {
       filesystem: {
         overrideHardDenyRead: false,

@@ -4,6 +4,7 @@ import { type A2uiPublisher, createPublishA2uiTool } from "@/src/tools/a2ui-publ
 import { createBackgroundTaskTool } from "@/src/tools/background-task.js";
 import { createBashTool } from "@/src/tools/bash.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
+import { BUILTIN_TOOL_SOURCE } from "@/src/tools/core/source.js";
 import { createCreateSubagentTool } from "@/src/tools/create-subagent.js";
 import { createScheduleTaskTool } from "@/src/tools/cron.js";
 import { createEditTool } from "@/src/tools/edit.js";
@@ -30,7 +31,7 @@ export function createBuiltinToolRegistry(
 ): ToolRegistry {
   const providers = config?.providers ?? DEFAULT_CONFIG.providers;
   const toolsConfig = config?.tools ?? DEFAULT_CONFIG.tools;
-  const registry = new ToolRegistry();
+  const registry = new ToolRegistry([], { source: BUILTIN_TOOL_SOURCE });
   registry.register(createBashTool());
   registry.register(createReadTool());
   registry.register(createWriteTool());

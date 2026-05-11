@@ -14,6 +14,7 @@ import {
   type DbPermissionKind,
   type FsPermissionKind,
   isFsSubtreeScopePath,
+  type McpToolPermissionScope,
   type PermissionScope,
   parsePermissionScope,
 } from "@/src/security/scope.js";
@@ -38,6 +39,9 @@ export interface EffectivePermissions {
   };
   bash: {
     fullAccessPrefixes: string[][];
+  };
+  mcp: {
+    tools: McpToolPermissionScope[];
   };
 }
 
@@ -133,6 +137,12 @@ function getBashFullAccessPrefixes(scopes: PermissionScope[]): string[][] {
     .map((scope) => [...scope.prefix]);
 }
 
+function getMcpToolScopes(scopes: PermissionScope[]): McpToolPermissionScope[] {
+  return scopes
+    .filter((scope): scope is McpToolPermissionScope => scope.kind === "mcp.tool")
+    .map((scope) => ({ ...scope }));
+}
+
 export function buildEffectivePermissions(
   scopes: PermissionScope[],
   systemPolicy: SystemPermissionPolicy = DEFAULT_SYSTEM_POLICY,
@@ -164,6 +174,9 @@ export function buildEffectivePermissions(
     },
     bash: {
       fullAccessPrefixes: getBashFullAccessPrefixes(scopes),
+    },
+    mcp: {
+      tools: getMcpToolScopes(scopes),
     },
   };
 }
@@ -379,8 +392,49 @@ export function checkBashFullAccessPermission(input: {
   };
 }
 
+export function checkMcpToolPermission(input: {
+  server: string;
+  tool: string;
+  serverFingerprint: string;
+  catalogVersion: string;
+  permissions: EffectivePermissions;
+}): PermissionCheckResult {
+  const matched = input.permissions.mcp.tools.some((scope) => mcpToolScopeMatches(scope, input));
+
+  if (matched) {
+    return {
+      result: "allow",
+      reason: "granted",
+      summary: `mcp.tool is granted for ${input.server}/${input.tool}`,
+    };
+  }
+
+  return {
+    result: "deny",
+    reason: "not_granted",
+    summary: `mcp.tool requires approval for ${input.server}/${input.tool}`,
+  };
+}
+
 export function parseGrantedScopes(scopeJsonValues: string[]): PermissionScope[] {
   return scopeJsonValues.map((scopeJson) => parsePermissionScope(JSON.parse(scopeJson)));
+}
+
+function mcpToolScopeMatches(
+  scope: McpToolPermissionScope,
+  target: {
+    server: string;
+    tool: string;
+    serverFingerprint: string;
+    catalogVersion: string;
+  },
+): boolean {
+  return (
+    scope.server === target.server &&
+    scope.tool === target.tool &&
+    scope.serverFingerprint === target.serverFingerprint &&
+    scope.catalogVersion === target.catalogVersion
+  );
 }
 
 function resolvePathWithExistingRealpath(inputPath: string, cwd?: string): string {

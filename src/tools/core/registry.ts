@@ -4,13 +4,16 @@ import {
   normalizeToolFailure,
   toolRecoverableError,
 } from "@/src/tools/core/errors.js";
+import { validateToolInput } from "@/src/tools/core/schema.js";
+import type { ToolSource } from "@/src/tools/core/source.js";
+import { attachToolSource } from "@/src/tools/core/source.js";
 import {
-  parseToolArgs,
   type ToolContentBlock,
   type ToolDefinition,
   type ToolExecutionContext,
   ToolLookupError,
   type ToolResult,
+  type ToolSourceMetadata,
 } from "@/src/tools/core/types.js";
 
 const logger = createSubsystemLogger("tools");
@@ -18,10 +21,30 @@ const DEFAULT_TOOL_TIMEOUT_MS = 10_000;
 export const DEFAULT_TOOL_RESULT_MAX_CHARS = 12_000;
 export const TOOL_RESULT_TRUNCATION_NOTICE = "\n\n[Tool result truncated due to size limit.]";
 
-export class ToolRegistry {
-  private readonly tools = new Map<string, ToolDefinition<unknown, unknown>>();
+export interface ToolRegistryLike {
+  has(name: string): boolean;
+  get(name: string): ToolDefinition | null;
+  getRequired(name: string): ToolDefinition;
+  list(): ToolDefinition[];
+  execute(name: string, context: ToolExecutionContext, rawArgs: unknown): Promise<ToolResult>;
+}
 
-  constructor(tools: ToolDefinition[] = []) {
+export class ToolRegistry implements ToolRegistryLike, ToolSource {
+  private readonly tools = new Map<string, ToolDefinition<unknown, unknown>>();
+  readonly metadata: ToolSourceMetadata;
+
+  constructor(
+    tools: ToolDefinition[] = [],
+    options: {
+      source?: ToolSourceMetadata;
+    } = {},
+  ) {
+    this.metadata = options.source ?? {
+      kind: "custom",
+      id: "tool-registry",
+      displayName: "Tool registry",
+      diagnosticsName: "tool-registry",
+    };
     this.registerMany(tools);
   }
 
@@ -30,7 +53,10 @@ export class ToolRegistry {
       throw new Error(`Tool already registered: ${tool.name}`);
     }
 
-    this.tools.set(tool.name, tool as ToolDefinition<unknown, unknown>);
+    this.tools.set(
+      tool.name,
+      attachToolSource(tool, this.metadata) as ToolDefinition<unknown, unknown>,
+    );
   }
 
   registerMany(tools: ToolDefinition[]): void {
@@ -65,96 +91,114 @@ export class ToolRegistry {
     context: ToolExecutionContext,
     rawArgs: unknown,
   ): Promise<ToolResult> {
-    const startedAt = Date.now();
-    let timedOut = false;
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-    logger.info("tool execution started", {
+    try {
+      return await executeToolDefinition(this.getRequired(name), name, context, rawArgs);
+    } catch (error) {
+      if (error instanceof ToolLookupError) {
+        throw normalizeToolFailure(error);
+      }
+      throw error;
+    }
+  }
+}
+
+export async function executeToolDefinition(
+  tool: ToolDefinition,
+  name: string,
+  context: ToolExecutionContext,
+  rawArgs: unknown,
+): Promise<ToolResult> {
+  const startedAt = Date.now();
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  logger.info("tool execution started", {
+    toolName: name,
+    toolCallId: context.toolCallId,
+    sessionId: context.sessionId,
+    conversationId: context.conversationId,
+    cwd: context.cwd,
+    source: tool.source?.diagnosticsName ?? tool.source?.id,
+    args: truncateSerialized(rawArgs),
+  });
+
+  try {
+    const args = validateToolInput(tool.name, tool, rawArgs);
+    const timeoutMs = Math.max(
+      1,
+      Math.floor(tool.getInvocationTimeoutMs?.(context, args) ?? DEFAULT_TOOL_TIMEOUT_MS),
+    );
+    const resultMaxChars = Math.max(
+      1,
+      Math.floor(tool.getResultMaxChars?.(context, args) ?? DEFAULT_TOOL_RESULT_MAX_CHARS),
+    );
+    const timeoutController = new AbortController();
+    const combinedAbortSignal =
+      context.abortSignal == null
+        ? timeoutController.signal
+        : AbortSignal.any([context.abortSignal, timeoutController.signal]);
+    const executionContext: ToolExecutionContext = {
+      ...context,
+      abortSignal: combinedAbortSignal,
+    };
+    const executionPromise = Promise.resolve(tool.execute(executionContext, args));
+    executionPromise.catch(() => {});
+    const rawResult = await Promise.race([
+      executionPromise,
+      new Promise<ToolResult>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          timeoutController.abort();
+          reject(
+            toolRecoverableError(`The ${name} tool timed out after ${timeoutMs}ms.`, {
+              code: "tool_timeout",
+              toolName: name,
+              timeoutMs,
+            }),
+          );
+        }, timeoutMs);
+      }),
+    ]);
+    const result = truncateToolResult(rawResult, resultMaxChars);
+    logger.info("tool execution finished", {
       toolName: name,
       toolCallId: context.toolCallId,
       sessionId: context.sessionId,
-      conversationId: context.conversationId,
-      cwd: context.cwd,
-      args: truncateSerialized(rawArgs),
+      source: tool.source?.diagnosticsName ?? tool.source?.id,
+      success: true,
+      durationMs: Date.now() - startedAt,
+      result: summarizeToolResult(result),
     });
 
-    try {
-      const tool = this.getRequired(name);
-      const args =
-        tool.inputSchema == null ? rawArgs : parseToolArgs(tool.name, tool.inputSchema, rawArgs);
-      const timeoutMs = Math.max(
-        1,
-        Math.floor(tool.getInvocationTimeoutMs?.(context, args) ?? DEFAULT_TOOL_TIMEOUT_MS),
-      );
-      const resultMaxChars = Math.max(
-        1,
-        Math.floor(tool.getResultMaxChars?.(context, args) ?? DEFAULT_TOOL_RESULT_MAX_CHARS),
-      );
-      const timeoutController = new AbortController();
-      const combinedAbortSignal =
-        context.abortSignal == null
-          ? timeoutController.signal
-          : AbortSignal.any([context.abortSignal, timeoutController.signal]);
-      const executionContext: ToolExecutionContext = {
-        ...context,
-        abortSignal: combinedAbortSignal,
-      };
-      const executionPromise = Promise.resolve(tool.execute(executionContext, args));
-      executionPromise.catch(() => {});
-      const rawResult = await Promise.race([
-        executionPromise,
-        new Promise<ToolResult>((_, reject) => {
-          timeoutHandle = setTimeout(() => {
-            timedOut = true;
-            timeoutController.abort();
-            reject(
-              toolRecoverableError(`The ${name} tool timed out after ${timeoutMs}ms.`, {
-                code: "tool_timeout",
-                toolName: name,
-                timeoutMs,
-              }),
-            );
-          }, timeoutMs);
-        }),
-      ]);
-      const result = truncateToolResult(rawResult, resultMaxChars);
-      logger.info("tool execution finished", {
+    return result;
+  } catch (error) {
+    if (isToolApprovalRequired(error)) {
+      logger.info("tool execution waiting for approval", {
         toolName: name,
         toolCallId: context.toolCallId,
         sessionId: context.sessionId,
-        success: true,
+        source: tool.source?.diagnosticsName ?? tool.source?.id,
         durationMs: Date.now() - startedAt,
-        result: summarizeToolResult(result),
+        reason: truncateText(error.reasonText, 160),
       });
+      throw error;
+    }
 
-      return result;
-    } catch (error) {
-      if (isToolApprovalRequired(error)) {
-        logger.info("tool execution waiting for approval", {
-          toolName: name,
-          toolCallId: context.toolCallId,
-          sessionId: context.sessionId,
-          durationMs: Date.now() - startedAt,
-          reason: truncateText(error.reasonText, 160),
-        });
-        throw error;
-      }
-
-      const normalized = normalizeToolFailure(error);
-      logger.warn("tool execution finished", {
-        toolName: name,
-        toolCallId: context.toolCallId,
-        sessionId: context.sessionId,
-        success: false,
-        durationMs: Date.now() - startedAt,
-        ...(timedOut ? { timedOut: true } : {}),
-        errorKind: normalized.kind,
-        errorMessage: truncateText(normalized.rawMessage ?? normalized.message, 160),
-      });
-      throw normalized;
-    } finally {
-      if (timeoutHandle != null) {
-        clearTimeout(timeoutHandle);
-      }
+    const normalized = normalizeToolFailure(error);
+    logger.warn("tool execution finished", {
+      toolName: name,
+      toolCallId: context.toolCallId,
+      sessionId: context.sessionId,
+      source: tool.source?.diagnosticsName ?? tool.source?.id,
+      success: false,
+      durationMs: Date.now() - startedAt,
+      ...(timedOut ? { timedOut: true } : {}),
+      errorKind: normalized.kind,
+      errorMessage: truncateText(normalized.rawMessage ?? normalized.message, 160),
+    });
+    throw normalized;
+  } finally {
+    if (timeoutHandle != null) {
+      clearTimeout(timeoutHandle);
     }
   }
 }

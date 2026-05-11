@@ -149,6 +149,54 @@ describe("security service", () => {
     });
   });
 
+  test("checks MCP tool grants with server and catalog fingerprints", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    const service = new SecurityService(handle.storage.db);
+
+    service.grantScopes({
+      ownerAgentId: "agent_2",
+      scopes: [
+        {
+          kind: "mcp.tool",
+          server: "linear",
+          tool: "create_issue",
+          serverFingerprint: "server-v1",
+          catalogVersion: "catalog-v1",
+        },
+      ],
+      grantedBy: "user",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+      expiresAt: new Date("2026-03-29T00:00:00.000Z"),
+    });
+
+    expect(
+      service.checkMcpToolAccess({
+        ownerAgentId: "agent_2",
+        server: "linear",
+        tool: "create_issue",
+        serverFingerprint: "server-v1",
+        catalogVersion: "catalog-v1",
+        activeAt: new Date("2026-03-22T12:00:00.000Z"),
+      }),
+    ).toEqual({
+      result: "allow",
+      reason: "granted",
+      summary: "mcp.tool is granted for linear/create_issue",
+    });
+
+    expect(
+      service.checkMcpToolAccess({
+        ownerAgentId: "agent_2",
+        server: "linear",
+        tool: "create_issue",
+        serverFingerprint: "server-v2",
+        catalogVersion: "catalog-v1",
+        activeAt: new Date("2026-03-22T12:00:00.000Z"),
+      }),
+    ).toMatchObject({ result: "deny", reason: "not_granted" });
+  });
+
   test("getAgentRole normalizes persisted agent kinds", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);

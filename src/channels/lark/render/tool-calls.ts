@@ -123,6 +123,11 @@ function renderToolDetail(
 }
 
 function summarizeToolLabel(tool: LarkToolSequenceTool): string {
+  const mcpTool = parseMcpToolName(tool.toolName);
+  if (mcpTool != null) {
+    return `MCP · ${humanizeNameFragment(mcpTool.serverName)} · ${humanizeNameFragment(mcpTool.toolName)}`;
+  }
+
   return tool.toolName;
 }
 
@@ -133,6 +138,10 @@ function renderToolDetailContent(tool: LarkToolSequenceTool): string {
   if (tool.toolName === "bash") {
     return renderBashToolDetailContent(tool);
   }
+  const mcpTool = parseMcpToolName(tool.toolName);
+  if (mcpTool != null) {
+    return renderMcpToolDetailContent(tool, mcpTool);
+  }
 
   const truncatedArgs = truncateLarkCardValueDeep(tool.args);
   const truncatedResult =
@@ -142,6 +151,25 @@ function renderToolDetailContent(tool: LarkToolSequenceTool): string {
 
   return (
     `**Input**\n\`\`\`json\n${prettyPrint(truncatedArgs)}\n\`\`\`` +
+    `\n\n**${
+      tool.status === "failed" ? "Error" : "Output"
+    }**\n\`\`\`\n${prettyPrint(truncatedResult)}\n\`\`\``
+  );
+}
+
+function renderMcpToolDetailContent(
+  tool: LarkToolSequenceTool,
+  mcpTool: { serverName: string; toolName: string },
+): string {
+  const truncatedArgs = truncateLarkCardValueDeep(tool.args);
+  const truncatedResult =
+    tool.status === "failed"
+      ? truncateLarkCardString(tool.errorMessage ?? "")
+      : truncateLarkCardValueDeep(tool.result);
+
+  return (
+    `**MCP**\n- Server: \`${mcpTool.serverName}\`\n- Tool: \`${mcpTool.toolName}\`` +
+    `\n\n**Parameters**\n\`\`\`json\n${prettyPrint(truncatedArgs)}\n\`\`\`` +
     `\n\n**${
       tool.status === "failed" ? "Error" : "Output"
     }**\n\`\`\`\n${prettyPrint(truncatedResult)}\n\`\`\``
@@ -254,6 +282,10 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
   }
 
   const args = isRecord(tool.args) ? tool.args : null;
+  if (parseMcpToolName(tool.toolName) != null) {
+    return summarizeMcpArgs(args);
+  }
+
   switch (tool.toolName) {
     case "schedule_task":
       return summarizeScheduleTask(args);
@@ -411,6 +443,23 @@ function summarizeGeneric(args: Record<string, unknown> | null): string {
   return "";
 }
 
+function summarizeMcpArgs(args: Record<string, unknown> | null): string {
+  if (args == null) {
+    return "";
+  }
+
+  return summarizeParts(
+    readString(args.title),
+    readString(args.query) ?? readString(args.pattern),
+    readString(args.name),
+    readIdentifier(args.id) ?? readIdentifier(args.issueId) ?? readIdentifier(args.projectId),
+    readString(args.project),
+    readString(args.team),
+    readString(args.state),
+    readString(args.assignee),
+  );
+}
+
 function summarizeTaskRef(args: Record<string, unknown> | null): string | null {
   const name = readString(args?.name);
   if (name != null) {
@@ -438,6 +487,44 @@ function normalizeSingleLine(text: string): string {
     .replace(/\s*\r?\n\s*/g, " ")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
+}
+
+function parseMcpToolName(toolName: string): { serverName: string; toolName: string } | null {
+  const prefix = "mcp__";
+  if (!toolName.startsWith(prefix)) {
+    return null;
+  }
+
+  const body = toolName.slice(prefix.length);
+  const separatorIndex = body.indexOf("__");
+  if (separatorIndex <= 0 || separatorIndex >= body.length - 2) {
+    return null;
+  }
+
+  return {
+    serverName: body.slice(0, separatorIndex),
+    toolName: body.slice(separatorIndex + 2),
+  };
+}
+
+function humanizeNameFragment(value: string): string {
+  const normalized = value.replace(/[_-]+/g, " ").trim();
+  if (normalized.length === 0) {
+    return value;
+  }
+
+  return normalized
+    .split(/\s+/)
+    .map((part, index) => (index === 0 ? capitalizeAscii(part) : part))
+    .join(" ");
+}
+
+function capitalizeAscii(value: string): string {
+  if (value.length === 0) {
+    return value;
+  }
+
+  return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
 }
 
 function prettyPrint(value: unknown): string {

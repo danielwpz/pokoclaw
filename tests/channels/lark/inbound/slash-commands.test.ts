@@ -270,6 +270,7 @@ describe("lark inbound slash commands", () => {
           latestTurnErrorMessage: null,
           activeRuns: [],
           pendingApprovals: [],
+          mcp: null,
         })),
       } satisfies Pick<RuntimeStatusService, "getConversationStatus">;
       const clients = {
@@ -402,6 +403,7 @@ describe("lark inbound slash commands", () => {
           latestTurnErrorMessage: null,
           activeRuns: [],
           pendingApprovals: [],
+          mcp: null,
         })),
       } satisfies Pick<RuntimeStatusService, "getConversationStatus">;
       const clients = {
@@ -513,6 +515,7 @@ describe("lark inbound slash commands", () => {
           latestTurnErrorMessage: null,
           activeRuns: [],
           pendingApprovals: [],
+          mcp: null,
         })),
       } satisfies Pick<RuntimeStatusService, "getConversationStatus">;
       const clients = {

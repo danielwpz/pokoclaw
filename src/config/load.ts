@@ -61,6 +61,7 @@ export function buildAppConfigFromInputs(
     projectContext: resolvedConfig.projectContext,
     selfHarness: resolvedConfig.selfHarness,
     tools: resolvedConfig.tools,
+    mcp: resolvedConfig.mcp,
     security: resolvedConfig.security,
     channels: resolvedConfig.channels,
     secrets,
