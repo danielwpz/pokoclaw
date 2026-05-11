@@ -85,6 +85,9 @@ The provider and model templates below cover the LLM side first. Complete the re
 
 If the user wants web search or web fetch, also configure a Tavily provider plus `[tools.web.search]` and `[tools.web.fetch]`.
 
+MCP is optional and is not part of the required onboarding flow. If the user asks
+for MCP tools, use `docs/mcp.md` for the supported configuration shape.
+
 ## Project context files
 
 Pokoclaw loads project guidance files for agent runs from the configured workdir:
