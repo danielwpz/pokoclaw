@@ -106,6 +106,7 @@ export interface ToolExecutionApprovalState {
     approved: true;
     mode: "one_shot";
     approvalId: number;
+    toolCallId?: string;
   };
   ephemeralPermissionScopes?: PermissionScope[];
 }

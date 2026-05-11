@@ -220,7 +220,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
   }
 
   if (
-    input.context.approvalState?.bashFullAccess?.approved === true ||
+    hasCurrentToolCallOneShotBashApproval(input.context) ||
     input.context.approvalState?.runtimeModeAutoApproval != null
   ) {
     return await executeUnsandboxedBash({
@@ -271,11 +271,21 @@ async function executeBashWithFullAccessIfAllowed(input: {
               approved: true,
               mode: "one_shot" as const,
               approvalId: 0,
+              ...(input.context.toolCallId == null ? {} : { toolCallId: input.context.toolCallId }),
             },
           },
         }
       : {}),
   });
+}
+
+function hasCurrentToolCallOneShotBashApproval(context: ToolExecutionContext): boolean {
+  const approval = context.approvalState?.bashFullAccess;
+  return (
+    approval?.approved === true &&
+    approval.toolCallId != null &&
+    approval.toolCallId === context.toolCallId
+  );
 }
 
 type BashFullAccessSegmentApproval =

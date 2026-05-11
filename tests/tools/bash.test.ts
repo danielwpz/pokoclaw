@@ -636,6 +636,106 @@ Use this exact bash argument object on the next retry if full access is warrante
     });
   });
 
+  test("does not reuse a one-shot bash full-access approval for a later tool call", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command: "agent-browser wait 5000 2>&1",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "done\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          toolCallId: "tool_2",
+          approvalState: {
+            bashFullAccess: {
+              approved: true,
+              mode: "one_shot",
+              approvalId: 43,
+            },
+          },
+        },
+        {
+          command: "agent-browser wait 5000 2>&1",
+          sandboxMode: "full_access",
+          justification: "Wait for the browser page to finish rendering.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      grantOnApprove: false,
+      request: {
+        scopes: [{ kind: "bash.full_access", prefix: ["agent-browser", "wait", "5000"] }],
+      },
+    });
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("uses a one-shot bash full-access approval for the matching tool call retry", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command: "agent-browser wait 5000 2>&1",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "done\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+        approvalState: {
+          bashFullAccess: {
+            approved: true,
+            mode: "one_shot",
+            approvalId: 43,
+            toolCallId: "tool_1",
+          },
+        },
+      },
+      {
+        command: "agent-browser wait 5000 2>&1",
+        sandboxMode: "full_access",
+        justification: "Wait for the browser page to finish rendering.",
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      command: "agent-browser wait 5000 2>&1",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
   test("uses existing bash full-access grants for every parsed subcommand in a compound command", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
