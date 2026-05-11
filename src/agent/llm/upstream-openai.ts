@@ -266,7 +266,7 @@ function streamOpenAICompletionsWithUpstreamUsage(
         })
         .asResponse();
 
-      ensureSuccessfulStreamResponse(response);
+      await ensureSuccessfulStreamResponse(response);
 
       stream.push({ type: "start", partial: output });
 
@@ -867,12 +867,89 @@ function readReasoningDetails(
     : null;
 }
 
-function ensureSuccessfulStreamResponse(response: Response): void {
+async function ensureSuccessfulStreamResponse(response: Response): Promise<void> {
   if (response.ok) {
     return;
   }
 
-  throw new Error(`OpenAI-compatible streaming request failed with status ${response.status}`);
+  throw new Error(await buildOpenAICompatibleHttpErrorMessage(response));
+}
+
+async function buildOpenAICompatibleHttpErrorMessage(response: Response): Promise<string> {
+  const statusText = response.statusText.trim();
+  const status = `status ${response.status}${statusText.length > 0 ? ` ${statusText}` : ""}`;
+  const prefix = `OpenAI-compatible streaming request failed with ${status}`;
+
+  let bodyText = "";
+  try {
+    bodyText = await response.text();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `${prefix}: failed to read response body: ${reason}`;
+  }
+
+  const detail = extractOpenAICompatibleHttpErrorDetail(bodyText);
+  return detail == null ? prefix : `${prefix}: ${detail}`;
+}
+
+function extractOpenAICompatibleHttpErrorDetail(bodyText: string): string | null {
+  const trimmed = bodyText.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const messages: string[] = [];
+    appendUniqueDetail(messages, readNestedString(parsed, ["error", "message"]));
+    appendUniqueDetail(messages, readNestedString(parsed, ["error", "error", "message"]));
+    appendUniqueDetail(messages, readNestedString(parsed, ["message"]));
+
+    if (messages.length === 0) {
+      appendUniqueDetail(messages, readNestedString(parsed, ["error", "code"]));
+      appendUniqueDetail(messages, readNestedString(parsed, ["error", "type"]));
+      appendUniqueDetail(messages, readNestedString(parsed, ["type"]));
+    }
+
+    const requestId =
+      readNestedString(parsed, ["request_id"]) ??
+      readNestedString(parsed, ["error", "request_id"]) ??
+      readNestedString(parsed, ["error", "metadata", "request_id"]);
+    const detail = messages.length === 0 ? truncateHttpErrorDetail(trimmed) : messages.join(" | ");
+    return requestId == null ? detail : `${detail} (request_id=${requestId})`;
+  } catch {
+    return truncateHttpErrorDetail(trimmed);
+  }
+}
+
+function appendUniqueDetail(details: string[], candidate: string | null): void {
+  if (candidate == null) {
+    return;
+  }
+
+  const normalized = candidate.trim();
+  if (normalized.length === 0 || details.includes(normalized)) {
+    return;
+  }
+
+  details.push(normalized);
+}
+
+function readNestedString(value: unknown, path: string[]): string | null {
+  let current = value;
+  for (const key of path) {
+    if (typeof current !== "object" || current == null || !(key in current)) {
+      return null;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+
+  return typeof current === "string" && current.trim().length > 0 ? current : null;
+}
+
+function truncateHttpErrorDetail(value: string): string {
+  const maxLength = 4000;
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 }
 
 async function* parseOpenAICompatibleSseResponse(response: Response): AsyncIterable<{

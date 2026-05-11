@@ -86,9 +86,14 @@ export function normalizeAgentLlmError(input: NormalizeAgentLlmErrorInput): Agen
   }
 
   const rawDetails = readAgentLlmRawErrorPayload(input.error);
-  const rawMessage = rawDetails?.rawMessage ?? getErrorMessage(input.error);
+  const rawMessages = rawDetails == null ? collectRawErrorMessages(input.error) : [];
+  const rawMessage =
+    rawDetails?.rawMessage ??
+    (rawMessages.length > 0 ? rawMessages.join(" | ") : getErrorMessage(input.error));
   const message =
-    rawDetails?.message ?? (rawMessage.trim().length > 0 ? rawMessage : "Unknown upstream error");
+    rawDetails?.message ??
+    selectPrimaryRawErrorMessage(rawMessages) ??
+    (rawMessage.trim().length > 0 ? rawMessage : "Unknown upstream error");
   const httpStatus = getHttpStatusCode(input.error, rawMessage);
   const shape = classifyAgentLlmError({
     message,
@@ -439,9 +444,18 @@ function collectRawErrorMessages(error: unknown): string[] {
   appendUniqueMessage(messages, readStringField(error, ["message"]));
   appendUniqueMessage(messages, readStringField(error, ["response", "error", "message"]));
   appendUniqueMessage(messages, readStringField(error, ["response", "data", "error", "message"]));
+  appendUniqueMessage(
+    messages,
+    readStringField(error, ["response", "data", "error", "error", "message"]),
+  );
   appendUniqueMessage(messages, readStringField(error, ["response", "data", "message"]));
   appendUniqueMessage(messages, readStringField(error, ["response", "body", "error", "message"]));
+  appendUniqueMessage(
+    messages,
+    readStringField(error, ["response", "body", "error", "error", "message"]),
+  );
   appendUniqueMessage(messages, readStringField(error, ["error", "message"]));
+  appendUniqueMessage(messages, readStringField(error, ["error", "error", "message"]));
   appendUniqueMessage(messages, readStringField(error, ["cause", "message"]));
 
   if (messages.length === 0 && typeof error === "string" && error.trim().length > 0) {
@@ -451,9 +465,26 @@ function collectRawErrorMessages(error: unknown): string[] {
   return messages;
 }
 
+function selectPrimaryRawErrorMessage(messages: string[]): string | undefined {
+  const first = messages[0];
+  if (first === undefined) {
+    return undefined;
+  }
+
+  if (messages.length > 1 && isGenericInvalidRequestMessage(first)) {
+    return messages[1];
+  }
+
+  return first;
+}
+
+function isGenericInvalidRequestMessage(message: string): boolean {
+  return /^(?:\d{3}\s+)?invalid[_\s-]?request(?:[_\s-]?error)?$/iu.test(message.trim());
+}
+
 export function buildAgentLlmRawErrorPayload(error: unknown): AgentLlmRawErrorPayload {
   const messages = collectRawErrorMessages(error);
-  const primaryMessage = messages[0] ?? getErrorMessage(error);
+  const primaryMessage = selectPrimaryRawErrorMessage(messages) ?? getErrorMessage(error);
   const rawMessage = messages.length > 0 ? messages.join(" | ") : primaryMessage;
   const serializedError = serializeUnknownError(error);
   const errorName = readStringField(error, ["name"]);

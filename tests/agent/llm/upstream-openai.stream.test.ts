@@ -299,6 +299,76 @@ describe("upstream openai completions streaming", () => {
       text: "POKOCLAW_LOOP_OK",
     });
   });
+
+  test("surfaces non-ok completions response body details", async () => {
+    chatCompletionsCreateMock.mockReturnValue({
+      asResponse: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: "invalid params, context window exceeds limit (2013)",
+            },
+            request_id: "req_123",
+          }),
+          {
+            status: 400,
+            headers: {
+              "content-type": "application/json",
+            },
+          },
+        ),
+      ),
+    });
+
+    const stream = streamWithNormalizedUpstreamUsage(
+      {
+        api: "openai-completions",
+        id: "openai/gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+        cost: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+      {
+        systemPrompt: "You are a helpful assistant.",
+        messages: [],
+      },
+      {
+        apiKey: "secret",
+        reasoning: "medium",
+      },
+    );
+
+    for await (const _event of stream) {
+      // Fully drain the stream before reading the final result.
+    }
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("400");
+    expect(result.errorMessage).toContain("invalid params, context window exceeds limit (2013)");
+    expect(
+      (
+        result as AssistantMessage & {
+          pokoclawRawError?: ReturnType<typeof buildAgentLlmRawErrorPayload>;
+        }
+      ).pokoclawRawError,
+    ).toMatchObject({
+      message: expect.stringContaining("invalid params, context window exceeds limit (2013)"),
+      rawMessage: expect.stringContaining("invalid params, context window exceeds limit (2013)"),
+    });
+  });
 });
 
 describe("upstream openai responses streaming", () => {
