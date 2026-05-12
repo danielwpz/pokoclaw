@@ -41,6 +41,7 @@ import type {
   ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import { appendCappedTextTail, capTextTail } from "@/src/shared/capped-text.js";
 
 export interface OpenAIResponsesStreamOptions {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -69,6 +70,9 @@ type StreamToolCallBlock = Extract<AssistantMessage["content"][number], { type: 
   partialJson?: string;
 };
 type StreamBlock = StreamThinkingBlock | StreamTextBlock | StreamToolCallBlock;
+
+const STREAM_REASONING_CONTENT_MAX_CHARS = 100_000;
+const STREAM_REASONING_TRUNCATION_PREFIX = "...[earlier reasoning truncated]\n";
 
 interface ResponsesReasoningSummaryPart {
   text: string;
@@ -536,8 +540,8 @@ export async function processResponsesStream<TApi extends Api>(
         currentItem.summary = currentItem.summary || [];
         const lastPart = currentItem.summary[currentItem.summary.length - 1];
         if (lastPart) {
-          currentBlock.thinking += event.delta;
-          lastPart.text += event.delta;
+          currentBlock.thinking = appendStreamReasoning(currentBlock.thinking, event.delta);
+          lastPart.text = appendStreamReasoning(lastPart.text, event.delta);
           stream.push({
             type: "thinking_delta",
             contentIndex: blockIndex(),
@@ -551,8 +555,8 @@ export async function processResponsesStream<TApi extends Api>(
         currentItem.summary = currentItem.summary || [];
         const lastPart = currentItem.summary[currentItem.summary.length - 1];
         if (lastPart) {
-          currentBlock.thinking += "\n\n";
-          lastPart.text += "\n\n";
+          currentBlock.thinking = appendStreamReasoning(currentBlock.thinking, "\n\n");
+          lastPart.text = appendStreamReasoning(lastPart.text, "\n\n");
           stream.push({
             type: "thinking_delta",
             contentIndex: blockIndex(),
@@ -617,7 +621,9 @@ export async function processResponsesStream<TApi extends Api>(
     } else if (event.type === "response.output_item.done") {
       const item = event.item as unknown as ResponsesStreamItem;
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
-        currentBlock.thinking = item.summary?.map((summary) => summary.text).join("\n\n") || "";
+        currentBlock.thinking = capStreamReasoning(
+          item.summary?.map((summary) => summary.text).join("\n\n") || "",
+        );
         currentBlock.thinkingSignature = JSON.stringify(item);
         stream.push({
           type: "thinking_end",
@@ -704,6 +710,20 @@ export async function processResponsesStream<TApi extends Api>(
       });
     }
   }
+}
+
+function appendStreamReasoning(existing: string, delta: string): string {
+  return appendCappedTextTail(existing, delta, {
+    maxChars: STREAM_REASONING_CONTENT_MAX_CHARS,
+    truncationPrefix: STREAM_REASONING_TRUNCATION_PREFIX,
+  });
+}
+
+function capStreamReasoning(value: string): string {
+  return capTextTail(value, {
+    maxChars: STREAM_REASONING_CONTENT_MAX_CHARS,
+    truncationPrefix: STREAM_REASONING_TRUNCATION_PREFIX,
+  });
 }
 
 function mapStopReason(status?: string): StopReason {

@@ -108,8 +108,9 @@ export class InMemorySessionLane {
         ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
       });
       if (steered) {
-        logger.debug("queued inbound message behind active run", {
+        logger.debug("queued inbound message behind active session run", {
           sessionId: input.sessionId,
+          scenario: input.scenario,
           content: truncateLogValue(input.content),
           persistedImageCount: normalized.userPayload?.images?.length ?? 0,
           runtimeImageCount: normalized.runtimeImages?.length ?? 0,
@@ -151,10 +152,32 @@ export class InMemorySessionLane {
           ? {}
           : { afterToolResultHook: input.afterToolResultHook }),
       })
+      .then((run) => {
+        logger.debug("session lane run resolved", {
+          sessionId: input.sessionId,
+          scenario: input.scenario,
+          runId: run.runId,
+          appendedMessages: run.appendedMessageIds.length,
+          toolExecutions: run.toolExecutions,
+          stopSignalReason: run.stopSignal?.reason ?? null,
+        });
+        return run;
+      })
+      .catch((error: unknown) => {
+        logger.error("session lane run rejected", {
+          sessionId: input.sessionId,
+          scenario: input.scenario,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      })
       .finally(() => {
         if (this.activeRun === runPromise) {
           this.activeRun = null;
-          logger.debug("session run became idle", { sessionId: input.sessionId });
+          logger.debug("session run became idle", {
+            sessionId: input.sessionId,
+            scenario: input.scenario,
+          });
         }
       });
 

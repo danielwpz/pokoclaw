@@ -64,6 +64,7 @@ async function withHandle(fn: (handle: TestDatabaseHandle) => Promise<void>): Pr
 }
 
 async function flushMicrotasks(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
   await Promise.resolve();
   await Promise.resolve();
 }

@@ -33,6 +33,7 @@ import {
   convertResponsesTools,
   processResponsesStream,
 } from "@/src/agent/llm/pi-ai-openai-responses-shared.js";
+import { appendCappedTextTail } from "@/src/shared/capped-text.js";
 
 type CostedModel = Pick<Model<Api>, "api" | "baseUrl" | "cost">;
 
@@ -153,6 +154,8 @@ const DEFAULT_COMPAT: ResolvedOpenAICompletionsCompat = {
 };
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+const STREAM_REASONING_CONTENT_MAX_CHARS = 100_000;
+const STREAM_REASONING_TRUNCATION_PREFIX = "...[earlier reasoning truncated]\n";
 
 export function supportsUpstreamCostParser(model: Pick<Model<Api>, "baseUrl">): boolean {
   return COST_PARSERS.some((parser) => parser.supports(model));
@@ -360,7 +363,7 @@ function streamOpenAICompletionsWithUpstreamUsage(
             });
           }
 
-          currentBlock.thinking += reasoningDelta;
+          currentBlock.thinking = appendStreamReasoning(currentBlock.thinking, reasoningDelta);
           stream.push({
             type: "thinking_delta",
             contentIndex: output.content.length - 1,
@@ -498,6 +501,13 @@ function streamOpenAICompletionsWithUpstreamUsage(
   })();
 
   return stream;
+}
+
+function appendStreamReasoning(existing: string, delta: string): string {
+  return appendCappedTextTail(existing, delta, {
+    maxChars: STREAM_REASONING_CONTENT_MAX_CHARS,
+    truncationPrefix: STREAM_REASONING_TRUNCATION_PREFIX,
+  });
 }
 
 function streamOpenAIResponsesWithUpstreamUsage(

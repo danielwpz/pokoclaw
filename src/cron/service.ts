@@ -378,6 +378,7 @@ export class CronService {
   }
 
   private kickoffClaimedRun(job: CronJob, triggerKind: "scheduled" | "manual"): void {
+    const startedAt = this.now();
     logger.info("kicking off claimed cron job run", {
       cronJobId: job.id,
       triggerKind,
@@ -437,6 +438,7 @@ export class CronService {
           cronJobId: job.id,
           triggerKind,
           inFlightRuns: this.inFlightRuns.size,
+          durationMs: this.now().getTime() - startedAt.getTime(),
         });
       });
 

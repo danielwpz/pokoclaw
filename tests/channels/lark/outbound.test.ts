@@ -3575,7 +3575,7 @@ describe("lark outbound runtime", () => {
       }),
     );
 
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     await Promise.resolve();
 
     expect(updateCard).toHaveBeenCalledOnce();

@@ -84,6 +84,7 @@ import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import type { PermissionRequest } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
+import { appendCappedTextTail } from "@/src/shared/capped-text.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import { buildSubagentWorkspaceDir, POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { resolveLocalCalendarContext } from "@/src/shared/time.js";
@@ -121,6 +122,10 @@ import {
 const logger = createSubsystemLogger("agent-loop");
 const ASSISTANT_RESPONSE_LOG_PREVIEW_MAX_LENGTH = 144;
 const ASSISTANT_REASONING_LOG_PREVIEW_MAX_LENGTH = 144;
+const ASSISTANT_REASONING_CAPTURE_MAX_CHARS = 100_000;
+const ASSISTANT_REASONING_EVENT_FLUSH_CHARS = 512;
+const ASSISTANT_REASONING_EVENT_FLUSH_MS = 250;
+const ASSISTANT_REASONING_TRUNCATION_PREFIX = "...[earlier reasoning truncated]\n";
 const EMPTY_OUTPUT_LLM_RETRY_LIMIT = 1;
 const UNKNOWN_ASSISTANT_ERROR_USAGE: MessageUsage = {
   input: 0,
@@ -636,11 +641,41 @@ export class AgentLoop {
         let sawStreamedReasoning = false;
         let streamedAssistantText = "";
         let streamedReasoningText = "";
+        let pendingReasoningDelta = "";
+        let lastReasoningEventFlushAt = 0;
         let streamedReasoningDeltaCount = 0;
         let streamedReasoningChars = 0;
         let overflowRecovered = false;
         let emptyOutputRetryCount = 0;
         let response: AgentModelTurnResult;
+
+        const flushPendingReasoningDelta = (force = false) => {
+          if (pendingReasoningDelta.length === 0) {
+            return;
+          }
+          const now = Date.now();
+          if (
+            !force &&
+            pendingReasoningDelta.length < ASSISTANT_REASONING_EVENT_FLUSH_CHARS &&
+            now - lastReasoningEventFlushAt < ASSISTANT_REASONING_EVENT_FLUSH_MS
+          ) {
+            return;
+          }
+
+          const delta = pendingReasoningDelta;
+          pendingReasoningDelta = "";
+          lastReasoningEventFlushAt = now;
+          this.recordEvent(events, {
+            type: "assistant_reasoning_delta",
+            turn: turn + 1,
+            messageId: assistantMessageId,
+            delta,
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            runId,
+          });
+        };
 
         while (true) {
           logger.info("requesting assistant response", {
@@ -718,7 +753,11 @@ export class AgentLoop {
               },
               onThinkingDelta: (event) => {
                 sawStreamedReasoning = true;
-                streamedReasoningText += event.delta;
+                streamedReasoningText = appendCappedTextTail(streamedReasoningText, event.delta, {
+                  maxChars: ASSISTANT_REASONING_CAPTURE_MAX_CHARS,
+                  truncationPrefix: ASSISTANT_REASONING_TRUNCATION_PREFIX,
+                });
+                pendingReasoningDelta += event.delta;
                 streamedReasoningDeltaCount += 1;
                 streamedReasoningChars += event.delta.length;
                 this.recordStreamDelta({
@@ -741,16 +780,7 @@ export class AgentLoop {
                     ),
                   });
                 }
-                this.recordEvent(events, {
-                  type: "assistant_reasoning_delta",
-                  turn: turn + 1,
-                  messageId: assistantMessageId,
-                  delta: event.delta,
-                  sessionId: input.sessionId,
-                  conversationId: context.session.conversationId,
-                  branchId: context.session.branchId,
-                  runId,
-                });
+                flushPendingReasoningDelta();
               },
             });
             break;
@@ -810,6 +840,7 @@ export class AgentLoop {
               sawStreamedReasoning = false;
               streamedAssistantText = "";
               streamedReasoningText = "";
+              pendingReasoningDelta = "";
               context = this.deps.sessions.getContext(input.sessionId);
               messages = [...context.messages];
               continue;
@@ -865,6 +896,7 @@ export class AgentLoop {
 
         throwIfAborted(handle.signal);
 
+        flushPendingReasoningDelta(true);
         const assistantText = collectAssistantText(response.content);
         const reasoningText = collectAssistantThinking(response.content);
         const toolCalls = collectAgentToolCalls(response.content);

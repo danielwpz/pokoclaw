@@ -36,6 +36,7 @@ import {
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
+import { RuntimeEventLoopWatchdog } from "@/src/runtime/event-loop-watchdog.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
 import { MinuteHeartbeat } from "@/src/runtime/minute-heartbeat.js";
 import {
@@ -62,6 +63,7 @@ export interface RuntimeBootstrap {
   readonly manager: AgentManager;
   readonly liveConfig: LiveConfigManager;
   readonly heartbeat: MinuteHeartbeat;
+  readonly eventLoopWatchdog: RuntimeEventLoopWatchdog;
   readonly cron: CronService;
   readonly meditation: MeditationScheduler;
   readonly mcp: McpClientManager;
@@ -181,6 +183,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     agentManager: manager,
   });
   const heartbeat = new MinuteHeartbeat();
+  const eventLoopWatchdog = new RuntimeEventLoopWatchdog();
   const meditationState = new MeditationStateRepo(input.storage);
   const meditation = new MeditationScheduler({
     config: input.config.selfHarness,
@@ -273,6 +276,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     manager,
     liveConfig,
     heartbeat,
+    eventLoopWatchdog,
     cron,
     meditation,
     mcp,
@@ -326,6 +330,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       lark.start();
       cron.start();
       meditation.start();
+      eventLoopWatchdog.start();
       heartbeat.start();
       started = true;
       logger.info("runtime bootstrap started", {
@@ -334,6 +339,8 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
         toolCount: tools.list().length,
         mcpServers: Object.keys(input.config.mcp.servers).length,
         larkInstallations: lark.status().configuredInstallations,
+        heartbeat: heartbeat.status(),
+        eventLoopWatchdog: eventLoopWatchdog.status(),
       });
 
       void dispatchPreparedBackOnlineRecovery({
@@ -361,10 +368,13 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
 
         logger.info("runtime bootstrap shutting down", {
           heartbeatStarted: heartbeat.status().started,
+          heartbeatNextTimerFireAt: heartbeat.status().nextTimerFireAt,
+          eventLoopWatchdog: eventLoopWatchdog.status(),
           inFlightCronRuns: cron.status().inFlightRuns,
           inFlightMeditationRuns: meditation.status().inFlightRuns,
         });
         heartbeat.stop();
+        eventLoopWatchdog.stop();
         unsubscribeMcpConfig();
         a2ui?.shutdown();
         await lark.shutdown();

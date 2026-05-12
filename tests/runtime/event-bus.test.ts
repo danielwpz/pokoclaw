@@ -2,9 +2,10 @@ import { describe, expect, test, vi } from "vitest";
 
 import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 
-async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+async function flushRuntimeEvents(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 describe("RuntimeEventBus", () => {
@@ -16,7 +17,7 @@ describe("RuntimeEventBus", () => {
     bus.publish({ id: "evt_1" });
 
     expect(listener).not.toHaveBeenCalled();
-    await flushMicrotasks();
+    await flushRuntimeEvents();
     expect(listener).toHaveBeenCalledExactlyOnceWith({ id: "evt_1" });
   });
 
@@ -28,7 +29,7 @@ describe("RuntimeEventBus", () => {
     unsubscribe();
     bus.publish({ id: "evt_2" });
 
-    await flushMicrotasks();
+    await flushRuntimeEvents();
     expect(listener).not.toHaveBeenCalled();
   });
 });

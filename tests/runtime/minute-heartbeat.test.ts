@@ -49,6 +49,7 @@ describe("minute heartbeat", () => {
     expect(heartbeat.status()).toEqual({
       started: false,
       subscriberCount: 1,
+      nextTimerFireAt: null,
     });
   });
 });

@@ -16,6 +16,7 @@ export interface MinuteHeartbeatDependencies {
 export interface MinuteHeartbeatStatus {
   started: boolean;
   subscriberCount: number;
+  nextTimerFireAt: string | null;
 }
 
 export class MinuteHeartbeat {
@@ -26,6 +27,7 @@ export class MinuteHeartbeat {
 
   private started = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private nextTimerFireAt: Date | null = null;
   private readonly listeners = new Map<string, MinuteHeartbeatListener>();
 
   constructor(deps: MinuteHeartbeatDependencies = {}) {
@@ -78,6 +80,7 @@ export class MinuteHeartbeat {
     if (this.timer != null) {
       this.clearTimeoutFn(this.timer);
       this.timer = null;
+      this.nextTimerFireAt = null;
     }
 
     logger.info("minute heartbeat stopped", {
@@ -89,6 +92,7 @@ export class MinuteHeartbeat {
     return {
       started: this.started,
       subscriberCount: this.listeners.size,
+      nextTimerFireAt: this.nextTimerFireAt?.toISOString() ?? null,
     };
   }
 
@@ -104,17 +108,22 @@ export class MinuteHeartbeat {
     const nowMs = this.now().getTime();
     const remainder = nowMs % this.intervalMs;
     const delayMs = remainder === 0 ? this.intervalMs : this.intervalMs - remainder;
+    const nextTimerFireAt = new Date(nowMs + delayMs);
 
     if (this.timer != null) {
       this.clearTimeoutFn(this.timer);
       this.timer = null;
+      this.nextTimerFireAt = null;
     }
 
+    this.nextTimerFireAt = nextTimerFireAt;
     logger.debug("scheduled next minute heartbeat tick", {
       delayMs,
+      nextTimerFireAt: nextTimerFireAt.toISOString(),
     });
     this.timer = this.setTimeoutFn(() => {
       this.timer = null;
+      this.nextTimerFireAt = null;
       this.dispatchTick(resolveHeartbeatTickAt(this.now()));
       if (this.started) {
         this.scheduleNextTick();

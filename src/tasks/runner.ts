@@ -85,6 +85,8 @@ export class TaskExecutionRunner {
     created: CreatedTaskExecution;
     createdAt?: Date;
   }): Promise<TaskExecutionRunResult> {
+    const startedAtMs = Date.now();
+    let terminalStatus: TaskExecutionRunResult["status"] | "unknown" = "unknown";
     logger.info("starting task execution", {
       taskRunId: input.created.taskRun.id,
       executionSessionId: input.created.executionSession.id,
@@ -106,6 +108,7 @@ export class TaskExecutionRunner {
         });
 
         if (started.status === "failed") {
+          terminalStatus = "failed";
           return started;
         }
 
@@ -119,11 +122,13 @@ export class TaskExecutionRunner {
 
         const completion = extractTaskCompletionFromRun(started.run);
         if (completion != null) {
-          return this.settleTaskCompletion({
+          const result = this.settleTaskCompletion({
             taskRunId: input.created.taskRun.id,
             started,
             completion,
           });
+          terminalStatus = result.status;
+          return result;
         }
 
         if (pass < this.maxSupervisorPasses) {
@@ -150,6 +155,7 @@ export class TaskExecutionRunner {
         maxSupervisorPasses: this.maxSupervisorPasses,
       });
 
+      terminalStatus = "failed";
       return {
         status: "failed",
         settled,
@@ -172,6 +178,7 @@ export class TaskExecutionRunner {
           error: normalized.message,
         });
 
+        terminalStatus = "cancelled";
         return {
           status: "cancelled",
           settled,
@@ -192,11 +199,20 @@ export class TaskExecutionRunner {
         error: normalized.message,
       });
 
+      terminalStatus = "failed";
       return {
         status: "failed",
         settled,
         errorMessage: normalized.message,
       };
+    } finally {
+      logger.info("task execution runner finished", {
+        taskRunId: input.created.taskRun.id,
+        executionSessionId: input.created.executionSession.id,
+        cronJobId: input.created.taskRun.cronJobId,
+        terminalStatus,
+        durationMs: Date.now() - startedAtMs,
+      });
     }
   }
 

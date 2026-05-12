@@ -323,6 +323,143 @@ describe("lark outbound runtime task threads", () => {
     expect(updatedTaskCard.header?.template).toBe("green");
   });
 
+  test("does not spin when task transcript delivery waits for an in-flight task status card", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi.fn(() => new Promise<Record<string, unknown>>(() => {}));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_task_card_1",
+        open_message_id: "om_task_open_1",
+      },
+    }));
+    const reply = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_task_thread_card_1",
+        open_message_id: "om_task_thread_open_1",
+      },
+    }));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: vi.fn(async (_input: unknown) => ({})),
+                  },
+                  cardElement: {
+                    content: vi.fn(async (_input: unknown) => ({})),
+                  },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(createMessage).not.toHaveBeenCalled();
+
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_task_wait_1",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_task_1",
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(createMessage).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+
+    await runtime.shutdown();
+  });
+
   test("creates a standalone task status card for a fresh cron run and does not reuse an older task thread", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);

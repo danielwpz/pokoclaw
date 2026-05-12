@@ -5,6 +5,7 @@
  * streaming/completion execution, and normalizes usage + errors back into local
  * runtime contracts.
  */
+import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import {
   type Api,
   type AssistantMessage,
@@ -46,6 +47,7 @@ const PERMISSIVE_TOOL_PARAMETERS = Type.Object({}, { additionalProperties: true 
 const DEFAULT_REASONING_LEVEL = "medium";
 const logger = createSubsystemLogger("llm-bridge");
 const LOG_PREVIEW_LIMIT = 160;
+const STREAM_EVENT_LOOP_YIELD_EVERY_EVENTS = 256;
 const OPENAI_COMPAT_ROLE_OVERRIDE = {
   supportsDeveloperRole: false,
 } as const;
@@ -98,14 +100,15 @@ export class PiBridge {
     const tools = input.model.supportsTools
       ? buildPiTools(input.tools, input.sessionPurpose, input.agentKind)
       : null;
+    const contextMessages = buildPiContextMessages(
+      input.compactSummary,
+      input.messages,
+      input.model.supportsVision,
+      input.resolveRuntimeImages,
+    );
     const context = {
       ...(input.systemPrompt == null ? {} : { systemPrompt: input.systemPrompt }),
-      messages: buildPiContextMessages(
-        input.compactSummary,
-        input.messages,
-        input.model.supportsVision,
-        input.resolveRuntimeImages,
-      ),
+      messages: contextMessages,
     };
     if (tools != null) {
       Object.assign(context, { tools });
@@ -130,7 +133,9 @@ export class PiBridge {
         }),
       );
       let accumulatedText = "";
+      let streamEventCount = 0;
       for await (const event of stream) {
+        streamEventCount += 1;
         switch (event.type) {
           case "text_delta":
             accumulatedText += event.delta;
@@ -146,6 +151,10 @@ export class PiBridge {
             break;
           default:
             break;
+        }
+
+        if (streamEventCount % STREAM_EVENT_LOOP_YIELD_EVERY_EVENTS === 0) {
+          await setImmediatePromise();
         }
       }
 

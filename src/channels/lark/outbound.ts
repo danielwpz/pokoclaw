@@ -71,6 +71,7 @@ const LARK_CARD_LOG_PREVIEW_MAX_LENGTH = 600;
 const LARK_CARDKIT_RECONCILE_RETRY_DELAY_MS = 1000;
 const TASK_STATUS_DELIVERY_PREFIX = "task_status:";
 const STEER_CONFIRMED_REACTION_EMOJI = "OK";
+const LARK_OUTBOUND_DEPENDENCY_RETRY_DELAY_MS = 1_000;
 
 interface LarkCardElementContentInput {
   path: {
@@ -199,6 +200,31 @@ export function createLarkOutboundRuntime(
     scheduleFlush(deliveryId, options);
   };
 
+  const ensureDeliveryScheduled = (
+    deliveryId: string,
+    options?: { immediate?: boolean; delayMs?: number },
+  ) => {
+    if (flushing.has(deliveryId) || scheduled.has(deliveryId)) {
+      return;
+    }
+
+    bumpVersionAndSchedule(deliveryId, options);
+  };
+
+  const scheduleDependentRetry = (deliveryId: string, context: Record<string, unknown>) => {
+    if (scheduled.has(deliveryId)) {
+      return;
+    }
+    logger.debug("scheduled lark outbound dependent retry", {
+      deliveryId,
+      delayMs: LARK_OUTBOUND_DEPENDENCY_RETRY_DELAY_MS,
+      ...context,
+    });
+    scheduleFlush(deliveryId, {
+      delayMs: LARK_OUTBOUND_DEPENDENCY_RETRY_DELAY_MS,
+    });
+  };
+
   const scheduleCardkitSequenceReconcile = (input: {
     bindingsRepo: LarkObjectBindingsRepo;
     channelInstallationId: string;
@@ -257,6 +283,7 @@ export function createLarkOutboundRuntime(
           deliveryId,
           completedVersion: flushVersion,
           latestVersion: deliveryVersions.get(deliveryId) ?? 0,
+          rescheduleImmediate,
         });
         scheduleFlush(deliveryId, { immediate: rescheduleImmediate });
       }
@@ -456,16 +483,24 @@ export function createLarkOutboundRuntime(
         shouldRenderStandaloneTaskCard(state.taskRunType) &&
         taskRootBinding?.larkMessageId == null
       ) {
+        const taskStatusDeliveryId = `${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`;
         logger.debug("deferring task transcript flush until task status card exists", {
           runId: state.runId,
           runCardObjectId,
           taskRunId: state.taskRunId,
           channelInstallationId: target.channelInstallationId,
+          taskStatusDeliveryId,
         });
-        bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`, {
+        ensureDeliveryScheduled(taskStatusDeliveryId, {
           immediate: true,
         });
-        bumpVersionAndSchedule(`run:${runCardObjectId}`);
+        scheduleDependentRetry(`run:${runCardObjectId}`, {
+          reason: "task_status_card_missing",
+          runId: state.runId,
+          runCardObjectId,
+          taskRunId: state.taskRunId,
+          taskStatusDeliveryId,
+        });
         continue;
       }
       const renderedPages = buildLarkRenderedRunCardPages(state, {
@@ -1095,15 +1130,22 @@ export function createLarkOutboundRuntime(
         shouldRenderStandaloneTaskCard(state.taskRunType) &&
         taskRootBinding?.larkMessageId == null
       ) {
+        const taskStatusDeliveryId = `${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`;
         logger.debug("deferring task approval card flush until task status card exists", {
           approvalFlowId,
           taskRunId: state.taskRunId,
           channelInstallationId: target.channelInstallationId,
+          taskStatusDeliveryId,
         });
-        bumpVersionAndSchedule(`${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`, {
+        ensureDeliveryScheduled(taskStatusDeliveryId, {
           immediate: true,
         });
-        bumpVersionAndSchedule(`approval:${approvalFlowId}`);
+        scheduleDependentRetry(`approval:${approvalFlowId}`, {
+          reason: "task_status_card_missing",
+          approvalFlowId,
+          taskRunId: state.taskRunId,
+          taskStatusDeliveryId,
+        });
         continue;
       }
       const existing = bindingsRepo.getByInternalObject({

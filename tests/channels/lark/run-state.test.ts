@@ -10,6 +10,7 @@ import {
 } from "@/src/channels/lark/render.js";
 import {
   LARK_ASSISTANT_PLACEHOLDER_TEXT,
+  LARK_REASONING_STATE_MAX_CHARS,
   markLarkRunApprovalResolved,
   markLarkRunAwaitingApproval,
   reduceLarkRunState,
@@ -435,6 +436,48 @@ describe("lark run state", () => {
       "tool_sequence",
       "assistant_text",
     ]);
+  });
+
+  test("caps streamed reasoning state to a bounded tail", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_reasoning_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_1",
+      }),
+    );
+
+    for (let index = 0; index < 40; index += 1) {
+      state = reduceLarkRunState(
+        state,
+        makeEnvelope({
+          type: "assistant_reasoning_delta",
+          eventId: `evt_reasoning_${index + 2}`,
+          createdAt: "2026-03-28T00:00:01.000Z",
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          branchId: "branch_1",
+          runId: "run_1",
+          turn: 1,
+          messageId: "msg_1",
+          delta: `${String(index).padStart(2, "0")}:${"x".repeat(500)}`,
+        }),
+      );
+    }
+
+    expect(state.reasoning.content.length).toBeLessThanOrEqual(
+      LARK_REASONING_STATE_MAX_CHARS + "...[earlier reasoning truncated]\n".length,
+    );
+    expect(state.reasoning.content).toContain("...[earlier reasoning truncated]\n");
+    expect(state.reasoning.content).toContain("39:");
+    expect(state.reasoning.content).not.toContain("00:");
   });
 
   test("does not split a tool sequence on assistant turns with no visible text", () => {

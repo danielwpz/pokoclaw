@@ -18,6 +18,11 @@ import type {
   OrchestratedRuntimeEventEnvelope,
   OrchestratedTaskRunEventEnvelope,
 } from "@/src/orchestration/outbound-events.js";
+import { appendCappedTextTail } from "@/src/shared/capped-text.js";
+
+export const LARK_REASONING_STATE_MAX_CHARS = 8_000;
+
+const LARK_REASONING_TRUNCATION_PREFIX = "...[earlier reasoning truncated]\n";
 
 export type LarkFooterStatus = "thinking" | "tool_running" | "waiting_approval" | null;
 
@@ -283,7 +288,7 @@ function onAssistantReasoningDelta(
       content:
         event.delta.length === 0
           ? state.reasoning.content
-          : `${state.reasoning.content}${event.delta}`,
+          : appendReasoningContentWithSeparator(state.reasoning.content, event.delta, ""),
       active: true,
       expanded: true,
     },
@@ -588,10 +593,19 @@ function finalizeActiveToolSequenceIfNeeded(
 }
 
 function appendReasoningContent(existing: string, next: string): string {
-  if (existing.length === 0) {
-    return next;
-  }
-  return `${existing}\n\n${next}`;
+  return appendReasoningContentWithSeparator(existing, next, "\n\n");
+}
+
+function appendReasoningContentWithSeparator(
+  existing: string,
+  next: string,
+  separator: string,
+): string {
+  const content = existing.length === 0 ? next : `${separator}${next}`;
+  return appendCappedTextTail(existing, content, {
+    maxChars: LARK_REASONING_STATE_MAX_CHARS,
+    truncationPrefix: LARK_REASONING_TRUNCATION_PREFIX,
+  });
 }
 
 function resolvePendingPermissionRequestTools(
