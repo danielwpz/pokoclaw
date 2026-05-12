@@ -345,10 +345,10 @@ describe("agent system prompt", () => {
     );
     expect(prompt).toContain("reduces manual approval friction");
     expect(prompt).toContain("materially improves system usability");
-    expect(prompt).toContain("Do not be unnecessarily conservative");
-    expect(prompt).toContain("`npm`, `node`, `git`, and `gh`");
+    expect(prompt).toContain("Balance autonomy and risk");
+    expect(prompt).toContain('broader prefixes like `["npm"]` or `["git"]`');
     expect(prompt).toContain(
-      'Example: `["npm"]` can fit `npm install`, `npm test`, or `npm run dev` in a Node project.',
+      'Example: repeated exact test runs can use `["npm","test"]` or the full command argv.',
     );
     expect(prompt).toContain("Not suitable: `curl ... && bash ...`");
     expect(prompt).toContain("do not use unmanaged backgrounding like &, nohup, setsid, or disown");
@@ -525,7 +525,7 @@ describe("agent system prompt", () => {
     );
     expect(prompt).toContain('retry with `sandboxMode: "full_access"` and `justification`.');
     expect(prompt).toContain(
-      'Example: `["git"]` can fit common repository commands in a git-centric task.',
+      'Example: ongoing Node or repository work may justify broader prefixes like `["npm"]` or `["git"]` when multiple related subcommands are likely.',
     );
   });
 

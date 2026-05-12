@@ -307,6 +307,7 @@ export class AgentLoop {
     cwd?: string;
     signal: AbortSignal;
     toolCallId: string;
+    runId?: string;
     approvalState?: ToolExecutionApprovalState;
   }): ToolExecutionContext {
     const runtimeControl = {
@@ -349,6 +350,7 @@ export class AgentLoop {
       storage: this.deps.storage,
       abortSignal: input.signal,
       toolCallId: input.toolCallId,
+      ...(input.runId === undefined ? {} : { runId: input.runId }),
       ...(input.ownerAgentId === undefined ? {} : { ownerAgentId: input.ownerAgentId }),
       ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
       ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
@@ -1508,6 +1510,7 @@ export class AgentLoop {
             agentKind: input.ownerAgent?.kind ?? null,
             signal: input.signal,
             toolCallId: input.toolCall.id,
+            runId: input.runId,
             ...(input.ownerAgent?.workdir == null ? {} : { cwd: input.ownerAgent.workdir }),
             ...(approvalState == null ? {} : { approvalState }),
           }),
@@ -1743,6 +1746,7 @@ export class AgentLoop {
           agentKind: input.input.ownerAgent?.kind ?? null,
           signal: input.input.signal,
           toolCallId: retryTarget.id,
+          runId: input.input.runId,
           ...(input.input.ownerAgent?.workdir == null
             ? {}
             : { cwd: input.input.ownerAgent.workdir }),

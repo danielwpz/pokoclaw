@@ -34,6 +34,7 @@ export interface ToolExecutionContext {
   systemDatabasePath?: string;
   abortSignal?: AbortSignal;
   toolCallId?: string;
+  runId?: string;
   approvalState?: ToolExecutionApprovalState;
   runtimeControl?: ToolRuntimeControl;
 }

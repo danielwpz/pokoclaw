@@ -8,6 +8,7 @@ const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() =
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import type { ExecuteUnsandboxedBashInput } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { createBashTool } from "@/src/tools/bash.js";
 import { type ToolFailure, toolRecoverableError } from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
@@ -44,6 +45,29 @@ describe("bash tool", () => {
       handle = null;
     }
   });
+
+  function seedSessionFixture(input: TestDatabaseHandle): void {
+    input.storage.sqlite.exec(`
+      INSERT INTO sessions (
+        id,
+        conversation_id,
+        branch_id,
+        owner_agent_id,
+        purpose,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        'sess_1',
+        'conv_1',
+        'branch_1',
+        'agent_1',
+        'chat',
+        '2026-03-22T00:00:00.000Z',
+        '2026-03-22T00:00:00.000Z'
+      );
+    `);
+  }
 
   test("returns stdout for a successful command", async () => {
     handle = await createTestDatabase(import.meta.url);
@@ -634,6 +658,115 @@ Use this exact bash argument object on the next retry if full access is warrante
       cwd: "/tmp/work",
       exitCode: 0,
     });
+  });
+
+  test("asks the agent to add a reusable prefix before first simple full-access approval", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    const failure = registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+        runId: "run_1",
+      },
+      {
+        command: "pnpm test",
+        sandboxMode: "full_access",
+        justification: "Run the project test suite outside the sandbox.",
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_full_access_missing_prefix",
+        command: "pnpm test",
+        runId: "run_1",
+      },
+    } satisfies Partial<ToolFailure>);
+
+    const message = await failure.catch((error) => (error instanceof Error ? error.message : ""));
+    expect(message).toMatch(/This simple bash `full_access` call has no `prefix`/);
+    expect(message).toMatch(/normalized argv starts with that prefix/);
+    expect(message).toMatch(/balancing autonomy and risk/);
+    expect(message).toMatch(/whole normalized command argv for exact repeats/);
+    expect(message).toMatch(/genuinely one-off/);
+    expect(message).toMatch(/Retry with the same command and justification/);
+    expect(message).toMatch(/\["npm","test"\]/);
+    expect(message).toMatch(/\["npm"\]/);
+    expect(message).toMatch(/\["git"\]/);
+    expect(message).toMatch(/"command": "pnpm test"/);
+    expect(message).toMatch(/"sandboxMode": "full_access"/);
+    expect(message).not.toMatch(/"prefix"/);
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("falls back to one-shot approval when the same run already prompted for a missing prefix", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    seedSessionFixture(handle);
+    new MessagesRepo(handle.storage.db).append({
+      id: "msg_missing_prefix",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "tool",
+      messageType: "tool_result",
+      visibility: "hidden_system",
+      payloadJson: JSON.stringify({
+        toolCallId: "tool_1",
+        toolName: "bash",
+        content: [{ type: "text", text: "simple bash full_access command should include prefix" }],
+        isError: true,
+        details: {
+          code: "bash_full_access_missing_prefix",
+          command: "pnpm test",
+          runId: "run_1",
+        },
+      }),
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          toolCallId: "tool_2",
+          runId: "run_1",
+        },
+        {
+          command: "pnpm test",
+          sandboxMode: "full_access",
+          justification: "Run the project test suite outside the sandbox.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      grantOnApprove: false,
+      approvalTitle: "Approval required: run bash command with full access",
+      request: {
+        scopes: [{ kind: "bash.full_access", prefix: ["pnpm", "test"] }],
+      },
+    });
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
 
   test("does not reuse a one-shot bash full-access approval for a later tool call", async () => {
