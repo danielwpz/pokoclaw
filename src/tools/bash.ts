@@ -311,6 +311,8 @@ function shouldPromptForMissingFullAccessPrefix(input: {
   command: string;
 }): boolean {
   if (input.context.runId == null) {
+    // Some direct tool invocations and older test harnesses do not run inside an AgentLoop run.
+    // Without a run id we cannot debounce the guidance safely, so keep normal approval behavior.
     return false;
   }
 

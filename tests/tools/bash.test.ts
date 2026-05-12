@@ -769,6 +769,98 @@ Use this exact bash argument object on the next retry if full access is warrante
     expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
 
+  test("allows retry with prefix after missing-prefix guidance", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command: "pnpm test",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const context = {
+      sessionId: "sess_1",
+      conversationId: "conv_1",
+      ownerAgentId: "agent_1",
+      cwd: "/tmp/work",
+      securityConfig: DEFAULT_CONFIG.security,
+      storage: handle.storage.db,
+      toolCallId: "tool_1",
+      runId: "run_1",
+    };
+
+    await expect(
+      registry.execute("bash", context, {
+        command: "pnpm test",
+        sandboxMode: "full_access",
+        justification: "Run the project test suite outside the sandbox.",
+      }),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_full_access_missing_prefix",
+      },
+    } satisfies Partial<ToolFailure>);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          ...context,
+          toolCallId: "tool_2",
+        },
+        {
+          command: "pnpm test",
+          sandboxMode: "full_access",
+          justification: "Run the project test suite outside the sandbox.",
+          prefix: ["pnpm", "test"],
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      grantOnApprove: true,
+      approvalTitle: "Approval required: run bash with full access for prefix pnpm test",
+      request: {
+        scopes: [{ kind: "bash.full_access", prefix: ["pnpm", "test"] }],
+      },
+    });
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "user",
+      scopes: [{ kind: "bash.full_access", prefix: ["pnpm", "test"] }],
+    });
+
+    const result = await registry.execute(
+      "bash",
+      {
+        ...context,
+        toolCallId: "tool_3",
+      },
+      {
+        command: "pnpm test",
+        sandboxMode: "full_access",
+        justification: "Run the project test suite outside the sandbox.",
+        prefix: ["pnpm", "test"],
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(result.details).toMatchObject({
+      command: "pnpm test",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
   test("does not reuse a one-shot bash full-access approval for a later tool call", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
@@ -1534,6 +1626,40 @@ Use this exact bash argument object on the next retry if full access is warrante
       name: "ToolApprovalRequired",
       grantOnApprove: false,
       approvalTitle: "Approval required: run bash command with full access",
+      request: {
+        scopes: [{ kind: "bash.full_access", prefix: ["bash", "-lc"] }],
+      },
+    });
+  });
+
+  test("does not ask for missing-prefix guidance on compound full-access commands", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          toolCallId: "tool_1",
+          runId: "run_1",
+        },
+        {
+          command: "npm run dev | tee out.log",
+          sandboxMode: "full_access",
+          justification: "Need to run the requested dev server with full access.",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolApprovalRequired",
+      grantOnApprove: false,
       request: {
         scopes: [{ kind: "bash.full_access", prefix: ["bash", "-lc"] }],
       },
