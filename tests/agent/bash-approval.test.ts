@@ -214,6 +214,24 @@ describe("agent loop bash approval flow", () => {
           });
         }
 
+        if (modelTurnCount === 3) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_3",
+                name: "bash",
+                arguments: {
+                  command: "echo hi > notes.txt",
+                  sandboxMode: "full_access",
+                  justification: "Need to write the requested note.",
+                },
+              },
+            ],
+          });
+        }
+
         return makeAssistantResult({
           content: [{ type: "text", text: "done" }],
         });
@@ -299,7 +317,7 @@ describe("agent loop bash approval flow", () => {
     ).toBe(true);
 
     const rows = messagesRepo.listBySession("sess_1");
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(8);
     expect(JSON.parse(rows[2]?.payloadJson ?? "{}")).toMatchObject({
       toolCallId: "tool_1",
       toolName: "bash",
@@ -319,6 +337,23 @@ describe("agent loop bash approval flow", () => {
     });
     expect(JSON.parse(rows[4]?.payloadJson ?? "{}")).toMatchObject({
       toolCallId: "tool_2",
+      toolName: "bash",
+      isError: true,
+      details: {
+        code: "bash_full_access_missing_prefix",
+      },
+    });
+    expect(JSON.parse(rows[5]?.payloadJson ?? "{}")).toMatchObject({
+      content: [
+        {
+          type: "toolCall",
+          id: "tool_3",
+          name: "bash",
+        },
+      ],
+    });
+    expect(JSON.parse(rows[6]?.payloadJson ?? "{}")).toMatchObject({
+      toolCallId: "tool_3",
       toolName: "bash",
       isError: false,
       content: expect.arrayContaining([
@@ -374,6 +409,34 @@ describe("agent loop bash approval flow", () => {
               {
                 type: "toolCall",
                 id: "tool_1",
+                name: "bash",
+                arguments: {
+                  command: "agent-browser wait 5000",
+                  sandboxMode: "full_access",
+                  justification: "Wait for the page to finish loading.",
+                },
+              },
+            ],
+          });
+        }
+
+        if (modelTurnCount === 2) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_3",
+                name: "bash",
+                arguments: {
+                  command: "agent-browser open https://example.com",
+                  sandboxMode: "full_access",
+                  justification: "Open the page for inspection.",
+                },
+              },
+              {
+                type: "toolCall",
+                id: "tool_4",
                 name: "bash",
                 arguments: {
                   command: "agent-browser wait 5000",
@@ -500,6 +563,30 @@ describe("agent loop bash approval flow", () => {
               {
                 type: "toolCall",
                 id: "tool_2",
+                name: "inspect_approval_state",
+                arguments: {},
+              },
+            ],
+          });
+        }
+
+        if (modelTurnCount === 2) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_3",
+                name: "bash",
+                arguments: {
+                  command: "agent-browser open https://example.com",
+                  sandboxMode: "full_access",
+                  justification: "Open the page for inspection.",
+                },
+              },
+              {
+                type: "toolCall",
+                id: "tool_4",
                 name: "inspect_approval_state",
                 arguments: {},
               },

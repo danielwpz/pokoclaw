@@ -11,6 +11,7 @@ import {
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import { executeSandboxedBash, executeUnsandboxedBash } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/core/errors.js";
 import { defineTool, type ToolExecutionContext, textToolResult } from "@/src/tools/core/types.js";
 import { renderBashResultBlock } from "@/src/tools/helpers/permission-block.js";
@@ -19,6 +20,7 @@ const DEFAULT_TIMEOUT_SEC = 10;
 const MAX_TIMEOUT_SEC = 10 * 60;
 const MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC = 60;
 const MAX_OUTPUT_CHARS = 128_000;
+const MISSING_PREFIX_GUIDANCE_CODE = "bash_full_access_missing_prefix";
 
 export const BASH_TOOL_SCHEMA = Type.Object(
   {
@@ -58,7 +60,7 @@ export const BASH_TOOL_SCHEMA = Type.Object(
         minItems: 1,
         maxItems: 16,
         description:
-          'Optional reusable approval scope for a simple stable command family. Good task-aligned prefixes such as ["npm"], ["git"], ["node"], or ["gh"] can reduce repeated manual approvals. Do not use it for compound shell commands.',
+          "Optional reusable approval scope for a simple stable command family. Add it when similar commands are likely soon; choose narrow or broader prefixes based on the task. Omit it for one-shot commands. Do not use it for compound shell commands.",
       }),
     ),
   },
@@ -85,7 +87,7 @@ export function createBashTool() {
   return defineTool({
     name: "bash",
     description:
-      "Run a shell command in sandboxed or full_access mode. By default it runs sandboxed and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. The default timeout is 10 seconds. You may override it with timeoutSec, but main chat agents cannot request more than 60 seconds; use a subagent for longer work. If approved host execution outside the sandbox is genuinely necessary, rerun with sandboxMode=full_access and justification. When repeated simple task-aligned command families are likely, consider prefix so similar bash calls can reuse approval.",
+      "Run a shell command in sandboxed or full_access mode. By default it runs sandboxed and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. The default timeout is 10 seconds. You may override it with timeoutSec, but main chat agents cannot request more than 60 seconds; use a subagent for longer work. If approved host execution outside the sandbox is genuinely necessary, rerun with sandboxMode=full_access and justification. When similar simple commands are likely soon, add prefix so future bash calls can reuse approval; choose the prefix scope based on the task.",
     inputSchema: BASH_TOOL_SCHEMA,
     getInvocationTimeoutMs: getBashInvocationTimeoutMs,
     async execute(context, args) {
@@ -251,6 +253,22 @@ async function executeBashWithFullAccessIfAllowed(input: {
     }
   }
 
+  if (
+    input.args.prefix == null &&
+    input.normalizedCommandPrefix != null &&
+    input.parsedCommandSequence?.kind === "simple" &&
+    shouldPromptForMissingFullAccessPrefix({
+      context: input.context,
+      command: input.args.command,
+    })
+  ) {
+    throw toolRecoverableError(buildMissingPrefixMessage(input.args), {
+      code: MISSING_PREFIX_GUIDANCE_CODE,
+      command: input.args.command,
+      runId: input.context.runId,
+    });
+  }
+
   const approvalPrefix = input.args.prefix ?? input.normalizedCommandPrefix ?? ["bash", "-lc"];
   const scope = { kind: "bash.full_access" as const, prefix: approvalPrefix };
   const approvalTitle =
@@ -286,6 +304,76 @@ function hasCurrentToolCallOneShotBashApproval(context: ToolExecutionContext): b
     approval.toolCallId != null &&
     approval.toolCallId === context.toolCallId
   );
+}
+
+function shouldPromptForMissingFullAccessPrefix(input: {
+  context: ToolExecutionContext;
+  command: string;
+}): boolean {
+  if (input.context.runId == null) {
+    // Some direct tool invocations and older test harnesses do not run inside an AgentLoop run.
+    // Without a run id we cannot debounce the guidance safely, so keep normal approval behavior.
+    return false;
+  }
+
+  if (
+    hasMissingPrefixGuidanceForRun({
+      context: input.context,
+      command: input.command,
+    })
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function hasMissingPrefixGuidanceForRun(input: {
+  context: ToolExecutionContext;
+  command: string;
+}): boolean {
+  const runId = input.context.runId;
+  if (runId == null) {
+    return false;
+  }
+
+  const messages = new MessagesRepo(input.context.storage).listBySession(input.context.sessionId);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "tool") {
+      continue;
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(message.payloadJson);
+    } catch {
+      continue;
+    }
+
+    if (typeof payload !== "object" || payload == null) {
+      continue;
+    }
+    const details = (payload as { details?: unknown }).details;
+    if (typeof details !== "object" || details == null) {
+      continue;
+    }
+
+    const candidate = details as {
+      code?: unknown;
+      command?: unknown;
+      runId?: unknown;
+    };
+    if (
+      candidate.code === MISSING_PREFIX_GUIDANCE_CODE &&
+      candidate.command === input.command &&
+      candidate.runId === runId
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 type BashFullAccessSegmentApproval =
@@ -412,6 +500,35 @@ function buildPrefixNotCommandPrefixMessage(args: BashToolArgs): string {
     "Use this exact bash argument object on the next retry:",
     "```json",
     retryJson,
+    "```",
+  ].join("\n");
+}
+
+function buildMissingPrefixMessage(args: BashToolArgs): string {
+  return [
+    "This simple bash `full_access` call has no `prefix`.",
+    "",
+    "`prefix` is the reusable approval scope: after approval, later `full_access` commands whose normalized argv starts with that prefix can reuse the grant.",
+    "Choose the scope by balancing autonomy and risk: reduce repeated user interruptions, but keep user confirmation when the approved command family would be meaningfully broader or riskier than the task needs.",
+    "Before retrying, decide whether this task is likely to need the same command or a closely related command again soon.",
+    "- If yes, add a task-appropriate `prefix`: the whole normalized command argv for exact repeats, or a shorter clear command-family prefix for related work.",
+    "- If this is genuinely one-off, retry without `prefix`; the next identical request in this run will continue as one-shot.",
+    "",
+    "Examples:",
+    '- Repeated exact test runs: use `["npm","test"]` or the full command argv.',
+    '- Ongoing Node or repository work may justify broader prefixes like `["npm"]` or `["git"]` when multiple related subcommands are likely.',
+    "- One-off setup/check command: omit `prefix`.",
+    "",
+    "Retry with the same command and justification. Add `prefix` only if reusable approval is likely to reduce repeated approvals.",
+    "Current command:",
+    "```json",
+    renderBashArgsJson(
+      selectBashArgs(args, {
+        mode: "full_access",
+        requireJustification: true,
+        dropPrefix: true,
+      }),
+    ),
     "```",
   ].join("\n");
 }
