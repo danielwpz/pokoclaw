@@ -161,13 +161,12 @@ export class CronJobsRepo {
       .all();
   }
 
-  listRunning(limit: number = 100): CronJob[] {
+  listRunning(): CronJob[] {
     return this.db
       .select()
       .from(cronJobs)
       .where(and(isNull(cronJobs.deletedAt), isNotNull(cronJobs.runningAt)))
       .orderBy(asc(cronJobs.runningAt), asc(cronJobs.id))
-      .limit(limit)
       .all();
   }
 

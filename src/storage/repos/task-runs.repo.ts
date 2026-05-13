@@ -99,13 +99,12 @@ export class TaskRunsRepo {
       .all();
   }
 
-  listRunning(limit = 100): TaskRun[] {
+  listRunning(): TaskRun[] {
     return this.db
       .select()
       .from(taskRuns)
       .where(eq(taskRuns.status, "running"))
       .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
-      .limit(limit)
       .all();
   }
 
