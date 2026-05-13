@@ -100,6 +100,7 @@ Supported component types:
 - `Text`
 - `Column`
 - `Row`
+- `Box`
 - `Divider`
 - `Button`
 - `Form`
@@ -125,12 +126,17 @@ Supported component types:
 ```json
 {
   "Column": {
-    "children": { "explicitList": ["title", "form"] }
+    "children": { "explicitList": ["title", "form"] },
+    "gap": 8
   }
 }
 ```
 
-Only `children.explicitList` is supported.
+Only `children.explicitList` is supported. `gap` is optional and sets vertical
+spacing in pixels between child elements. Without `gap`, `Column` keeps the
+older flat rendering behavior. If a `Column` contains a `Form` or form input
+components, the Lark renderer keeps the older flat rendering behavior and may
+ignore `gap`, because Lark rejects forms nested inside layout columns.
 
 ### Row
 
@@ -138,12 +144,38 @@ Only `children.explicitList` is supported.
 {
   "Row": {
     "children": { "explicitList": ["cancel_button", "confirm_button"] },
-    "distribution": "end"
+    "distribution": "end",
+    "gap": 12
   }
 }
 ```
 
-`distribution` may be `start`, `center`, or `end`.
+`distribution` may be `start`, `center`, or `end`. `gap` is optional and sets
+horizontal spacing in pixels between weighted child columns. `Row` children
+share the available width equally, so two children each occupy 50%.
+
+### Box
+
+Use `Box` for dashboard panels, colored stat cards, and headers that need a
+full-width background behind child content. Prefer `Box` over `Grid` for normal
+dashboard cards; `Grid` has fixed pixel dimensions and is intended for pixel
+displays.
+
+```json
+{
+  "Box": {
+    "children": { "explicitList": ["title", "count", "meta"] },
+    "backgroundColor": "#EAF2FF",
+    "padding": 16,
+    "borderRadius": 12
+  }
+}
+```
+
+`backgroundColor` and `padding` are rendered in Lark. `borderRadius` is accepted
+as an advisory layout hint, but Lark may ignore it. Do not wrap `Form`,
+`TextField`, `MultipleChoice`, or `DateTimeInput` in a `Box`; Lark form controls
+need the flat form layout used by the form examples.
 
 ### Divider
 

@@ -6,6 +6,7 @@ export const LARK_CARD_COMPONENT_TYPES = [
   "Text",
   "Column",
   "Row",
+  "Box",
   "Divider",
   "Button",
   "Form",
@@ -240,6 +241,21 @@ function validateComponentProps(type, props, path, issues) {
     case "Column":
     case "Row":
       validateChildren(props.children, `${path}.children`, issues);
+      if (props.gap !== undefined) {
+        validateNonNegativeInteger(props.gap, `${path}.gap`, issues);
+      }
+      return;
+    case "Box":
+      validateChildren(props.children, `${path}.children`, issues);
+      if (props.backgroundColor !== undefined && readString(props.backgroundColor) == null) {
+        addError(issues, `${path}.backgroundColor`, "Box.backgroundColor must be a string");
+      }
+      if (props.padding !== undefined) {
+        validateNonNegativeInteger(props.padding, `${path}.padding`, issues);
+      }
+      if (props.borderRadius !== undefined) {
+        validateNonNegativeInteger(props.borderRadius, `${path}.borderRadius`, issues);
+      }
       return;
     case "Divider":
       return;
@@ -300,7 +316,7 @@ function validateRenderedSurface(surface, issues) {
   const inputNames = new Set();
   for (const node of surface.components.values()) {
     const component = readComponentRef(surface, node.id);
-    if (component.type === "Column" || component.type === "Row") {
+    if (component.type === "Column" || component.type === "Row" || component.type === "Box") {
       validateChildReferences(surface, component.props.children, node.id, issues);
     }
     if (component.type === "Grid") {
