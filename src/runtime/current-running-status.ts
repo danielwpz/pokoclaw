@@ -104,67 +104,71 @@ export function buildCurrentRunningRuntimeStatus(input: {
   now: string;
   liveRuns: RunLiveObservabilitySnapshot[];
 }): CurrentRunningRuntimeStatusSnapshot {
-  const repos = createRepos(input.storage);
-  const runningTaskRuns = repos.taskRuns.listRunning();
-  const runningWork = input.liveRuns.map((run) => buildRunningWorkItem({ repos, run }));
-  const liveSessionIds = new Set(input.liveRuns.map((run) => run.sessionId));
-  const representedTaskRunIds = new Set(
-    runningWork.map((item) => item.taskRun?.id).filter((id): id is string => id != null),
-  );
-  const representedCronJobIds = new Set(
-    runningWork.map((item) => item.cronJob?.id).filter((id): id is string => id != null),
-  );
+  return input.storage.transaction((tx) => {
+    const repos = createRepos(tx);
+    const runningTaskRuns = repos.taskRuns.listRunning();
+    const runningCronJobs = repos.cronJobs.listRunning();
+    const runningWork = input.liveRuns.map((run) => buildRunningWorkItem({ repos, run }));
+    const liveSessionIds = new Set(input.liveRuns.map((run) => run.sessionId));
+    const representedTaskRunIds = new Set(
+      runningWork.map((item) => item.taskRun?.id).filter((id): id is string => id != null),
+    );
+    const representedCronJobIds = new Set(
+      runningWork.map((item) => item.cronJob?.id).filter((id): id is string => id != null),
+    );
 
-  const suspectRunningTaskRuns = runningTaskRuns
-    .filter((taskRun) => {
-      if (representedTaskRunIds.has(taskRun.id)) {
-        return false;
-      }
-      return taskRun.executionSessionId == null || !liveSessionIds.has(taskRun.executionSessionId);
-    })
-    .map((taskRun) => {
-      const ownerAgent = repos.agents.getById(taskRun.ownerAgentId);
-      const cronJob =
-        taskRun.cronJobId == null
-          ? null
-          : repos.cronJobs.getByIdIncludingDeleted(taskRun.cronJobId);
-      if (cronJob != null) {
-        representedCronJobIds.add(cronJob.id);
-      }
+    const suspectRunningTaskRuns = runningTaskRuns
+      .filter((taskRun) => {
+        if (representedTaskRunIds.has(taskRun.id)) {
+          return false;
+        }
+        return (
+          taskRun.executionSessionId == null || !liveSessionIds.has(taskRun.executionSessionId)
+        );
+      })
+      .map((taskRun) => {
+        const ownerAgent = repos.agents.getById(taskRun.ownerAgentId);
+        const cronJob =
+          taskRun.cronJobId == null
+            ? null
+            : repos.cronJobs.getByIdIncludingDeleted(taskRun.cronJobId);
+        if (cronJob != null) {
+          representedCronJobIds.add(cronJob.id);
+        }
 
-      return {
-        reason: "running_task_run_without_live_run" as const,
-        ownerAgent: toAgentSnapshot(ownerAgent),
-        taskRun: toRequiredTaskRunSnapshot(taskRun),
-        cronJob: toCronJobSnapshot(cronJob),
-        backgroundTask: toBackgroundTaskSnapshot(taskRun),
-      };
-    });
+        return {
+          reason: "running_task_run_without_live_run" as const,
+          ownerAgent: toAgentSnapshot(ownerAgent),
+          taskRun: toRequiredTaskRunSnapshot(taskRun),
+          cronJob: toCronJobSnapshot(cronJob),
+          backgroundTask: toBackgroundTaskSnapshot(taskRun),
+        };
+      });
 
-  const runningTaskCronJobIds = new Set(
-    runningTaskRuns.map((taskRun) => taskRun.cronJobId).filter((id): id is string => id != null),
-  );
-  const suspectRunningCronJobs = repos.cronJobs
-    .listRunning()
-    .filter((cronJob) => {
-      if (representedCronJobIds.has(cronJob.id)) {
-        return false;
-      }
-      return !runningTaskCronJobIds.has(cronJob.id);
-    })
-    .map((cronJob) => ({
-      reason: "running_cron_job_without_running_task_run" as const,
-      ownerAgent: toAgentSnapshot(repos.agents.getById(cronJob.ownerAgentId)),
-      cronJob: toRequiredCronJobSnapshot(cronJob),
-    }));
+    const runningTaskCronJobIds = new Set(
+      runningTaskRuns.map((taskRun) => taskRun.cronJobId).filter((id): id is string => id != null),
+    );
+    const suspectRunningCronJobs = runningCronJobs
+      .filter((cronJob) => {
+        if (representedCronJobIds.has(cronJob.id)) {
+          return false;
+        }
+        return !runningTaskCronJobIds.has(cronJob.id);
+      })
+      .map((cronJob) => ({
+        reason: "running_cron_job_without_running_task_run" as const,
+        ownerAgent: toAgentSnapshot(repos.agents.getById(cronJob.ownerAgentId)),
+        cronJob: toRequiredCronJobSnapshot(cronJob),
+      }));
 
-  return {
-    now: input.now,
-    scope: "global_current_running",
-    runningWork,
-    suspectRunningTaskRuns,
-    suspectRunningCronJobs,
-  };
+    return {
+      now: input.now,
+      scope: "global_current_running",
+      runningWork,
+      suspectRunningTaskRuns,
+      suspectRunningCronJobs,
+    };
+  });
 }
 
 export function buildRuntimeRunStatus(input: {
