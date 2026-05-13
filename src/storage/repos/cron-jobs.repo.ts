@@ -161,6 +161,15 @@ export class CronJobsRepo {
       .all();
   }
 
+  listRunning(): CronJob[] {
+    return this.db
+      .select()
+      .from(cronJobs)
+      .where(and(isNull(cronJobs.deletedAt), isNotNull(cronJobs.runningAt)))
+      .orderBy(asc(cronJobs.runningAt), asc(cronJobs.id))
+      .all();
+  }
+
   update(input: UpdateCronJobInput): CronJob | null {
     const updatedAt = input.updatedAt ?? new Date();
     const result = this.db

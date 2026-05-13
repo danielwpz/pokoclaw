@@ -31,6 +31,10 @@ export function isToolAllowedForSession(input: {
     return input.purpose === "chat" && input.agentKind === "main";
   }
 
+  if (input.toolName === "get_runtime_status") {
+    return input.purpose === "chat" && input.agentKind === "main";
+  }
+
   if (input.toolName === "schedule_task") {
     return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
   }

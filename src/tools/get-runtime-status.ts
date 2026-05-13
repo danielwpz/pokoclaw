@@ -1,13 +1,15 @@
 /**
  * Live runtime status tool.
  *
- * Exposes the in-memory observability view for currently active runs so the
- * main agent can diagnose streaming progress, stalls, tool activity, and
- * approval waits. This intentionally complements, rather than replaces,
- * database and log inspection.
+ * Exposes the main agent's current-running work view by combining in-memory
+ * live run observability with durable task/cron ownership facts.
  */
 import { type Static, Type } from "@sinclair/typebox";
 
+import {
+  buildCurrentRunningRuntimeStatus,
+  buildRuntimeRunStatus,
+} from "@/src/runtime/current-running-status.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { toolInternalError, toolRecoverableError } from "@/src/tools/core/errors.js";
@@ -19,7 +21,7 @@ export const GET_RUNTIME_STATUS_TOOL_SCHEMA = Type.Object(
       Type.String({
         minLength: 1,
         description:
-          "Optional run id to inspect. Omit this field to list all currently active runs in live memory. When runId is provided, the tool can also return a finished/failed/cancelled run snapshot if that run is still retained in memory.",
+          "Optional low-level run id to inspect. Omit this field to list all currently running work across the runtime, enriched with task/cron/background ownership metadata.",
       }),
     ),
   },
@@ -34,7 +36,7 @@ export function createGetRuntimeStatusTool() {
   return defineTool({
     name: "get_runtime_status",
     description:
-      "Read live in-memory runtime status for main-agent diagnosis. By default it returns all currently active runs still present in live memory. If runId is provided, it returns that specific run when present, including a retained finished/failed/cancelled snapshot when still available in memory after the run leaves the active list. The payload separates run-level phase from latest-request status so a null latest-request TTFT only means the current request has not produced a first token yet, not that the whole run never responded.",
+      "Read the main agent's global current-running runtime status. By default it returns every currently running work item across agents, enriched with owner agent, task_run, background_task, and cron_job metadata when available. It also flags durable task/cron rows that still claim to be running without a matching live run. If runId is provided, it inspects that low-level live run and enriches it with the same ownership metadata when present.",
     inputSchema: GET_RUNTIME_STATUS_TOOL_SCHEMA,
     execute(context, args) {
       ensureMainAgentRuntimeCaller(context.sessionId, context.storage);
@@ -45,11 +47,29 @@ export function createGetRuntimeStatusTool() {
         );
       }
 
-      return jsonToolResult(
-        context.runtimeControl.getRuntimeStatus(
-          args.runId == null ? undefined : { runId: args.runId },
-        ),
+      const status = context.runtimeControl.getRuntimeStatus(
+        args.runId == null ? undefined : { runId: args.runId },
       );
+      if ("runs" in status) {
+        return jsonToolResult(
+          buildCurrentRunningRuntimeStatus({
+            storage: context.storage,
+            now: status.now,
+            liveRuns: status.runs,
+          }),
+        );
+      }
+      if (status.found) {
+        return jsonToolResult(
+          buildRuntimeRunStatus({
+            storage: context.storage,
+            now: status.now,
+            run: status.run,
+          }),
+        );
+      }
+
+      return jsonToolResult(status);
     },
   });
 }
