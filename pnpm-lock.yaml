@@ -42,8 +42,8 @@ importers:
         specifier: ^0.45.1
         version: 0.45.1(@types/better-sqlite3@7.6.13)(better-sqlite3@12.8.0)
       lark-a2ui-renderer:
-        specifier: file:../../a2ui/lark-a2ui-renderer
-        version: file:../../a2ui/lark-a2ui-renderer(@larksuiteoapi/node-sdk@1.60.0)
+        specifier: 0.1.2
+        version: 0.1.2(@larksuiteoapi/node-sdk@1.60.0)
       openai:
         specifier: 6.26.0
         version: 6.26.0(ws@8.20.0)(zod@4.3.6)
@@ -1822,8 +1822,8 @@ packages:
   jws@4.0.1:
     resolution: {integrity: sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==}
 
-  lark-a2ui-renderer@file:../../a2ui/lark-a2ui-renderer:
-    resolution: {directory: ../../a2ui/lark-a2ui-renderer, type: directory}
+  lark-a2ui-renderer@0.1.2:
+    resolution: {integrity: sha512-c+2wINMowU/uxGxcb+1SW4Hrbz19mN06UyWfnFj0kURlon2/uNsmZFBdS1LIEaSJIQLYfFSr4VyXxihUgS36fQ==}
     peerDependencies:
       '@larksuiteoapi/node-sdk': ^1.60.0
     peerDependenciesMeta:
@@ -4404,7 +4404,7 @@ snapshots:
       jwa: 2.0.1
       safe-buffer: 5.2.1
 
-  lark-a2ui-renderer@file:../../a2ui/lark-a2ui-renderer(@larksuiteoapi/node-sdk@1.60.0):
+  lark-a2ui-renderer@0.1.2(@larksuiteoapi/node-sdk@1.60.0):
     optionalDependencies:
       '@larksuiteoapi/node-sdk': 1.60.0
 
