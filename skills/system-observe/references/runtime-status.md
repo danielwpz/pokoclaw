@@ -1,33 +1,73 @@
 # System Observe Runtime Status Reference
 
-Use this reference when the question is specifically about the live in-memory `get_runtime_status` payload.
+Use this reference when the question is specifically about the `get_runtime_status` payload.
 
 ## What this tool is for
 
-`get_runtime_status` is the live in-memory view for current runtime diagnosis.
+`get_runtime_status` is the Main Agent's global current-running runtime view.
+Its default result combines live in-memory run observability with durable task and cron ownership facts from storage.
 
 Use it to answer questions like:
 
-- Is a run still active right now?
-- Is the run currently in model execution, tool execution, or approval wait?
+- What is actively running anywhere in the system right now?
+- Which agent owns each active run, background task, or cron task run?
+- Is a currently running item in model execution, tool execution, or approval wait?
+- Is a durable task or cron row still marked running even though no matching live run is present?
 - Has the run already produced any response in earlier requests?
 - Is the latest request still waiting for first token, already streaming, or already finished?
 - Is a just-finished run still retained in memory by `runId`?
 
 This tool is not a durable history source.
-If the run is absent from live memory, use the database and logs next.
+The default result intentionally answers "what is running now"; it does not list completed, failed, cancelled, or not-yet-scheduled work.
+If you need history, completion details, or failure causes, use the database and logs next.
 
-This tool only exposes the live in-memory fields that runtime control currently publishes.
-Other in-memory state may still exist internally but remain unavailable through this tool.
+This tool only exposes live run fields that runtime control currently publishes plus selected durable ownership metadata.
+Other runtime state may still exist internally but remain unavailable through this tool.
 If your conclusion depends on live state that is not exposed here, say that clearly and use the database, logs, or source inspection instead of guessing.
+
+SubAgents should not receive this tool. Cross-agent and whole-system runtime diagnosis is a Main Agent responsibility.
 
 ## Return shape overview
 
-When inspecting one run, read the payload in three layers, from broadest to most specific.
+### Default call
+
+Calling `get_runtime_status` without arguments returns:
+
+- `now`
+- `scope = "global_current_running"`
+- `runningWork`: active live runs enriched with ownership metadata
+- `suspectRunningTaskRuns`: `task_runs.status = 'running'` rows whose execution session is absent from current live runs
+- `suspectRunningCronJobs`: `cron_jobs.running_at IS NOT NULL` rows without a matching running task run/current representation
+
+Each `runningWork` item contains:
+
+- `kind`: one of `main_chat`, `subagent_chat`, `approval`, `background_task`, `cron_task`, `task_run`, `run`
+- `runId`
+- `liveRun`: the low-level live run observability snapshot
+- `ownerAgent`: owner agent identity when known
+- `session`: execution session identity when known
+- `taskRun`: durable task run metadata when the run belongs to a task
+- `cronJob`: durable cron job metadata when the run belongs to a cron job
+- `backgroundTask`: background task preview when the task input has the background task payload
+
+### `runId` call
+
+Calling `get_runtime_status` with `runId` returns one enriched `run` item when that low-level run is present in live memory or retained memory:
+
+- `now`
+- `found = true`
+- `run`: the same enriched work item shape used in `runningWork`
+
+If not found, the tool returns the runtime-control not-found payload.
+Use DB/log inspection to determine whether it completed, failed, cancelled, or disappeared after a process restart.
+
+## Live run shape
+
+When inspecting `runningWork[].liveRun` or `run.liveRun`, read the payload in three layers, from broadest to most specific.
 
 ### 1. Run-level state
 
-Top-level fields describe the overall run:
+`liveRun` fields describe the overall low-level run:
 
 - `runId`, `sessionId`, `conversationId`, `branchId`, `scenario`
 - `phase`
@@ -38,7 +78,7 @@ Top-level fields describe the overall run:
 
 ### 2. `latestRequest`
 
-`latestRequest` describes the newest LLM request known for this run:
+`liveRun.latestRequest` describes the newest LLM request known for this run:
 
 - `sequence`
 - `status`
@@ -50,7 +90,7 @@ Top-level fields describe the overall run:
 
 ### 3. `responseSummary`
 
-`responseSummary` summarizes response history across the run so far:
+`liveRun.responseSummary` summarizes response history across the run so far:
 
 - `requestCount`
 - `respondedRequestCount`
@@ -111,55 +151,118 @@ That means the latest model request already ended and the run has moved on to to
 
 ## Examples
 
-### Example 1: earlier requests responded, latest request still waiting for first token
+### Example 1: default global current-running result
 
 ```json
 {
-  "phase": "running",
-  "latestRequest": {
-    "sequence": 4,
-    "status": "waiting_first_token",
-    "startedAt": "2026-04-04T00:00:10.000Z",
-    "ttftMs": null
-  },
-  "responseSummary": {
-    "requestCount": 4,
-    "respondedRequestCount": 3,
-    "hasAnyResponse": true,
-    "lastRespondedRequestSequence": 3,
-    "lastRespondedRequestTtftMs": 1200
+  "scope": "global_current_running",
+  "runningWork": [
+    {
+      "kind": "background_task",
+      "runId": "run_bg",
+      "ownerAgent": { "id": "agent_sub", "kind": "sub" },
+      "taskRun": { "id": "task_bg", "status": "running" },
+      "backgroundTask": { "taskDefinitionPreview": "Scan the repository." },
+      "liveRun": {
+        "phase": "running",
+        "latestRequest": { "status": "waiting_first_token", "ttftMs": null }
+      }
+    },
+    {
+      "kind": "cron_task",
+      "runId": "run_cron",
+      "taskRun": { "id": "task_cron", "status": "running", "cronJobId": "cron_daily" },
+      "cronJob": { "id": "cron_daily", "runningAt": "2026-04-04T00:00:00.000Z" },
+      "liveRun": { "phase": "tool_running", "activeToolName": "bash" }
+    }
+  ],
+  "suspectRunningTaskRuns": [],
+  "suspectRunningCronJobs": []
+}
+```
+
+Correct reading: these are current-running items across the runtime, not just the current conversation.
+
+### Example 2: durable row still says running, but no live run is present
+
+```json
+{
+  "scope": "global_current_running",
+  "runningWork": [],
+  "suspectRunningTaskRuns": [
+    {
+      "reason": "running_task_run_without_live_run",
+      "taskRun": { "id": "task_orphan", "status": "running" }
+    }
+  ],
+  "suspectRunningCronJobs": [
+    {
+      "reason": "running_cron_job_without_running_task_run",
+      "cronJob": { "id": "cron_orphan", "runningAt": "2026-04-04T00:01:00.000Z" }
+    }
+  ]
+}
+```
+
+Correct reading: this is not ordinary active work. It is an observable inconsistency that should be investigated through DB/logs.
+
+### Example 3: earlier requests responded, latest request still waiting for first token
+
+```json
+{
+  "liveRun": {
+    "phase": "running",
+    "latestRequest": {
+      "sequence": 4,
+      "status": "waiting_first_token",
+      "startedAt": "2026-04-04T00:00:10.000Z",
+      "ttftMs": null
+    },
+    "responseSummary": {
+      "requestCount": 4,
+      "respondedRequestCount": 3,
+      "hasAnyResponse": true,
+      "lastRespondedRequestSequence": 3,
+      "lastRespondedRequestTtftMs": 1200
+    }
   }
 }
 ```
 
 Correct reading: the newest request is still waiting for first token, but the run already produced responses in earlier requests.
 
-### Example 2: latest request finished, run is currently executing a tool
+### Example 4: latest request finished, run is currently executing a tool
 
 ```json
 {
-  "phase": "tool_running",
-  "latestRequest": {
-    "sequence": 2,
-    "status": "finished",
-    "ttftMs": 800
+  "liveRun": {
+    "phase": "tool_running",
+    "latestRequest": {
+      "sequence": 2,
+      "status": "finished",
+      "ttftMs": 800
+    },
+    "activeToolName": "grep"
   },
-  "activeToolName": "grep"
 }
 ```
 
 Correct reading: the model request already ended and the run is now spending time in tool execution.
 
-### Example 3: finished run still available by `runId`
+### Example 5: finished run still available by `runId`
 
 ```json
 {
   "found": true,
   "run": {
-    "phase": "completed",
-    "latestRequest": {
-      "status": "finished",
-      "ttftMs": 950
+    "kind": "main_chat",
+    "runId": "run_done",
+    "liveRun": {
+      "phase": "completed",
+      "latestRequest": {
+        "status": "finished",
+        "ttftMs": 950
+      }
     }
   }
 }
@@ -167,15 +270,17 @@ Correct reading: the model request already ended and the run is now spending tim
 
 Correct reading: the run is no longer active, but its retained in-memory snapshot is still available.
 
-### Example 4: run failed after the latest request had already finished
+### Example 6: run failed after the latest request had already finished
 
 ```json
 {
-  "phase": "failed",
-  "latestRequest": {
-    "sequence": 2,
-    "status": "finished",
-    "ttftMs": 700
+  "liveRun": {
+    "phase": "failed",
+    "latestRequest": {
+      "sequence": 2,
+      "status": "finished",
+      "ttftMs": 700
+    }
   }
 }
 ```
@@ -184,5 +289,6 @@ Correct reading: the run failed later in orchestration or tool work. Do not rest
 
 ## Notes
 
+- The default result is current-running only.
 - Snapshots are retained in memory while they remain in runtime control after the run leaves the active list. A completed, failed, or cancelled run may still be accessible by `runId` for immediate diagnosis even though it is no longer active.
-- This tool only exposes the in-memory fields that runtime control currently publishes. Other live state may exist internally but is not accessible here.
+- This tool only exposes the live run fields that runtime control currently publishes plus selected durable owner/task/cron metadata. Other live state may exist internally but is not accessible here.

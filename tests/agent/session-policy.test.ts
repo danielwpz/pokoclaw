@@ -3,6 +3,32 @@ import { describe, expect, test } from "vitest";
 import { isToolAllowedForSession } from "@/src/agent/session-policy.js";
 
 describe("session policy", () => {
+  test("allows get_runtime_status only in main chat sessions", () => {
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "main",
+        toolName: "get_runtime_status",
+      }),
+    ).toBe(true);
+
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "sub",
+        toolName: "get_runtime_status",
+      }),
+    ).toBe(false);
+
+    expect(
+      isToolAllowedForSession({
+        purpose: "task",
+        agentKind: "main",
+        toolName: "get_runtime_status",
+      }),
+    ).toBe(false);
+  });
+
   test("allows schedule_task only in main or sub chat sessions", () => {
     expect(
       isToolAllowedForSession({

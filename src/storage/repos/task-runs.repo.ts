@@ -99,6 +99,16 @@ export class TaskRunsRepo {
       .all();
   }
 
+  listRunning(limit = 100): TaskRun[] {
+    return this.db
+      .select()
+      .from(taskRuns)
+      .where(eq(taskRuns.status, "running"))
+      .orderBy(desc(taskRuns.startedAt), desc(taskRuns.id))
+      .limit(limit)
+      .all();
+  }
+
   listByCronJobId(cronJobId: string, limit = 20): TaskRun[] {
     return this.db
       .select()

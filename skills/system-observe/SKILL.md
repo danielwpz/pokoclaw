@@ -10,7 +10,7 @@ Use this skill to inspect pokoclaw itself.
 
 ## Channels
 
-- Live runtime status: in-memory state for active runs plus retained snapshots for specific finished runs that still remain in process memory. Use `get_runtime_status` first when you need to know whether something is actively running right now, whether a just-finished run is still inspectable in memory, or whether the latest LLM request is waiting for first token vs already streaming vs already finished.
+- Live runtime status: Main Agent only, global current-running state across active runs, background tasks, cron task runs, and suspect durable rows that still claim to be running without a matching live run. Use `get_runtime_status` first when you need to know what is actively running right now. Use its `runId` form to inspect one low-level run, including a retained just-finished snapshot when still available in process memory.
 - System database: durable facts such as sessions, messages, task runs, cron jobs, approvals, permission grants, and delegated approval history.
 - Runtime log: host-side operational evidence such as failures, routing decisions, retries, crashes, and subsystem errors.
 - Source code and references: authoritative schema definitions and implementation behavior.
@@ -41,8 +41,10 @@ Choose one or more channels based on the question. Do not force a fixed order fo
 
 ## Working rules
 
-- For a question about a run that may still be active now, start with `get_runtime_status` before querying the DB.
-- If `get_runtime_status` says a run is not present in live memory, treat that as "not currently active here and no retained in-memory snapshot was found" rather than proof of success; then use the DB to determine whether it completed, failed, or was cancelled.
+- For a question about what is running now, start with `get_runtime_status` before querying the DB.
+- In the default `get_runtime_status` result, `runningWork` is the current-running main view. Do not treat completed, failed, cancelled, or not-yet-scheduled work as missing evidence; query the DB/logs only when the user asks for history or cause.
+- If `get_runtime_status` returns `suspectRunningTaskRuns` or `suspectRunningCronJobs`, treat those as explicit inconsistency signals: durable state still says running, but the matching live run/current task linkage is absent.
+- If the `runId` form says a run is not present in live memory, treat that as "not currently active here and no retained in-memory snapshot was found" rather than proof of success; then use the DB to determine whether it completed, failed, or was cancelled.
 - If the answer depends on live in-memory state that `get_runtime_status` does not expose, say that clearly and do not guess.
 - Adapt an existing query recipe before inventing a new exploratory query.
 - Delegated approval investigation uses the same DB and log channels; start from the approval recipes and approval log hints in the references.
