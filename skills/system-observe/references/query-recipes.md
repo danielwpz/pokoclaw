@@ -4,6 +4,27 @@ Use these as starting points and adapt them to the concrete IDs or time window y
 
 If the task is about approvals or delegated approval, start from this file before writing custom SQL.
 
+## Agent and SubAgent inventory
+
+Use this instead of guessing a `subagents` table. SubAgents are stored in `agents`.
+
+```sql
+SELECT
+  a.id,
+  a.kind,
+  a.display_name,
+  a.status,
+  a.main_agent_id,
+  a.workdir,
+  c.title AS conversation_title,
+  c.external_chat_id,
+  a.created_at
+FROM agents a
+LEFT JOIN conversations c ON c.id = a.conversation_id
+ORDER BY a.created_at DESC
+LIMIT 50;
+```
+
 ## Recent task runs
 
 ```sql
@@ -23,6 +44,33 @@ SELECT
 FROM task_runs
 ORDER BY started_at DESC
 LIMIT 20;
+```
+
+## Running or problematic task runs with owner agent
+
+Use `task_runs.owner_agent_id`; there is no `task_runs.agent_id`.
+
+```sql
+SELECT
+  tr.id,
+  tr.run_type,
+  tr.owner_agent_id,
+  a.kind AS owner_agent_kind,
+  a.display_name AS owner_agent_name,
+  tr.workstream_id,
+  tr.thread_root_run_id,
+  tr.cron_job_id,
+  tr.execution_session_id,
+  tr.status,
+  tr.description,
+  tr.started_at,
+  tr.finished_at,
+  tr.error_text
+FROM task_runs tr
+LEFT JOIN agents a ON a.id = tr.owner_agent_id
+WHERE tr.status IN ('running', 'failed', 'cancelled', 'blocked')
+ORDER BY tr.started_at DESC
+LIMIT 50;
 ```
 
 ## Follow one task thread lineage
@@ -82,6 +130,36 @@ FROM task_runs
 WHERE workstream_id = 'REPLACE_WORKSTREAM_ID'
 ORDER BY started_at DESC, id DESC
 LIMIT 20;
+```
+
+## Scheduled tasks with owner agent
+
+`cron_jobs.id` is the scheduled task id used by `schedule_task`.
+
+```sql
+SELECT
+  cj.id AS scheduled_task_id,
+  cj.owner_agent_id,
+  a.kind AS owner_agent_kind,
+  a.display_name AS owner_agent_name,
+  cj.name,
+  cj.enabled,
+  cj.schedule_kind,
+  cj.schedule_value,
+  cj.timezone,
+  cj.context_mode,
+  cj.workstream_id,
+  cj.next_run_at,
+  cj.running_at,
+  cj.last_run_at,
+  cj.last_status,
+  cj.consecutive_failures,
+  cj.last_output
+FROM cron_jobs cj
+LEFT JOIN agents a ON a.id = cj.owner_agent_id
+WHERE cj.deleted_at IS NULL
+ORDER BY COALESCE(cj.last_run_at, cj.next_run_at, cj.created_at) DESC
+LIMIT 50;
 ```
 
 ## Recent pending approvals
@@ -225,6 +303,30 @@ ORDER BY started_at DESC
 LIMIT 10;
 ```
 
+## Latest task runs for scheduled tasks
+
+Use this to connect scheduled task definitions to their concrete executions.
+
+```sql
+SELECT
+  cj.id AS scheduled_task_id,
+  cj.name,
+  tr.id AS task_run_id,
+  tr.thread_root_run_id,
+  tr.execution_session_id,
+  tr.status,
+  tr.attempt,
+  tr.started_at,
+  tr.finished_at,
+  tr.result_summary,
+  tr.error_text
+FROM cron_jobs cj
+LEFT JOIN task_runs tr ON tr.cron_job_id = cj.id
+WHERE cj.deleted_at IS NULL
+ORDER BY tr.started_at DESC
+LIMIT 50;
+```
+
 ## Cron job status
 
 ```sql
@@ -242,6 +344,49 @@ SELECT
 FROM cron_jobs
 ORDER BY updated_at DESC
 LIMIT 20;
+```
+
+## Lark run card and task card bindings
+
+Task status cards use `internal_object_kind = 'run_card'` and `internal_object_id = 'task:' || task_run_id`.
+Run transcript pages also use `run_card`, with page-specific internal ids.
+
+```sql
+SELECT
+  internal_object_kind,
+  internal_object_id,
+  conversation_id,
+  branch_id,
+  lark_message_id,
+  lark_open_message_id,
+  lark_card_id,
+  thread_root_message_id,
+  card_element_id,
+  last_sequence,
+  status,
+  updated_at
+FROM lark_object_bindings
+WHERE internal_object_kind = 'run_card'
+ORDER BY updated_at DESC
+LIMIT 50;
+```
+
+## Lark binding for one task run
+
+```sql
+SELECT
+  internal_object_kind,
+  internal_object_id,
+  lark_message_id,
+  lark_open_message_id,
+  lark_card_id,
+  thread_root_message_id,
+  status,
+  metadata_json,
+  updated_at
+FROM lark_object_bindings
+WHERE internal_object_kind = 'run_card'
+  AND internal_object_id = 'task:REPLACE_TASK_RUN_ID';
 ```
 
 ## Recent permission grants
@@ -262,6 +407,9 @@ LIMIT 20;
 
 - Select only the columns you need.
 - Filter by `session_id`, `owner_agent_id`, `cron_job_id`, `workstream_id`, `thread_root_run_id`, or time window before reading large tables.
+- Use `agents.display_name`, not `agents.title`.
+- Use `task_runs.owner_agent_id`, not `task_runs.agent_id`.
+- Use `SELECT ... FROM agents WHERE kind = 'sub'`, not a `subagents` table.
 - For task-thread incidents, prefer `thread_root_run_id` over `workstream_id`.
 - For "same cron job, different runs" questions, inspect both `workstream_id` and `thread_root_run_id` so you do not accidentally merge distinct run threads.
 - If a message payload is the only likely source of detail, first identify the relevant rows, then do a second narrower query for `payload_json`.
