@@ -1312,6 +1312,8 @@ describe("AgentManager", () => {
       expect(result).toEqual({
         accepted: true,
         cronJobId: "cron_2",
+        taskRunId: expect.any(String),
+        executionSessionId: expect.any(String),
       });
       expect(submitMessage).toHaveBeenCalledOnce();
       await flushMicrotasks();

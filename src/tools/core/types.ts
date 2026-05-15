@@ -87,6 +87,8 @@ export interface ToolRuntimeControl {
   runCronJobNow?(input: { jobId: string }): Promise<{
     accepted: boolean;
     cronJobId: string;
+    taskRunId: string;
+    executionSessionId: string;
   }>;
   startBackgroundTask?(input: {
     sourceSessionId: string;

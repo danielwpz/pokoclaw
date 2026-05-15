@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { CronService } from "@/src/cron/service.js";
 import { AgentManager } from "@/src/orchestration/agent-manager.js";
+import type { CreatedTaskExecution } from "@/src/orchestration/task-run-factory.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
@@ -129,6 +130,84 @@ function createCompletedRunResult(taskRunId: string): TaskExecutionRunResult {
   };
 }
 
+function createCreatedCronTaskExecution(
+  taskRunId: string,
+  executionSessionId: string,
+): CreatedTaskExecution {
+  return {
+    taskRun: {
+      id: taskRunId,
+      runType: "cron",
+      ownerAgentId: "agent_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      workstreamId: "workstream_1",
+      threadRootRunId: taskRunId,
+      initiatorSessionId: null,
+      initiatorThreadId: null,
+      parentRunId: null,
+      cronJobId: "cron_1",
+      executionSessionId,
+      status: "running",
+      priority: 0,
+      attempt: 1,
+      description: null,
+      inputJson: "{}",
+      resultSummary: null,
+      errorText: null,
+      startedAt: "2026-03-27T12:00:00.000Z",
+      finishedAt: null,
+      durationMs: null,
+      cancelledBy: null,
+    },
+    executionSession: {
+      id: executionSessionId,
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "task",
+      contextMode: "isolated",
+      approvalForSessionId: null,
+      forkedFromSessionId: null,
+      forkSourceSeq: null,
+      status: "active",
+      compactCursor: 0,
+      compactSummary: null,
+      compactSummaryTokenTotal: null,
+      compactSummaryUsageJson: null,
+      createdAt: "2026-03-27T12:00:00.000Z",
+      updatedAt: "2026-03-27T12:00:00.000Z",
+      endedAt: null,
+    },
+  };
+}
+
+function createMockCronAgentManager(
+  runCreatedTaskExecutionImpl: () => Promise<TaskExecutionRunResult>,
+  createdExecution: CreatedTaskExecution = createCreatedCronTaskExecution(
+    "task_run_mock_1",
+    "sess_task_mock_1",
+  ),
+) {
+  const createCronTaskExecutionFromJob = vi.fn(
+    (_input: Parameters<AgentManager["createCronTaskExecutionFromJob"]>[0]) => createdExecution,
+  );
+  const runCreatedTaskExecution = vi.fn(
+    (_input: Parameters<AgentManager["runCreatedTaskExecution"]>[0]) =>
+      runCreatedTaskExecutionImpl(),
+  );
+
+  return {
+    agentManager: {
+      createCronTaskExecutionFromJob,
+      runCreatedTaskExecution,
+    },
+    createCronTaskExecutionFromJob,
+    runCreatedTaskExecution,
+    createdExecution,
+  };
+}
+
 async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
@@ -192,11 +271,14 @@ describe("cron service", () => {
     `);
 
     const deferred = createDeferred<TaskExecutionRunResult>();
-    const runCronTaskExecutionFromJob = vi.fn(() => deferred.promise);
+    const { agentManager, runCreatedTaskExecution } = createMockCronAgentManager(
+      () => deferred.promise,
+      createCreatedCronTaskExecution("run_1", "sess_task_1"),
+    );
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: { runCronTaskExecutionFromJob },
+      agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 
@@ -206,7 +288,7 @@ describe("cron service", () => {
       dueJobs: 1,
       claimedJobs: 1,
     });
-    expect(runCronTaskExecutionFromJob).toHaveBeenCalledOnce();
+    expect(runCreatedTaskExecution).toHaveBeenCalledOnce();
 
     const repo = new CronJobsRepo(handle.storage.db);
     expect(repo.getById("cron_1")).toMatchObject({
@@ -240,10 +322,12 @@ describe("cron service", () => {
       );
     `);
 
-    const runCronTaskExecutionFromJob = vi.fn(async () => createCompletedRunResult("unused"));
+    const { agentManager, runCreatedTaskExecution } = createMockCronAgentManager(async () =>
+      createCompletedRunResult("unused"),
+    );
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: { runCronTaskExecutionFromJob },
+      agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 
@@ -254,7 +338,7 @@ describe("cron service", () => {
       claimedJobs: 0,
       missedJobs: 1,
     });
-    expect(runCronTaskExecutionFromJob).not.toHaveBeenCalled();
+    expect(runCreatedTaskExecution).not.toHaveBeenCalled();
     expect(new CronJobsRepo(handle.storage.db).getById("cron_1")).toMatchObject({
       runningAt: null,
       lastStatus: "missed",
@@ -278,15 +362,34 @@ describe("cron service", () => {
     `);
 
     const deferred = createDeferred<TaskExecutionRunResult>();
-    const runCronTaskExecutionFromJob = vi.fn(() => deferred.promise);
+    const createdExecution = createCreatedCronTaskExecution(
+      "task_run_manual_1",
+      "sess_task_manual_1",
+    );
+    const { agentManager, createCronTaskExecutionFromJob, runCreatedTaskExecution } =
+      createMockCronAgentManager(() => deferred.promise, createdExecution);
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: { runCronTaskExecutionFromJob },
+      agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 
-    await service.runJobNow("cron_1");
+    const result = await service.runJobNow("cron_1");
+    expect(result).toEqual({
+      accepted: true,
+      cronJobId: "cron_1",
+      taskRunId: "task_run_manual_1",
+      executionSessionId: "sess_task_manual_1",
+    });
+    expect(createCronTaskExecutionFromJob).toHaveBeenCalledExactlyOnceWith({
+      cronJobId: "cron_1",
+      createdAt: new Date("2026-03-27T12:00:00.000Z"),
+    });
+    expect(runCreatedTaskExecution).toHaveBeenCalledExactlyOnceWith({
+      created: createdExecution,
+      createdAt: new Date("2026-03-27T12:00:00.000Z"),
+    });
 
     const repo = new CronJobsRepo(handle.storage.db);
     expect(repo.getById("cron_1")).toMatchObject({
@@ -294,7 +397,7 @@ describe("cron service", () => {
       nextRunAt: "2026-03-28T00:00:00.000Z",
     });
 
-    deferred.resolve(createCompletedRunResult("run_2"));
+    deferred.resolve(createCompletedRunResult("task_run_manual_1"));
     await deferred.promise;
     await flushMicrotasks();
 
@@ -321,9 +424,8 @@ describe("cron service", () => {
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: {
-        runCronTaskExecutionFromJob: vi.fn(async () => createCompletedRunResult("unused")),
-      },
+      agentManager: createMockCronAgentManager(async () => createCompletedRunResult("unused"))
+        .agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 
@@ -358,18 +460,21 @@ describe("cron service", () => {
     `);
 
     const deferred = createDeferred<TaskExecutionRunResult>();
-    const runCronTaskExecutionFromJob = vi.fn(() => deferred.promise);
+    const { agentManager, runCreatedTaskExecution } = createMockCronAgentManager(
+      () => deferred.promise,
+      createCreatedCronTaskExecution("run_3", "sess_task_3"),
+    );
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: { runCronTaskExecutionFromJob },
+      agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 
     await service.scanOnce();
     await service.scanOnce();
 
-    expect(runCronTaskExecutionFromJob).toHaveBeenCalledTimes(1);
+    expect(runCreatedTaskExecution).toHaveBeenCalledTimes(1);
 
     deferred.resolve(createCompletedRunResult("run_3"));
     await deferred.promise;
@@ -391,16 +496,19 @@ describe("cron service", () => {
     `);
 
     const deferred = createDeferred<TaskExecutionRunResult>();
-    const runCronTaskExecutionFromJob = vi.fn(() => deferred.promise);
+    const { agentManager, runCreatedTaskExecution } = createMockCronAgentManager(
+      () => deferred.promise,
+      createCreatedCronTaskExecution("run_4", "sess_task_4"),
+    );
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: { runCronTaskExecutionFromJob },
+      agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 
     await service.runJobNow("cron_1");
-    expect(runCronTaskExecutionFromJob).toHaveBeenCalledOnce();
+    expect(runCreatedTaskExecution).toHaveBeenCalledOnce();
 
     deferred.resolve(createCompletedRunResult("run_4"));
     await deferred.promise;
@@ -422,11 +530,14 @@ describe("cron service", () => {
     `);
 
     const deferred = createDeferred<TaskExecutionRunResult>();
-    const runCronTaskExecutionFromJob = vi.fn(() => deferred.promise);
+    const { agentManager } = createMockCronAgentManager(
+      () => deferred.promise,
+      createCreatedCronTaskExecution("run_5", "sess_task_5"),
+    );
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: { runCronTaskExecutionFromJob },
+      agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 
@@ -456,9 +567,8 @@ describe("cron service", () => {
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: {
-        runCronTaskExecutionFromJob: vi.fn(async () => createCompletedRunResult("unused")),
-      },
+      agentManager: createMockCronAgentManager(async () => createCompletedRunResult("unused"))
+        .agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 
@@ -479,11 +589,13 @@ describe("cron service", () => {
     seedFixture(handle);
 
     let now = new Date("2026-03-27T12:00:00.000Z");
-    const runCronTaskExecutionFromJob = vi.fn(async () => createCompletedRunResult("run_6"));
+    const { agentManager, runCreatedTaskExecution } = createMockCronAgentManager(async () =>
+      createCompletedRunResult("run_6"),
+    );
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: { runCronTaskExecutionFromJob },
+      agentManager,
       now: () => now,
     });
 
@@ -509,7 +621,7 @@ describe("cron service", () => {
       dueJobs: 1,
       claimedJobs: 1,
     });
-    expect(runCronTaskExecutionFromJob).toHaveBeenCalledTimes(1);
+    expect(runCreatedTaskExecution).toHaveBeenCalledTimes(1);
     expect(new CronJobsRepo(handle.storage.db).getById(created.id)).toMatchObject({
       enabled: false,
       nextRunAt: null,
@@ -524,7 +636,7 @@ describe("cron service", () => {
       dueJobs: 0,
       claimedJobs: 0,
     });
-    expect(runCronTaskExecutionFromJob).toHaveBeenCalledTimes(1);
+    expect(runCreatedTaskExecution).toHaveBeenCalledTimes(1);
   });
 
   test("one-shot jobs with legacy relative schedule values still disable themselves after completion", async () => {
@@ -542,11 +654,14 @@ describe("cron service", () => {
     `);
 
     const deferred = createDeferred<TaskExecutionRunResult>();
-    const runCronTaskExecutionFromJob = vi.fn(() => deferred.promise);
+    const { agentManager } = createMockCronAgentManager(
+      () => deferred.promise,
+      createCreatedCronTaskExecution("run_legacy", "sess_task_legacy"),
+    );
 
     const service = new CronService({
       storage: handle.storage.db,
-      agentManager: { runCronTaskExecutionFromJob },
+      agentManager,
       now: () => new Date("2026-03-27T12:00:00.000Z"),
     });
 

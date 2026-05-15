@@ -24,7 +24,7 @@ const DEFAULT_MISSED_GRACE_MS = 3 * 60 * 1000;
 
 export interface CronServiceDependencies {
   storage: StorageDb;
-  agentManager: Pick<AgentManager, "runCronTaskExecutionFromJob">;
+  agentManager: Pick<AgentManager, "createCronTaskExecutionFromJob" | "runCreatedTaskExecution">;
   now?: () => Date;
   staleRunningMs?: number;
   dueBatchLimit?: number;
@@ -51,6 +51,8 @@ export interface AddCronJobInput
 export interface RunCronJobNowResult {
   accepted: boolean;
   cronJobId: string;
+  taskRunId: string;
+  executionSessionId: string;
 }
 
 export class CronService {
@@ -251,10 +253,12 @@ export class CronService {
       runningAt: claimed.runningAt,
     });
 
-    this.kickoffClaimedRun(claimed, "manual");
+    const started = this.kickoffClaimedRun(claimed, "manual");
     return {
       accepted: true,
-      cronJobId: jobId,
+      cronJobId: started.cronJobId,
+      taskRunId: started.taskRunId,
+      executionSessionId: started.executionSessionId,
     };
   }
 
@@ -377,7 +381,14 @@ export class CronService {
     }
   }
 
-  private kickoffClaimedRun(job: CronJob, triggerKind: "scheduled" | "manual"): void {
+  private kickoffClaimedRun(
+    job: CronJob,
+    triggerKind: "scheduled" | "manual",
+  ): {
+    cronJobId: string;
+    taskRunId: string;
+    executionSessionId: string;
+  } {
     const startedAt = this.now();
     logger.info("kicking off claimed cron job run", {
       cronJobId: job.id,
@@ -389,10 +400,15 @@ export class CronService {
       nextRunAt: job.nextRunAt,
     });
 
+    const created = this.deps.agentManager.createCronTaskExecutionFromJob({
+      cronJobId: job.id,
+      createdAt: startedAt,
+    });
+
     const runPromise = this.deps.agentManager
-      .runCronTaskExecutionFromJob({
-        cronJobId: job.id,
-        createdAt: this.now(),
+      .runCreatedTaskExecution({
+        created,
+        createdAt: startedAt,
       })
       .then((result) => {
         const finishedAt = this.now();
@@ -448,6 +464,12 @@ export class CronService {
       triggerKind,
       inFlightRuns: this.inFlightRuns.size,
     });
+
+    return {
+      cronJobId: job.id,
+      taskRunId: created.taskRun.id,
+      executionSessionId: created.executionSession.id,
+    };
   }
 
   private repo(): CronJobsRepo {
@@ -456,7 +478,7 @@ export class CronService {
 }
 
 function summarizeTaskExecutionResult(
-  result: Awaited<ReturnType<AgentManager["runCronTaskExecutionFromJob"]>>,
+  result: Awaited<ReturnType<AgentManager["runCreatedTaskExecution"]>>,
 ): string | null {
   switch (result.status) {
     case "completed":

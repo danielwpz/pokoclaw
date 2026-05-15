@@ -205,12 +205,17 @@ describe("schedule_task tool", () => {
       type: "text",
       text: expect.stringContaining("Created scheduled task"),
     });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("Scheduled task id:"),
+    });
 
     const rows = handle.storage.sqlite
       .prepare(
-        "SELECT owner_agent_id, target_conversation_id, target_branch_id, payload_json FROM cron_jobs WHERE name = ?",
+        "SELECT id, owner_agent_id, target_conversation_id, target_branch_id, payload_json FROM cron_jobs WHERE name = ?",
       )
       .all("Morning review") as Array<{
+      id: string;
       owner_agent_id: string;
       target_conversation_id: string;
       target_branch_id: string;
@@ -218,12 +223,24 @@ describe("schedule_task tool", () => {
     }>;
 
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toEqual({
+    const createdRow = rows[0];
+    if (createdRow == null) {
+      throw new Error("Expected the scheduled task row to exist");
+    }
+    expect(createdRow).toEqual({
+      id: createdRow.id,
       owner_agent_id: "agent_sub",
       target_conversation_id: "conv_sub",
       target_branch_id: "branch_sub",
       payload_json: "Review open pull requests.",
     });
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        id: createdRow.id,
+        scheduledTaskId: createdRow.id,
+        cronJobId: createdRow.id,
+      }),
+    );
   });
 
   test("main agent listing includes subagent-owned scheduled tasks in its management scope", async () => {
@@ -269,6 +286,8 @@ describe("schedule_task tool", () => {
     const runCronJobNow = vi.fn(async () => ({
       accepted: true,
       cronJobId: "cron_sub",
+      taskRunId: "task_run_manual_1",
+      executionSessionId: "sess_task_manual_1",
     }));
     const registry = new ToolRegistry([createScheduleTaskTool()]);
 
@@ -306,6 +325,21 @@ describe("schedule_task tool", () => {
     expect(result.content[0]).toEqual({
       type: "text",
       text: expect.stringContaining("do not manually simulate the same work here"),
+    });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("Task run id: task_run_manual_1"),
+    });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("Execution session id: sess_task_manual_1"),
+    });
+    expect(result.details).toEqual({
+      accepted: true,
+      scheduledTaskId: "cron_sub",
+      cronJobId: "cron_sub",
+      taskRunId: "task_run_manual_1",
+      executionSessionId: "sess_task_manual_1",
     });
   });
 
