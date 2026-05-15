@@ -132,8 +132,12 @@ export function createScheduleTaskTool() {
           });
 
           return textToolResult(
-            `Created scheduled task "${created.name ?? created.id}" for this ${resolved.callerAgent.kind === "main" ? "main agent" : "subagent"}.`,
-            formatCronJobForOutput(created),
+            `Created scheduled task "${created.name ?? created.id}" for this ${resolved.callerAgent.kind === "main" ? "main agent" : "subagent"}. Scheduled task id: ${created.id}.`,
+            {
+              ...formatCronJobForOutput(created),
+              scheduledTaskId: created.id,
+              cronJobId: created.id,
+            },
           );
         }
 
@@ -198,10 +202,13 @@ export function createScheduleTaskTool() {
           }
           const result = await context.runtimeControl.runCronJobNow({ jobId: job.id });
           return textToolResult(
-            `Triggered scheduled task "${job.name ?? job.id}" to run now. A separate background task run starts immediately. You will not directly see that run's full execution result inside the current run, so do not manually simulate the same work here.`,
+            `Triggered scheduled task "${job.name ?? job.id}" to run now. Scheduled task id: ${result.cronJobId}. Task run id: ${result.taskRunId}. Execution session id: ${result.executionSessionId}. A separate background task run starts immediately. You will not directly see that run's full execution result inside the current run, so do not manually simulate the same work here.`,
             {
               accepted: result.accepted,
               scheduledTaskId: result.cronJobId,
+              cronJobId: result.cronJobId,
+              taskRunId: result.taskRunId,
+              executionSessionId: result.executionSessionId,
             },
           );
         }

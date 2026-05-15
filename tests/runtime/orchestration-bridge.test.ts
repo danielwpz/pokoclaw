@@ -253,6 +253,8 @@ describe("RuntimeOrchestrationBridge", () => {
         runCronJobNow: vi.fn(async () => ({
           accepted: true,
           cronJobId: "cron_sub_1",
+          taskRunId: "task_run_cron_1",
+          executionSessionId: "sess_task_cron_1",
         })),
         startBackgroundTask: vi.fn(async () => ({
           accepted: true,
@@ -269,6 +271,8 @@ describe("RuntimeOrchestrationBridge", () => {
     ).resolves.toEqual({
       accepted: true,
       cronJobId: "cron_sub_1",
+      taskRunId: "task_run_cron_1",
+      executionSessionId: "sess_task_cron_1",
     });
   });
 
@@ -285,6 +289,8 @@ describe("RuntimeOrchestrationBridge", () => {
         runCronJobNow: vi.fn(async () => ({
           accepted: true,
           cronJobId: "cron_sub_1",
+          taskRunId: "task_run_cron_1",
+          executionSessionId: "sess_task_cron_1",
         })),
         startBackgroundTask,
         suppressBackgroundTaskCompletionNotice,
