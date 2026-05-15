@@ -330,6 +330,10 @@ describe("schedule_task tool", () => {
       type: "text",
       text: expect.stringContaining("Task run id: task_run_manual_1"),
     });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: expect.stringContaining("Execution session id: sess_task_manual_1"),
+    });
     expect(result.details).toEqual({
       accepted: true,
       scheduledTaskId: "cron_sub",
