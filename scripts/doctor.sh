@@ -49,6 +49,21 @@ print_unknown_unsupported() {
 EOF
 }
 
+print_windows_shell_context() {
+  info "windows shell context:"
+  info "  uname: $(uname -s 2>/dev/null || printf 'unknown')"
+  info "  MSYSTEM: ${MSYSTEM:-<unset>}"
+  info "  OSTYPE: ${OSTYPE:-<unset>}"
+  info "  SHELL: ${SHELL:-<unset>}"
+  info "  ComSpec: ${ComSpec:-${COMSPEC:-<unset>}}"
+  if command -v bash >/dev/null 2>&1; then
+    info "  bash: $(command -v bash)"
+  else
+    info "  bash: <missing>"
+  fi
+  info "  bash tool invocation: bash -lc <command>"
+}
+
 check_command() {
   local command_name="$1"
   local install_hint="${2:-}"
@@ -190,6 +205,7 @@ main() {
       check_linux_host || failures=$((failures + $?))
       ;;
     MINGW* | MSYS* | CYGWIN*)
+      print_windows_shell_context
       print_windows_unsupported
       exit 2
       ;;

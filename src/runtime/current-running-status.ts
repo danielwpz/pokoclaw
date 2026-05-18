@@ -1,5 +1,6 @@
 import { resolveSessionLiveState } from "@/src/runtime/live-state.js";
 import type { RunLiveObservabilitySnapshot } from "@/src/runtime/run-observability.js";
+import { detectRuntimeShellInfo, type RuntimeShellInfo } from "@/src/runtime/shell-info.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
@@ -88,6 +89,7 @@ export interface SuspectRunningCronJobItem {
 export interface CurrentRunningRuntimeStatusSnapshot {
   now: string;
   scope: "global_current_running";
+  runtimeEnvironment: RuntimeShellInfo;
   runningWork: CurrentRunningWorkItem[];
   suspectRunningTaskRuns: SuspectRunningTaskRunItem[];
   suspectRunningCronJobs: SuspectRunningCronJobItem[];
@@ -96,6 +98,7 @@ export interface CurrentRunningRuntimeStatusSnapshot {
 export interface RuntimeRunStatusSnapshot {
   now: string;
   found: true;
+  runtimeEnvironment: RuntimeShellInfo;
   run: CurrentRunningWorkItem;
 }
 
@@ -164,6 +167,7 @@ export function buildCurrentRunningRuntimeStatus(input: {
     return {
       now: input.now,
       scope: "global_current_running",
+      runtimeEnvironment: detectRuntimeShellInfo(),
       runningWork,
       suspectRunningTaskRuns,
       suspectRunningCronJobs,
@@ -179,6 +183,7 @@ export function buildRuntimeRunStatus(input: {
   return {
     now: input.now,
     found: true,
+    runtimeEnvironment: detectRuntimeShellInfo(),
     run: buildRunningWorkItem({
       repos: createRepos(input.storage),
       run: input.run,

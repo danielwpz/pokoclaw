@@ -31,6 +31,7 @@ import {
   buildToolUsageSection,
   buildWorkspaceRuntimeSection,
 } from "@/src/agent/system-prompt-sections.js";
+import type { RuntimeShellInfo } from "@/src/runtime/shell-info.js";
 
 function joinSections(sections: string[]): string {
   return sections.filter((section) => section.trim().length > 0).join("\n\n");
@@ -48,6 +49,7 @@ interface BuildAgentSystemPromptInput {
   memoryCatalog?: string | null;
   currentDate?: string | null;
   timezone?: string | null;
+  shellInfo?: RuntimeShellInfo | null;
   skillsCatalog?: string | null;
 }
 
@@ -62,6 +64,7 @@ function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildProjectContextSection({
       ...(input.projectContextPrompt === undefined
@@ -98,6 +101,7 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildProjectContextSection({
       ...(input.projectContextPrompt === undefined
@@ -141,6 +145,7 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildProjectContextSection({
       ...(input.projectContextPrompt === undefined
@@ -173,6 +178,7 @@ function buildApprovalAgentSystemPrompt(input: BuildAgentSystemPromptInput): str
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildProjectContextSection({
       ...(input.projectContextPrompt === undefined

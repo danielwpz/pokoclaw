@@ -80,6 +80,7 @@ import {
 import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import type { RuntimeModeService } from "@/src/runtime/runtime-modes.js";
+import { detectRuntimeShellInfo } from "@/src/runtime/shell-info.js";
 import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-queue.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import type { PermissionRequest } from "@/src/security/scope.js";
@@ -533,6 +534,7 @@ export class AgentLoop {
         ? buildSubagentWorkspaceDir(ownerAgent.id)
         : null;
     const promptRuntimeContext = resolveLocalCalendarContext();
+    const shellInfo = detectRuntimeShellInfo();
     const memorySnapshot = this.memoryResolver.resolveForRun({
       agentKind: ownerAgent?.kind ?? null,
       privateWorkspaceDir,
@@ -574,6 +576,7 @@ export class AgentLoop {
       description: ownerAgent?.description ?? null,
       currentDate: promptRuntimeContext.currentDate,
       timezone: promptRuntimeContext.timezone,
+      shellInfo,
       workdir: ownerAgent?.workdir ?? null,
       privateWorkspaceDir,
       bootstrapPrompt: bootstrapSnapshot?.prompt ?? null,

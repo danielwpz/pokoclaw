@@ -9,7 +9,7 @@ import {
   type SandboxPermissionIssue,
   type SandboxRuntimeConfig,
 } from "@danielwpz/sandbox-runtime";
-
+import { getDefaultBashExecutable } from "@/src/runtime/shell-info.js";
 import {
   checkFilesystemPermission,
   expandExactDirectoryReadChildren,
@@ -52,7 +52,7 @@ export interface SandboxedBashResult extends SandboxExecResult {
 }
 
 const logger = createSubsystemLogger("security/sandbox");
-const DEFAULT_BASH_BINARY = process.platform === "win32" ? "bash" : "/bin/bash";
+const DEFAULT_BASH_BINARY = getDefaultBashExecutable();
 const BLOCKED_ENV_VAR_NAMES = new Set<string>([
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
