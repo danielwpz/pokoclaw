@@ -19,6 +19,8 @@ import {
 } from "@/tests/storage/helpers/test-db.js";
 import { seedConversationAndAgentFixture } from "@/tests/tools/helpers.js";
 
+const originalProcessPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
 vi.mock("@/src/security/sandbox.js", async () => {
   const actual = await vi.importActual<typeof import("@/src/security/sandbox.js")>(
     "@/src/security/sandbox.js",
@@ -35,11 +37,13 @@ describe("bash tool", () => {
   let handle: TestDatabaseHandle | null = null;
 
   beforeEach(() => {
+    mockProcessPlatform("linux");
     executeSandboxedBashMock.mockReset();
     executeUnsandboxedBashMock.mockReset();
   });
 
   afterEach(async () => {
+    restoreProcessPlatform();
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
@@ -67,6 +71,22 @@ describe("bash tool", () => {
         '2026-03-22T00:00:00.000Z'
       );
     `);
+  }
+
+  function mockProcessPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", {
+      value: platform,
+      configurable: true,
+      enumerable: originalProcessPlatformDescriptor?.enumerable ?? true,
+    });
+  }
+
+  function restoreProcessPlatform(): void {
+    if (originalProcessPlatformDescriptor == null) {
+      return;
+    }
+
+    Object.defineProperty(process, "platform", originalProcessPlatformDescriptor);
   }
 
   test("returns stdout for a successful command", async () => {
@@ -128,6 +148,133 @@ describe("bash tool", () => {
 </bash_result>`,
       },
     ]);
+  });
+
+  test("uses host full-access bash by default on native Windows when autopilot is enabled", async () => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command: "pwd",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "/tmp/work\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        approvalState: {
+          runtimeModeAutoApproval: {
+            source: "autopilot",
+          },
+        },
+      },
+      {
+        command: "pwd",
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledWith({
+      context: expect.objectContaining({
+        sessionId: "sess_1",
+      }),
+      command: "pwd",
+      timeoutMs: 10_000,
+    });
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      command: "pwd",
+      cwd: "/tmp/work",
+      exitCode: 0,
+    });
+  });
+
+  test("rejects default native Windows bash unless autopilot is enabled", async () => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const failure = registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "pwd",
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "windows_bash_requires_autopilot_full_access",
+        requestedSandboxMode: "sandboxed",
+      },
+    } satisfies Partial<ToolFailure>);
+
+    const message = await failure.catch((error) => (error instanceof Error ? error.message : ""));
+    expect(message).toMatch(/Native Windows cannot run sandboxed bash commands yet\./);
+    expect(message).toMatch(/\[runtime\] autopilot = true/);
+    expect(message).toMatch(/full access/);
+    expect(message).toMatch(/not Linux sandbox isolation/);
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("does not treat YOLO as native Windows bash host-execution opt-in", async () => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          approvalState: {
+            runtimeModeAutoApproval: {
+              source: "yolo",
+            },
+          },
+        },
+        {
+          command: "pwd",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "windows_bash_requires_autopilot_full_access",
+      },
+    } satisfies Partial<ToolFailure>);
+
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
 
   test("returns non-zero exits as normal tool results", async () => {

@@ -1,5 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox";
-
+import { isNativeWindowsPlatform } from "@/src/runtime/host-platform.js";
 import { classifyBashApprovalHelper } from "@/src/security/bash-approval-helpers.js";
 import {
   type BashCommandSegment,
@@ -21,6 +21,7 @@ const MAX_TIMEOUT_SEC = 10 * 60;
 const MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC = 60;
 const MAX_OUTPUT_CHARS = 128_000;
 const MISSING_PREFIX_GUIDANCE_CODE = "bash_full_access_missing_prefix";
+const WINDOWS_BASH_REQUIRES_AUTOPILOT_CODE = "windows_bash_requires_autopilot_full_access";
 
 export const BASH_TOOL_SCHEMA = Type.Object(
   {
@@ -104,18 +105,26 @@ export function createBashTool() {
 
       assertBashTimeoutAllowed(context, args);
       const timeoutMs = getBashInvocationTimeoutMs(context, args);
-      const sandboxMode = args.sandboxMode ?? "sandboxed";
-      if (sandboxMode !== "full_access" && (args.justification != null || args.prefix != null)) {
+      const requestedSandboxMode = args.sandboxMode ?? "sandboxed";
+      if (
+        requestedSandboxMode !== "full_access" &&
+        (args.justification != null || args.prefix != null)
+      ) {
         throw toolRecoverableError(buildFullAccessArgsRequireModeMessage(args), {
           code: "bash_full_access_args_require_full_access_mode",
         });
       }
+      const effectiveExecution = resolveEffectiveBashExecution({
+        context,
+        requestedSandboxMode,
+      });
+      const sandboxMode = effectiveExecution.sandboxMode;
       const security = new SecurityService(
         context.storage,
         buildSystemPolicy({ security: context.securityConfig }),
       );
       const parsedCommandSequence =
-        sandboxMode === "full_access"
+        sandboxMode === "full_access" && !effectiveExecution.windowsAutopilotHostExecution
           ? await parseConservativeBashCommandSequence(args.command)
           : null;
       const normalizedCommandPrefix =
@@ -123,8 +132,14 @@ export function createBashTool() {
           ? (parsedCommandSequence.commands[0]?.argv ?? null)
           : normalizeBashCommandPrefix(args.command);
 
-      const result =
-        sandboxMode === "full_access"
+      const result = effectiveExecution.windowsAutopilotHostExecution
+        ? await executeUnsandboxedBash({
+            context,
+            command: args.command,
+            timeoutMs,
+            ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          })
+        : sandboxMode === "full_access"
           ? await executeBashWithFullAccessIfAllowed({
               context,
               args,
@@ -162,6 +177,36 @@ export function createBashTool() {
         outputTruncated: rendered.truncated,
       });
     },
+  });
+}
+
+type BashSandboxMode = NonNullable<BashToolArgs["sandboxMode"]>;
+
+function resolveEffectiveBashExecution(input: {
+  context: ToolExecutionContext;
+  requestedSandboxMode: BashSandboxMode;
+  platform?: NodeJS.Platform;
+}): {
+  sandboxMode: BashSandboxMode;
+  windowsAutopilotHostExecution: boolean;
+} {
+  if (!isNativeWindowsPlatform(input.platform) || input.requestedSandboxMode === "full_access") {
+    return {
+      sandboxMode: input.requestedSandboxMode,
+      windowsAutopilotHostExecution: false,
+    };
+  }
+
+  if (input.context.approvalState?.runtimeModeAutoApproval?.source === "autopilot") {
+    return {
+      sandboxMode: "full_access",
+      windowsAutopilotHostExecution: true,
+    };
+  }
+
+  throw toolRecoverableError(buildWindowsBashRequiresAutopilotMessage(), {
+    code: WINDOWS_BASH_REQUIRES_AUTOPILOT_CODE,
+    requestedSandboxMode: input.requestedSandboxMode,
   });
 }
 
@@ -442,6 +487,16 @@ function buildFullAccessArgsRequireModeMessage(args: BashToolArgs): string {
     "```json",
     fullAccessRetry,
     "```",
+  ].join("\n");
+}
+
+function buildWindowsBashRequiresAutopilotMessage(): string {
+  return [
+    "Native Windows cannot run sandboxed bash commands yet.",
+    "",
+    "To opt in to Windows bash host execution, set `[runtime] autopilot = true` in `~/.pokoclaw/system/config.toml` and restart Pokoclaw.",
+    "",
+    "With that setting enabled, bash commands run on the Windows host with full access. This is not Linux sandbox isolation, so only enable it on a machine and workspace where that trust model is acceptable.",
   ].join("\n");
 }
 
