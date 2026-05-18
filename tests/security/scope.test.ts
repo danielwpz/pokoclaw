@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  appendFsSubtreeSuffix,
   describePermissionRequest,
   describePermissionScope,
   isFsSubtreeScopePath,
@@ -32,6 +33,30 @@ describe("permission scope parsing", () => {
     expect(isFsSubtreeScopePath("/Users/example/.pokoclaw/workspace/**")).toBe(true);
   });
 
+  test("normalizes Windows fs subtree suffixes to the stable internal suffix", () => {
+    expect(
+      parsePermissionScopeJson(
+        '{"kind":"fs.read","path":"C:\\\\Users\\\\example\\\\project\\\\**"}',
+      ),
+    ).toEqual({
+      kind: "fs.read",
+      path: "C:\\Users\\example\\project/**",
+    });
+    expect(isFsSubtreeScopePath("C:\\Users\\example\\project\\**")).toBe(true);
+  });
+
+  test("appends stable fs subtree suffixes without platform separators", () => {
+    expect(appendFsSubtreeSuffix("C:\\Users\\example\\project")).toBe(
+      "C:\\Users\\example\\project/**",
+    );
+    expect(appendFsSubtreeSuffix("C:\\Users\\example\\project\\")).toBe(
+      "C:\\Users\\example\\project/**",
+    );
+    expect(appendFsSubtreeSuffix("C:\\Users\\example\\project\\**")).toBe(
+      "C:\\Users\\example\\project/**",
+    );
+  });
+
   test("parses db scopes", () => {
     expect(parsePermissionScopeJson('{"kind":"db.read","database":"system"}')).toEqual({
       kind: "db.read",
@@ -47,6 +72,9 @@ describe("permission scope parsing", () => {
 
   test("rejects filesystem root subtree scopes", () => {
     expect(() => parsePermissionScopeJson('{"kind":"fs.read","path":"/**"}')).toThrow(
+      "Invalid permission scope JSON: fs.read path must not target the filesystem root subtree",
+    );
+    expect(() => parsePermissionScopeJson('{"kind":"fs.read","path":"C:\\\\**"}')).toThrow(
       "Invalid permission scope JSON: fs.read path must not target the filesystem root subtree",
     );
   });
