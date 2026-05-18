@@ -259,7 +259,7 @@ describe("McpToolSource", () => {
       ],
       grantedBy: "user",
       createdAt: new Date("2026-05-11T00:00:00.000Z"),
-      expiresAt: new Date("2026-05-18T00:00:00.000Z"),
+      expiresAt: null,
     });
 
     await registry.execute("mcp__linear__create_issue", makeContext(handle, "agent_1"), {});
