@@ -26,6 +26,8 @@ import {
   type TestDatabaseHandle,
 } from "@/tests/storage/helpers/test-db.js";
 
+const originalProcessPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
 vi.mock("@/src/security/sandbox.js", async () => {
   const actual = await vi.importActual<typeof import("@/src/security/sandbox.js")>(
     "@/src/security/sandbox.js",
@@ -142,16 +144,34 @@ describe("agent loop bash approval flow", () => {
   let handle: TestDatabaseHandle | null = null;
 
   beforeEach(() => {
+    mockProcessPlatform("linux");
     executeSandboxedBashMock.mockReset();
     executeUnsandboxedBashMock.mockReset();
   });
 
   afterEach(async () => {
+    restoreProcessPlatform();
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
     }
   });
+
+  function mockProcessPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", {
+      value: platform,
+      configurable: true,
+      enumerable: originalProcessPlatformDescriptor?.enumerable ?? true,
+    });
+  }
+
+  function restoreProcessPlatform(): void {
+    if (originalProcessPlatformDescriptor == null) {
+      return;
+    }
+
+    Object.defineProperty(process, "platform", originalProcessPlatformDescriptor);
+  }
 
   test("pauses and resumes the same bash tool call after one-shot full-access approval", async () => {
     handle = await createTestDatabase(import.meta.url);
