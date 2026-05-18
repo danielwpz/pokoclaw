@@ -321,6 +321,10 @@ autopilot = true
 
 Restart Pokoclaw after changing this value.
 
+On native Windows, sandboxed bash is not available yet. If `[runtime] autopilot = true` is enabled,
+bash commands run directly on the Windows host with full access instead of using Linux sandbox
+isolation. Only enable this on a machine and workspace where that trust model is acceptable.
+
 ### If the user prefers file-based secrets
 
 Keep `config.toml` like this:
