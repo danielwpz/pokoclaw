@@ -4,6 +4,8 @@
  * `system-prompt.ts` composes these building blocks into role-specific prompts.
  * Keep behavioral wording here so policy changes are localized and testable.
  */
+import type { RuntimeShellInfo } from "@/src/runtime/shell-info.js";
+
 function renderSection(title: string, lines: string[]): string {
   const content = lines.map((line) => line.trimEnd());
   while (content[0] === "") {
@@ -66,6 +68,7 @@ function buildBackgroundTaskSharedGuidance(): string[] {
 export interface WorkspaceRuntimePromptContext {
   currentDate?: string | null;
   timezone?: string | null;
+  shellInfo?: RuntimeShellInfo | null;
 }
 
 export interface SubagentProfilePromptContext {
@@ -505,6 +508,7 @@ export function buildSafetySection(): string {
 }
 
 export function buildWorkspaceRuntimeSection(input: WorkspaceRuntimePromptContext = {}): string {
+  const shellInfo = input.shellInfo;
   const lines = [
     ...(input.currentDate == null || input.currentDate.trim().length === 0
       ? []
@@ -512,6 +516,15 @@ export function buildWorkspaceRuntimeSection(input: WorkspaceRuntimePromptContex
     ...(input.timezone == null || input.timezone.trim().length === 0
       ? []
       : [`- Time zone: ${input.timezone.trim()}`]),
+    ...(shellInfo == null
+      ? []
+      : [
+          `- Host platform: ${shellInfo.platformLabel} (${shellInfo.platform})`,
+          `- Host shell: ${shellInfo.hostShell.label} (detected from ${shellInfo.hostShell.detectionSource})`,
+          `- Bash tool shell: ${shellInfo.bashTool.invocation}; command syntax is ${shellInfo.bashTool.syntax}.`,
+          `- Bash default execution mode: ${shellInfo.bashTool.defaultSandboxMode}.`,
+          ...shellInfo.notes.map((note) => `- ${note}`),
+        ]),
   ];
 
   if (lines.length === 0) {

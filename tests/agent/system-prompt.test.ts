@@ -24,6 +24,7 @@ import {
   buildToolUsageSection,
   buildWorkspaceRuntimeSection,
 } from "@/src/agent/system-prompt-sections.js";
+import { detectRuntimeShellInfo } from "@/src/runtime/shell-info.js";
 
 describe("agent system prompt", () => {
   test("builds the current structured sections and omits future empty sections", () => {
@@ -251,6 +252,29 @@ describe("agent system prompt", () => {
         "- If you are unsure about the current time, or need an exact time, use bash to get it.",
       ),
     ).toBe(true);
+  });
+
+  test("injects runtime shell context when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      currentDate: "2026-03-30",
+      timezone: "Asia/Shanghai",
+      shellInfo: detectRuntimeShellInfo({
+        platform: "win32",
+        env: {
+          MSYSTEM: "MINGW64",
+          SHELL: "C:/Program Files/Git/usr/bin/bash.exe",
+        },
+      }),
+    });
+
+    expect(prompt).toContain("Host platform: Windows (win32)");
+    expect(prompt).toContain("Host shell: Git Bash / MinGW (MINGW64)");
+    expect(prompt).toContain("Bash tool shell: bash -lc <command>; command syntax is bash.");
+    expect(prompt).toContain("Bash default execution mode: sandboxed.");
+    expect(prompt).toContain("This runtime context is informational only.");
+    expect(prompt).toContain("does not grant full_access host execution");
   });
 
   test("keeps the prompt prefix stable when only the injected runtime date changes", () => {

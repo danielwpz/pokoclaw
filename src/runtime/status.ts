@@ -20,6 +20,7 @@ import type {
   EffectiveApprovalModeSource,
   RuntimeModeService,
 } from "@/src/runtime/runtime-modes.js";
+import { detectRuntimeShellInfo, type RuntimeShellInfo } from "@/src/runtime/shell-info.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -84,6 +85,7 @@ export interface ConversationStatusSnapshot {
   sessionId: string;
   model: StatusModelSnapshot;
   runtimeMode: StatusRuntimeModeSnapshot;
+  runtimeEnvironment?: RuntimeShellInfo;
   sessionUsage: StatusUsageSnapshot | null;
   latestTurnUsage: StatusUsageSnapshot | null;
   latestTurnErrorMessage: string | null;
@@ -185,6 +187,7 @@ export class RuntimeStatusService {
       sessionId: input.sessionId,
       model,
       runtimeMode,
+      runtimeEnvironment: detectRuntimeShellInfo(),
       sessionUsage,
       latestTurnUsage,
       latestTurnErrorMessage:
@@ -215,6 +218,9 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
     lines.push(`Reasoning: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`);
   }
   lines.push(`运行模式：${formatRuntimeModeLine(snapshot.runtimeMode)}`);
+  if (snapshot.runtimeEnvironment != null) {
+    lines.push(`Host: ${formatRuntimeShellLine(snapshot.runtimeEnvironment)}`);
+  }
   if (snapshot.mcp != null) {
     lines.push(...formatMcpTextLines(snapshot.mcp));
   }
@@ -315,6 +321,9 @@ export function buildConversationStatusPresentation(
           ? []
           : [`**Reasoning**: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`]),
         `**运行模式**：${formatRuntimeModeLine(snapshot.runtimeMode)}`,
+        ...(snapshot.runtimeEnvironment == null
+          ? []
+          : [`**Host**: ${formatRuntimeShellLine(snapshot.runtimeEnvironment)}`]),
         ...(snapshot.mcp == null ? [] : formatMcpMarkdownLines(snapshot.mcp)),
       ].join("\n"),
       [
@@ -385,6 +394,10 @@ function formatRuntimeModeLine(mode: StatusRuntimeModeSnapshot): string {
     case "normal":
       return "🧸 手动审批";
   }
+}
+
+function formatRuntimeShellLine(shellInfo: RuntimeShellInfo): string {
+  return `${shellInfo.platformLabel} / ${shellInfo.hostShell.label} / bash tool: ${shellInfo.bashTool.invocation}`;
 }
 
 function resolveStatusModel(input: {

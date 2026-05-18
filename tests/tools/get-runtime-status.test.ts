@@ -98,6 +98,12 @@ describe("get_runtime_status tool", () => {
           json: {
             now: "2026-04-04T00:00:05.000Z",
             scope: "global_current_running",
+            runtimeEnvironment: expect.objectContaining({
+              bashTool: expect.objectContaining({
+                syntax: "bash",
+                defaultSandboxMode: "sandboxed",
+              }),
+            }),
             runningWork: [
               expect.objectContaining({
                 kind: "main_chat",
@@ -218,6 +224,12 @@ describe("get_runtime_status tool", () => {
       json: {
         now: "2026-04-04T00:00:05.000Z",
         scope: "global_current_running",
+        runtimeEnvironment: expect.objectContaining({
+          bashTool: expect.objectContaining({
+            syntax: "bash",
+            defaultSandboxMode: "sandboxed",
+          }),
+        }),
         runningWork: expect.arrayContaining([
           expect.objectContaining({
             kind: "background_task",
@@ -361,6 +373,12 @@ describe("get_runtime_status tool", () => {
           json: {
             now: "2026-04-04T00:00:05.000Z",
             found: true,
+            runtimeEnvironment: expect.objectContaining({
+              bashTool: expect.objectContaining({
+                syntax: "bash",
+                defaultSandboxMode: "sandboxed",
+              }),
+            }),
             run: expect.objectContaining({
               kind: "main_chat",
               runId: "run_done",
