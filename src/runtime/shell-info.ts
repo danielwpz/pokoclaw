@@ -188,12 +188,22 @@ function formatPlatformLabel(platform: NodeJS.Platform): string {
 function getEnv(env: NodeJS.ProcessEnv, name: string): string | null {
   const direct = env[name];
   if (direct != null && direct.trim().length > 0) {
-    return direct.trim();
+    return sanitizeEnvText(direct);
   }
 
   const entry = Object.entries(env).find(([key]) => key.toLowerCase() === name.toLowerCase());
   const value = entry?.[1];
-  return value == null || value.trim().length === 0 ? null : value.trim();
+  return value == null || value.trim().length === 0 ? null : sanitizeEnvText(value);
+}
+
+function sanitizeEnvText(value: string): string {
+  let sanitized = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    sanitized += codePoint == null || codePoint < 32 || codePoint === 127 ? " " : char;
+  }
+
+  return sanitized.replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
 function normalizeSlashes(value: string): string {
