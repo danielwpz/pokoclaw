@@ -58,11 +58,11 @@ export type PermissionCheckResult =
     };
 
 function expandHomePrefix(value: string): string {
+  const homeDir = process.env.HOME;
   if (value === "~") {
-    return process.env.HOME ?? value;
+    return homeDir ?? value;
   }
-  if (value.startsWith("~/")) {
-    const homeDir = process.env.HOME;
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
     return homeDir == null ? value : path.join(homeDir, value.slice(2));
   }
   return value;
