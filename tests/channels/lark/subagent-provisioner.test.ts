@@ -41,6 +41,23 @@ describe("lark subagent provisioner", () => {
     const chatMembersCreate = vi.fn(async () => ({ data: { invalid_id_list: [] } }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "om_welcome_1" } }));
     const putTopNotice = vi.fn(async () => ({ data: {} }));
+    const tagCreate = vi.fn(async () => ({
+      data: { create_tag_fail_reason: { duplicate_id: "tag_pokoclaw" } },
+    }));
+    const tagRelationGet = vi.fn(async () => ({
+      data: {
+        tag_info_with_bind_versions: [
+          {
+            tag_info: {
+              id: "tag_existing",
+              name: "existing",
+            },
+          },
+        ],
+      },
+    }));
+    const tagRelationUpdate = vi.fn(async () => ({ data: {} }));
+    const tagRelationCreate = vi.fn(async () => ({ data: {} }));
 
     const provisioner = createLarkSubagentConversationSurfaceProvisioner({
       storage: handle.storage.db,
@@ -63,6 +80,16 @@ describe("lark subagent provisioner", () => {
                 },
                 chatTopNotice: {
                   putTopNotice,
+                },
+                v2: {
+                  tag: {
+                    create: tagCreate,
+                  },
+                  bizEntityTagRelation: {
+                    get: tagRelationGet,
+                    update: tagRelationUpdate,
+                    create: tagRelationCreate,
+                  },
                 },
               },
             },
@@ -112,6 +139,38 @@ describe("lark subagent provisioner", () => {
       params: { member_id_type: "open_id" },
       data: { id_list: ["ou_user_1", "ou_user_2"] },
     });
+    expect(tagCreate).toHaveBeenCalledExactlyOnceWith({
+      data: {
+        create_tag: {
+          tag_type: "tenant",
+          name: "pokoclaw",
+          i18n_names: [
+            {
+              locale: "zh_cn",
+              name: "pokoclaw",
+            },
+            {
+              locale: "en_us",
+              name: "pokoclaw",
+            },
+          ],
+        },
+      },
+    });
+    expect(tagRelationGet).toHaveBeenCalledExactlyOnceWith({
+      params: {
+        tag_biz_type: "chat",
+        biz_entity_id: "chat_sub_1",
+      },
+    });
+    expect(tagRelationUpdate).toHaveBeenCalledExactlyOnceWith({
+      data: {
+        tag_biz_type: "chat",
+        biz_entity_id: "chat_sub_1",
+        tag_ids: ["tag_existing", "tag_pokoclaw"],
+      },
+    });
+    expect(tagRelationCreate).not.toHaveBeenCalled();
     expect(chatLink).toHaveBeenCalledExactlyOnceWith({
       path: { chat_id: "chat_sub_1" },
       data: { validity_period: "permanently" },
@@ -159,6 +218,132 @@ describe("lark subagent provisioner", () => {
         chat_top_notice: [{ action_type: "1", message_id: "om_welcome_1" }],
       },
     });
+  });
+
+  test("reuses a bound management tag when duplicate tag creation omits duplicate_id", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_1', 'lark', 'default', '2026-03-29T00:00:00.000Z', '2026-03-29T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, title, created_at, updated_at)
+      VALUES
+        ('conv_main', 'ci_1', 'chat_main', 'dm', 'Main', '2026-03-29T00:00:00.000Z', '2026-03-29T00:00:00.000Z'),
+        ('conv_tagged', 'ci_1', 'chat_tagged', 'group', 'Tagged', '2026-03-29T00:01:00.000Z', '2026-03-29T00:01:00.000Z');
+    `);
+
+    const chatCreate = vi.fn(async () => ({ data: { chat_id: "chat_sub_duplicate_name" } }));
+    const chatDelete = vi.fn(async () => ({ data: {} }));
+    const chatMembersGet = vi.fn(async () => ({
+      data: {
+        items: [{ member_id: "ou_user_1" }],
+        has_more: false,
+      },
+    }));
+    const chatMembersCreate = vi.fn(async () => ({ data: { invalid_id_list: [] } }));
+    const chatLink = vi.fn(async () => ({
+      data: { share_link: "https://example.com/subagent-duplicate-name" },
+    }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "om_welcome_duplicate" } }));
+    const putTopNotice = vi.fn(async () => ({ data: {} }));
+    const tagCreate = vi.fn(async () => ({
+      code: 402,
+      msg: "duplicate name in tenant",
+    }));
+    const tagRelationGet = vi.fn(async (payload: { params: { biz_entity_id: string } }) => {
+      if (payload.params.biz_entity_id === "chat_tagged") {
+        return {
+          data: {
+            tag_info_with_bind_versions: [
+              {
+                tag_info: {
+                  id: "tag_pokoclaw",
+                  name: "pokoclaw",
+                },
+              },
+            ],
+          },
+        };
+      }
+
+      return { data: { tag_info_with_bind_versions: [] } };
+    });
+    const tagRelationCreate = vi.fn(async () => ({ data: {} }));
+
+    const provisioner = createLarkSubagentConversationSurfaceProvisioner({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                chat: {
+                  create: chatCreate,
+                  delete: chatDelete,
+                  link: chatLink,
+                },
+                chatMembers: {
+                  get: chatMembersGet,
+                  create: chatMembersCreate,
+                },
+                message: {
+                  create: messageCreate,
+                },
+                chatTopNotice: {
+                  putTopNotice,
+                },
+                v2: {
+                  tag: {
+                    create: tagCreate,
+                  },
+                  bizEntityTagRelation: {
+                    get: tagRelationGet,
+                    update: vi.fn(async () => ({ data: {} })),
+                    create: tagRelationCreate,
+                  },
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    const result = await provisioner.provisionSubagentSurface({
+      conversationId: "conv_sub_duplicate_name",
+      sourceConversationId: "conv_main",
+      channelInstanceId: "ci_1",
+      title: "PR Review",
+      description: "Review pull requests and summarize findings.",
+      initialTask: "Review the current PR and report concrete issues.",
+      workdir: "/Users/example/work/pokoclaw",
+      privateWorkspaceDir: "/Users/example/.pokoclaw/workspace/subagents/abcd1234",
+      preferredSurface: "independent_chat",
+    });
+
+    expect(result).toMatchObject({
+      status: "provisioned",
+      externalChatId: "chat_sub_duplicate_name",
+    });
+    expect(tagRelationGet).toHaveBeenCalledWith({
+      params: {
+        tag_biz_type: "chat",
+        biz_entity_id: "chat_tagged",
+      },
+    });
+    expect(tagRelationGet).toHaveBeenCalledWith({
+      params: {
+        tag_biz_type: "chat",
+        biz_entity_id: "chat_sub_duplicate_name",
+      },
+    });
+    expect(tagRelationCreate).toHaveBeenCalledExactlyOnceWith({
+      data: {
+        tag_biz_type: "chat",
+        biz_entity_id: "chat_sub_duplicate_name",
+        tag_ids: ["tag_pokoclaw"],
+      },
+    });
+    expect(chatDelete).not.toHaveBeenCalled();
   });
 
   test("cleans up the created chat when provisioning fails after chat.create", async () => {
@@ -231,6 +416,94 @@ describe("lark subagent provisioner", () => {
     expect(chatDelete).toHaveBeenCalledExactlyOnceWith({
       path: { chat_id: "chat_sub_2" },
     });
+  });
+
+  test("keeps provisioning when applying the management tag fails", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_1', 'lark', 'default', '2026-03-29T00:00:00.000Z', '2026-03-29T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, title, created_at, updated_at)
+      VALUES ('conv_main', 'ci_1', 'chat_main', 'dm', 'Main', '2026-03-29T00:00:00.000Z', '2026-03-29T00:00:00.000Z');
+    `);
+
+    const chatCreate = vi.fn(async () => ({ data: { chat_id: "chat_sub_tag_failure" } }));
+    const chatDelete = vi.fn(async () => ({ data: {} }));
+    const chatMembersGet = vi.fn(async () => ({
+      data: {
+        items: [{ member_id: "ou_user_1" }],
+        has_more: false,
+      },
+    }));
+    const chatMembersCreate = vi.fn(async () => ({ data: { invalid_id_list: [] } }));
+    const chatLink = vi.fn(async () => ({
+      data: { share_link: "https://example.com/subagent-tag-failure" },
+    }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "om_welcome_tag_failure" } }));
+    const putTopNotice = vi.fn(async () => ({ data: {} }));
+    const tagCreate = vi.fn(async () => {
+      throw new Error("missing im:tag:write permission");
+    });
+
+    const provisioner = createLarkSubagentConversationSurfaceProvisioner({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                chat: {
+                  create: chatCreate,
+                  delete: chatDelete,
+                  link: chatLink,
+                },
+                chatMembers: {
+                  get: chatMembersGet,
+                  create: chatMembersCreate,
+                },
+                message: {
+                  create: messageCreate,
+                },
+                chatTopNotice: {
+                  putTopNotice,
+                },
+                v2: {
+                  tag: {
+                    create: tagCreate,
+                  },
+                  bizEntityTagRelation: {
+                    get: vi.fn(async () => ({ data: {} })),
+                    update: vi.fn(async () => ({ data: {} })),
+                    create: vi.fn(async () => ({ data: {} })),
+                  },
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    const result = await provisioner.provisionSubagentSurface({
+      conversationId: "conv_sub_tag_failure",
+      sourceConversationId: "conv_main",
+      channelInstanceId: "ci_1",
+      title: "PR Review",
+      description: "Review pull requests and summarize findings.",
+      initialTask: "Review the current PR and report concrete issues.",
+      workdir: "/Users/example/work/pokoclaw",
+      privateWorkspaceDir: "/Users/example/.pokoclaw/workspace/subagents/abcd1234",
+      preferredSurface: "independent_chat",
+    });
+
+    expect(result).toMatchObject({
+      status: "provisioned",
+      externalChatId: "chat_sub_tag_failure",
+      shareLink: "https://example.com/subagent-tag-failure",
+    });
+    expect(chatDelete).not.toHaveBeenCalled();
+    expect(chatLink).toHaveBeenCalledOnce();
+    expect(messageCreate).toHaveBeenCalledOnce();
   });
 
   test("supports explicit cleanup of a provisioned subagent chat", async () => {

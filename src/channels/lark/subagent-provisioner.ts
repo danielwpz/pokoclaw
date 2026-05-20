@@ -11,6 +11,8 @@ import { ChannelInstancesRepo } from "@/src/storage/repos/channel-instances.repo
 import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
 
 const logger = createSubsystemLogger("channels/lark-subagent-provisioner");
+// Lets users find and manage all Pokoclaw-created SubAgent chats from one Lark tag.
+const POKOCLAW_SUBAGENT_CHAT_TAG_NAME = "pokoclaw";
 
 export interface CreateLarkSubagentConversationSurfaceProvisionerInput {
   storage: StorageDb;
@@ -92,6 +94,13 @@ export function createLarkSubagentConversationSurfaceProvisioner(
           });
           assertLarkOk(addResp, "add subagent chat members");
         }
+
+        await applyPokoclawSubagentChatTag({
+          client,
+          chatId: externalChatId,
+          storage: input.storage,
+          channelInstanceId: channelInstance.id,
+        });
 
         const shareLink = await getChatShareLink(client, externalChatId);
         await publishWelcomeNotice({
@@ -184,6 +193,172 @@ async function listChatMemberIds(client: LarkSdkClient, chatId: string): Promise
 
 function buildSubagentChatName(title: string): string {
   return title.trim();
+}
+
+async function applyPokoclawSubagentChatTag(input: {
+  client: LarkSdkClient;
+  chatId: string;
+  storage: StorageDb;
+  channelInstanceId: string;
+}): Promise<void> {
+  try {
+    const tagId = await ensurePokoclawSubagentChatTag(input);
+    const existingTagIds = await getChatTagIds(input.client, input.chatId);
+    if (existingTagIds.includes(tagId)) {
+      return;
+    }
+
+    const tagIds = existingTagIds.length > 0 ? [...existingTagIds, tagId] : [tagId];
+    const response =
+      existingTagIds.length > 0
+        ? await input.client.sdk.im.v2.bizEntityTagRelation.update({
+            data: {
+              tag_biz_type: "chat",
+              biz_entity_id: input.chatId,
+              tag_ids: tagIds,
+            },
+          })
+        : await input.client.sdk.im.v2.bizEntityTagRelation.create({
+            data: {
+              tag_biz_type: "chat",
+              biz_entity_id: input.chatId,
+              tag_ids: tagIds,
+            },
+          });
+    assertLarkOk(
+      response,
+      `bind ${POKOCLAW_SUBAGENT_CHAT_TAG_NAME} tag to subagent chat ${input.chatId}`,
+    );
+  } catch (error: unknown) {
+    logger.warn("failed to tag lark subagent chat for unified management", {
+      chatId: input.chatId,
+      tagName: POKOCLAW_SUBAGENT_CHAT_TAG_NAME,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function ensurePokoclawSubagentChatTag(input: {
+  client: LarkSdkClient;
+  storage: StorageDb;
+  channelInstanceId: string;
+}): Promise<string> {
+  const response = await input.client.sdk.im.v2.tag.create({
+    data: {
+      create_tag: {
+        tag_type: "tenant",
+        name: POKOCLAW_SUBAGENT_CHAT_TAG_NAME,
+        i18n_names: [
+          {
+            locale: "zh_cn",
+            name: POKOCLAW_SUBAGENT_CHAT_TAG_NAME,
+          },
+          {
+            locale: "en_us",
+            name: POKOCLAW_SUBAGENT_CHAT_TAG_NAME,
+          },
+        ],
+      },
+    },
+  });
+
+  const tagId = response.data?.id ?? response.data?.create_tag_fail_reason?.duplicate_id ?? "";
+  if (tagId.length > 0) {
+    return tagId;
+  }
+
+  if (isDuplicateTagNameResponse(response)) {
+    const existingTagId = await findExistingPokoclawSubagentChatTagId(input);
+    if (existingTagId != null) {
+      return existingTagId;
+    }
+  }
+
+  assertLarkOk(response, `ensure ${POKOCLAW_SUBAGENT_CHAT_TAG_NAME} lark tag`);
+  throw new Error(`Lark tag.create returned no id for ${POKOCLAW_SUBAGENT_CHAT_TAG_NAME}`);
+}
+
+function isDuplicateTagNameResponse(response: {
+  code?: number | undefined;
+  msg?: string | undefined;
+}): boolean {
+  return response.code === 402 && response.msg === "duplicate name in tenant";
+}
+
+async function findExistingPokoclawSubagentChatTagId(input: {
+  client: LarkSdkClient;
+  storage: StorageDb;
+  channelInstanceId: string;
+}): Promise<string | null> {
+  const conversations = new ConversationsRepo(input.storage).listByChannelInstanceId(
+    input.channelInstanceId,
+    100,
+  );
+
+  for (const conversation of conversations) {
+    const tagId = await findPokoclawTagIdBoundToChat(input.client, conversation.externalChatId);
+    if (tagId != null) {
+      return tagId;
+    }
+  }
+
+  return null;
+}
+
+async function findPokoclawTagIdBoundToChat(
+  client: LarkSdkClient,
+  chatId: string,
+): Promise<string | null> {
+  const response = await client.sdk.im.v2.bizEntityTagRelation.get({
+    params: {
+      tag_biz_type: "chat",
+      biz_entity_id: chatId,
+    },
+  });
+  if (response.code !== undefined && response.code !== 0) {
+    return null;
+  }
+
+  for (const item of response.data?.tag_info_with_bind_versions ?? []) {
+    const tagInfo = item.tag_info;
+    const tagId = tagInfo?.id ?? "";
+    if (tagInfo != null && tagId.length > 0 && isPokoclawSubagentTagInfo(tagInfo)) {
+      return tagId;
+    }
+  }
+
+  return null;
+}
+
+function isPokoclawSubagentTagInfo(tagInfo: {
+  name?: string | undefined;
+  i18n_names?: { name?: string | undefined }[] | undefined;
+}): boolean {
+  if (tagInfo.name === POKOCLAW_SUBAGENT_CHAT_TAG_NAME) {
+    return true;
+  }
+
+  return (tagInfo.i18n_names ?? []).some((item) => item.name === POKOCLAW_SUBAGENT_CHAT_TAG_NAME);
+}
+
+async function getChatTagIds(client: LarkSdkClient, chatId: string): Promise<string[]> {
+  const response = await client.sdk.im.v2.bizEntityTagRelation.get({
+    params: {
+      tag_biz_type: "chat",
+      biz_entity_id: chatId,
+    },
+  });
+  assertLarkOk(response, `list tags for subagent chat ${chatId}`);
+
+  const tagIds = new Set<string>();
+  for (const item of response.data?.tag_info_with_bind_versions ?? []) {
+    const tagId = item.tag_info?.id ?? "";
+    if (tagId.length > 0) {
+      tagIds.add(tagId);
+    }
+  }
+
+  return Array.from(tagIds);
 }
 
 async function getChatShareLink(client: LarkSdkClient, chatId: string): Promise<string | null> {
