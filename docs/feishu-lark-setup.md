@@ -153,6 +153,8 @@ In **Permissions**, use **Batch import** and paste this permission set:
 
 If the platform UI or permission names have changed, adapt carefully instead of pretending the old list is exact.
 
+The `im:tag:*` and `im:biz_entity_tag_relation:*` scopes let Pokoclaw add the fixed `pokoclaw` enterprise custom group label to newly created SubAgent group chats. If these scopes are missing, SubAgent creation still succeeds, but the label step is skipped with a warning.
+
 ### 3C-6. Enable bot capability
 
 In **App Capability** > **Bot**:

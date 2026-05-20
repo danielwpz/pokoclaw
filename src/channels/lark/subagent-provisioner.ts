@@ -12,6 +12,8 @@ import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
 
 const logger = createSubsystemLogger("channels/lark-subagent-provisioner");
 
+const SUBAGENT_CHAT_TAG_NAME = "pokoclaw";
+
 export interface CreateLarkSubagentConversationSurfaceProvisionerInput {
   storage: StorageDb;
   clients: {
@@ -83,6 +85,8 @@ export function createLarkSubagentConversationSurfaceProvisioner(
           };
         }
 
+        const subagentChatTagId = await applySubagentChatTag(client, externalChatId);
+
         const memberIds = await listChatMemberIds(client, sourceConversation.externalChatId);
         if (memberIds.length > 0) {
           const addResp = await client.sdk.im.chatMembers.create({
@@ -112,6 +116,7 @@ export function createLarkSubagentConversationSurfaceProvisioner(
           shareLink,
           channelInstallationId: installationId,
           memberCount: memberIds.length,
+          subagentChatTagId,
         });
 
         return {
@@ -151,6 +156,52 @@ export function createLarkSubagentConversationSurfaceProvisioner(
       }
     },
   };
+}
+
+async function applySubagentChatTag(client: LarkSdkClient, chatId: string): Promise<string | null> {
+  try {
+    const tagResp = await client.sdk.im.v2.tag.create({
+      data: {
+        create_tag: {
+          tag_type: "tenant",
+          name: SUBAGENT_CHAT_TAG_NAME,
+        },
+      },
+    });
+    assertLarkOk(tagResp, `create or reuse lark subagent chat tag ${SUBAGENT_CHAT_TAG_NAME}`);
+
+    const tagId = tagResp.data?.id ?? tagResp.data?.create_tag_fail_reason?.duplicate_id ?? "";
+    if (tagId.length === 0) {
+      logger.warn("lark subagent chat tag creation returned no tag id", {
+        chatId,
+        tagName: SUBAGENT_CHAT_TAG_NAME,
+      });
+      return null;
+    }
+
+    const bindResp = await client.sdk.im.v2.bizEntityTagRelation.create({
+      data: {
+        tag_biz_type: "chat",
+        biz_entity_id: chatId,
+        tag_ids: [tagId],
+      },
+    });
+    assertLarkOk(bindResp, `bind lark subagent chat tag ${SUBAGENT_CHAT_TAG_NAME}`);
+
+    logger.info("tagged lark subagent chat surface", {
+      chatId,
+      tagName: SUBAGENT_CHAT_TAG_NAME,
+      tagId,
+    });
+    return tagId;
+  } catch (error: unknown) {
+    logger.warn("failed to tag lark subagent chat surface", {
+      chatId,
+      tagName: SUBAGENT_CHAT_TAG_NAME,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 async function listChatMemberIds(client: LarkSdkClient, chatId: string): Promise<string[]> {
