@@ -315,6 +315,7 @@ export class AgentLoop {
     runId?: string;
     approvalState?: ToolExecutionApprovalState;
   }): ToolExecutionContext {
+    const taskRun = new TaskRunsRepo(this.deps.storage).getByExecutionSessionId(input.sessionId);
     const runtimeControl = {
       submitApprovalDecision: (decision) => this.submitApprovalResponse(decision),
       getRuntimeStatus: (request) => {
@@ -356,6 +357,7 @@ export class AgentLoop {
       abortSignal: input.signal,
       toolCallId: input.toolCallId,
       ...(input.runId === undefined ? {} : { runId: input.runId }),
+      ...(taskRun == null ? {} : { taskRunId: taskRun.id }),
       ...(input.ownerAgentId === undefined ? {} : { ownerAgentId: input.ownerAgentId }),
       ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
       ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),

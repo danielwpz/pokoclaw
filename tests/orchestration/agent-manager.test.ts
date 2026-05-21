@@ -1487,6 +1487,84 @@ describe("AgentManager", () => {
     });
   });
 
+  test("publishes outbound attachment envelopes to the outbound event bus", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id,
+          execution_session_id, status, started_at
+        ) VALUES (
+          'task_image_1', 'delegate', 'agent_sub', 'conv_sub', 'branch_sub',
+          'sess_sub', 'running', '2026-03-25T00:00:02.500Z'
+        );
+      `);
+
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const published: OrchestratedOutboundEventEnvelope[] = [];
+      bus.subscribe(async (event) => {
+        published.push(event);
+      });
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+        outboundEventBus: bus,
+      });
+
+      const result = manager.publishOutboundAttachment({
+        sourceSessionId: "sess_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        runId: "run_1",
+        taskRunId: "task_image_1",
+        attachmentPath: "/tmp/chart.png",
+        displayPath: "chart.png",
+        type: "image",
+      });
+      await flushMicrotasks();
+
+      expect(result).toMatchObject({
+        accepted: true,
+        eventId: expect.any(String),
+      });
+      expect(published).toHaveLength(1);
+      expect(published[0]).toMatchObject({
+        kind: "outbound_attachment_event",
+        target: {
+          conversationId: "conv_sub",
+          branchId: "branch_sub",
+        },
+        session: {
+          sessionId: "sess_sub",
+          purpose: "task",
+        },
+        agent: {
+          ownerAgentId: "agent_sub",
+          ownerRole: "subagent",
+          mainAgentId: "agent_main",
+        },
+        taskRun: {
+          taskRunId: "task_image_1",
+          runType: "delegate",
+        },
+        run: {
+          runId: "run_1",
+        },
+        event: {
+          type: "outbound_attachment_requested",
+          eventId: result.eventId,
+          attachmentPath: "/tmp/chart.png",
+          displayPath: "chart.png",
+          attachmentType: "image",
+        },
+      });
+    });
+  });
+
   test("returns null for invalid delegated approval ids", async () => {
     const submitMessage = vi.fn(
       async (_input: SubmitMessageInput): Promise<SubmitMessageResult> => {

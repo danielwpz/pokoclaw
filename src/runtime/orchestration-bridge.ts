@@ -15,6 +15,7 @@ const logger = createSubsystemLogger("runtime-orchestration-bridge");
 type RuntimeOrchestrationTarget = Pick<
   AgentManager,
   | "emitRuntimeEvent"
+  | "publishOutboundAttachment"
   | "submitSubagentCreationRequest"
   | "runCronJobNow"
   | "startBackgroundTask"
@@ -69,6 +70,20 @@ export class RuntimeOrchestrationBridge {
       this.requireManager(
         "suppressBackgroundTaskCompletionNotice",
       ).suppressBackgroundTaskCompletionNotice(input);
+    },
+    sendAttachment: async (input) => {
+      const result = this.requireManager("publishOutboundAttachment").publishOutboundAttachment(
+        input,
+      );
+
+      logger.info("published outbound attachment request through runtime bridge", {
+        sourceSessionId: input.sourceSessionId,
+        eventId: result.eventId,
+        attachmentPath: input.attachmentPath,
+        attachmentType: input.type,
+      });
+
+      return result;
     },
   };
 

@@ -18,6 +18,7 @@ import { createQuerySystemDbTool } from "@/src/tools/query-system-db.js";
 import { createReadTool } from "@/src/tools/read.js";
 import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
 import { createReviewPermissionRequestTool } from "@/src/tools/review-permission-request.js";
+import { createSendAttachmentTool } from "@/src/tools/send-attachment.js";
 import { createWaitTaskTool } from "@/src/tools/wait-task.js";
 import { createWebFetchTool } from "@/src/tools/web/fetch.js";
 import { createWebSearchTool } from "@/src/tools/web/search.js";
@@ -49,6 +50,7 @@ export function createBuiltinToolRegistry(
   registry.register(createBackgroundTaskTool());
   registry.register(createWaitTaskTool());
   registry.register(createListBackgroundTasksTool());
+  registry.register(createSendAttachmentTool());
   registry.register(
     createPublishA2uiTool(
       integrations.a2uiPublisher == null ? {} : { publisher: integrations.a2uiPublisher },

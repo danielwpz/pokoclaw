@@ -35,6 +35,7 @@ export interface ToolExecutionContext {
   abortSignal?: AbortSignal;
   toolCallId?: string;
   runId?: string;
+  taskRunId?: string;
   approvalState?: ToolExecutionApprovalState;
   runtimeControl?: ToolRuntimeControl;
 }
@@ -100,6 +101,19 @@ export interface ToolRuntimeControl {
     taskRunId: string;
   }>;
   suppressBackgroundTaskCompletionNotice?(input: { taskRunId: string }): void;
+  sendAttachment?(input: {
+    sourceSessionId: string;
+    conversationId: string;
+    branchId: string;
+    runId?: string | null;
+    taskRunId?: string | null;
+    attachmentPath: string;
+    displayPath: string;
+    type: "image" | "pdf" | "word" | "spreadsheet" | "presentation" | "html" | "file";
+  }): Promise<{
+    accepted: true;
+    eventId: string;
+  }>;
 }
 
 export interface ToolExecutionApprovalState {

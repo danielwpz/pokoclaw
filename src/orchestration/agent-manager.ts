@@ -16,6 +16,9 @@ import {
 import {
   type OrchestratedOutboundEventEnvelope,
   type OrchestratedRuntimeEventEnvelope,
+  type OutboundAttachmentRequestedEvent,
+  type OutboundAttachmentType,
+  projectOutboundAttachmentEvent,
   projectRuntimeEvent,
   projectSubagentCreationEvent,
   projectTaskRunEvent,
@@ -151,6 +154,43 @@ export class AgentManager {
       db: this.deps.storage,
       event,
     });
+  }
+
+  publishOutboundAttachment(input: {
+    sourceSessionId: string;
+    conversationId: string;
+    branchId: string;
+    runId?: string | null;
+    taskRunId?: string | null;
+    attachmentPath: string;
+    displayPath: string;
+    type: OutboundAttachmentType;
+  }): { accepted: true; eventId: string } {
+    const event: OutboundAttachmentRequestedEvent = {
+      type: "outbound_attachment_requested",
+      eventId: randomUUID(),
+      attachmentPath: input.attachmentPath,
+      displayPath: input.displayPath,
+      attachmentType: input.type,
+      requestedAt: new Date().toISOString(),
+    };
+
+    this.publishOutboundEvent(
+      projectOutboundAttachmentEvent({
+        db: this.deps.storage,
+        sourceSessionId: input.sourceSessionId,
+        conversationId: input.conversationId,
+        branchId: input.branchId,
+        ...(input.runId === undefined ? {} : { runId: input.runId }),
+        ...(input.taskRunId === undefined ? {} : { taskRunId: input.taskRunId }),
+        event,
+      }),
+    );
+
+    return {
+      accepted: true,
+      eventId: event.eventId,
+    };
   }
 
   createTaskExecution(params: CreateTaskExecutionInput): CreatedTaskExecution {
