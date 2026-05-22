@@ -166,6 +166,42 @@ function makeTaskEnvelope(
   };
 }
 
+function makeLarkHttpError(
+  status: number,
+  data: Record<string, unknown>,
+): Error & { response: { status: number; data: Record<string, unknown> } } {
+  const error = new Error(`Request failed with status code ${status}`) as Error & {
+    response: { status: number; data: Record<string, unknown> };
+  };
+  error.response = {
+    status,
+    data,
+  };
+  return error;
+}
+
+function readLarkInteractiveCardId(input: unknown): string | null {
+  const content =
+    typeof input === "object" &&
+    input != null &&
+    "data" in input &&
+    typeof input.data === "object" &&
+    input.data != null &&
+    "content" in input.data &&
+    typeof input.data.content === "string"
+      ? input.data.content
+      : null;
+  if (content == null) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(content) as { data?: { card_id?: unknown } };
+    return typeof parsed.data?.card_id === "string" ? parsed.data.card_id : null;
+  } catch {
+    return null;
+  }
+}
+
 function makeApprovalRuntimeEnvelope(
   event: OrchestratedRuntimeEventEnvelope["event"],
 ): OrchestratedRuntimeEventEnvelope {
@@ -2078,6 +2114,197 @@ describe("lark outbound runtime", () => {
     expect(fullReplyPayload?.data?.msg_type).toBe("interactive");
     expect(fullReplyPayload?.data?.content ?? "").toContain("日报汇总 · 完整结果");
     expect(fullReplyPayload?.data?.content ?? "").toContain("tail-end-marker");
+
+    await runtime.shutdown();
+  });
+
+  test("does not retry the same task status card after ambiguous card reference send failure", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { card_id: "card_task_status_poisoned" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_task_status_retry" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_task_transcript" } });
+    const createMessage = vi.fn(async (input: unknown) => {
+      const cardId = readLarkInteractiveCardId(input);
+      if (cardId === "card_task_status_poisoned") {
+        throw makeLarkHttpError(500, {
+          code: 2200,
+          msg: "Internal Error",
+        });
+      }
+      if (cardId === "card_task_status_retry") {
+        throw makeLarkHttpError(400, {
+          code: 230099,
+          msg: "Failed to create card content, ext=ErrCode: 200780; ErrMsg: card binding biz count over limit; ",
+        });
+      }
+      return {
+        data: {
+          message_id: `om_${cardId ?? "unknown"}`,
+          open_message_id: `oom_${cardId ?? "unknown"}`,
+        },
+      };
+    });
+    const updateCard = vi.fn(async () => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: vi.fn(async () => ({})) },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply: vi.fn(async () => ({})),
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_task_msg_1",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_task_1",
+      }),
+    );
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_task_msg_2",
+        createdAt: "2026-03-28T00:00:01.100Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_task_1",
+        delta: "hello",
+        accumulatedText: "hello",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const sentCardIds = createMessage.mock.calls.map((call) =>
+      readLarkInteractiveCardId(call.at(0)),
+    );
+    expect(createMessage).toHaveBeenCalledTimes(3);
+    expect(sentCardIds.filter((cardId) => cardId === "card_task_status_poisoned")).toHaveLength(1);
+    expect(sentCardIds).toContain("card_task_status_retry");
+    expect(sentCardIds).toContain("card_task_transcript");
+
+    const taskStatusBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "task:task_1",
+    });
+    expect(taskStatusBinding).toMatchObject({
+      larkCardId: "card_task_status_retry",
+      larkMessageId: null,
+      status: "stale",
+    });
+    expect(JSON.parse(taskStatusBinding?.metadataJson ?? "{}")).toMatchObject({
+      cardReferenceSendFailure: {
+        attempts: 2,
+        lastFailureKind: "card_binding_biz_count_over_limit",
+        httpStatus: 400,
+        upstreamCode: 230099,
+      },
+    });
+
+    const transcriptBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_task_1:seg:1",
+    });
+    expect(transcriptBinding).toMatchObject({
+      larkCardId: "card_task_transcript",
+      larkMessageId: "om_card_task_transcript",
+    });
 
     await runtime.shutdown();
   });
