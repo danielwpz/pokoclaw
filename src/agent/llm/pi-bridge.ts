@@ -49,7 +49,7 @@ const DEFAULT_REASONING_LEVEL = "medium";
 const logger = createSubsystemLogger("llm-bridge");
 const LOG_PREVIEW_LIMIT = 160;
 const STREAM_EVENT_LOOP_YIELD_EVERY_EVENTS = 256;
-const DEFAULT_FIRST_RESPONSE_TIMEOUT_MS = 10_000;
+const DEFAULT_FIRST_RESPONSE_TIMEOUT_MS = 45_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 const OPENAI_COMPAT_ROLE_OVERRIDE = {
   supportsDeveloperRole: false,
