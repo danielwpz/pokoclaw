@@ -9,6 +9,7 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import {
   type Api,
   type AssistantMessage,
+  type AssistantMessageEvent,
   completeSimple,
   type Model,
   type Tool,
@@ -48,6 +49,8 @@ const DEFAULT_REASONING_LEVEL = "medium";
 const logger = createSubsystemLogger("llm-bridge");
 const LOG_PREVIEW_LIMIT = 160;
 const STREAM_EVENT_LOOP_YIELD_EVERY_EVENTS = 256;
+const DEFAULT_FIRST_RESPONSE_TIMEOUT_MS = 10_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 60_000;
 const OPENAI_COMPAT_ROLE_OVERRIDE = {
   supportsDeveloperRole: false,
 } as const;
@@ -89,8 +92,16 @@ export interface ProviderApiKeyResolver {
   resolveApiKey(provider: ResolvedProvider): Promise<string | undefined>;
 }
 
+export interface PiBridgeOptions {
+  firstResponseTimeoutMs?: number;
+  streamIdleTimeoutMs?: number;
+}
+
 export class PiBridge {
-  constructor(private readonly providerApiKeyResolver?: ProviderApiKeyResolver) {}
+  constructor(
+    private readonly providerApiKeyResolver?: ProviderApiKeyResolver,
+    private readonly options: PiBridgeOptions = {},
+  ) {}
 
   async streamTurn(input: PiBridgeRunTurnInput): Promise<PiBridgeRunTurnResult> {
     // The bridge is intentionally thin: it translates our stored/session state
@@ -124,18 +135,43 @@ export class PiBridge {
       supportsVision: input.model.supportsVision,
     });
 
+    let watchdog: LlmStreamWatchdog | null = null;
+    let streamIterator: AsyncIterator<AssistantMessageEvent> | null = null;
     try {
-      const stream = streamWithNormalizedUpstreamUsage(
-        model,
-        context,
-        await buildPiStreamOptions(this.providerApiKeyResolver, input.model, input.signal, {
+      throwIfSignalAborted(input.signal, input.model);
+      const streamOptions = await buildPiStreamOptions(
+        this.providerApiKeyResolver,
+        input.model,
+        input.signal,
+        {
           enableReasoning: true,
-        }),
+        },
       );
+      throwIfSignalAborted(input.signal, input.model);
+      watchdog = new LlmStreamWatchdog({
+        parentSignal: input.signal,
+        model: input.model,
+        firstResponseTimeoutMs:
+          this.options.firstResponseTimeoutMs ?? DEFAULT_FIRST_RESPONSE_TIMEOUT_MS,
+        streamIdleTimeoutMs: this.options.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      });
+      const stream = streamWithNormalizedUpstreamUsage(model, context, {
+        ...streamOptions,
+        signal: watchdog.signal,
+      });
       let accumulatedText = "";
       let streamEventCount = 0;
-      for await (const event of stream) {
+      streamIterator = stream[Symbol.asyncIterator]();
+      while (true) {
+        const next = await watchdog.race(streamIterator.next());
+        if (next.done === true) {
+          break;
+        }
+        const event = next.value;
         streamEventCount += 1;
+        if (isSemanticModelStreamEvent(event)) {
+          watchdog.markSemanticEvent(event.type);
+        }
         switch (event.type) {
           case "text_delta":
             accumulatedText += event.delta;
@@ -158,7 +194,7 @@ export class PiBridge {
         }
       }
 
-      const finalMessage = await stream.result();
+      const finalMessage = await watchdog.race(stream.result());
       const contentSummary = summarizeAssistantContent(finalMessage.content);
       logger.debug("streaming llm turn finished", {
         modelId: input.model.id,
@@ -168,13 +204,19 @@ export class PiBridge {
       });
       return normalizeAssistantResult(finalMessage, "stream");
     } catch (error) {
-      const enrichedError = enrichCodexFetchFailure(error, input.model, "request");
+      if (streamIterator?.return != null) {
+        void streamIterator.return().catch(() => undefined);
+      }
+      const enrichedError =
+        watchdog?.failure ?? enrichCodexFetchFailure(error, input.model, "request");
       logRawLlmFailure("stream", input.model, enrichedError);
       throw normalizeAgentLlmError({
         error: enrichedError,
         provider: input.model.provider.id,
         model: input.model.id,
       });
+    } finally {
+      watchdog?.dispose();
     }
   }
 
@@ -318,6 +360,192 @@ export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunn
 
   runCompaction(input: CompactionModelRunnerInput): Promise<CompactionModelRunnerResult> {
     return this.bridge.completeText(input);
+  }
+}
+
+type LlmStreamWatchdogTimeoutKind = "first_response" | "stream_idle";
+
+class LlmStreamWatchdog {
+  readonly controller = new AbortController();
+  failure: AgentLlmError | null = null;
+
+  private readonly timeoutPromise: Promise<never>;
+  private rejectTimeoutPromise!: (error: AgentLlmError) => void;
+  private timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
+  private sawSemanticEvent = false;
+
+  constructor(
+    private readonly input: {
+      parentSignal: AbortSignal;
+      model: ResolvedModel;
+      firstResponseTimeoutMs: number;
+      streamIdleTimeoutMs: number;
+    },
+  ) {
+    this.timeoutPromise = new Promise<never>((_resolve, reject) => {
+      this.rejectTimeoutPromise = reject;
+    });
+
+    if (input.parentSignal.aborted) {
+      this.failWithAbort();
+      return;
+    }
+
+    input.parentSignal.addEventListener("abort", this.handleParentAbort, { once: true });
+    this.scheduleTimeout("first_response", input.firstResponseTimeoutMs);
+  }
+
+  get signal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  race<T>(operation: Promise<T>): Promise<T> {
+    if (this.failure != null) {
+      return Promise.reject(this.failure);
+    }
+
+    return Promise.race([operation, this.timeoutPromise]);
+  }
+
+  markSemanticEvent(eventType: AssistantMessageEvent["type"]): void {
+    if (this.disposed || this.failure != null) {
+      return;
+    }
+
+    if (!this.sawSemanticEvent) {
+      this.sawSemanticEvent = true;
+      logger.debug("llm first semantic stream event received", {
+        modelId: this.input.model.id,
+        provider: this.input.model.provider.id,
+        eventType,
+      });
+    }
+
+    this.scheduleTimeout("stream_idle", this.input.streamIdleTimeoutMs);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.clearTimeout();
+    this.input.parentSignal.removeEventListener("abort", this.handleParentAbort);
+  }
+
+  private readonly handleParentAbort = (): void => {
+    this.failWithAbort();
+  };
+
+  private failWithAbort(): void {
+    if (this.disposed || this.failure != null) {
+      return;
+    }
+
+    this.clearTimeout();
+    this.failure = new AgentLlmError({
+      kind: "aborted",
+      message: "Request was aborted",
+      retryable: false,
+      provider: this.input.model.provider.id,
+      model: this.input.model.id,
+      rawMessage: "Request was aborted",
+    });
+    this.controller.abort(this.input.parentSignal.reason);
+    this.rejectTimeoutPromise(this.failure);
+  }
+
+  private scheduleTimeout(kind: LlmStreamWatchdogTimeoutKind, timeoutMs: number): void {
+    this.clearTimeout();
+    if (timeoutMs <= 0 || this.disposed || this.failure != null) {
+      return;
+    }
+
+    this.timeoutHandle = setTimeout(() => {
+      this.failWithTimeout(kind, timeoutMs);
+    }, timeoutMs);
+    unrefTimer(this.timeoutHandle);
+  }
+
+  private failWithTimeout(kind: LlmStreamWatchdogTimeoutKind, timeoutMs: number): void {
+    if (this.disposed || this.failure != null) {
+      return;
+    }
+
+    if (this.input.parentSignal.aborted) {
+      this.failWithAbort();
+      return;
+    }
+
+    this.clearTimeout();
+    const message =
+      kind === "first_response"
+        ? `LLM first response timed out after ${timeoutMs}ms`
+        : `LLM stream idle timed out after ${timeoutMs}ms`;
+    this.failure = new AgentLlmError({
+      kind: "timeout",
+      message,
+      retryable: true,
+      provider: this.input.model.provider.id,
+      model: this.input.model.id,
+      rawMessage: message,
+    });
+    logger.warn("aborting llm request after stream watchdog timeout", {
+      modelId: this.input.model.id,
+      provider: this.input.model.provider.id,
+      timeoutKind: kind,
+      timeoutMs,
+      sawSemanticEvent: this.sawSemanticEvent,
+    });
+    this.rejectTimeoutPromise(this.failure);
+    this.controller.abort(this.failure);
+  }
+
+  private clearTimeout(): void {
+    if (this.timeoutHandle == null) {
+      return;
+    }
+
+    clearTimeout(this.timeoutHandle);
+    this.timeoutHandle = null;
+  }
+}
+
+function throwIfSignalAborted(signal: AbortSignal, model: ResolvedModel): void {
+  if (!signal.aborted) {
+    return;
+  }
+
+  throw new AgentLlmError({
+    kind: "aborted",
+    message: "Request was aborted",
+    retryable: false,
+    provider: model.provider.id,
+    model: model.id,
+    rawMessage: "Request was aborted",
+  });
+}
+
+function isSemanticModelStreamEvent(event: AssistantMessageEvent): boolean {
+  switch (event.type) {
+    case "text_start":
+    case "text_delta":
+    case "text_end":
+    case "thinking_start":
+    case "thinking_delta":
+    case "thinking_end":
+    case "toolcall_start":
+    case "toolcall_delta":
+    case "toolcall_end":
+      return true;
+    case "start":
+    case "done":
+    case "error":
+      return false;
+  }
+}
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  if (typeof timer === "object" && timer !== null && "unref" in timer) {
+    (timer as { unref: () => void }).unref();
   }
 }
 
