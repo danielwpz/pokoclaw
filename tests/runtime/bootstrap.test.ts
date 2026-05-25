@@ -34,7 +34,7 @@ function createConfig(): AppConfig {
       recentTurnsPreserve: 3,
     },
     runtime: {
-      maxTurns: 60,
+      maxTurns: 100,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
       autopilot: false,

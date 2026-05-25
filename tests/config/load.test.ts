@@ -187,7 +187,7 @@ describe("config loader", () => {
       recentTurnsPreserve: 3,
     });
     expect(config.runtime).toEqual({
-      maxTurns: 60,
+      maxTurns: 100,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
       autopilot: false,

@@ -1419,7 +1419,7 @@ describe("agent loop", () => {
     });
   });
 
-  test("uses the default max turn limit of 60 when runtime config is omitted", async () => {
+  test("uses the default max turn limit of 100 when runtime config is omitted", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
 
@@ -1479,9 +1479,9 @@ describe("agent loop", () => {
     });
 
     await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
-      "configured max turn limit (60)",
+      "configured max turn limit (100)",
     );
-    expect(turn).toBe(60);
+    expect(turn).toBe(100);
   });
 
   test("passes owner agent and workspace cwd into tool execution context", async () => {

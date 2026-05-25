@@ -4101,7 +4101,7 @@ describe("lark outbound runtime", () => {
         modelId: "model_1",
         errorKind: "unknown",
         errorMessage:
-          "Run hit the configured max turn limit (60) before producing a final response.",
+          "Run hit the configured max turn limit (100) before producing a final response.",
         retryable: false,
       }),
     );
@@ -4114,7 +4114,7 @@ describe("lark outbound runtime", () => {
       | { data?: { card?: { data?: string } } }
       | undefined;
     expect(updatePayload?.data?.card?.data ?? "").toContain("执行失败");
-    expect(updatePayload?.data?.card?.data ?? "").toContain("max turn limit (60)");
+    expect(updatePayload?.data?.card?.data ?? "").toContain("max turn limit (100)");
 
     await runtime.shutdown();
   });
