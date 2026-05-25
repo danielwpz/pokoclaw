@@ -866,7 +866,7 @@ export class AgentLoop {
             if (emptyOutputRetryError != null) {
               emptyOutputRetryCount += 1;
               const retryAttempt = getNextEmptyOutputLlmAttempt({
-                retryCountAfterIncrement: emptyOutputRetryCount,
+                retryCount: emptyOutputRetryCount,
               });
               logger.warn("retrying assistant response after empty-output llm failure", {
                 sessionId: input.sessionId,
@@ -941,7 +941,7 @@ export class AgentLoop {
         if (successfulEmptyOutputRetry) {
           emptyOutputRetryCount += 1;
           const retryAttempt = getNextEmptyOutputLlmAttempt({
-            retryCountAfterIncrement: emptyOutputRetryCount,
+            retryCount: emptyOutputRetryCount,
           });
           logger.warn("retrying assistant response after successful empty output", {
             sessionId: input.sessionId,

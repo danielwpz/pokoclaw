@@ -356,7 +356,7 @@ llmFirstResponseTimeoutMs = 45000
 ```
 
 Lark run cards show retry progress in the footer, for example:
-`🔁 模型响应超时，正在重试 2/5`.
+`🔁 模型调用出错，正在重试 2/5`.
 
 Use `llmFirstResponseTimeoutMs` to shorten or lengthen the per-attempt wait for
 the first semantic model event. Local testing can set it to `3000` to trigger the

@@ -91,7 +91,7 @@ describe("lark retry footer", () => {
     expect(rendered.card).toMatchObject({
       config: {
         summary: {
-          content: "🔁 模型响应超时，正在重试 2/5",
+          content: "🔁 模型调用出错，正在重试 2/5",
         },
       },
     });
@@ -99,7 +99,7 @@ describe("lark retry footer", () => {
       expect.arrayContaining([
         expect.objectContaining({
           tag: "markdown",
-          content: "🔁 模型响应超时，正在重试 2/5",
+          content: "🔁 模型调用出错，正在重试 2/5",
           text_size: "notation",
         }),
       ]),
@@ -123,7 +123,7 @@ describe("lark retry footer", () => {
     expect(getCardBodyElements(rendered.card)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          content: "🔁 模型响应超时，正在重试 2/5",
+          content: "🔁 模型调用出错，正在重试 2/5",
         }),
       ]),
     );

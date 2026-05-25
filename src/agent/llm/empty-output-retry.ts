@@ -4,8 +4,8 @@ export function getEmptyOutputLlmRetryLimit(maxAttempts: number): number {
   return Math.max(0, maxAttempts - 1);
 }
 
-export function getNextEmptyOutputLlmAttempt(input: { retryCountAfterIncrement: number }): number {
-  return input.retryCountAfterIncrement + 1;
+export function getNextEmptyOutputLlmAttempt(input: { retryCount: number }): number {
+  return input.retryCount + 1;
 }
 
 export function shouldRetrySuccessfulEmptyAssistantOutput(input: {

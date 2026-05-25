@@ -228,6 +228,8 @@ function onAssistantMessageStarted(
     ...state,
     activeAssistantMessageId: event.messageId,
     footerStatus: "thinking",
+    // Preserve retry progress after AgentLoop starts the next attempt; clear it
+    // when the model emits real progress such as reasoning, text, or tool calls.
     awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,

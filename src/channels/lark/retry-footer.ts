@@ -17,7 +17,7 @@ export function createLarkRetryFooterNotice(
 }
 
 export function renderLarkRetryFooterNotice(notice: LarkRetryFooterNotice): string {
-  return `🔁 模型响应超时，正在重试 ${notice.attempt}/${notice.maxAttempts}`;
+  return `🔁 模型调用出错，正在重试 ${notice.attempt}/${notice.maxAttempts}`;
 }
 
 export function summarizeLarkRetryFooterNotice(notice: LarkRetryFooterNotice): string {
