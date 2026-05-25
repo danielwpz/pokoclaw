@@ -1,6 +1,8 @@
 import type { RawConfig } from "@/src/config/schema.js";
 
 export const DEFAULT_RUNTIME_MAX_TURNS = 100;
+export const DEFAULT_RUNTIME_MAX_EMPTY_OUTPUT_LLM_ATTEMPTS = 5;
+export const DEFAULT_RUNTIME_LLM_FIRST_RESPONSE_TIMEOUT_MS = 45_000;
 export const DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS = 3 * 60 * 1000;
 export const DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_PROJECT_CONTEXT_MAX_BYTES = 8192;
@@ -30,6 +32,8 @@ export const DEFAULT_CONFIG: RawConfig = {
   },
   runtime: {
     maxTurns: DEFAULT_RUNTIME_MAX_TURNS,
+    maxEmptyOutputLlmAttempts: DEFAULT_RUNTIME_MAX_EMPTY_OUTPUT_LLM_ATTEMPTS,
+    llmFirstResponseTimeoutMs: DEFAULT_RUNTIME_LLM_FIRST_RESPONSE_TIMEOUT_MS,
     approvalTimeoutMs: DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
     approvalGrantTtlMs: DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
     autopilot: false,

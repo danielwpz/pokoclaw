@@ -4332,6 +4332,14 @@ describe("agent loop", () => {
     expect(
       result.events.filter((event) => event.type === "assistant_message_started"),
     ).toHaveLength(2);
+    expect(
+      result.events.find((event) => event.type === "assistant_response_retrying"),
+    ).toMatchObject({
+      type: "assistant_response_retrying",
+      attempt: 2,
+      maxAttempts: 5,
+      reason: "successful_empty_output",
+    });
     const rows = messagesRepo.listBySession("sess_1");
     expect(rows).toHaveLength(2);
     expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({
