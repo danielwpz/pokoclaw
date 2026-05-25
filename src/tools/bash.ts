@@ -87,7 +87,7 @@ export function createBashTool() {
   return defineTool({
     name: "bash",
     description:
-      "Run a shell command in sandboxed or full_access mode. By default it runs sandboxed and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. The default timeout is 10 seconds. You may override it with timeoutSec, but main chat agents cannot request more than 60 seconds; use a subagent for longer work. If approved host execution outside the sandbox is genuinely necessary, rerun with sandboxMode=full_access and justification. When similar simple commands are likely soon, add prefix so future bash calls can reuse approval; choose the prefix scope based on the task.",
+      "Run a shell command in sandboxed or full_access mode. By default it runs sandboxed and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. If approved host execution outside the sandbox is genuinely necessary, rerun with sandboxMode=full_access and justification. When similar simple commands are likely soon, add prefix so future bash calls can reuse approval; choose the prefix scope based on the task.",
     inputSchema: BASH_TOOL_SCHEMA,
     getInvocationTimeoutMs: getBashInvocationTimeoutMs,
     async execute(context, args) {
@@ -174,7 +174,7 @@ function assertBashTimeoutAllowed(context: ToolExecutionContext, args: BashToolA
   if (context.agentKind === "main" && context.sessionPurpose === "chat") {
     if (timeoutSec > MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC) {
       throw toolRecoverableError(
-        `Main-agent bash commands cannot request more than ${MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC} seconds. Use a subagent for longer-running work.`,
+        `Bash commands are capped at ${MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC} seconds here to keep you responsive. Use background_task (unattended one-shot) or create_subagent (interactive, multi-step) for longer-running work.`,
         {
           code: "bash_timeout_exceeds_main_agent_limit",
           requestedTimeoutSec: timeoutSec,

@@ -115,6 +115,7 @@ export function buildApprovalAgentIdentitySection(): string {
 export function buildMainAgentOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Stay responsive as the user's single entrypoint and protect your own bandwidth for new requests, interruptions, and coordination.",
+    "- Bash commands are capped at 60 seconds to keep you responsive for new requests and interruptions. For longer-running work, use background_task (unattended one-shot) or create_subagent (interactive, multi-step).",
     "- Default to concise, mobile-friendly replies. Many users read on phones with limited screen space, so keep routine answers compact and easy to scan.",
     "- If the user explicitly asks for a deep explanation, a technical analysis, or a thorough walkthrough, then be as complete as the task requires.",
     "- You can and should handle casual conversation, quick answers, short local exploration, and top-level coordination in the main chat.",
