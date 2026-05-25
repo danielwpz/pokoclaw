@@ -40,6 +40,7 @@ describe("send_attachment tool", () => {
     expect(tool.description).toContain("current conversation");
     expect(tool.description).toContain("Do not substitute Markdown links");
     expect(tool.description).toContain("text cards, or A2UI");
+    expect(tool.description).toContain("Currently only image attachments are delivered");
   });
 
   test("publishes a granted local image path as a channel-neutral outbound attachment request", async () => {
@@ -150,6 +151,57 @@ describe("send_attachment tool", () => {
       kind: "recoverable_error",
       details: {
         code: "unsupported_image_format",
+      },
+    });
+    expect(sendAttachment).not.toHaveBeenCalled();
+  });
+
+  test("rejects non-image attachments before publishing unsupported outbound events", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    handle.storage.sqlite.exec(`
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, created_at, updated_at)
+      VALUES ('sess_1', 'conv_1', 'branch_1', 'agent_1', 'chat', '2026-03-22T00:00:00.000Z', '2026-03-22T00:00:00.000Z');
+    `);
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-send-attachment-"));
+    await writeFile(path.join(tempDir, "report.pdf"), "%PDF-1.7");
+
+    new SecurityService(handle.storage.db).grantScopes({
+      ownerAgentId: "agent_1",
+      grantedBy: "main_agent",
+      scopes: [{ kind: "fs.read", path: `${tempDir}/**` }],
+    });
+
+    const sendAttachment = vi.fn(async () => ({
+      accepted: true as const,
+      eventId: "evt_pdf_1",
+    }));
+    const registry = new ToolRegistry();
+    registry.register(createSendAttachmentTool());
+
+    await expect(
+      registry.execute(
+        "send_attachment",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          runtimeControl: {
+            sendAttachment,
+            submitApprovalDecision: vi.fn(() => false),
+          },
+        },
+        { path: "report.pdf" },
+      ),
+    ).rejects.toMatchObject({
+      kind: "recoverable_error",
+      details: {
+        code: "unsupported_attachment_type",
+        attachmentType: "pdf",
       },
     });
     expect(sendAttachment).not.toHaveBeenCalled();

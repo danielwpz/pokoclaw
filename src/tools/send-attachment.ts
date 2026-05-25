@@ -10,7 +10,6 @@ import {
   resolveToolCwd,
 } from "@/src/tools/helpers/common.js";
 
-const MAX_OUTBOUND_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_OUTBOUND_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export const ATTACHMENT_TYPES = [
@@ -58,7 +57,7 @@ export function createSendAttachmentTool() {
   return defineTool({
     name: "send_attachment",
     description:
-      "Attach a local file in the current conversation through the active channel's native attachment capability. Use this whenever the user asks you to send, show, share, or deliver a local image or file after creating or locating it. Set type to image for image files. Do not substitute Markdown links, file paths, text cards, or A2UI for an actual chat attachment when this tool is available. Image files must be non-empty JPEG, PNG, WEBP, GIF, TIFF, BMP, or ICO files and under 10 MB; other attachment types are queued only when the channel supports them.",
+      "Attach a local file in the current conversation through the active channel's native attachment capability. Use this whenever the user asks you to send, show, share, or deliver a local image or file after creating or locating it. Set type to image for image files. Do not substitute Markdown links, file paths, text cards, or A2UI for an actual chat attachment when this tool is available. Currently only image attachments are delivered; image files must be non-empty JPEG, PNG, WEBP, GIF, TIFF, BMP, or ICO files and under 10 MB.",
     inputSchema: SEND_ATTACHMENT_TOOL_SCHEMA,
     async execute(context, args) {
       if (context.runtimeControl?.sendAttachment == null) {
@@ -97,6 +96,18 @@ export function createSendAttachmentTool() {
         });
       }
       const attachmentType = args.type ?? inferAttachmentType(displayPath);
+      if (attachmentType !== "image") {
+        throw toolRecoverableError(
+          `Attachment type "${attachmentType}" is not supported by the current delivery channels yet: ${displayPath}`,
+          {
+            code: "unsupported_attachment_type",
+            path: absolutePath,
+            displayPath,
+            attachmentType,
+            supportedTypes: ["image"],
+          },
+        );
+      }
       if (attachmentType === "image" && !hasSupportedImageExtension(displayPath)) {
         throw toolRecoverableError(
           `Attachment type "image" requires a supported image extension (PNG, JPEG, WEBP, GIF, TIFF, BMP, ICO): ${displayPath}`,
@@ -107,16 +118,14 @@ export function createSendAttachmentTool() {
           },
         );
       }
-      const maxBytes =
-        attachmentType === "image" ? MAX_OUTBOUND_IMAGE_BYTES : MAX_OUTBOUND_ATTACHMENT_BYTES;
-      if (fileStats.size > maxBytes) {
+      if (fileStats.size > MAX_OUTBOUND_IMAGE_BYTES) {
         throw toolRecoverableError(
-          `Attachment file is larger than ${bytesToMegabytes(maxBytes)} MB: ${displayPath}`,
+          `Attachment file is larger than ${bytesToMegabytes(MAX_OUTBOUND_IMAGE_BYTES)} MB: ${displayPath}`,
           {
             code: "file_too_large",
             path: absolutePath,
             sizeBytes: fileStats.size,
-            maxBytes,
+            maxBytes: MAX_OUTBOUND_IMAGE_BYTES,
           },
         );
       }
