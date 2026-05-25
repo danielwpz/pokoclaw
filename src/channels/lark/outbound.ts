@@ -509,6 +509,7 @@ export function createLarkOutboundRuntime(
       activeToolSequenceBlockId: state.activeToolSequenceBlockId,
       blockCount: state.blocks.length,
       footerStatus: state.footerStatus,
+      footerNotice: state.footerNotice,
     });
 
     const deliveryTargets = listLarkDeliveryTargets(input.storage, {
@@ -2079,6 +2080,7 @@ export function createLarkOutboundRuntime(
           activeToolSequenceBlockId: next.activeToolSequenceBlockId,
           blockCount: next.blocks.length,
           footerStatus: next.footerStatus,
+          footerNotice: next.footerNotice,
           terminal: next.terminal,
         });
         bumpVersionAndSchedule(`run:${runCardObjectId}`, {
@@ -2649,6 +2651,7 @@ function shouldCreateRunSegmentForEvent(envelope: OrchestratedRuntimeEventEnvelo
     case "assistant_message_started":
     case "assistant_message_delta":
     case "assistant_message_completed":
+    case "assistant_response_retrying":
     case "tool_call_started":
     case "tool_call_completed":
     case "tool_call_failed":

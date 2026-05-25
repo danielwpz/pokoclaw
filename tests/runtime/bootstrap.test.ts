@@ -35,6 +35,8 @@ function createConfig(): AppConfig {
     },
     runtime: {
       maxTurns: 100,
+      maxEmptyOutputLlmAttempts: 5,
+      llmFirstResponseTimeoutMs: 45_000,
       approvalTimeoutMs: 180_000,
       approvalGrantTtlMs: 604_800_000,
       autopilot: false,

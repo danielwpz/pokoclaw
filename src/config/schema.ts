@@ -65,6 +65,8 @@ export interface CompactionConfig {
 
 export interface RuntimeConfig {
   maxTurns: number;
+  maxEmptyOutputLlmAttempts: number;
+  llmFirstResponseTimeoutMs: number;
   approvalTimeoutMs: number;
   approvalGrantTtlMs: number;
   autopilot: boolean;
@@ -260,6 +262,8 @@ interface CompactionConfigInput {
 
 interface RuntimeConfigInput {
   maxTurns?: unknown;
+  maxEmptyOutputLlmAttempts?: unknown;
+  llmFirstResponseTimeoutMs?: unknown;
   approvalTimeoutMs?: unknown;
   approvalGrantTtlMs?: unknown;
   autopilot?: unknown;
@@ -922,7 +926,14 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
   const config = input as RuntimeConfigInput;
   assertAllowedKeys(
     config,
-    new Set(["maxTurns", "approvalTimeoutMs", "approvalGrantTtlMs", "autopilot"]),
+    new Set([
+      "maxTurns",
+      "maxEmptyOutputLlmAttempts",
+      "llmFirstResponseTimeoutMs",
+      "approvalTimeoutMs",
+      "approvalGrantTtlMs",
+      "autopilot",
+    ]),
     "config.toml runtime",
   );
 
@@ -930,6 +941,14 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
     maxTurns: validatePositiveInteger(
       config.maxTurns ?? defaults.maxTurns,
       "config.toml runtime.maxTurns",
+    ),
+    maxEmptyOutputLlmAttempts: validatePositiveInteger(
+      config.maxEmptyOutputLlmAttempts ?? defaults.maxEmptyOutputLlmAttempts,
+      "config.toml runtime.maxEmptyOutputLlmAttempts",
+    ),
+    llmFirstResponseTimeoutMs: validatePositiveInteger(
+      config.llmFirstResponseTimeoutMs ?? defaults.llmFirstResponseTimeoutMs,
+      "config.toml runtime.llmFirstResponseTimeoutMs",
     ),
     approvalTimeoutMs: validatePositiveInteger(
       config.approvalTimeoutMs ?? defaults.approvalTimeoutMs,

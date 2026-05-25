@@ -130,7 +130,9 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     autopilotEnabled: input.config.runtime.autopilot,
   });
   const providerApiKeyResolver = new CodexProviderApiKeyResolver();
-  const llmBridge = new PiBridge(providerApiKeyResolver);
+  const llmBridge = new PiBridge(providerApiKeyResolver, {
+    firstResponseTimeoutMs: input.config.runtime.llmFirstResponseTimeoutMs,
+  });
   const status = new RuntimeStatusService({
     storage: input.storage,
     control,

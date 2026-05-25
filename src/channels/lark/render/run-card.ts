@@ -7,6 +7,11 @@ import {
 } from "@/src/channels/lark/render/task-card.js";
 import { renderToolSequenceSlice } from "@/src/channels/lark/render/tool-calls.js";
 import {
+  type LarkRetryFooterNotice,
+  renderLarkRetryFooterNotice,
+  summarizeLarkRetryFooterNotice,
+} from "@/src/channels/lark/retry-footer.js";
+import {
   buildLarkAssistantElementId,
   LARK_ASSISTANT_PLACEHOLDER_TEXT,
   type LarkAssistantTextBlock,
@@ -462,7 +467,12 @@ function buildRunCardPage(
   }
 
   if (includeFooter && options.pageIndex === options.pageCount) {
-    const footerElements = renderFooter(state.footerStatus, state.terminal, state.runId);
+    const footerElements = renderFooter(
+      state.footerStatus,
+      state.footerNotice,
+      state.terminal,
+      state.runId,
+    );
     if (footerElements.length > 0) {
       elements.push({ tag: "hr" }, ...footerElements);
     }
@@ -719,25 +729,32 @@ function renderVisibleTerminalSummary(
 
 function renderFooter(
   status: LarkFooterStatus,
+  notice: LarkRetryFooterNotice | null,
   terminal: LarkRunState["terminal"],
   runId: string | null,
 ): Array<Record<string, unknown>> {
   const elements: Array<Record<string, unknown>> = [];
-  if (status === "thinking") {
+  if (notice != null) {
+    elements.push({
+      tag: "markdown",
+      content: renderLarkRetryFooterNotice(notice),
+      text_size: "notation",
+    });
+  } else if (status === "thinking") {
     elements.push({
       tag: "markdown",
       content: "🧠 正在思考",
       text_size: "notation",
     });
   }
-  if (status === "tool_running") {
+  if (notice == null && status === "tool_running") {
     elements.push({
       tag: "markdown",
       content: "🧰 正在调用工具",
       text_size: "notation",
     });
   }
-  if (status === "waiting_approval") {
+  if (notice == null && status === "waiting_approval") {
     elements.push({
       tag: "markdown",
       content: "🔐 等待批复",
@@ -780,6 +797,9 @@ function summarizeRunState(state: LarkRunState): string {
     if (state.terminal === "denied") {
       return `${taskKind}已拒绝`;
     }
+    if (state.footerNotice != null) {
+      return summarizeLarkRetryFooterNotice(state.footerNotice);
+    }
     if (state.footerStatus === "waiting_approval") {
       return `${taskKind}等待批复`;
     }
@@ -815,6 +835,9 @@ function summarizeRunState(state: LarkRunState): string {
   }
   if (state.terminal === "denied") {
     return "已拒绝";
+  }
+  if (state.footerNotice != null) {
+    return summarizeLarkRetryFooterNotice(state.footerNotice);
   }
   if (state.footerStatus === "waiting_approval") {
     return "等待批复";

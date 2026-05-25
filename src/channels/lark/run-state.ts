@@ -10,10 +10,15 @@ import type {
   AssistantMessageDeltaEvent,
   AssistantMessageStartedEvent,
   AssistantReasoningDeltaEvent,
+  AssistantResponseRetryingEvent,
   ToolCallCompletedEvent,
   ToolCallFailedEvent,
   ToolCallStartedEvent,
 } from "@/src/agent/events.js";
+import {
+  createLarkRetryFooterNotice,
+  type LarkRetryFooterNotice,
+} from "@/src/channels/lark/retry-footer.js";
 import type {
   OrchestratedRuntimeEventEnvelope,
   OrchestratedTaskRunEventEnvelope,
@@ -78,6 +83,7 @@ export interface LarkRunState {
   activeAssistantMessageId: string | null;
   activeToolSequenceBlockId: string | null;
   footerStatus: LarkFooterStatus;
+  footerNotice: LarkRetryFooterNotice | null;
   awaitingApprovalTarget: "user" | "main_agent" | null;
   reasoning: LarkReasoningState;
   terminal: LarkRunTerminal;
@@ -148,6 +154,8 @@ export function reduceLarkRunState(
       return onAssistantReasoningDelta(hydratedState, envelope.event);
     case "assistant_message_completed":
       return onAssistantMessageCompleted(hydratedState, envelope.event);
+    case "assistant_response_retrying":
+      return onAssistantResponseRetrying(hydratedState, envelope.event);
     case "tool_call_started":
       return onToolCallStarted(hydratedState, envelope.event);
     case "tool_call_completed":
@@ -184,6 +192,7 @@ function createInitialRunState(input: {
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: null,
+    footerNotice: null,
     awaitingApprovalTarget: null,
     reasoning: {
       content: "",
@@ -265,6 +274,7 @@ function onAssistantMessageDelta(
         ? null
         : state.activeToolSequenceBlockId,
     footerStatus: null,
+    footerNotice: null,
     awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
@@ -283,6 +293,7 @@ function onAssistantReasoningDelta(
   return {
     ...state,
     footerStatus: "thinking",
+    footerNotice: null,
     awaitingApprovalTarget: null,
     reasoning: {
       content:
@@ -321,6 +332,7 @@ function onAssistantMessageCompleted(
     activeToolSequenceBlockId:
       existingBlock == null && hasVisibleText ? null : state.activeToolSequenceBlockId,
     footerStatus: null,
+    footerNotice: null,
     awaitingApprovalTarget: null,
     reasoning: {
       content:
@@ -330,6 +342,27 @@ function onAssistantMessageCompleted(
       active: false,
       expanded: false,
     },
+  };
+}
+
+function onAssistantResponseRetrying(
+  state: LarkRunState,
+  event: AssistantResponseRetryingEvent,
+): LarkRunState {
+  return {
+    ...state,
+    activeAssistantMessageId: event.messageId,
+    footerStatus: "thinking",
+    footerNotice: createLarkRetryFooterNotice(event),
+    awaitingApprovalTarget: null,
+    reasoning: {
+      ...state.reasoning,
+      active: false,
+      expanded: false,
+    },
+    terminal: "running",
+    terminalErrorKind: null,
+    terminalMessage: null,
   };
 }
 
@@ -372,6 +405,7 @@ function onToolCallStarted(state: LarkRunState, event: ToolCallStartedEvent): La
     ),
     activeToolSequenceBlockId,
     footerStatus: "tool_running",
+    footerNotice: null,
     awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
@@ -397,6 +431,7 @@ function onToolCallCompleted(state: LarkRunState, event: ToolCallCompletedEvent)
         : block,
     ),
     footerStatus: hasRunningTool(state.blocks, event.toolCallId) ? "tool_running" : null,
+    footerNotice: null,
     awaitingApprovalTarget: null,
   };
 }
@@ -421,6 +456,7 @@ function onToolCallFailed(state: LarkRunState, event: ToolCallFailedEvent): Lark
         : block,
     ),
     footerStatus: hasRunningTool(state.blocks, event.toolCallId) ? "tool_running" : null,
+    footerNotice: null,
     awaitingApprovalTarget: null,
   };
 }
@@ -461,6 +497,7 @@ function finalizeRun(
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: null,
+    footerNotice: null,
     awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
@@ -490,6 +527,7 @@ function finalizeTaskRun(
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: null,
+    footerNotice: null,
     awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
@@ -514,6 +552,7 @@ export function markLarkRunAwaitingApproval(
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: input.approvalTarget === "main_agent" ? "waiting_approval" : null,
+    footerNotice: null,
     awaitingApprovalTarget: input.approvalTarget,
     reasoning: {
       ...state.reasoning,
@@ -539,6 +578,7 @@ export function markLarkRunApprovalResolved(
     activeAssistantMessageId: null,
     activeToolSequenceBlockId: null,
     footerStatus: null,
+    footerNotice: null,
     awaitingApprovalTarget: null,
     reasoning: {
       ...state.reasoning,
@@ -676,6 +716,7 @@ export function shouldHandleLarkRuntimeEvent(envelope: OrchestratedRuntimeEventE
     envelope.event.type === "assistant_message_delta" ||
     envelope.event.type === "assistant_reasoning_delta" ||
     envelope.event.type === "assistant_message_completed" ||
+    envelope.event.type === "assistant_response_retrying" ||
     envelope.event.type === "tool_call_started" ||
     envelope.event.type === "tool_call_completed" ||
     envelope.event.type === "tool_call_failed" ||

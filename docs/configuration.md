@@ -343,6 +343,25 @@ autopilot = true
 
 Restart Pokoclaw after changing this value.
 
+### LLM empty-output retries
+
+Pokoclaw retries a model response when the model times out before producing any
+visible output, or returns an empty assistant message with no tool call. The
+default is five total model attempts, including the first request.
+
+```toml
+[runtime]
+maxEmptyOutputLlmAttempts = 5
+llmFirstResponseTimeoutMs = 45000
+```
+
+Lark run cards show retry progress in the footer, for example:
+`🔁 模型响应超时，正在重试 2/5`.
+
+Use `llmFirstResponseTimeoutMs` to shorten or lengthen the per-attempt wait for
+the first semantic model event. Local testing can set it to `3000` to trigger the
+retry path quickly.
+
 ### If the user prefers file-based secrets
 
 Keep `config.toml` like this:
