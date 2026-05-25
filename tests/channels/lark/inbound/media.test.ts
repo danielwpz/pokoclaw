@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, test, vi } from "vitest";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
@@ -11,6 +14,169 @@ import { ChannelSurfacesRepo } from "@/src/storage/repos/channel-surfaces.repo.j
 import { makeMessageEvent, makeRawMessage, seedFixture, withHandle } from "./fixtures.js";
 
 describe("lark inbound message media handling", () => {
+  test("downloads inbound audio messages to the local workspace and forwards the saved path", async () => {
+    const assetStoreDir = await mkdtemp(path.join(tmpdir(), "pokoclaw-lark-audio-"));
+    try {
+      await withHandle(async (handle) => {
+        seedFixture(handle);
+        const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+        surfacesRepo.upsert({
+          id: "surface_1",
+          channelType: "lark",
+          channelInstallationId: "default",
+          conversationId: "conv_main",
+          branchId: "branch_main",
+          surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+          surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+        });
+
+        const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+        const messageResourceGet = vi.fn(async () => ({
+          headers: { "content-type": "audio/mpeg" },
+          getReadableStream: () => Readable.from(Buffer.from("fake-audio")),
+        }));
+        const clients = {
+          getOrCreate: vi.fn(() => ({
+            sdk: {
+              im: {
+                messageResource: {
+                  get: messageResourceGet,
+                },
+              },
+            },
+          })),
+        } as unknown as { getOrCreate(installationId: string): LarkSdkClient };
+
+        const handler = createLarkMessageReceiveHandler({
+          installationId: "default",
+          storage: handle.storage.db,
+          ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+          control: new RuntimeControlService(new SessionRunAbortRegistry()),
+          clients,
+          assetStoreDir,
+        });
+
+        await handler(makeMessageEvent("audio", { file_key: "audio_v3_123" }));
+
+        const localPath = path.join(
+          assetStoreDir,
+          "2026-03-27",
+          "om_msg_1",
+          "audio-audio_v3_123.mp3",
+        );
+
+        expect(messageResourceGet).toHaveBeenCalledExactlyOnceWith({
+          path: {
+            message_id: "om_msg_1",
+            file_key: "audio_v3_123",
+          },
+          params: {
+            type: "audio",
+          },
+        });
+        await expect(readFile(localPath, "utf8")).resolves.toBe("fake-audio");
+        expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+          sessionId: "sess_chat_1",
+          scenario: "chat",
+          content: [
+            "[\u8bed\u97f3 audio_v3_123]",
+            "",
+            "Saved local files:",
+            `- audio: audio_v3_123 -> ${localPath}`,
+          ].join("\n"),
+          channelMessageId: "om_msg_1",
+          createdAt: new Date("2026-03-27T00:00:00.000Z"),
+        });
+      });
+    } finally {
+      await rm(assetStoreDir, { recursive: true, force: true });
+    }
+  });
+
+  test("downloads uploaded recording files to the local workspace", async () => {
+    const assetStoreDir = await mkdtemp(path.join(tmpdir(), "pokoclaw-lark-file-"));
+    try {
+      await withHandle(async (handle) => {
+        seedFixture(handle);
+        const surfacesRepo = new ChannelSurfacesRepo(handle.storage.db);
+        surfacesRepo.upsert({
+          id: "surface_1",
+          channelType: "lark",
+          channelInstallationId: "default",
+          conversationId: "conv_main",
+          branchId: "branch_main",
+          surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+          surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+        });
+
+        const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+        const messageResourceGet = vi.fn(async () => ({
+          headers: { "content-type": "audio/x-m4a" },
+          getReadableStream: () => Readable.from(Buffer.from("fake-m4a")),
+        }));
+        const clients = {
+          getOrCreate: vi.fn(() => ({
+            sdk: {
+              im: {
+                messageResource: {
+                  get: messageResourceGet,
+                },
+              },
+            },
+          })),
+        } as unknown as { getOrCreate(installationId: string): LarkSdkClient };
+
+        const handler = createLarkMessageReceiveHandler({
+          installationId: "default",
+          storage: handle.storage.db,
+          ingress: { submitMessage, submitApprovalDecision: vi.fn(() => false) },
+          control: new RuntimeControlService(new SessionRunAbortRegistry()),
+          clients,
+          assetStoreDir,
+        });
+
+        await handler(
+          makeMessageEvent("file", {
+            file_key: "file_v3_recording_1",
+            file_name: "meeting recording.m4a",
+          }),
+        );
+
+        const localPath = path.join(
+          assetStoreDir,
+          "2026-03-27",
+          "om_msg_1",
+          "meeting recording-file_v3_recording_1.m4a",
+        );
+
+        expect(messageResourceGet).toHaveBeenCalledExactlyOnceWith({
+          path: {
+            message_id: "om_msg_1",
+            file_key: "file_v3_recording_1",
+          },
+          params: {
+            type: "file",
+          },
+        });
+        await expect(readFile(localPath, "utf8")).resolves.toBe("fake-m4a");
+        expect(submitMessage).toHaveBeenCalledExactlyOnceWith({
+          sessionId: "sess_chat_1",
+          scenario: "chat",
+          content: [
+            "[\u6587\u4ef6 file_v3_recording_1]",
+            "",
+            "Saved local files:",
+            `- file: meeting recording.m4a -> ${localPath}`,
+          ].join("\n"),
+          channelMessageId: "om_msg_1",
+          createdAt: new Date("2026-03-27T00:00:00.000Z"),
+        });
+      });
+    } finally {
+      await rm(assetStoreDir, { recursive: true, force: true });
+    }
+  });
+
   test("downloads inbound image messages and forwards them in userPayload", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
