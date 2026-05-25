@@ -114,7 +114,10 @@ describe("pi bridge Codex service tier", () => {
     vi.unstubAllGlobals();
   });
 
-  test("sends configured fast service tier in the final streaming Codex HTTP request body", async () => {
+  test.each([
+    ["fast", "priority"],
+    ["flex", "flex"],
+  ] as const)("sends configured %s service tier as %s in the final streaming Codex HTTP request body", async (configuredTier, requestTier) => {
     const requests: Array<{ url: string; body: unknown }> = [];
     vi.stubGlobal(
       "fetch",
@@ -129,7 +132,7 @@ describe("pi bridge Codex service tier", () => {
 
     const bridge = new PiBridge();
     const result = await bridge.streamTurn({
-      model: createCodexModel({ serviceTier: "fast" }),
+      model: createCodexModel({ serviceTier: configuredTier }),
       systemPrompt: "You are concise.",
       compactSummary: null,
       messages: [createStoredUserMessage()],
@@ -142,7 +145,7 @@ describe("pi bridge Codex service tier", () => {
     expect(requests[0]?.url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(requests[0]?.body).toMatchObject({
       model: "gpt-5.5",
-      service_tier: "priority",
+      service_tier: requestTier,
     });
   });
 });

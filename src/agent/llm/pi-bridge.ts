@@ -54,7 +54,6 @@ const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
 const OPENAI_COMPAT_ROLE_OVERRIDE = {
   supportsDeveloperRole: false,
 } as const;
-const OPENAI_SERVICE_TIER_HOSTS = new Set(["api.openai.com", "chatgpt.com"]);
 
 type RequestServiceTier = "auto" | "default" | "flex" | "scale" | "priority";
 
@@ -672,6 +671,8 @@ function resolveRequestServiceTier(
 }
 
 function createServiceTierPayloadPatch(serviceTier: RequestServiceTier) {
+  // pi-ai calls `onPayload` with the live request payload before JSON serialization.
+  // Mutating in place is intentional here and covered by the final-fetch bridge tests.
   return (payload: unknown): unknown | undefined => {
     if (!isPlainObjectRecord(payload) || payload.service_tier !== undefined) {
       return undefined;
@@ -687,16 +688,14 @@ function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
 
 function shouldApplyOpenAIServiceTier(model: ResolvedModel): boolean {
   const api = resolvePiApi(model);
-  if (api !== "openai-responses" && api !== "openai-codex-responses") {
-    return false;
-  }
-
   const host = resolveServiceTierBaseUrlHost(model);
-  if (host == null || !OPENAI_SERVICE_TIER_HOSTS.has(host)) {
-    return false;
+  if (api === "openai-responses") {
+    return host === "api.openai.com";
   }
-
-  return api === "openai-responses" ? host === "api.openai.com" : host === "chatgpt.com";
+  if (api === "openai-codex-responses") {
+    return host === "chatgpt.com";
+  }
+  return false;
 }
 
 function resolveServiceTierBaseUrlHost(model: ResolvedModel): string | null {
