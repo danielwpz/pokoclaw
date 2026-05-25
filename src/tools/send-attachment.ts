@@ -97,11 +97,21 @@ export function createSendAttachmentTool() {
         });
       }
       const attachmentType = args.type ?? inferAttachmentType(displayPath);
+      if (attachmentType === "image" && !hasSupportedImageExtension(displayPath)) {
+        throw toolRecoverableError(
+          `Attachment type "image" requires a supported image extension (PNG, JPEG, WEBP, GIF, TIFF, BMP, ICO): ${displayPath}`,
+          {
+            code: "unsupported_image_format",
+            path: absolutePath,
+            displayPath,
+          },
+        );
+      }
       const maxBytes =
         attachmentType === "image" ? MAX_OUTBOUND_IMAGE_BYTES : MAX_OUTBOUND_ATTACHMENT_BYTES;
       if (fileStats.size > maxBytes) {
         throw toolRecoverableError(
-          `Attachment file is larger than ${formatMegabytes(maxBytes)} MB: ${displayPath}`,
+          `Attachment file is larger than ${bytesToMegabytes(maxBytes)} MB: ${displayPath}`,
           {
             code: "file_too_large",
             path: absolutePath,
@@ -150,7 +160,7 @@ function isMissingPathError(error: unknown): boolean {
 
 function inferAttachmentType(displayPath: string): AttachmentType {
   const normalized = displayPath.toLowerCase();
-  if (/\.(png|jpe?g|webp|gif|tiff?|bmp|ico)$/.test(normalized)) {
+  if (hasSupportedImageExtension(normalized)) {
     return "image";
   }
   if (normalized.endsWith(".pdf")) {
@@ -171,6 +181,10 @@ function inferAttachmentType(displayPath: string): AttachmentType {
   return "file";
 }
 
-function formatMegabytes(bytes: number): number {
+function hasSupportedImageExtension(displayPath: string): boolean {
+  return /\.(png|jpe?g|webp|gif|tiff?|bmp|ico)$/i.test(displayPath);
+}
+
+function bytesToMegabytes(bytes: number): number {
   return bytes / 1024 / 1024;
 }

@@ -1764,24 +1764,35 @@ export function createLarkOutboundRuntime(
       }
 
       const replyToMessageId = readStringValue(target.surfaceObject.reply_to_message_id);
-      const result = await sendLarkImageMessage({
-        installationId: target.channelInstallationId,
-        chatId,
-        ...(replyToMessageId == null ? {} : { replyToMessageId }),
-        imagePath: envelope.event.attachmentPath,
-        clients: input.clients,
-      });
+      try {
+        const result = await sendLarkImageMessage({
+          installationId: target.channelInstallationId,
+          chatId,
+          ...(replyToMessageId == null ? {} : { replyToMessageId }),
+          imagePath: envelope.event.attachmentPath,
+          clients: input.clients,
+        });
 
-      logger.info("sent lark outbound image attachment event", {
-        eventId: envelope.event.eventId,
-        channelInstallationId: target.channelInstallationId,
-        chatId,
-        replyToMessageId,
-        attachmentPath: envelope.event.attachmentPath,
-        imageKey: result.imageKey,
-        messageId: result.messageId,
-        openMessageId: result.openMessageId,
-      });
+        logger.info("sent lark outbound image attachment event", {
+          eventId: envelope.event.eventId,
+          channelInstallationId: target.channelInstallationId,
+          chatId,
+          replyToMessageId,
+          attachmentPath: envelope.event.attachmentPath,
+          imageKey: result.imageKey,
+          messageId: result.messageId,
+          openMessageId: result.openMessageId,
+        });
+      } catch (error) {
+        logger.error("failed to send lark outbound image attachment event", {
+          eventId: envelope.event.eventId,
+          channelInstallationId: target.channelInstallationId,
+          chatId,
+          replyToMessageId,
+          attachmentPath: envelope.event.attachmentPath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   };
 

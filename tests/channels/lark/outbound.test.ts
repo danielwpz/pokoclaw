@@ -487,7 +487,9 @@ describe("lark outbound runtime", () => {
     await writeFile(attachmentPath, Buffer.from("png"));
 
     const uploadImage = vi.fn(async (_input: unknown) => ({
-      image_key: "img_v3_uploaded",
+      data: {
+        image_key: "img_v3_uploaded",
+      },
     }));
     const createMessage = vi.fn(async (_input: unknown) => ({
       data: {
@@ -548,6 +550,105 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("continues sending outbound image attachments after one lark target fails", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES
+        ('ci_lark_bad', 'lark', 'bad', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'),
+        ('ci_lark_good', 'lark', 'good', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_bad', 'oc_bad', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    const surfaces = new ChannelSurfacesRepo(handle.storage.db);
+    surfaces.upsert({
+      id: "surface_bad",
+      channelType: "lark",
+      channelInstallationId: "bad",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_bad",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_bad" }),
+    });
+    surfaces.upsert({
+      id: "surface_good",
+      channelType: "lark",
+      channelInstallationId: "good",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_good",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_good" }),
+    });
+
+    const tempDir = await mkdtemp(join(tmpdir(), "pokoclaw-lark-image-"));
+    tempDirs.push(tempDir);
+    const attachmentPath = join(tempDir, "chart.png");
+    await writeFile(attachmentPath, Buffer.from("png"));
+
+    const uploadImage = vi.fn(async (_input: unknown) => ({
+      data: {
+        image_key: "img_v3_uploaded",
+      },
+    }));
+    let createAttempts = 0;
+    const createMessage = vi.fn(async (_input: unknown) => {
+      createAttempts += 1;
+      if (createAttempts === 1) {
+        throw new Error("simulated lark send failure");
+      }
+      return {
+        data: {
+          message_id: "om_image_2",
+          open_message_id: "om_open_image_2",
+        },
+      };
+    });
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                image: {
+                  create: uploadImage,
+                },
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+    bus.publish(
+      makeAttachmentEnvelope({
+        type: "outbound_attachment_requested",
+        eventId: "evt_image_1",
+        attachmentPath,
+        displayPath: "chart.png",
+        attachmentType: "image",
+        requestedAt: "2026-03-28T00:00:00.000Z",
+      }),
+    );
+
+    await waitForCondition(() => createMessage.mock.calls.length === 2);
+
+    expect(uploadImage).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenCalledTimes(2);
+
+    await runtime.shutdown();
+  });
+
   test("skips non-image outbound attachment events until lark supports them", async () => {
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`
@@ -562,7 +663,9 @@ describe("lark outbound runtime", () => {
     `);
 
     const uploadImage = vi.fn(async (_input: unknown) => ({
-      image_key: "img_v3_uploaded",
+      data: {
+        image_key: "img_v3_uploaded",
+      },
     }));
     const createMessage = vi.fn(async (_input: unknown) => ({
       data: {

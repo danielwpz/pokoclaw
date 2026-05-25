@@ -31,8 +31,8 @@ export async function sendLarkImageMessage(input: {
       image: createReadStream(input.imagePath),
     },
   });
-  const imageKey = upload?.image_key ?? null;
-  if (imageKey == null || imageKey.trim().length === 0) {
+  const imageKey = readImageKey(upload);
+  if (imageKey == null) {
     throw new Error("Lark image upload did not return image_key.");
   }
 
@@ -63,18 +63,37 @@ export async function sendLarkImageMessage(input: {
           },
         });
 
-  const responseData =
-    typeof response?.data === "object" && response.data != null
-      ? (response.data as Record<string, unknown>)
-      : {};
-  const messageId =
-    typeof responseData.message_id === "string" ? responseData.message_id : undefined;
-  const openMessageId =
-    typeof responseData.open_message_id === "string" ? responseData.open_message_id : undefined;
+  const messageId = readStringField(response?.data, "message_id") ?? undefined;
+  const openMessageId = readStringField(response?.data, "open_message_id") ?? undefined;
 
   return {
     imageKey,
     ...(messageId === undefined ? {} : { messageId }),
     ...(openMessageId === undefined ? {} : { openMessageId }),
   };
+}
+
+function readImageKey(upload: unknown): string | null {
+  return (
+    readStringField(readObjectField(upload, "data"), "image_key") ??
+    readStringField(upload, "image_key")
+  );
+}
+
+function readObjectField(value: unknown, key: string): Record<string, unknown> | null {
+  if (typeof value !== "object" || value == null || Array.isArray(value)) {
+    return null;
+  }
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "object" && field != null && !Array.isArray(field)
+    ? (field as Record<string, unknown>)
+    : null;
+}
+
+function readStringField(value: unknown, key: string): string | null {
+  if (typeof value !== "object" || value == null || Array.isArray(value)) {
+    return null;
+  }
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "string" && field.trim().length > 0 ? field.trim() : null;
 }
