@@ -375,6 +375,7 @@ describe("config loader", () => {
         "maxOutputTokens = 16384",
         "supportsTools = true",
         "supportsVision = true",
+        'serviceTier = "fast"',
         "[models.catalog.reasoning]",
         "enabled = true",
         "[models.catalog.pricing]",
@@ -452,6 +453,7 @@ describe("config loader", () => {
       },
     });
     expect(config.models.catalog).toHaveLength(2);
+    expect(config.models.catalog[0]?.serviceTier).toBe("fast");
     expect(config.models.scenarios.chat).toEqual([
       "anthropic_main/claude-sonnet-4-5",
       "openai_main/gpt-5-mini",
@@ -931,6 +933,33 @@ describe("config loader", () => {
 
     await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
       "config.toml models.scenarios contains unknown key: subagent",
+    );
+  });
+
+  test("rejects invalid model service tier values", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.main]",
+        'api = "openai-responses"',
+        "",
+        "[[models.catalog]]",
+        'id = "gpt5"',
+        'provider = "main"',
+        'upstreamId = "openai/gpt-5"',
+        "contextWindow = 200000",
+        "maxOutputTokens = 16384",
+        "supportsTools = true",
+        "supportsVision = true",
+        'serviceTier = "turbo"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml models.catalog[0].serviceTier must be one of: auto, default, flex, scale, priority, fast",
     );
   });
 

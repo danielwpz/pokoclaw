@@ -48,6 +48,7 @@ export interface StatusModelSnapshot {
   upstreamModelId: string | null;
   modelApi: string | null;
   supportsReasoning: boolean | null;
+  serviceTier?: string | null;
   source: "latest_assistant" | "agent_default" | "scenario_default" | "unknown";
 }
 
@@ -214,6 +215,9 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
   if (snapshot.model.supportsReasoning != null) {
     lines.push(`Reasoning: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`);
   }
+  if (snapshot.model.serviceTier != null) {
+    lines.push(`Service tier: ${snapshot.model.serviceTier}`);
+  }
   lines.push(`运行模式：${formatRuntimeModeLine(snapshot.runtimeMode)}`);
   if (snapshot.mcp != null) {
     lines.push(...formatMcpTextLines(snapshot.mcp));
@@ -314,6 +318,9 @@ export function buildConversationStatusPresentation(
         ...(snapshot.model.supportsReasoning == null
           ? []
           : [`**Reasoning**: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`]),
+        ...(snapshot.model.serviceTier == null
+          ? []
+          : [`**Service tier**: ${snapshot.model.serviceTier}`]),
         `**运行模式**：${formatRuntimeModeLine(snapshot.runtimeMode)}`,
         ...(snapshot.mcp == null ? [] : formatMcpMarkdownLines(snapshot.mcp)),
       ].join("\n"),
@@ -405,6 +412,7 @@ function resolveStatusModel(input: {
       upstreamModelId: input.latestAssistant.model ?? null,
       modelApi: input.latestAssistant.modelApi ?? null,
       supportsReasoning: latestAssistantModel?.reasoning?.enabled === true,
+      serviceTier: latestAssistantModel?.serviceTier ?? null,
       source: "latest_assistant",
     };
   }
@@ -431,6 +439,7 @@ function resolveStatusModel(input: {
     upstreamModelId: null,
     modelApi: null,
     supportsReasoning: null,
+    serviceTier: null,
     source: "unknown",
   };
 }
@@ -464,6 +473,7 @@ function modelToStatusSnapshot(
     upstreamModelId: model.upstreamId,
     modelApi: model.provider.api,
     supportsReasoning: model.reasoning?.enabled === true,
+    serviceTier: model.serviceTier ?? null,
     source,
   };
 }
@@ -612,6 +622,7 @@ function formatModelLine(model: StatusModelSnapshot): string {
     model.upstreamModelId,
     model.providerId,
     model.modelApi,
+    model.serviceTier == null ? null : `tier:${model.serviceTier}`,
   ].filter((value): value is string => value != null && value.length > 0);
   return parts.length > 0 ? parts.join(" / ") : "未知";
 }

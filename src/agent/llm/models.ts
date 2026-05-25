@@ -8,6 +8,7 @@ import type {
   ModelPricingConfig,
   ModelReasoningConfig,
   ModelScenarioConfig,
+  ModelServiceTier,
   ProviderConfig,
 } from "@/src/config/schema.js";
 
@@ -41,6 +42,7 @@ export interface ResolvedModel {
   maxOutputTokens: number;
   supportsTools: boolean;
   supportsVision: boolean;
+  serviceTier?: ModelServiceTier;
   reasoning?: ModelReasoningConfig;
   pricing?: ModelPricingConfig;
   provider: ResolvedProvider;

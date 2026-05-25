@@ -108,7 +108,7 @@ function buildModelSwitchCardElements(
 function buildOverviewMarkdown(overview: ScenarioModelSwitchOverview): string {
   const modelLines = overview.models.map(
     (model) =>
-      `${model.index}. **${model.modelId}** · provider: \`${model.providerId}\` · upstream: \`${model.upstreamModelId}\` · tools: ${model.supportsTools ? "yes" : "no"} · reasoning: ${model.supportsReasoning ? "yes" : "no"}`,
+      `${model.index}. **${model.modelId}** · provider: \`${model.providerId}\` · upstream: \`${model.upstreamModelId}\` · tools: ${model.supportsTools ? "yes" : "no"} · reasoning: ${model.supportsReasoning ? "yes" : "no"}${model.serviceTier == null ? "" : ` · tier: ${model.serviceTier}`}`,
   );
   const scenarioLines = overview.scenarios.map(
     (scenario) =>
@@ -178,7 +178,7 @@ function buildModelRow(
             content: [
               `**${model.index}. ${model.modelId}**${isCurrent ? " · 当前使用" : ""}`,
               `provider: \`${model.providerId}\` · upstream: \`${model.upstreamModelId}\``,
-              `tools: ${model.supportsTools ? "yes" : "no"} · reasoning: ${model.supportsReasoning ? "yes" : "no"}`,
+              `tools: ${model.supportsTools ? "yes" : "no"} · reasoning: ${model.supportsReasoning ? "yes" : "no"}${model.serviceTier == null ? "" : ` · tier: ${model.serviceTier}`}`,
             ].join("\n"),
           },
         ],

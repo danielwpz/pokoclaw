@@ -122,6 +122,10 @@ export class ProviderRegistry {
       provider,
     };
 
+    if (entry.serviceTier != null) {
+      resolved.serviceTier = entry.serviceTier;
+    }
+
     if (entry.reasoning != null) {
       resolved.reasoning = { ...entry.reasoning };
     }
