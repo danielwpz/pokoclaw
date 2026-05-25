@@ -175,6 +175,28 @@ Matching `secrets.toml`:
 appSecret = "paste-your-feishu-or-lark-app-secret-here"
 ```
 
+To create a fast-tier Codex model instance, add a separate catalog entry that points at the
+same upstream model and sets `serviceTier = "fast"`:
+
+```toml
+[[models.catalog]]
+id = "codex-gpt5.5-fast"
+provider = "openai_codex"
+upstreamId = "gpt-5.5"
+contextWindow = 400000
+maxOutputTokens = 16384
+supportsTools = true
+supportsVision = true
+serviceTier = "fast"
+[models.catalog.reasoning]
+enabled = true
+effort = "high"
+```
+
+`serviceTier = "fast"` is sent to the native Codex/OpenAI Responses request as
+`service_tier = "priority"`. It is a model-instance setting, like
+`reasoning.effort`, so scenarios can choose the normal or fast entry explicitly.
+
 ### Template B: OpenRouter via environment variable
 
 Replace `upstreamId` with the OpenRouter model the user actually wants. The structure stays the same.

@@ -55,6 +55,8 @@ const OPENAI_COMPAT_ROLE_OVERRIDE = {
   supportsDeveloperRole: false,
 } as const;
 
+type RequestServiceTier = "auto" | "default" | "flex" | "scale" | "priority";
+
 export interface PiBridgeTextDelta {
   delta: string;
   accumulatedText: string;
@@ -620,6 +622,11 @@ async function buildPiStreamOptions(
     maxTokens: number;
     apiKey?: string;
     reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+    serviceTier?: RequestServiceTier;
+    onPayload?: (
+      payload: unknown,
+      model: Model<Api>,
+    ) => unknown | undefined | Promise<unknown | undefined>;
   } = {
     signal,
     sessionId: model.id,
@@ -645,7 +652,58 @@ async function buildPiStreamOptions(
     options.reasoning = model.reasoning.effort ?? DEFAULT_REASONING_LEVEL;
   }
 
+  const serviceTier = resolveRequestServiceTier(model.serviceTier);
+  if (serviceTier != null && shouldApplyOpenAIServiceTier(model)) {
+    options.serviceTier = serviceTier;
+    options.onPayload = createServiceTierPayloadPatch(serviceTier);
+  }
+
   return options;
+}
+
+function resolveRequestServiceTier(
+  serviceTier: ResolvedModel["serviceTier"],
+): RequestServiceTier | undefined {
+  if (serviceTier == null) {
+    return undefined;
+  }
+  return serviceTier === "fast" ? "priority" : serviceTier;
+}
+
+function createServiceTierPayloadPatch(serviceTier: RequestServiceTier) {
+  // pi-ai calls `onPayload` with the live request payload before JSON serialization.
+  // Mutating in place is intentional here and covered by the final-fetch bridge tests.
+  return (payload: unknown): unknown | undefined => {
+    if (!isPlainObjectRecord(payload) || payload.service_tier !== undefined) {
+      return undefined;
+    }
+    payload.service_tier = serviceTier;
+    return undefined;
+  };
+}
+
+function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function shouldApplyOpenAIServiceTier(model: ResolvedModel): boolean {
+  const api = resolvePiApi(model);
+  const host = resolveServiceTierBaseUrlHost(model);
+  if (api === "openai-responses") {
+    return host === "api.openai.com";
+  }
+  if (api === "openai-codex-responses") {
+    return host === "chatgpt.com";
+  }
+  return false;
+}
+
+function resolveServiceTierBaseUrlHost(model: ResolvedModel): string | null {
+  try {
+    return new URL(resolvePiBaseUrl(model)).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 function toPiModel(model: ResolvedModel): Model<Api> {

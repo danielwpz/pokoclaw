@@ -9,6 +9,7 @@ export interface LoggingConfig {
 
 export type ProviderAuthSource = "config" | "codex-local";
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ModelServiceTier = "auto" | "default" | "flex" | "scale" | "priority" | "fast";
 
 export interface ProviderConfig {
   api: string;
@@ -37,6 +38,7 @@ export interface ModelCatalogEntry {
   maxOutputTokens: number;
   supportsTools: boolean;
   supportsVision: boolean;
+  serviceTier?: ModelServiceTier;
   reasoning?: ModelReasoningConfig;
   pricing?: ModelPricingConfig;
 }
@@ -231,6 +233,7 @@ interface ModelCatalogEntryInput {
   maxOutputTokens?: unknown;
   supportsTools?: unknown;
   supportsVision?: unknown;
+  serviceTier?: unknown;
   reasoning?: unknown;
   pricing?: unknown;
 }
@@ -378,6 +381,14 @@ const MODEL_SCENARIOS = [
 const LARK_CONNECTION_MODES: readonly LarkConnectionMode[] = ["websocket", "webhook"];
 const PROVIDER_AUTH_SOURCES: readonly ProviderAuthSource[] = ["config", "codex-local"];
 const REASONING_EFFORTS: readonly ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
+const MODEL_SERVICE_TIERS: readonly ModelServiceTier[] = [
+  "auto",
+  "default",
+  "flex",
+  "scale",
+  "priority",
+  "fast",
+];
 const MCP_TRANSPORTS: readonly McpTransport[] = ["stdio", "streamable_http"];
 const MCP_TOOL_POLICIES: readonly McpToolPolicy[] = ["auto", "ask", "always_allow"];
 const MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -688,6 +699,7 @@ function validateModelCatalog(
         "maxOutputTokens",
         "supportsTools",
         "supportsVision",
+        "serviceTier",
         "reasoning",
         "pricing",
       ]),
@@ -734,6 +746,14 @@ function validateModelCatalog(
         `config.toml models.catalog[${index}].supportsVision`,
       ),
     };
+
+    const serviceTier = validateOptionalModelServiceTier(
+      entry.serviceTier,
+      `config.toml models.catalog[${index}].serviceTier`,
+    );
+    if (serviceTier != null) {
+      normalizedEntry.serviceTier = serviceTier;
+    }
 
     const reasoning = validateReasoningConfig(
       entry.reasoning,
@@ -1719,6 +1739,10 @@ function cloneModelCatalogEntry(entry: ModelCatalogEntry): ModelCatalogEntry {
     cloned.reasoning = { ...entry.reasoning };
   }
 
+  if (entry.serviceTier != null) {
+    cloned.serviceTier = entry.serviceTier;
+  }
+
   if (entry.pricing != null) {
     cloned.pricing = { ...entry.pricing };
   }
@@ -1770,6 +1794,19 @@ function validateOptionalReasoningEffort(
     throw new Error(`${path} must be one of: minimal, low, medium, high, xhigh`);
   }
   return value as ReasoningEffort;
+}
+
+function validateOptionalModelServiceTier(
+  value: unknown,
+  path: string,
+): ModelServiceTier | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !MODEL_SERVICE_TIERS.includes(value as ModelServiceTier)) {
+    throw new Error(`${path} must be one of: auto, default, flex, scale, priority, fast`);
+  }
+  return value as ModelServiceTier;
 }
 
 function validateNonEmptyString(value: unknown, path: string): string {
