@@ -189,6 +189,18 @@ describe("agent system prompt", () => {
     expect(prompt).toContain("Showing a plan for review when the only expected reply is");
   });
 
+  test("guides agents to send current-chat images through the native image tool", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+    });
+
+    expect(prompt).toContain("use `send_attachment`");
+    expect(prompt).toContain("set `type` to `image`");
+    expect(prompt).toContain("Do not replace it with a Markdown link");
+    expect(prompt).toContain("file path, A2UI surface, or ordinary text/card reply");
+  });
+
   test("defaults chat sessions without agentKind to the main-agent prompt", () => {
     const prompt = buildAgentSystemPrompt({
       sessionPurpose: "chat",

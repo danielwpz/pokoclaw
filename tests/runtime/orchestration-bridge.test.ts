@@ -250,6 +250,7 @@ describe("RuntimeOrchestrationBridge", () => {
       manager: {
         emitRuntimeEvent: vi.fn(),
         submitSubagentCreationRequest: vi.fn(),
+        publishOutboundAttachment: vi.fn(),
         runCronJobNow: vi.fn(async () => ({
           accepted: true,
           cronJobId: "cron_sub_1",
@@ -286,6 +287,7 @@ describe("RuntimeOrchestrationBridge", () => {
       manager: {
         emitRuntimeEvent: vi.fn(),
         submitSubagentCreationRequest: vi.fn(),
+        publishOutboundAttachment: vi.fn(),
         runCronJobNow: vi.fn(async () => ({
           accepted: true,
           cronJobId: "cron_sub_1",
@@ -320,6 +322,57 @@ describe("RuntimeOrchestrationBridge", () => {
     });
     expect(suppressBackgroundTaskCompletionNotice).toHaveBeenCalledExactlyOnceWith({
       taskRunId: "task_bg_1",
+    });
+  });
+
+  test("forwards attachment send requests to the attached manager", async () => {
+    const publishOutboundAttachment = vi.fn(() => ({
+      accepted: true as const,
+      eventId: "evt_image_1",
+    }));
+    const bridge = createRuntimeOrchestrationBridge({
+      manager: {
+        emitRuntimeEvent: vi.fn(),
+        submitSubagentCreationRequest: vi.fn(),
+        publishOutboundAttachment,
+        runCronJobNow: vi.fn(async () => ({
+          accepted: true,
+          cronJobId: "cron_sub_1",
+          taskRunId: "task_run_cron_1",
+          executionSessionId: "sess_task_cron_1",
+        })),
+        startBackgroundTask: vi.fn(async () => ({
+          accepted: true,
+          taskRunId: "task_bg_1",
+        })),
+        suppressBackgroundTaskCompletionNotice: vi.fn(),
+      },
+    });
+
+    await expect(
+      bridge.runtimeControl.sendAttachment?.({
+        sourceSessionId: "sess_main",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        runId: "run_1",
+        taskRunId: "task_1",
+        attachmentPath: "/tmp/chart.png",
+        displayPath: "chart.png",
+        type: "image",
+      }),
+    ).resolves.toEqual({
+      accepted: true,
+      eventId: "evt_image_1",
+    });
+    expect(publishOutboundAttachment).toHaveBeenCalledExactlyOnceWith({
+      sourceSessionId: "sess_main",
+      conversationId: "conv_main",
+      branchId: "branch_main",
+      runId: "run_1",
+      taskRunId: "task_1",
+      attachmentPath: "/tmp/chart.png",
+      displayPath: "chart.png",
+      type: "image",
     });
   });
 });

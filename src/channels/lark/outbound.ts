@@ -27,6 +27,7 @@ import {
 } from "@/src/channels/lark/cardkit-mutations.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import { listLarkDeliveryTargets, readStringValue } from "@/src/channels/lark/delivery-targets.js";
+import { sendLarkImageMessage } from "@/src/channels/lark/image-message.js";
 import {
   addLarkMessageReaction,
   removeLarkMessageReaction,
@@ -52,6 +53,7 @@ import {
 import type { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
 import { sendLarkTextMessage } from "@/src/channels/lark/text-message.js";
 import type {
+  OrchestratedOutboundAttachmentEventEnvelope,
   OrchestratedOutboundEventEnvelope,
   OrchestratedRuntimeEventEnvelope,
 } from "@/src/orchestration/outbound-events.js";
@@ -1781,6 +1783,83 @@ export function createLarkOutboundRuntime(
     }
   };
 
+  const handleOutboundAttachmentEvent = async (
+    envelope: OrchestratedOutboundAttachmentEventEnvelope,
+  ): Promise<void> => {
+    if (envelope.event.attachmentType !== "image") {
+      logger.warn("skipping lark outbound attachment because only image delivery is implemented", {
+        eventId: envelope.event.eventId,
+        conversationId: envelope.target.conversationId,
+        branchId: envelope.target.branchId,
+        taskRunId: envelope.taskRun.taskRunId,
+        attachmentType: envelope.event.attachmentType,
+        attachmentPath: envelope.event.attachmentPath,
+      });
+      return;
+    }
+
+    const deliveryTargets = listLarkDeliveryTargets(input.storage, {
+      conversationId: envelope.target.conversationId,
+      branchId: envelope.target.branchId,
+      taskRunId: envelope.taskRun.taskRunId,
+    });
+
+    if (deliveryTargets.length === 0) {
+      logger.warn("skipping lark outbound image because no lark delivery target is paired", {
+        eventId: envelope.event.eventId,
+        conversationId: envelope.target.conversationId,
+        branchId: envelope.target.branchId,
+        attachmentPath: envelope.event.attachmentPath,
+      });
+      return;
+    }
+
+    for (const target of deliveryTargets) {
+      const chatId = readStringValue(target.surfaceObject.chat_id);
+      if (chatId == null) {
+        logger.warn("skipping lark outbound image because surface is missing chat_id", {
+          eventId: envelope.event.eventId,
+          conversationId: envelope.target.conversationId,
+          branchId: envelope.target.branchId,
+          channelInstallationId: target.channelInstallationId,
+          attachmentPath: envelope.event.attachmentPath,
+        });
+        continue;
+      }
+
+      const replyToMessageId = readStringValue(target.surfaceObject.reply_to_message_id);
+      try {
+        const result = await sendLarkImageMessage({
+          installationId: target.channelInstallationId,
+          chatId,
+          ...(replyToMessageId == null ? {} : { replyToMessageId }),
+          imagePath: envelope.event.attachmentPath,
+          clients: input.clients,
+        });
+
+        logger.info("sent lark outbound image attachment event", {
+          eventId: envelope.event.eventId,
+          channelInstallationId: target.channelInstallationId,
+          chatId,
+          replyToMessageId,
+          attachmentPath: envelope.event.attachmentPath,
+          imageKey: result.imageKey,
+          messageId: result.messageId,
+          openMessageId: result.openMessageId,
+        });
+      } catch (error) {
+        logger.error("failed to send lark outbound image attachment event", {
+          eventId: envelope.event.eventId,
+          channelInstallationId: target.channelInstallationId,
+          chatId,
+          replyToMessageId,
+          attachmentPath: envelope.event.attachmentPath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
+
   return {
     start() {
       if (unsubscribe != null) {
@@ -1860,6 +1939,10 @@ export function createLarkOutboundRuntime(
             immediate: isTaskLifecycleTerminalEvent(envelope),
           });
           return;
+        }
+
+        if (envelope.kind === "outbound_attachment_event") {
+          return handleOutboundAttachmentEvent(envelope);
         }
 
         if (envelope.kind !== "runtime_event") {

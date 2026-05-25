@@ -8,11 +8,21 @@
 import type { AgentRuntimeEvent } from "@/src/agent/events.js";
 import {
   resolveSessionLiveState,
+  resolveTaskRunLiveState,
   resolveTaskRunLiveStateFromTaskRun,
 } from "@/src/runtime/live-state.js";
 import type { AgentRuntimeRole } from "@/src/security/policy.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import type { Session, SubagentCreationRequest, TaskRun } from "@/src/storage/schema/types.js";
+
+export type OutboundAttachmentType =
+  | "image"
+  | "pdf"
+  | "word"
+  | "spreadsheet"
+  | "presentation"
+  | "html"
+  | "file";
 
 export interface OutboundEventContext {
   target: {
@@ -154,10 +164,25 @@ export interface OrchestratedSubagentCreationEventEnvelope extends OutboundEvent
   event: SubagentCreationOutboundEvent;
 }
 
+export interface OutboundAttachmentRequestedEvent {
+  type: "outbound_attachment_requested";
+  eventId: string;
+  attachmentPath: string;
+  displayPath: string;
+  attachmentType: OutboundAttachmentType;
+  requestedAt: string;
+}
+
+export interface OrchestratedOutboundAttachmentEventEnvelope extends OutboundEventContext {
+  kind: "outbound_attachment_event";
+  event: OutboundAttachmentRequestedEvent;
+}
+
 export type OrchestratedOutboundEventEnvelope =
   | OrchestratedRuntimeEventEnvelope
   | OrchestratedTaskRunEventEnvelope
-  | OrchestratedSubagentCreationEventEnvelope;
+  | OrchestratedSubagentCreationEventEnvelope
+  | OrchestratedOutboundAttachmentEventEnvelope;
 
 export function projectRuntimeEvent(input: {
   db: StorageDb;
@@ -242,6 +267,50 @@ export function projectSubagentCreationEvent(input: {
       mainAgentId: state?.mainAgentId ?? input.request.sourceAgentId,
       taskRun: state?.taskRun ?? null,
       runId: null,
+      object: {
+        messageId: null,
+        toolCallId: null,
+        toolName: null,
+        approvalId: null,
+      },
+    }),
+    event: input.event,
+  };
+}
+
+export function projectOutboundAttachmentEvent(input: {
+  db: StorageDb;
+  sourceSessionId: string;
+  conversationId: string;
+  branchId: string;
+  runId?: string | null;
+  taskRunId?: string | null;
+  event: OutboundAttachmentRequestedEvent;
+}): OrchestratedOutboundAttachmentEventEnvelope {
+  const state = resolveSessionLiveState({
+    db: input.db,
+    sessionId: input.sourceSessionId,
+  });
+  const taskRun =
+    input.taskRunId == null
+      ? (state?.taskRun ?? null)
+      : (resolveTaskRunLiveState({
+          db: input.db,
+          taskRunId: input.taskRunId,
+        })?.taskRun ?? null);
+
+  return {
+    kind: "outbound_attachment_event",
+    ...buildContext({
+      conversationId: input.conversationId,
+      branchId: input.branchId,
+      sessionId: input.sourceSessionId,
+      sessionPurpose: state?.session.purpose ?? null,
+      ownerAgentId: state?.ownerAgentId ?? null,
+      ownerRole: state?.ownerRole ?? null,
+      mainAgentId: state?.mainAgentId ?? null,
+      taskRun,
+      runId: input.runId ?? null,
       object: {
         messageId: null,
         toolCallId: null,

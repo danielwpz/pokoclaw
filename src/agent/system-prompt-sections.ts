@@ -235,6 +235,7 @@ export function buildApprovalAgentOperatingModelSection(): string {
 export function buildToolUsageSection(): string {
   return renderSection("Tool Usage", [
     "- Use the existing first-class tool when one is available instead of inventing an indirect shell workaround.",
+    "- When the user asks you to send, show, share, or deliver an image or file in the current chat, create or locate a real local file and use `send_attachment`; set `type` to `image` for images. Do not replace it with a Markdown link, file path, A2UI surface, or ordinary text/card reply.",
     "- Routine low-risk tool calls do not need narration first.",
     "- For complex, risky, or potentially destructive actions, briefly explain what you are about to do.",
     "- Tool names and arguments are exact; call them precisely as defined.",
