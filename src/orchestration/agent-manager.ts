@@ -104,6 +104,7 @@ export interface ResolveSubagentCreationRequestResult {
 interface PendingBackgroundTaskCompletionNotice {
   taskRunId: string;
   sourceSessionId: string;
+  messageType: "background_task_completion" | "scheduled_task_run_settled";
   content: string;
   createdAt: Date;
 }
@@ -704,6 +705,7 @@ export class AgentManager {
     logSettledTaskExecution("completed", settled);
     this.publishTaskRunSettledEvent("task_run_completed", settled);
     this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
+    this.appendScheduledTaskRunSettledNoticeIfNeeded(settled.taskRun);
     return settled;
   }
 
@@ -721,6 +723,7 @@ export class AgentManager {
     logSettledTaskExecution("blocked", settled);
     this.publishTaskRunSettledEvent("task_run_blocked", settled);
     this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
+    this.appendScheduledTaskRunSettledNoticeIfNeeded(settled.taskRun);
     return settled;
   }
 
@@ -740,6 +743,7 @@ export class AgentManager {
     logSettledTaskExecution("failed", settled);
     this.publishTaskRunSettledEvent("task_run_failed", settled);
     this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
+    this.appendScheduledTaskRunSettledNoticeIfNeeded(settled.taskRun);
     return settled;
   }
 
@@ -759,6 +763,7 @@ export class AgentManager {
     logSettledTaskExecution("cancelled", settled);
     this.publishTaskRunSettledEvent("task_run_cancelled", settled);
     this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
+    this.appendScheduledTaskRunSettledNoticeIfNeeded(settled.taskRun);
     return settled;
   }
 
@@ -1031,6 +1036,55 @@ export class AgentManager {
     this.enqueueBackgroundTaskCompletionNotice({
       taskRunId: taskRun.id,
       sourceSessionId: sourceSession.id,
+      messageType: "background_task_completion",
+      content,
+      createdAt: finishedAtDate,
+    });
+    this.flushBackgroundTaskCompletionNoticesForSession({
+      sessionId: sourceSession.id,
+      trigger: "task_settled",
+    });
+  }
+
+  private appendScheduledTaskRunSettledNoticeIfNeeded(taskRun: TaskRun): void {
+    if (taskRun.runType !== "cron" || taskRun.cronJobId == null) {
+      return;
+    }
+
+    const sessionsRepo = new SessionsRepo(this.deps.storage);
+    const sourceSession = sessionsRepo.findLatestByConversationBranch(
+      taskRun.conversationId,
+      taskRun.branchId,
+      { purpose: "chat" },
+    );
+    if (sourceSession == null || sourceSession.ownerAgentId !== taskRun.ownerAgentId) {
+      logger.debug(
+        "skipped scheduled task completion notice because no owner chat session exists",
+        {
+          taskRunId: taskRun.id,
+          cronJobId: taskRun.cronJobId,
+          ownerAgentId: taskRun.ownerAgentId,
+          conversationId: taskRun.conversationId,
+          branchId: taskRun.branchId,
+        },
+      );
+      return;
+    }
+
+    const cronJob = new CronJobsRepo(this.deps.storage).getByIdIncludingDeleted(taskRun.cronJobId);
+    const finishedAtDate =
+      taskRun.finishedAt == null || Number.isNaN(Date.parse(taskRun.finishedAt))
+        ? new Date()
+        : new Date(taskRun.finishedAt);
+    const content = renderScheduledTaskRunSettledNotice({
+      taskRun,
+      taskName: cronJob?.name ?? null,
+    });
+
+    this.enqueueBackgroundTaskCompletionNotice({
+      taskRunId: taskRun.id,
+      sourceSessionId: sourceSession.id,
+      messageType: "scheduled_task_run_settled",
       content,
       createdAt: finishedAtDate,
     });
@@ -1133,7 +1187,7 @@ export class AgentManager {
         sessionId: sourceSession.id,
         seq: messagesRepo.getNextSeq(sourceSession.id),
         role: "user",
-        messageType: "background_task_completion",
+        messageType: notice.messageType,
         visibility: "hidden_system",
         payloadJson: JSON.stringify({ content: notice.content }),
         createdAt: notice.createdAt,
@@ -1241,6 +1295,36 @@ function renderBackgroundTaskCompletionNotice(input: {
   lines.push(
     "This is a system completion notice for a background task you started. Do not echo this raw block to the user.",
   );
+  lines.push("</system_event>");
+  return lines.join("\n");
+}
+
+function renderScheduledTaskRunSettledNotice(input: {
+  taskRun: TaskRun;
+  taskName: string | null;
+}): string {
+  const displayName =
+    input.taskName != null && input.taskName.trim().length > 0
+      ? input.taskName.trim()
+      : (input.taskRun.cronJobId ?? input.taskRun.id);
+  const lines = [
+    '<system_event type="scheduled_task_run_settled">',
+    `Scheduled task "${displayName}" finished.`,
+    "",
+    `scheduled_task_id: ${input.taskRun.cronJobId ?? "(unknown)"}`,
+    `task_run_id: ${input.taskRun.id}`,
+    `status: ${input.taskRun.status}`,
+  ];
+
+  if (input.taskRun.finishedAt != null && input.taskRun.finishedAt.trim().length > 0) {
+    lines.push(`finished_at: ${input.taskRun.finishedAt}`);
+  }
+
+  lines.push("");
+  lines.push(
+    'This is background context only. If relevant, inspect the scheduled task with schedule_task action="list" and match the returned job id to scheduled_task_id. That list output includes lastStatus, lastRunAt, and lastOutput. For exact task_run_id details, use query_system_db if database read access is available. If not relevant, ignore this notice and continue responding to the user normally.',
+  );
+  lines.push("Do not echo this raw system_event block to the user.");
   lines.push("</system_event>");
   return lines.join("\n");
 }
