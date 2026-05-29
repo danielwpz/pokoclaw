@@ -31,8 +31,14 @@ import { buildAgentLlmRawErrorPayload } from "@/src/agent/llm/errors.js";
 import {
   convertResponsesMessages,
   convertResponsesTools,
+  normalizeResponsesInputRoles,
   processResponsesStream,
+  type ResponsesInput,
 } from "@/src/agent/llm/pi-ai-openai-responses-shared.js";
+import {
+  type CodexResponsesStreamOptions,
+  streamOpenAICodexResponsesWithLocalConverter,
+} from "@/src/agent/llm/providers/codex/stream.js";
 import { appendCappedTextTail } from "@/src/shared/capped-text.js";
 
 type CostedModel = Pick<Model<Api>, "api" | "baseUrl" | "cost">;
@@ -82,7 +88,6 @@ interface ParsedActualCost {
   total?: number;
 }
 
-type ResponsesInput = Exclude<ResponseCreateParamsStreaming["input"], undefined>;
 type AssistantContentItem = AssistantMessage["content"][number];
 type AssistantToolCallContent = Extract<AssistantContentItem, { type: "toolCall" }>;
 type AssistantMessageWithRawError = AssistantMessage & {
@@ -93,6 +98,14 @@ type ResolvedOpenAICompletionsCompat = Omit<
   "cacheControlFormat"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+};
+
+type OpenAIResponsesAdapterOptions = SimpleStreamOptions & {
+  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+  onPayload?: (
+    payload: unknown,
+    model: Model<Api>,
+  ) => unknown | undefined | Promise<unknown | undefined>;
 };
 
 interface UpstreamCostParser {
@@ -220,11 +233,19 @@ export function streamWithNormalizedUpstreamUsage(
     );
   }
 
+  if (model.api === "openai-codex-responses") {
+    return streamOpenAICodexResponsesWithLocalConverter(
+      model as Model<"openai-codex-responses">,
+      context,
+      options as CodexResponsesStreamOptions | undefined,
+    );
+  }
+
   if (shouldUseCustomOpenAIResponsesStream(model)) {
     return streamOpenAIResponsesWithUpstreamUsage(
       model as Model<"openai-responses">,
       context,
-      options,
+      options as OpenAIResponsesAdapterOptions | undefined,
     );
   }
 
@@ -513,7 +534,7 @@ function appendStreamReasoning(existing: string, delta: string): string {
 function streamOpenAIResponsesWithUpstreamUsage(
   model: Model<"openai-responses">,
   context: Context,
-  options?: SimpleStreamOptions,
+  options?: OpenAIResponsesAdapterOptions,
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
 
@@ -541,19 +562,42 @@ function streamOpenAIResponsesWithUpstreamUsage(
         dangerouslyAllowBrowser: true,
       });
 
-      const params = buildOpenAIResponsesParams(model, context, options);
+      const params = await applyPayloadHook(
+        buildOpenAIResponsesParams(model, context, options),
+        model,
+        options,
+      );
       const rawStream = await client.responses.create(
-        params,
+        params as ResponseCreateParamsStreaming,
         options?.signal ? { signal: options.signal } : undefined,
       );
 
       let completedUsage: unknown = null;
       let completedServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined;
+      const requestServiceTier = options?.serviceTier;
       async function* tappedStream(): AsyncIterable<ResponseStreamEvent> {
-        for await (const event of rawStream) {
+        const events = rawStream as AsyncIterable<ResponseStreamEvent>;
+        for await (const event of events) {
           if (event.type === "response.completed") {
             completedUsage = event.response?.usage ?? null;
-            completedServiceTier = event.response?.service_tier;
+            completedServiceTier = resolveResponseServiceTier(
+              event.response?.service_tier,
+              requestServiceTier,
+            );
+            if (
+              event.response != null &&
+              completedServiceTier !== undefined &&
+              completedServiceTier !== event.response.service_tier
+            ) {
+              yield {
+                ...event,
+                response: {
+                  ...event.response,
+                  service_tier: completedServiceTier,
+                },
+              };
+              continue;
+            }
           }
           yield event;
         }
@@ -561,16 +605,18 @@ function streamOpenAIResponsesWithUpstreamUsage(
 
       stream.push({ type: "start", partial: output });
       await processResponsesStream(tappedStream(), output, stream, model, {
-        serviceTier: completedServiceTier,
+        serviceTier: requestServiceTier,
         applyServiceTierPricing,
       });
 
       if (completedUsage != null) {
+        // Prefer the upstream-compatible usage payload when present; this
+        // intentionally replaces usage calculated by the shared stream parser.
         const normalizedUsage = normalizeUsageFromOpenAICompatible(model, completedUsage);
         if (normalizedUsage) {
           output.usage = normalizedUsage.usage;
           if (normalizedUsage.costSource === "estimated") {
-            applyServiceTierPricing(output.usage, completedServiceTier);
+            applyServiceTierPricing(output.usage, completedServiceTier ?? requestServiceTier);
           }
         }
       }
@@ -637,7 +683,7 @@ export function buildOpenAICompletionsParams(
 export function buildOpenAIResponsesParams(
   model: Model<"openai-responses">,
   context: Context,
-  options?: SimpleStreamOptions,
+  options?: OpenAIResponsesAdapterOptions,
 ): ResponseCreateParamsStreaming {
   const messages: ResponsesInput = normalizeResponsesInputRoles(
     convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS),
@@ -654,6 +700,10 @@ export function buildOpenAIResponsesParams(
     params.prompt_cache_key = options.sessionId;
   }
 
+  if (options?.serviceTier) {
+    params.service_tier = options.serviceTier;
+  }
+
   if (context.tools) {
     params.tools = convertResponsesTools(context.tools);
   }
@@ -667,6 +717,28 @@ export function buildOpenAIResponsesParams(
   }
 
   return params;
+}
+
+async function applyPayloadHook(
+  params: ResponseCreateParamsStreaming,
+  model: Model<"openai-responses">,
+  options?: OpenAIResponsesAdapterOptions,
+): Promise<unknown> {
+  const nextParams = await options?.onPayload?.(params, model);
+  return nextParams ?? params;
+}
+
+function resolveResponseServiceTier(
+  responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+  requestServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+): ResponseCreateParamsStreaming["service_tier"] | undefined {
+  if (
+    requestServiceTier != null &&
+    (responseServiceTier == null || responseServiceTier === "default")
+  ) {
+    return requestServiceTier;
+  }
+  return responseServiceTier;
 }
 
 /**
@@ -686,35 +758,6 @@ function resolveCompat(model: Model<"openai-completions">): ResolvedOpenAIComple
   };
 }
 
-/**
- * Normalizes developer role to system for the Responses API.
- *
- * This is a hard invariant: the Responses API must never emit developer-role
- * input items, even if a future upstream change allows `supportsDeveloperRole`
- * in a compat layer.  The responses format treats developer and system as
- * equivalent, and pokoclaw normalizes to system everywhere.
- */
-function normalizeResponsesInputRoles(input: ResponsesInput): ResponsesInput {
-  if (!Array.isArray(input)) {
-    return input;
-  }
-
-  let changed = false;
-  const normalized = input.map((item) => {
-    if (!isRecord(item) || item.role !== "developer") {
-      return item;
-    }
-
-    changed = true;
-    return {
-      ...item,
-      role: "system" as const,
-    };
-  });
-
-  return changed ? normalized : input;
-}
-
 function convertCompletionTools(
   tools: Tool[] | undefined,
 ): OpenAI.Chat.ChatCompletionTool[] | undefined {
@@ -728,10 +771,6 @@ function convertCompletionTools(
       parameters: tool.parameters as Record<string, unknown>,
     },
   }));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> & { role?: unknown } {
-  return typeof value === "object" && value !== null;
 }
 
 function parseRawUsage(rawUsage: unknown): OpenAICompatibleUsageRaw | null {

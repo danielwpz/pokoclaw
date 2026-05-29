@@ -1,6 +1,6 @@
 import { refreshOpenAICodexToken } from "@mariozechner/pi-ai/oauth";
 import type { ResolvedProvider } from "@/src/agent/llm/models.js";
-import type { ProviderApiKeyResolver } from "@/src/agent/llm/pi-bridge.js";
+import type { ProviderApiKeyResolver, ResolvedProviderApiKey } from "@/src/agent/llm/pi-bridge.js";
 import { withFileLock } from "@/src/shared/file-lock.js";
 import { CODEX_CREDENTIALS_PATH } from "@/src/shared/paths.js";
 import {
@@ -14,7 +14,7 @@ import { readStoredCodexCredential, writeStoredCodexCredential } from "./store.j
 // This prevents accidentally forwarding ChatGPT/Codex bearer tokens to arbitrary
 // third-party endpoints via a misconfigured provider.
 export class CodexProviderApiKeyResolver implements ProviderApiKeyResolver {
-  async resolveApiKey(provider: ResolvedProvider): Promise<string | undefined> {
+  async resolveApiKey(provider: ResolvedProvider): Promise<ResolvedProviderApiKey | undefined> {
     if (provider.authSource !== "codex-local") {
       return provider.apiKey;
     }
@@ -25,7 +25,13 @@ export class CodexProviderApiKeyResolver implements ProviderApiKeyResolver {
     }
 
     const credential = await resolveCodexCredential();
-    return credential?.accessToken;
+    if (credential == null) {
+      return undefined;
+    }
+    return {
+      apiKey: credential.accessToken,
+      ...(credential.accountId == null ? {} : { accountId: credential.accountId }),
+    };
   }
 }
 

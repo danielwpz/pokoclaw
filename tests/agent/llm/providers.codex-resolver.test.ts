@@ -89,7 +89,10 @@ describe("codex provider api key resolver", () => {
       authSource: "codex-local",
     };
 
-    await expect(resolver.resolveApiKey(provider)).resolves.toBe("external-access");
+    await expect(resolver.resolveApiKey(provider)).resolves.toEqual({
+      apiKey: "external-access",
+      accountId: "acct_1",
+    });
     expect(writeStoredCodexCredentialMock).toHaveBeenCalledOnce();
   });
 
@@ -111,7 +114,10 @@ describe("codex provider api key resolver", () => {
       authSource: "codex-local",
     };
 
-    await expect(resolver.resolveApiKey(provider)).resolves.toBe("external-access");
+    await expect(resolver.resolveApiKey(provider)).resolves.toEqual({
+      apiKey: "external-access",
+      accountId: "acct_1",
+    });
     expect(writeStoredCodexCredentialMock).toHaveBeenCalledWith(
       expect.objectContaining({ sourceFingerprint: "keychain:cli|abcd1234" }),
     );
@@ -141,7 +147,10 @@ describe("codex provider api key resolver", () => {
       authSource: "codex-local",
     };
 
-    await expect(resolver.resolveApiKey(provider)).resolves.toBe("external-access");
+    await expect(resolver.resolveApiKey(provider)).resolves.toEqual({
+      apiKey: "external-access",
+      accountId: "acct_new",
+    });
     expect(writeStoredCodexCredentialMock).toHaveBeenCalledOnce();
   });
 
@@ -197,7 +206,10 @@ describe("codex provider api key resolver", () => {
       authSource: "codex-local",
     };
 
-    await expect(resolver.resolveApiKey(provider)).resolves.toBe("refreshed-access");
+    await expect(resolver.resolveApiKey(provider)).resolves.toEqual({
+      apiKey: "refreshed-access",
+      accountId: "acct_2",
+    });
     expect(withFileLockMock).toHaveBeenCalledOnce();
     expect(refreshOpenAICodexTokenMock).toHaveBeenCalledWith("stored-refresh");
     expect(writeStoredCodexCredentialMock).toHaveBeenCalled();
