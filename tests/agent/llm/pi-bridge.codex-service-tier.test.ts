@@ -62,6 +62,68 @@ function createStoredUserMessage(): Message {
   };
 }
 
+function createStoredDeepSeekAssistantMessage(): Message {
+  return {
+    id: "msg_deepseek_assistant",
+    sessionId: "sess_1",
+    seq: 2,
+    role: "assistant",
+    messageType: "text",
+    visibility: "user_visible",
+    channelMessageId: null,
+    channelParentMessageId: null,
+    channelThreadId: null,
+    provider: "deepseek",
+    model: "deepseek-v4-flash",
+    modelApi: "openai-completions",
+    stopReason: "stop",
+    errorMessage: null,
+    payloadJson: JSON.stringify({
+      content: [
+        {
+          type: "thinking",
+          thinking: "Private reasoning from a different provider.",
+          thinkingSignature: "reasoning_content",
+        },
+        {
+          type: "text",
+          text: "Visible answer from the same assistant message.",
+        },
+      ],
+    }),
+    tokenInput: null,
+    tokenOutput: null,
+    tokenCacheRead: null,
+    tokenCacheWrite: null,
+    tokenTotal: null,
+    usageJson: JSON.stringify({
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 15,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    }),
+    createdAt: "2026-03-22T00:00:02.000Z",
+  };
+}
+
+function createStoredFollowUpUserMessage(): Message {
+  return {
+    ...createStoredUserMessage(),
+    id: "msg_user_2",
+    seq: 3,
+    payloadJson: JSON.stringify({ content: "Continue." }),
+    createdAt: "2026-03-22T00:00:03.000Z",
+  };
+}
+
 function createSseResponse(): Response {
   const messageItem = {
     type: "message",
@@ -147,5 +209,41 @@ describe("pi bridge Codex service tier", () => {
       model: "gpt-5.5",
       service_tier: requestTier,
     });
+  });
+
+  test("sends unique fallback response item ids for cross-provider assistant history", async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        requests.push({
+          url: String(input),
+          body: typeof init?.body === "string" ? JSON.parse(init.body) : init?.body,
+        });
+        return createSseResponse();
+      }),
+    );
+
+    const bridge = new PiBridge();
+    await bridge.streamTurn({
+      model: createCodexModel(),
+      systemPrompt: "You are concise.",
+      compactSummary: null,
+      messages: [
+        createStoredUserMessage(),
+        createStoredDeepSeekAssistantMessage(),
+        createStoredFollowUpUserMessage(),
+      ],
+      tools: new ToolRegistry(),
+      signal: new AbortController().signal,
+    });
+
+    const body = requests[0]?.body as { input?: Array<{ id?: string; type?: string }> };
+    const itemIds = (body.input ?? [])
+      .filter((entry) => entry.type === "message")
+      .map((entry) => entry.id);
+
+    expect(itemIds).toHaveLength(2);
+    expect(new Set(itemIds).size).toBe(itemIds.length);
   });
 });

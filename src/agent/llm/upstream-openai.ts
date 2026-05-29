@@ -156,6 +156,15 @@ const DEFAULT_COMPAT: ResolvedOpenAICompletionsCompat = {
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const STREAM_REASONING_CONTENT_MAX_CHARS = 100_000;
 const STREAM_REASONING_TRUNCATION_PREFIX = "...[earlier reasoning truncated]\n";
+const CODEX_RESPONSE_STATUSES = new Set([
+  "completed",
+  "incomplete",
+  "failed",
+  "cancelled",
+  "queued",
+  "in_progress",
+]);
+const CODEX_JWT_AUTH_CLAIM = "https://api.openai.com/auth";
 
 export function supportsUpstreamCostParser(model: Pick<Model<Api>, "baseUrl">): boolean {
   return COST_PARSERS.some((parser) => parser.supports(model));
@@ -170,6 +179,9 @@ export function shouldUseCustomOpenAICompletionsStream(
 export function shouldUseCustomOpenAIResponsesStream(
   model: Pick<Model<Api>, "api" | "baseUrl">,
 ): boolean {
+  if (model.api === "openai-codex-responses") {
+    return true;
+  }
   return model.api === "openai-responses" && supportsUpstreamCostParser(model);
 }
 
@@ -511,7 +523,7 @@ function appendStreamReasoning(existing: string, delta: string): string {
 }
 
 function streamOpenAIResponsesWithUpstreamUsage(
-  model: Model<"openai-responses">,
+  model: Model<"openai-responses" | "openai-codex-responses">,
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
@@ -537,20 +549,31 @@ function streamOpenAIResponsesWithUpstreamUsage(
 
       const client = new OpenAI({
         apiKey,
-        baseURL: model.baseUrl,
+        baseURL: resolveResponsesBaseUrl(model),
+        ...(model.api === "openai-codex-responses"
+          ? { defaultHeaders: buildCodexDefaultHeaders(apiKey, options?.sessionId) }
+          : {}),
         dangerouslyAllowBrowser: true,
       });
 
-      const params = buildOpenAIResponsesParams(model, context, options);
+      const params = await applyPayloadHook(
+        buildOpenAIResponsesParams(model, context, options),
+        model,
+        options,
+      );
       const rawStream = await client.responses.create(
-        params,
+        params as ResponseCreateParamsStreaming,
         options?.signal ? { signal: options.signal } : undefined,
       );
 
       let completedUsage: unknown = null;
       let completedServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined;
       async function* tappedStream(): AsyncIterable<ResponseStreamEvent> {
-        for await (const event of rawStream) {
+        const events =
+          model.api === "openai-codex-responses"
+            ? mapCodexResponsesEvents(rawStream as AsyncIterable<Record<string, unknown>>)
+            : (rawStream as AsyncIterable<ResponseStreamEvent>);
+        for await (const event of events) {
           if (event.type === "response.completed") {
             completedUsage = event.response?.usage ?? null;
             completedServiceTier = event.response?.service_tier;
@@ -635,38 +658,194 @@ export function buildOpenAICompletionsParams(
 }
 
 export function buildOpenAIResponsesParams(
-  model: Model<"openai-responses">,
+  model: Model<"openai-responses" | "openai-codex-responses">,
   context: Context,
   options?: SimpleStreamOptions,
 ): ResponseCreateParamsStreaming {
   const messages: ResponsesInput = normalizeResponsesInputRoles(
-    convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS),
+    convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+      includeSystemPrompt: model.api !== "openai-codex-responses",
+    }),
   );
-  const params: ResponseCreateParamsStreaming = {
-    model: model.id,
-    input: messages,
-    stream: true,
-    store: false,
-    max_output_tokens: model.maxTokens,
-  };
+  const params: ResponseCreateParamsStreaming =
+    model.api === "openai-codex-responses"
+      ? ({
+          model: model.id,
+          input: messages,
+          stream: true,
+          store: false,
+          instructions: context.systemPrompt,
+          text: { verbosity: "medium" },
+          include: ["reasoning.encrypted_content"],
+          prompt_cache_key: options?.sessionId,
+          tool_choice: "auto",
+          parallel_tool_calls: true,
+        } as ResponseCreateParamsStreaming)
+      : {
+          model: model.id,
+          input: messages,
+          stream: true,
+          store: false,
+          max_output_tokens: model.maxTokens,
+        };
 
   if (options?.sessionId) {
     params.prompt_cache_key = options.sessionId;
   }
 
+  const requestServiceTier = getRequestServiceTier(options);
+  if (requestServiceTier) {
+    params.service_tier = requestServiceTier;
+  }
+
   if (context.tools) {
-    params.tools = convertResponsesTools(context.tools);
+    params.tools = convertResponsesTools(
+      context.tools,
+      model.api === "openai-codex-responses" ? { strict: null } : undefined,
+    );
   }
 
   if (model.reasoning && options?.reasoning) {
     params.reasoning = {
-      effort: options.reasoning,
-      summary: "detailed",
+      effort:
+        model.api === "openai-codex-responses"
+          ? clampCodexReasoningEffort(model.id, options.reasoning)
+          : options.reasoning,
+      summary: model.api === "openai-codex-responses" ? "auto" : "detailed",
     };
-    params.include = ["reasoning.encrypted_content"];
+    if (model.api !== "openai-codex-responses") {
+      params.include = ["reasoning.encrypted_content"];
+    }
   }
 
   return params;
+}
+
+function getRequestServiceTier(
+  options?: SimpleStreamOptions,
+): ResponseCreateParamsStreaming["service_tier"] | undefined {
+  return (options as { serviceTier?: ResponseCreateParamsStreaming["service_tier"] } | undefined)
+    ?.serviceTier;
+}
+
+async function applyPayloadHook(
+  params: ResponseCreateParamsStreaming,
+  model: Model<"openai-responses" | "openai-codex-responses">,
+  options?: SimpleStreamOptions,
+): Promise<unknown> {
+  const payloadHook = options?.onPayload as
+    | ((payload: unknown, model: Model<Api>) => unknown | undefined | Promise<unknown | undefined>)
+    | undefined;
+  const nextParams = await payloadHook?.(params, model);
+  return nextParams ?? params;
+}
+
+function resolveResponsesBaseUrl(model: Model<"openai-responses" | "openai-codex-responses">) {
+  if (model.api !== "openai-codex-responses") {
+    return model.baseUrl;
+  }
+
+  const normalized = model.baseUrl.replace(/\/+$/, "");
+  if (normalized.endsWith("/codex/responses")) {
+    return normalized.slice(0, -"/responses".length);
+  }
+  if (normalized.endsWith("/codex")) {
+    return normalized;
+  }
+  return `${normalized}/codex`;
+}
+
+function buildCodexDefaultHeaders(
+  token: string,
+  sessionId: string | undefined,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    "OpenAI-Beta": "responses=experimental",
+    "chatgpt-account-id": extractCodexAccountId(token),
+    originator: "pi",
+    accept: "text/event-stream",
+    "content-type": "application/json",
+  };
+  if (sessionId) {
+    headers.session_id = sessionId;
+    headers["x-client-request-id"] = sessionId;
+  }
+  return headers;
+}
+
+function extractCodexAccountId(token: string): string {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) {
+      throw new Error("missing payload");
+    }
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      [CODEX_JWT_AUTH_CLAIM]?: { chatgpt_account_id?: unknown };
+    };
+    const accountId = parsed[CODEX_JWT_AUTH_CLAIM]?.chatgpt_account_id;
+    if (typeof accountId !== "string" || accountId.length === 0) {
+      throw new Error("missing account id");
+    }
+    return accountId;
+  } catch {
+    throw new Error("Failed to extract accountId from token");
+  }
+}
+
+function clampCodexReasoningEffort(
+  modelId: string,
+  effort: NonNullable<SimpleStreamOptions["reasoning"]>,
+): NonNullable<SimpleStreamOptions["reasoning"]> {
+  const id = modelId.includes("/") ? (modelId.split("/").at(-1) ?? modelId) : modelId;
+  if (
+    (id.startsWith("gpt-5.2") ||
+      id.startsWith("gpt-5.3") ||
+      id.startsWith("gpt-5.4") ||
+      id.startsWith("gpt-5.5")) &&
+    effort === "minimal"
+  ) {
+    return "low";
+  }
+  if (id === "gpt-5.1" && effort === "xhigh") {
+    return "high";
+  }
+  if (id === "gpt-5.1-codex-mini") {
+    return effort === "high" || effort === "xhigh" ? "high" : "medium";
+  }
+  return effort;
+}
+
+async function* mapCodexResponsesEvents(
+  events: AsyncIterable<Record<string, unknown>>,
+): AsyncIterable<ResponseStreamEvent> {
+  for await (const event of events) {
+    const type = typeof event.type === "string" ? event.type : undefined;
+    if (!type) continue;
+    if (type === "error") {
+      const code = typeof event.code === "string" ? event.code : "";
+      const message = typeof event.message === "string" ? event.message : "";
+      throw new Error(`Codex error: ${message || code || JSON.stringify(event)}`);
+    }
+    if (
+      type === "response.done" ||
+      type === "response.completed" ||
+      type === "response.incomplete"
+    ) {
+      const response = isRecord(event.response)
+        ? {
+            ...event.response,
+            status:
+              typeof event.response.status === "string" &&
+              CODEX_RESPONSE_STATUSES.has(event.response.status)
+                ? event.response.status
+                : undefined,
+          }
+        : event.response;
+      yield { ...event, type: "response.completed", response } as unknown as ResponseStreamEvent;
+      return;
+    }
+    yield event as unknown as ResponseStreamEvent;
+  }
 }
 
 /**
