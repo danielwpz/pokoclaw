@@ -18,10 +18,12 @@ import { buildAgentLlmRawErrorPayload } from "@/src/agent/llm/errors.js";
 import {
   convertResponsesMessages,
   convertResponsesTools,
+  isRecord,
+  normalizeResponsesInputRoles,
   processResponsesStream,
+  type ResponsesInput,
 } from "@/src/agent/llm/pi-ai-openai-responses-shared.js";
 
-type ResponsesInput = Exclude<ResponseCreateParamsStreaming["input"], undefined>;
 type RequestServiceTier = ResponseCreateParamsStreaming["service_tier"];
 
 export type CodexResponsesStreamOptions = SimpleStreamOptions & {
@@ -349,7 +351,9 @@ function normalizeCodexTerminalEvent(
       : type === "response.incomplete"
         ? "incomplete"
         : undefined;
-  const status = normalizeCodexResponseStatus(response.status, type) ?? fallbackStatus;
+  const status =
+    normalizeCodexResponseStatus(response.status, type, { required: type === "response.done" }) ??
+    fallbackStatus;
   const normalizedResponse = {
     ...response,
     ...(status == null ? {} : { status }),
@@ -365,8 +369,15 @@ function normalizeCodexTerminalEvent(
   } as unknown as ResponseStreamEvent;
 }
 
-function normalizeCodexResponseStatus(value: unknown, eventType: string): string | undefined {
+function normalizeCodexResponseStatus(
+  value: unknown,
+  eventType: string,
+  options?: { required?: boolean },
+): string | undefined {
   if (value == null) {
+    if (options?.required === true) {
+      throw invalidCodexEvent(eventType, "response.status is required");
+    }
     return undefined;
   }
   if (typeof value !== "string" || !CODEX_RESPONSE_STATUSES.has(value)) {
@@ -378,10 +389,13 @@ function normalizeCodexResponseStatus(value: unknown, eventType: string): string
 function validateCodexOutputItemEvent(event: Record<string, unknown>, eventType: string): void {
   const item = requireRecordField(event, "item", eventType, "item");
   const itemType = requireStringField(item, "type", eventType, "item.type");
+  const isDoneEvent = eventType === "response.output_item.done";
 
   if (itemType === "message") {
     requireStringField(item, "id", eventType, "item.id");
-    validateMessageContentParts(item.content, eventType, "item.content");
+    validateMessageContentParts(item.content, eventType, "item.content", {
+      required: isDoneEvent,
+    });
     return;
   }
 
@@ -399,10 +413,13 @@ function validateCodexOutputItemEvent(event: Record<string, unknown>, eventType:
     if (item.id != null && typeof item.id !== "string") {
       throw invalidCodexEvent(eventType, "item.id must be a string");
     }
-    if (item.summary != null && !Array.isArray(item.summary)) {
-      throw invalidCodexEvent(eventType, "item.summary must be an array");
-    }
+    validateReasoningSummaryParts(item.summary, eventType, "item.summary", {
+      required: isDoneEvent,
+    });
+    return;
   }
+
+  requireStringField(item, "id", eventType, "item.id");
 }
 
 function validateCodexContentPartEvent(event: Record<string, unknown>, eventType: string): void {
@@ -418,8 +435,16 @@ function validateReasoningSummaryPartEvent(
   requireStringField(part, "text", eventType, "part.text");
 }
 
-function validateMessageContentParts(value: unknown, eventType: string, path: string): void {
+function validateMessageContentParts(
+  value: unknown,
+  eventType: string,
+  path: string,
+  options?: { required?: boolean },
+): void {
   if (value == null) {
+    if (options?.required === true) {
+      throw invalidCodexEvent(eventType, `${path} is required`);
+    }
     return;
   }
   if (!Array.isArray(value)) {
@@ -440,6 +465,29 @@ function validateMessagePart(part: Record<string, unknown>, eventType: string, p
   } else if (partType === "refusal") {
     requireStringField(part, "refusal", eventType, `${path}.refusal`);
   }
+}
+
+function validateReasoningSummaryParts(
+  value: unknown,
+  eventType: string,
+  path: string,
+  options?: { required?: boolean },
+): void {
+  if (value == null) {
+    if (options?.required === true) {
+      throw invalidCodexEvent(eventType, `${path} is required`);
+    }
+    return;
+  }
+  if (!Array.isArray(value)) {
+    throw invalidCodexEvent(eventType, `${path} must be an array`);
+  }
+  value.forEach((part, index) => {
+    if (!isRecord(part)) {
+      throw invalidCodexEvent(eventType, `${path}[${index}] must be an object`);
+    }
+    requireStringField(part, "text", eventType, `${path}[${index}].text`);
+  });
 }
 
 function readCodexErrorMessage(event: Record<string, unknown>): string {
@@ -476,31 +524,6 @@ function requireStringField(
 
 function invalidCodexEvent(eventType: string, message: string): Error {
   return new Error(`Invalid Codex ${eventType} event: ${message}`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> & { role?: unknown } {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeResponsesInputRoles(input: ResponsesInput): ResponsesInput {
-  if (!Array.isArray(input)) {
-    return input;
-  }
-
-  let changed = false;
-  const normalized = input.map((item) => {
-    if (!isRecord(item) || item.role !== "developer") {
-      return item;
-    }
-
-    changed = true;
-    return {
-      ...item,
-      role: "system" as const,
-    };
-  });
-
-  return changed ? normalized : input;
 }
 
 function applyCodexServiceTierPricing(

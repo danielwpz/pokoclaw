@@ -43,6 +43,8 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { appendCappedTextTail, capTextTail } from "@/src/shared/capped-text.js";
 
+export type ResponsesInput = Exclude<ResponseCreateParamsStreaming["input"], undefined>;
+
 export interface OpenAIResponsesStreamOptions {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   applyServiceTierPricing?: (
@@ -73,6 +75,39 @@ type StreamBlock = StreamThinkingBlock | StreamTextBlock | StreamToolCallBlock;
 
 const STREAM_REASONING_CONTENT_MAX_CHARS = 100_000;
 const STREAM_REASONING_TRUNCATION_PREFIX = "...[earlier reasoning truncated]\n";
+
+/**
+ * Normalizes developer role to system for the Responses API.
+ *
+ * This is a hard invariant: the Responses API must never emit developer-role
+ * input items, even if a future upstream change allows `supportsDeveloperRole`
+ * in a compat layer. The responses format treats developer and system as
+ * equivalent, and pokoclaw normalizes to system everywhere.
+ */
+export function normalizeResponsesInputRoles(input: ResponsesInput): ResponsesInput {
+  if (!Array.isArray(input)) {
+    return input;
+  }
+
+  let changed = false;
+  const normalized = input.map((item) => {
+    if (!isRecord(item) || item.role !== "developer") {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      role: "system" as const,
+    };
+  });
+
+  return changed ? normalized : input;
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> & { role?: unknown } {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 interface ResponsesReasoningSummaryPart {
   text: string;

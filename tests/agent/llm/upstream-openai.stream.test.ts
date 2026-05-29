@@ -672,4 +672,103 @@ describe("upstream openai responses streaming", () => {
       rawMessage: "provider_error: upstream exploded",
     });
   });
+
+  test("uses requested service tier for estimated Responses pricing when upstream reports default tier", async () => {
+    responsesCreateMock.mockResolvedValue(
+      createAsyncIterable([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "message",
+            id: "msg_123",
+            role: "assistant",
+            content: [],
+          },
+        },
+        {
+          type: "response.content_part.added",
+          part: {
+            type: "output_text",
+            text: "",
+            annotations: [],
+          },
+        },
+        {
+          type: "response.output_text.delta",
+          delta: "OK",
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_123",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: "OK",
+                annotations: [],
+              },
+            ],
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            status: "completed",
+            service_tier: "default",
+            usage: {
+              input_tokens: 100,
+              output_tokens: 50,
+              total_tokens: 150,
+              input_tokens_details: {
+                cached_tokens: 0,
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    const options = {
+      apiKey: "secret",
+      serviceTier: "priority" as const,
+    };
+
+    const stream = streamWithNormalizedUpstreamUsage(
+      {
+        api: "openai-responses",
+        id: "openai/gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 200_000,
+        maxTokens: 16_384,
+        cost: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+      {
+        systemPrompt: "You are a helpful assistant.",
+        messages: [],
+      },
+      options,
+    );
+
+    for await (const _event of stream) {
+      // Fully drain the stream before reading the final result.
+    }
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("stop");
+    expect(result.usage.cost.input).toBeCloseTo(0.0002, 12);
+    expect(result.usage.cost.output).toBeCloseTo(0.0001, 12);
+    expect(result.usage.cost.total).toBeCloseTo(0.0003, 12);
+  });
 });

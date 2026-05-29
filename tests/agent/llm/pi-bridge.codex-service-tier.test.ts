@@ -375,6 +375,39 @@ describe("pi bridge Codex service tier", () => {
     ).rejects.toThrow("invalid_request_error: Codex rejected duplicate item ids");
   });
 
+  test("preserves Codex failed done event details for non-streaming bridge turns", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        createSseResponseFromEvents([
+          {
+            type: "response.done",
+            response: {
+              id: "resp_failed",
+              status: "failed",
+              error: {
+                code: "invalid_request_error",
+                message: "Codex rejected duplicate item ids",
+              },
+            },
+          },
+        ]),
+      ),
+    );
+
+    const bridge = new PiBridge();
+    await expect(
+      bridge.completeTurn({
+        model: createCodexModel(),
+        systemPrompt: "You are concise.",
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("invalid_request_error: Codex rejected duplicate item ids");
+  });
+
   test("rejects malformed Codex stream events before response processing", async () => {
     vi.stubGlobal(
       "fetch",

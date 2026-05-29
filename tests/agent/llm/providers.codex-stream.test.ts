@@ -119,4 +119,59 @@ describe("codex responses stream adapter", () => {
       ]),
     ).rejects.toThrow("Invalid Codex response.output_text.delta event");
   });
+
+  test("requires a known status on Codex done events", async () => {
+    await expect(
+      collectMappedEvents([
+        {
+          type: "response.done",
+          response: {
+            id: "resp_missing_status",
+          },
+        },
+      ]),
+    ).rejects.toThrow("Invalid Codex response.done event: response.status is required");
+  });
+
+  test("requires finalized message content on Codex output item done events", async () => {
+    await expect(
+      collectMappedEvents([
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_missing_content",
+          },
+        },
+      ]),
+    ).rejects.toThrow("Invalid Codex response.output_item.done event: item.content is required");
+  });
+
+  test("requires finalized reasoning summary on Codex output item done events", async () => {
+    await expect(
+      collectMappedEvents([
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "reasoning",
+            id: "rs_missing_summary",
+          },
+        },
+      ]),
+    ).rejects.toThrow("Invalid Codex response.output_item.done event: item.summary is required");
+  });
+
+  test("validates shared fields on unknown Codex output item types", async () => {
+    await expect(
+      collectMappedEvents([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "custom_item",
+            id: 123,
+          },
+        },
+      ]),
+    ).rejects.toThrow("Invalid Codex response.output_item.added event: item.id must be a string");
+  });
 });

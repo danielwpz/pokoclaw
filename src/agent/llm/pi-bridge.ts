@@ -691,7 +691,9 @@ async function buildPiStreamOptions(
   const serviceTier = resolveRequestServiceTier(model.serviceTier);
   if (serviceTier != null && shouldApplyOpenAIServiceTier(model)) {
     options.serviceTier = serviceTier;
-    options.onPayload = createServiceTierPayloadPatch(serviceTier);
+    if (shouldInjectServiceTierViaPayloadHook(model)) {
+      options.onPayload = createServiceTierPayloadPatch(serviceTier);
+    }
   }
 
   return options;
@@ -707,8 +709,8 @@ function resolveRequestServiceTier(
 }
 
 function createServiceTierPayloadPatch(serviceTier: RequestServiceTier) {
-  // pi-ai calls `onPayload` with the live request payload before JSON serialization.
-  // Mutating in place is intentional here and covered by the final-fetch bridge tests.
+  // Used for pi-ai streamSimple adapters that do not read Pokoclaw's
+  // `options.serviceTier` extension. Custom adapters set service_tier directly.
   return (payload: unknown): unknown | undefined => {
     if (!isPlainObjectRecord(payload) || payload.service_tier !== undefined) {
       return undefined;
@@ -716,6 +718,10 @@ function createServiceTierPayloadPatch(serviceTier: RequestServiceTier) {
     payload.service_tier = serviceTier;
     return undefined;
   };
+}
+
+function shouldInjectServiceTierViaPayloadHook(model: ResolvedModel): boolean {
+  return resolvePiApi(model) === "openai-responses";
 }
 
 function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
