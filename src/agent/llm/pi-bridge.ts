@@ -10,8 +10,10 @@ import {
   type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
+  type Context,
   completeSimple,
   type Model,
+  type SimpleStreamOptions,
   type Tool,
   Type,
 } from "@mariozechner/pi-ai";
@@ -90,8 +92,15 @@ export interface PiBridgeRunTurnResult {
   errorMessage?: string;
 }
 
+export interface ResolvedProviderApiCredential {
+  apiKey: string;
+  accountId?: string;
+}
+
+export type ResolvedProviderApiKey = string | ResolvedProviderApiCredential;
+
 export interface ProviderApiKeyResolver {
-  resolveApiKey(provider: ResolvedProvider): Promise<string | undefined>;
+  resolveApiKey(provider: ResolvedProvider): Promise<ResolvedProviderApiKey | undefined>;
 }
 
 export interface PiBridgeOptions {
@@ -251,13 +260,18 @@ export class PiBridge {
     });
 
     try {
-      const finalMessage = await completeSimple(
-        model,
-        context,
-        await buildPiStreamOptions(this.providerApiKeyResolver, input.model, input.signal, {
+      const streamOptions = await buildPiStreamOptions(
+        this.providerApiKeyResolver,
+        input.model,
+        input.signal,
+        {
           enableReasoning: true,
-        }),
+        },
       );
+      const finalMessage =
+        model.api === "openai-codex-responses"
+          ? await consumeStreamToCompletion(model, context, streamOptions)
+          : await completeSimple(model, context, streamOptions);
       const contentSummary = summarizeAssistantContent(finalMessage.content);
       logger.debug("non-stream llm turn finished", {
         modelId: input.model.id,
@@ -286,27 +300,28 @@ export class PiBridge {
     });
 
     try {
-      const finalMessage = await completeSimple(
-        model,
-        {
-          systemPrompt: input.systemPrompt,
-          messages: [
-            {
-              role: "user" as const,
-              content: [{ type: "text" as const, text: input.prompt }],
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        await buildPiStreamOptions(
-          this.providerApiKeyResolver,
-          input.model,
-          input.signal ?? new AbortController().signal,
+      const context = {
+        systemPrompt: input.systemPrompt,
+        messages: [
           {
-            enableReasoning: false,
+            role: "user" as const,
+            content: [{ type: "text" as const, text: input.prompt }],
+            timestamp: Date.now(),
           },
-        ),
+        ],
+      };
+      const streamOptions = await buildPiStreamOptions(
+        this.providerApiKeyResolver,
+        input.model,
+        input.signal ?? new AbortController().signal,
+        {
+          enableReasoning: false,
+        },
       );
+      const finalMessage =
+        model.api === "openai-codex-responses"
+          ? await consumeStreamToCompletion(model, context, streamOptions)
+          : await completeSimple(model, context, streamOptions);
 
       const normalized = normalizeAssistantResult(finalMessage, "complete");
       logger.debug("compaction llm call finished", {
@@ -363,6 +378,18 @@ export class PiAgentModelRunner implements AgentModelRunner, CompactionModelRunn
   runCompaction(input: CompactionModelRunnerInput): Promise<CompactionModelRunnerResult> {
     return this.bridge.completeText(input);
   }
+}
+
+async function consumeStreamToCompletion(
+  model: Model<Api>,
+  context: Context,
+  options: SimpleStreamOptions,
+): Promise<AssistantMessage> {
+  const stream = streamWithNormalizedUpstreamUsage(model, context, options);
+  for await (const _event of stream) {
+    // Drain the stream so the adapter can assemble the final AssistantMessage.
+  }
+  return await stream.result();
 }
 
 type LlmStreamWatchdogTimeoutKind = "first_response" | "stream_idle";
@@ -621,6 +648,7 @@ async function buildPiStreamOptions(
     sessionId: string;
     maxTokens: number;
     apiKey?: string;
+    codexAccountId?: string;
     reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
     serviceTier?: RequestServiceTier;
     onPayload?: (
@@ -633,11 +661,16 @@ async function buildPiStreamOptions(
     maxTokens: model.maxOutputTokens,
   };
   let resolvedApiKey: string | undefined;
+  let resolvedCodexAccountId: string | undefined;
   try {
-    resolvedApiKey =
-      (await providerApiKeyResolver?.resolveApiKey(model.provider)) ??
-      model.provider.apiKey ??
-      undefined;
+    const resolvedCredential = await providerApiKeyResolver?.resolveApiKey(model.provider);
+    if (typeof resolvedCredential === "string") {
+      resolvedApiKey = resolvedCredential;
+    } else if (resolvedCredential != null) {
+      resolvedApiKey = resolvedCredential.apiKey;
+      resolvedCodexAccountId = resolvedCredential.accountId;
+    }
+    resolvedApiKey ??= model.provider.apiKey ?? undefined;
   } catch (error) {
     throw enrichCodexFetchFailure(error, model, "auth");
   }
@@ -646,6 +679,9 @@ async function buildPiStreamOptions(
     Object.assign(options, {
       apiKey,
     });
+  }
+  if (resolvedCodexAccountId != null && resolvedCodexAccountId.length > 0) {
+    options.codexAccountId = resolvedCodexAccountId;
   }
 
   if (input.enableReasoning && model.reasoning?.enabled) {
