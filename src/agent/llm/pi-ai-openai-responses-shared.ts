@@ -170,6 +170,26 @@ function parseTextSignature(signature?: string): TextSignature | undefined {
   return { id: signature };
 }
 
+function reserveResponseItemId(preferredId: string, usedIds: Set<string>): string {
+  if (!usedIds.has(preferredId)) {
+    usedIds.add(preferredId);
+    return preferredId;
+  }
+
+  for (let attempt = 2; ; attempt += 1) {
+    const suffix = `_${attempt.toString(36)}`;
+    const candidateBase =
+      preferredId.length + suffix.length > 64
+        ? preferredId.slice(0, 64 - suffix.length).replace(/_+$/, "")
+        : preferredId;
+    const candidate = `${candidateBase}${suffix}`;
+    if (!usedIds.has(candidate)) {
+      usedIds.add(candidate);
+      return candidate;
+    }
+  }
+}
+
 function transformMessages(
   messages: Message[],
   model: Model<Api>,
@@ -340,6 +360,7 @@ export function convertResponsesMessages<TApi extends Api>(
     normalizeToolCallId(id),
   );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
+  const usedResponseItemIds = new Set<string>();
 
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
@@ -387,11 +408,15 @@ export function convertResponsesMessages<TApi extends Api>(
         assistantMsg.provider === model.provider &&
         assistantMsg.api === model.api;
 
-      for (const block of msg.content) {
+      for (const [blockIndex, block] of msg.content.entries()) {
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
             try {
-              output.push(JSON.parse(block.thinkingSignature) as Record<string, unknown>);
+              const item = JSON.parse(block.thinkingSignature) as Record<string, unknown>;
+              if (typeof item.id === "string") {
+                usedResponseItemIds.add(item.id);
+              }
+              output.push(item);
             } catch {
               // thinkingSignature may be a plain string marker (e.g. "reasoning_content"
               // used as a DeepSeek compat marker), not JSON.  Keep the raw value.
@@ -402,10 +427,11 @@ export function convertResponsesMessages<TApi extends Api>(
           const parsedSignature = parseTextSignature(block.textSignature);
           let msgId = parsedSignature?.id;
           if (!msgId) {
-            msgId = `msg_${msgIndex}`;
+            msgId = `msg_${msgIndex}_${blockIndex}`;
           } else if (msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
           }
+          msgId = reserveResponseItemId(msgId, usedResponseItemIds);
 
           output.push({
             type: "message",
@@ -422,6 +448,9 @@ export function convertResponsesMessages<TApi extends Api>(
           let itemId = itemIdRaw;
           if (isDifferentModel && itemId?.startsWith("fc_")) {
             itemId = undefined;
+          }
+          if (itemId != null) {
+            itemId = reserveResponseItemId(itemId, usedResponseItemIds);
           }
           output.push({
             type: "function_call",
