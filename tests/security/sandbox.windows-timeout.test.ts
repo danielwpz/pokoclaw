@@ -35,6 +35,7 @@ describe("Windows host bash timeout cleanup", () => {
   let tempDir: string | null = null;
 
   beforeEach(() => {
+    vi.useRealTimers();
     vi.resetModules();
     spawnMock.mockReset();
     spawnCalls.length = 0;
@@ -53,6 +54,7 @@ describe("Windows host bash timeout cleanup", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     vi.resetModules();
     if (tempDir != null) {
       await rm(tempDir, { recursive: true, force: true });
@@ -100,6 +102,48 @@ describe("Windows host bash timeout cleanup", () => {
     });
     expect(spawnCalls[0]?.child.kill).not.toHaveBeenCalled();
   });
+
+  test("falls back to killing bash when taskkill hangs", async () => {
+    spawnMock.mockImplementation(
+      (command: string, args: string[] = [], options: Record<string, unknown> = {}) => {
+        const child = createFakeChild(command === "taskkill" ? 456 : 123);
+        spawnCalls.push({ command, args, options, child });
+        return child;
+      },
+    );
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-windows-timeout-"));
+    const { executeUnsandboxedBash } = await import("@/src/security/sandbox.js");
+
+    const promise = executeUnsandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: {} as ToolExecutionContext["storage"],
+        toolCallId: "tool_1",
+      },
+      command: "node child-process-that-outlives-bash.js",
+      cwd: tempDir,
+      timeoutMs: 5,
+      platform: "win32",
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_timeout",
+        timeoutMs: 5,
+      },
+    });
+
+    expect(spawnCalls.map((call) => path.basename(call.command))).toEqual(["bash", "taskkill"]);
+    expect(spawnCalls[1]?.child.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(spawnCalls[0]?.child.kill).toHaveBeenCalledWith("SIGKILL");
+  }, 8_000);
 });
 
 function createFakeChild(pid: number): FakeChildProcess {

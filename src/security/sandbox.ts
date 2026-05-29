@@ -787,6 +787,7 @@ async function runUnsandboxedShellCommand(input: {
 
 async function terminateWindowsProcessTree(pid: number): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
+    const TASKKILL_TIMEOUT_MS = 5_000;
     let taskkill: ChildProcess;
     try {
       taskkill = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
@@ -799,11 +800,20 @@ async function terminateWindowsProcessTree(pid: number): Promise<boolean> {
     }
 
     let settled = false;
+    const timeout = setTimeout(() => {
+      try {
+        taskkill.kill("SIGKILL");
+      } catch {
+        // Best-effort cleanup if taskkill itself gets stuck.
+      }
+      finish(false);
+    }, TASKKILL_TIMEOUT_MS);
     const finish = (killed: boolean) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearTimeout(timeout);
       taskkill.removeAllListeners();
       resolve(killed);
     };
