@@ -197,7 +197,7 @@ describe("pi bridge Codex service tier", () => {
   test.each([
     ["fast", "priority"],
     ["flex", "flex"],
-  ] as const)("sends configured %s service tier as %s in the final streaming Codex HTTP request body", async (configuredTier, requestTier) => {
+  ] as const)("sends configured %s service tier as %s without unsupported token cap in the final streaming Codex HTTP request body", async (configuredTier, requestTier) => {
     const requests: CapturedRequest[] = [];
     vi.stubGlobal(
       "fetch",
@@ -223,8 +223,8 @@ describe("pi bridge Codex service tier", () => {
     expect(requests[0]?.body).toMatchObject({
       model: "gpt-5.5",
       service_tier: requestTier,
-      max_output_tokens: 16_384,
     });
+    expect(requests[0]?.body).not.toHaveProperty("max_output_tokens");
     expect(requests[0]?.body).not.toHaveProperty("tool_choice");
     expect(requests[0]?.body).not.toHaveProperty("parallel_tool_calls");
     expect(requests[0]?.body).not.toHaveProperty("tools");
@@ -292,8 +292,8 @@ describe("pi bridge Codex service tier", () => {
     expect(requests[0]?.body).toMatchObject({
       model: "gpt-5.5",
       stream: true,
-      max_output_tokens: 16_384,
     });
+    expect(requests[0]?.body).not.toHaveProperty("max_output_tokens");
     const input = requests[0]?.body.input;
     expect(Array.isArray(input)).toBe(true);
     if (!Array.isArray(input)) {

@@ -155,7 +155,6 @@ export function buildOpenAICodexResponsesParams(
     instructions: context.systemPrompt,
     text: { verbosity: "medium" },
     include: ["reasoning.encrypted_content"],
-    max_output_tokens: model.maxTokens,
   } as ResponseCreateParamsStreaming;
 
   if (options?.sessionId) {
