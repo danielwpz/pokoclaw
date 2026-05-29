@@ -610,6 +610,8 @@ function streamOpenAIResponsesWithUpstreamUsage(
       });
 
       if (completedUsage != null) {
+        // Prefer the upstream-compatible usage payload when present; this
+        // intentionally replaces usage calculated by the shared stream parser.
         const normalizedUsage = normalizeUsageFromOpenAICompatible(model, completedUsage);
         if (normalizedUsage) {
           output.usage = normalizedUsage.usage;

@@ -385,6 +385,8 @@ async function consumeStreamToCompletion(
   context: Context,
   options: SimpleStreamOptions,
 ): Promise<AssistantMessage> {
+  // Reuses the Codex streaming adapter for converter parity only. Non-streaming
+  // calls still rely on the caller-provided AbortSignal, not LlmStreamWatchdog.
   const stream = streamWithNormalizedUpstreamUsage(model, context, options);
   for await (const _event of stream) {
     // Drain the stream so the adapter can assemble the final AssistantMessage.
