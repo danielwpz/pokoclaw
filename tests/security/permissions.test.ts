@@ -9,6 +9,7 @@ import {
   checkBashFullAccessPermission,
   checkDatabasePermission,
   checkFilesystemPermission,
+  normalizeFilesystemTargetPath,
   parseGrantedScopes,
 } from "@/src/security/permissions.js";
 import {
@@ -160,6 +161,7 @@ describe("filesystem permission checks", () => {
         buildAgentPermissionBaseline("main"),
       );
       const targetPath = path.join(tempDir, ".ssh", "id_rsa");
+      const normalizedTargetPath = normalizeFilesystemTargetPath(targetPath);
 
       expect(
         checkFilesystemPermission({
@@ -170,7 +172,7 @@ describe("filesystem permission checks", () => {
       ).toEqual({
         result: "deny",
         reason: "hard_deny",
-        summary: `fs.read is blocked by system policy for ${targetPath}`,
+        summary: `fs.read is blocked by system policy for ${normalizedTargetPath}`,
       });
       expect(
         checkFilesystemPermission({
@@ -181,7 +183,7 @@ describe("filesystem permission checks", () => {
       ).toEqual({
         result: "deny",
         reason: "hard_deny",
-        summary: `fs.write is blocked by system policy for ${targetPath}`,
+        summary: `fs.write is blocked by system policy for ${normalizedTargetPath}`,
       });
     } finally {
       if (originalHome == null) {
