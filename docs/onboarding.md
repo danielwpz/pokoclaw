@@ -91,7 +91,11 @@ Current checks:
   - `socat`, used by sandbox-runtime Linux networking
   - bubblewrap filesystem smoke
   - bubblewrap network namespace smoke
-- Windows and WSL:
+- native Windows-like shells (`MINGW*`, `MSYS*`, `CYGWIN*`):
+  - common checks only
+  - sandboxed bash is not available yet
+  - runnable startup requires explicit `[runtime] autopilot = true`, which makes bash commands run directly on the Windows host with full access and no Linux sandbox isolation
+- WSL:
   - currently unsupported; the doctor exits with a clear message and points contributors to the GitHub repository
 
 Required Linux host capability:
@@ -228,7 +232,7 @@ If the user wants web search or web fetch, also write:
 - `[tools.web.search]`
 - `[tools.web.fetch]`
 
-Do not enable `[runtime] autopilot = true` during onboarding unless the user explicitly asks for fewer approval prompts and accepts that Pokoclaw will skip eligible human approval waits.
+Do not enable `[runtime] autopilot = true` during onboarding unless the user explicitly asks for fewer approval prompts and accepts that Pokoclaw will skip eligible human approval waits. On native Windows, this setting is also the explicit unsafe host-execution opt-in required for startup because sandboxed bash is not available yet.
 
 This phase is for LLM configuration. Complete channel setup separately in Phase 3C: Required Feishu/Lark setup.
 
@@ -286,6 +290,7 @@ Check these first:
 - inconsistent provider or model IDs
 - a provider with no usable model mapping
 - an empty scenario list for a setup that is supposed to be runnable
+- on native Windows, startup failure because `[runtime] autopilot = true` is not set; enabling it means bash commands run directly on the Windows host with full access and no Linux sandbox isolation
 - on Linux, sandbox setup failures:
   - missing `bwrap`, `socat`, or `rg`
   - bubblewrap namespace or setuid failures from Phase 1

@@ -15,14 +15,17 @@ fail() {
   printf '[doctor] error: %s\n' "$*" >&2
 }
 
-print_windows_unsupported() {
-  cat >&2 <<EOF
-[doctor] Pokoclaw does not currently support Windows.
+print_windows_autopilot_notice() {
+  cat <<EOF
+[doctor] Pokoclaw only supports native Windows bash through an explicit Autopilot opt-in.
 [doctor]
-[doctor] If you want to help add Windows compatibility, contributions are welcome:
-[doctor] ${REPO_URL}
+[doctor] Set this in ~/.pokoclaw/system/config.toml and restart Pokoclaw:
 [doctor]
-[doctor] Please open an issue or PR with details about your environment.
+[doctor]   [runtime]
+[doctor]   autopilot = true
+[doctor]
+[doctor] With that setting enabled, bash commands run on the Windows host with full access.
+[doctor] This is not Linux sandbox isolation.
 EOF
 }
 
@@ -190,8 +193,8 @@ main() {
       check_linux_host || failures=$((failures + $?))
       ;;
     MINGW* | MSYS* | CYGWIN*)
-      print_windows_unsupported
-      exit 2
+      print_windows_autopilot_notice
+      check_common_tools || failures=$((failures + $?))
       ;;
     *)
       print_unknown_unsupported "${os_name}"
