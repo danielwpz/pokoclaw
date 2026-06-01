@@ -766,7 +766,11 @@ function findUnquotedBackgroundAmpersand(command: string): boolean {
 
 function findCmdStartBackgroundFlag(command: string): boolean {
   const segments = command.split(/&&?|\|\|?|\r?\n/g);
-  return segments.some((segment) => /^\s*\(?\s*start\b[^\r\n&|]*\/b(?:\s|$)/i.test(segment));
+  return segments.some((segment) => {
+    const match = segment.match(/^\s*\(?\s*start\b([^\r\n&|]*)/i);
+    const args = match?.[1];
+    return args == null ? false : /(?:^|\s)\/b(?:\s|$)/i.test(args);
+  });
 }
 
 function findPowerShellBackgroundAmpersand(command: string): boolean {

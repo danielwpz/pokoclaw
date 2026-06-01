@@ -62,10 +62,11 @@ const logger = createSubsystemLogger("security/sandbox");
 const DEFAULT_BASH_BINARY = getDefaultBashExecutable();
 const POWERSHELL_UTF8_OUTPUT_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
 const POWERSHELL_EXIT_CODE_RELAY_SUFFIX = [
-  "if (-not $?) {",
-  "  if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) { exit $global:LASTEXITCODE }",
-  "  exit 1",
-  "}",
+  "$global:__pokoclaw_success = $?",
+  "$global:__pokoclaw_last_exit_code = $global:LASTEXITCODE",
+  "if ($global:__pokoclaw_last_exit_code -is [int] -and $global:__pokoclaw_last_exit_code -ne 0) { exit $global:__pokoclaw_last_exit_code }",
+  "if (-not $global:__pokoclaw_success) { exit 1 }",
+  "exit 0",
 ].join("\n");
 const BLOCKED_ENV_VAR_NAMES = new Set<string>([
   "ANTHROPIC_API_KEY",

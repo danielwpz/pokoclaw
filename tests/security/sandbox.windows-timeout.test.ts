@@ -181,7 +181,7 @@ describe("Windows host bash timeout cleanup", () => {
         storage: {} as ToolExecutionContext["storage"],
         toolCallId: "tool_1",
       },
-      command: "robocopy src dest",
+      command: "robocopy src dest; Write-Output done",
       cwd: tempDir,
       timeoutMs: 10_000,
       platform: "win32",
@@ -200,9 +200,14 @@ describe("Windows host bash timeout cleanup", () => {
     expect(spawnCalls[0]?.args[3]).toContain(
       "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;",
     );
-    expect(spawnCalls[0]?.args[3]).toContain("robocopy src dest");
+    const commandArg = spawnCalls[0]?.args[3];
+    expect(commandArg).toContain("robocopy src dest; Write-Output done");
+    expect(spawnCalls[0]?.args[3]).toContain("$global:__pokoclaw_success = $?");
     expect(spawnCalls[0]?.args[3]).toContain(
-      "if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) { exit $global:LASTEXITCODE }",
+      "$global:__pokoclaw_last_exit_code = $global:LASTEXITCODE",
+    );
+    expect(spawnCalls[0]?.args[3]).toContain(
+      "if ($global:__pokoclaw_last_exit_code -is [int] -and $global:__pokoclaw_last_exit_code -ne 0) { exit $global:__pokoclaw_last_exit_code }",
     );
   });
 });

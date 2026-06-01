@@ -2002,6 +2002,59 @@ Use this exact bash argument object on the next retry if full access is warrante
     expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
 
+  test("does not treat a cmd START /D path containing /b as backgrounding", async () => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    const command = "start /D C:/b /WAIT program";
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command,
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        shellInfo: detectRuntimeShellInfo({
+          platform: "win32",
+          env: {
+            ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          },
+          isExecutableAvailable: (candidate) => candidate === "C:\\Windows\\System32\\cmd.exe",
+        }),
+        approvalState: {
+          runtimeModeAutoApproval: {
+            source: "autopilot",
+          },
+        },
+      },
+      { command },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command,
+      }),
+    );
+    expect(result.details).toMatchObject({
+      command,
+      exitCode: 0,
+    });
+  });
+
   test("allows logical && while still rejecting background keywords", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
