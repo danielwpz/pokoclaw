@@ -228,6 +228,7 @@ export interface NormalizedLarkCardAction {
   actorOpenId: string | null;
   scenario: ModelScenario | null;
   modelId: string | null;
+  modelSelections: Partial<Record<ModelScenario, string>>;
 }
 
 export function buildLarkChatSurfaceKey(chatId: string): string {
@@ -522,7 +523,6 @@ export function createLarkMessageReceiveHandler(input: {
         replyToMessageId: route.replyToMessageId,
         state: {
           overview: input.modelSwitch.getOverview(),
-          selectedScenario: null,
         },
         ...(input.clients == null ? {} : { clients: input.clients }),
       });
@@ -738,7 +738,8 @@ export function normalizeLarkCardAction(
 
   const action = isRecord(data.action) ? data.action : null;
   const value = action != null && isRecord(action.value) ? action.value : null;
-  const actionName = typeof value?.action === "string" ? value.action.trim() : "";
+  const actionName =
+    readString(value?.action) ?? readString(action?.name) ?? readString(data.action_name) ?? "";
   if (actionName.length === 0) {
     return { skipReason: "card action is missing action name" };
   }
@@ -767,6 +768,7 @@ export function normalizeLarkCardAction(
     typeof value?.modelId === "string" && value.modelId.trim().length > 0
       ? value.modelId.trim()
       : null;
+  const modelSelections = normalizeModelSelections(action?.form_value ?? data.form_value);
 
   return {
     action: actionName,
@@ -780,6 +782,7 @@ export function normalizeLarkCardAction(
     actorOpenId,
     scenario,
     modelId,
+    modelSelections,
   };
 }
 
@@ -839,8 +842,7 @@ export function createLarkCardActionHandler(input: {
       normalized.action !== "deny_permission" &&
       normalized.action !== "approve_subagent_creation" &&
       normalized.action !== "deny_subagent_creation" &&
-      normalized.action !== "model_switch_select_scenario" &&
-      normalized.action !== "model_switch_apply"
+      normalized.action !== "model_switch_submit"
     ) {
       logger.debug("ignoring unsupported lark card action", {
         installationId: input.installationId,
@@ -889,10 +891,7 @@ export function createLarkCardActionHandler(input: {
       };
     }
 
-    if (
-      normalized.action === "model_switch_select_scenario" ||
-      normalized.action === "model_switch_apply"
-    ) {
+    if (normalized.action === "model_switch_submit") {
       if (input.modelSwitch == null) {
         return {
           toast: {
@@ -901,52 +900,26 @@ export function createLarkCardActionHandler(input: {
           },
         };
       }
-      if (normalized.scenario == null) {
-        return {
-          toast: {
-            type: "error",
-            content: "无法识别目标场景",
-          },
-        };
-      }
 
       try {
-        if (normalized.action === "model_switch_select_scenario") {
-          return buildLarkModelSwitchCardCallbackResponse({
-            overview: input.modelSwitch.getOverview(),
-            selectedScenario: normalized.scenario,
-          });
-        }
-
-        if (normalized.modelId == null) {
-          return {
-            toast: {
-              type: "error",
-              content: "无法识别目标模型",
-            },
-          };
-        }
-
-        const result = await input.modelSwitch.switchScenarioModel({
-          scenario: normalized.scenario,
-          modelId: normalized.modelId,
+        const result = await applySubmittedModelSwitches({
+          modelSwitch: input.modelSwitch,
+          selections: normalized.modelSelections,
         });
         return buildLarkModelSwitchCardCallbackResponse({
           overview: input.modelSwitch.getOverview(),
-          selectedScenario: result.scenario,
-          message: `已将 ${result.scenario} 切换到 ${result.nextModelId}。新配置会从下一次新的输入开始生效。`,
+          message: result.message,
           warnings: result.warnings,
           toast: {
-            type: "success",
-            content: `已切换 ${result.scenario} → ${result.nextModelId}`,
+            type: result.changedCount > 0 ? "success" : "info",
+            content: result.toast,
           },
         });
       } catch (error: unknown) {
         logger.error("failed to process lark model switch card action", {
           installationId: input.installationId,
           action: normalized.action,
-          scenario: normalized.scenario,
-          modelId: normalized.modelId,
+          modelSelections: normalized.modelSelections,
           error: error instanceof Error ? error.message : String(error),
         });
         return {
@@ -3065,7 +3038,6 @@ async function fetchQuotedLarkMessage(input: {
 
 function buildLarkModelSwitchCardCallbackResponse(input: {
   overview: ReturnType<ScenarioModelSwitchService["getOverview"]>;
-  selectedScenario: ModelScenario | null;
   message?: string;
   warnings?: string[];
   toast?: {
@@ -3084,7 +3056,6 @@ function buildLarkModelSwitchCardCallbackResponse(input: {
 } {
   const state: LarkModelSwitchCardState = {
     overview: input.overview,
-    selectedScenario: input.selectedScenario,
     ...(input.message == null ? {} : { message: input.message }),
     ...(input.warnings == null ? {} : { warnings: input.warnings }),
   };
@@ -3095,6 +3066,56 @@ function buildLarkModelSwitchCardCallbackResponse(input: {
       data: rendered.card,
     },
     ...(input.toast == null ? {} : { toast: input.toast }),
+  };
+}
+
+async function applySubmittedModelSwitches(input: {
+  modelSwitch: ScenarioModelSwitchService;
+  selections: Partial<Record<ModelScenario, string>>;
+}): Promise<{
+  changedCount: number;
+  message: string;
+  toast: string;
+  warnings: string[];
+}> {
+  const overview = input.modelSwitch.getOverview();
+  const changes = overview.scenarios.flatMap((scenario) => {
+    const selectedModelId = input.selections[scenario.scenario];
+    if (selectedModelId == null || selectedModelId === scenario.currentModelId) {
+      return [];
+    }
+    return [
+      {
+        scenario: scenario.scenario,
+        modelId: selectedModelId,
+      },
+    ];
+  });
+
+  if (changes.length === 0) {
+    return {
+      changedCount: 0,
+      message: "没有模型变更。",
+      toast: "没有模型变更",
+      warnings: [],
+    };
+  }
+
+  const switched: string[] = [];
+  const warnings = new Set<string>();
+  for (const change of changes) {
+    const result = await input.modelSwitch.switchScenarioModel(change);
+    switched.push(`${result.scenario} → ${result.nextModelId}`);
+    for (const warning of result.warnings) {
+      warnings.add(warning);
+    }
+  }
+
+  return {
+    changedCount: switched.length,
+    message: `已更新 ${switched.length} 个场景：${switched.join("，")}。新配置会从下一次新的输入开始生效。`,
+    toast: switched.length === 1 ? `已切换 ${switched[0]}` : `已更新 ${switched.length} 个场景`,
+    warnings: [...warnings],
   };
 }
 
@@ -3289,6 +3310,43 @@ function normalizeModelScenario(value: unknown): ModelScenario | null {
     value === "meditationConsolidation"
     ? value
     : null;
+}
+
+function normalizeModelSelections(value: unknown): Partial<Record<ModelScenario, string>> {
+  const selections: Partial<Record<ModelScenario, string>> = {};
+  if (!isRecord(value)) {
+    return selections;
+  }
+
+  for (const [key, rawSelection] of Object.entries(value)) {
+    const scenario = normalizeModelScenario(key);
+    if (scenario == null) {
+      continue;
+    }
+    const modelId = normalizeModelSelectionValue(rawSelection);
+    if (modelId.length > 0) {
+      selections[scenario] = modelId;
+    }
+  }
+
+  return selections;
+}
+
+function normalizeModelSelectionValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (Array.isArray(value)) {
+    const first = value.find((item) => typeof item === "string" && item.trim().length > 0);
+    return typeof first === "string" ? first.trim() : "";
+  }
+
+  if (isRecord(value)) {
+    return readString(value.value) ?? readString(value.option_value) ?? readString(value.id) ?? "";
+  }
+
+  return "";
 }
 
 function readString(value: unknown): string | null {

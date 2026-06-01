@@ -14,7 +14,7 @@ describe("patchScenarioModelListInToml", () => {
       'task = ["deepseek"]',
       "",
       "[runtime]",
-      "maxTurns = 60",
+      "maxTurns = 100",
       "",
     ].join("\n");
 
@@ -59,7 +59,7 @@ describe("patchScenarioModelListInToml", () => {
       'chat = ["deepseek"]',
       "",
       "[runtime]",
-      "maxTurns = 60",
+      "maxTurns = 100",
       "",
     ].join("\n");
 

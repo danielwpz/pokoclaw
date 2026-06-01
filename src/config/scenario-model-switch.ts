@@ -15,6 +15,7 @@ export interface ScenarioModelCatalogSummary {
   supportsTools: boolean;
   supportsVision: boolean;
   supportsReasoning: boolean;
+  serviceTier?: string | null;
 }
 
 export interface ScenarioModelStateSummary {
@@ -136,6 +137,7 @@ function summarizeCatalogModel(
     supportsTools: model.supportsTools,
     supportsVision: model.supportsVision,
     supportsReasoning: model.reasoning?.enabled === true,
+    serviceTier: model.serviceTier ?? null,
   };
 }
 

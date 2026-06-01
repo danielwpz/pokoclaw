@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AppConfig } from "@/src/config/schema.js";
+import { appendFsSubtreeSuffix } from "@/src/security/scope.js";
 import {
   POKOCLAW_REPO_DIR,
   POKOCLAW_SKILLS_DIR,
@@ -43,32 +44,28 @@ export interface AgentPermissionBaseline {
   };
 }
 
-function subtree(value: string): string {
-  return path.join(value, "**");
-}
-
 const HOME_DIR = os.homedir();
 
 export const DEFAULT_FILESYSTEM_HARD_DENY_READ = [
-  subtree(POKOCLAW_SYSTEM_DIR),
-  subtree(path.join("~", ".ssh")),
-  subtree(path.join("~", ".gnupg")),
-  subtree(path.join("~", ".aws")),
-  subtree(path.join("~", ".azure")),
-  subtree(path.join("~", ".gcloud")),
-  subtree(path.join("~", ".kube")),
-  subtree(path.join("~", ".docker")),
+  appendFsSubtreeSuffix(POKOCLAW_SYSTEM_DIR),
+  appendFsSubtreeSuffix(path.join("~", ".ssh")),
+  appendFsSubtreeSuffix(path.join("~", ".gnupg")),
+  appendFsSubtreeSuffix(path.join("~", ".aws")),
+  appendFsSubtreeSuffix(path.join("~", ".azure")),
+  appendFsSubtreeSuffix(path.join("~", ".gcloud")),
+  appendFsSubtreeSuffix(path.join("~", ".kube")),
+  appendFsSubtreeSuffix(path.join("~", ".docker")),
 ] as const;
 
 export const DEFAULT_FILESYSTEM_HARD_DENY_WRITE = [
-  subtree(POKOCLAW_SYSTEM_DIR),
-  subtree(path.join("~", ".ssh")),
-  subtree(path.join("~", ".gnupg")),
-  subtree(path.join("~", ".aws")),
-  subtree(path.join("~", ".azure")),
-  subtree(path.join("~", ".gcloud")),
-  subtree(path.join("~", ".kube")),
-  subtree(path.join("~", ".docker")),
+  appendFsSubtreeSuffix(POKOCLAW_SYSTEM_DIR),
+  appendFsSubtreeSuffix(path.join("~", ".ssh")),
+  appendFsSubtreeSuffix(path.join("~", ".gnupg")),
+  appendFsSubtreeSuffix(path.join("~", ".aws")),
+  appendFsSubtreeSuffix(path.join("~", ".azure")),
+  appendFsSubtreeSuffix(path.join("~", ".gcloud")),
+  appendFsSubtreeSuffix(path.join("~", ".kube")),
+  appendFsSubtreeSuffix(path.join("~", ".docker")),
 ] as const;
 
 export const DEFAULT_NETWORK_HARD_DENY_HOSTS = [
@@ -127,12 +124,12 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
         fs: {
           readMode: "allow_only",
           readAllow: [
-            subtree(HOME_DIR),
-            subtree(POKOCLAW_WORKSPACE_DIR),
-            subtree(POKOCLAW_SKILLS_DIR),
-            subtree(POKOCLAW_REPO_DIR),
+            appendFsSubtreeSuffix(HOME_DIR),
+            appendFsSubtreeSuffix(POKOCLAW_WORKSPACE_DIR),
+            appendFsSubtreeSuffix(POKOCLAW_SKILLS_DIR),
+            appendFsSubtreeSuffix(POKOCLAW_REPO_DIR),
           ],
-          writeAllow: [subtree(POKOCLAW_WORKSPACE_DIR)],
+          writeAllow: [appendFsSubtreeSuffix(POKOCLAW_WORKSPACE_DIR)],
         },
       };
     case "subagent":
@@ -146,11 +143,11 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
         fs: {
           readMode: "allow_only",
           readAllow: [
-            subtree(POKOCLAW_WORKSPACE_DIR),
-            subtree(POKOCLAW_SKILLS_DIR),
-            subtree(POKOCLAW_REPO_DIR),
+            appendFsSubtreeSuffix(POKOCLAW_WORKSPACE_DIR),
+            appendFsSubtreeSuffix(POKOCLAW_SKILLS_DIR),
+            appendFsSubtreeSuffix(POKOCLAW_REPO_DIR),
           ],
-          writeAllow: [subtree(POKOCLAW_WORKSPACE_DIR)],
+          writeAllow: [appendFsSubtreeSuffix(POKOCLAW_WORKSPACE_DIR)],
         },
       };
   }

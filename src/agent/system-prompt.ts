@@ -59,12 +59,13 @@ function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildTaskAgentOperatingModelSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
-    buildBashFullAccessSection(),
+    buildBashFullAccessSection({
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+    }),
     buildSafetySection(),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
-      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildProjectContextSection({
       ...(input.projectContextPrompt === undefined
@@ -95,13 +96,14 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildMainAgentSubagentSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
-    buildBashFullAccessSection(),
+    buildBashFullAccessSection({
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+    }),
     buildInteractiveUiSection(),
     buildSafetySection(),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
-      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildProjectContextSection({
       ...(input.projectContextPrompt === undefined
@@ -139,13 +141,14 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
     buildSubagentScheduledTasksSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
-    buildBashFullAccessSection(),
+    buildBashFullAccessSection({
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+    }),
     buildInteractiveUiSection(),
     buildSafetySection(),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
-      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildProjectContextSection({
       ...(input.projectContextPrompt === undefined
@@ -178,7 +181,6 @@ function buildApprovalAgentSystemPrompt(input: BuildAgentSystemPromptInput): str
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
-      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildProjectContextSection({
       ...(input.projectContextPrompt === undefined

@@ -109,6 +109,72 @@ function createAssistantEventStream(events: AssistantMessageEvent[], result: Ass
   };
 }
 
+function createNeverYieldingAssistantEventStream(result: AssistantMessage) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      await new Promise<never>(() => undefined);
+    },
+    async result() {
+      return result;
+    },
+  };
+}
+
+function createAssistantEventStreamThenHang(
+  events: AssistantMessageEvent[],
+  result: AssistantMessage,
+) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const event of events) {
+        yield event;
+      }
+      await new Promise<never>(() => undefined);
+    },
+    async result() {
+      return result;
+    },
+  };
+}
+
+function createTextAssistantMessage(text = "ok"): AssistantMessage {
+  return {
+    role: "assistant" as const,
+    api: "anthropic-messages" as const,
+    provider: "anthropic_main",
+    model: "claude-sonnet-4-5-20250929",
+    stopReason: "stop" as const,
+    content: [{ type: "text" as const, text }],
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    timestamp: Date.now(),
+  };
+}
+
+async function waitForPromiseResult<T>(
+  promise: Promise<T>,
+  timeoutMs = 200,
+): Promise<T | "still-pending"> {
+  return Promise.race([
+    promise,
+    new Promise<"still-pending">((resolve) => {
+      setTimeout(() => resolve("still-pending"), timeoutMs);
+    }),
+  ]);
+}
+
 describe("pi bridge", () => {
   beforeEach(() => {
     upstreamStreamMock.mockImplementation((model, context, options) =>
@@ -253,6 +319,123 @@ describe("pi bridge", () => {
     expect(options.apiKey).toBe("secret");
     expect(options.sessionId).toBe("anthropic_main/claude-sonnet-4-5");
     expect(options.reasoning).toBe("medium");
+  });
+
+  test("aborts and raises retryable timeout when no first model event arrives", async () => {
+    const finalMessage = createTextAssistantMessage();
+    let requestSignal: AbortSignal | undefined;
+    streamSimpleMock.mockImplementation((_model, _context, options) => {
+      requestSignal = options.signal;
+      return createNeverYieldingAssistantEventStream(finalMessage);
+    });
+
+    const bridge = new PiBridge(undefined, {
+      firstResponseTimeoutMs: 10,
+      streamIdleTimeoutMs: 0,
+    });
+    const resultPromise = bridge
+      .streamTurn({
+        model: createResolvedModel(),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+      })
+      .catch((caught) => caught);
+
+    const result = await waitForPromiseResult(resultPromise);
+
+    expect(result).toBeInstanceOf(AgentLlmError);
+    expect(result).toMatchObject({
+      kind: "timeout",
+      retryable: true,
+      provider: "anthropic_main",
+      model: "anthropic_main/claude-sonnet-4-5",
+    });
+    expect(result).toHaveProperty("message", "LLM first response timed out after 10ms");
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  test("does not classify parent cancellation as a first-response timeout", async () => {
+    const finalMessage = createTextAssistantMessage();
+    let requestSignal: AbortSignal | undefined;
+    streamSimpleMock.mockImplementation((_model, _context, options) => {
+      requestSignal = options.signal;
+      return createNeverYieldingAssistantEventStream(finalMessage);
+    });
+
+    const parentController = new AbortController();
+    const bridge = new PiBridge(undefined, {
+      firstResponseTimeoutMs: 100,
+      streamIdleTimeoutMs: 0,
+    });
+    const resultPromise = bridge
+      .streamTurn({
+        model: createResolvedModel(),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: parentController.signal,
+      })
+      .catch((caught) => caught);
+
+    setTimeout(() => parentController.abort(), 10);
+    const result = await waitForPromiseResult(resultPromise);
+
+    expect(result).toBeInstanceOf(AgentLlmError);
+    expect(result).toMatchObject({
+      kind: "aborted",
+      retryable: false,
+    });
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  test("raises stream idle timeout after visible output without masking the streamed delta", async () => {
+    const finalMessage = createTextAssistantMessage("partial answer");
+    let requestSignal: AbortSignal | undefined;
+    streamSimpleMock.mockImplementation((_model, _context, options) => {
+      requestSignal = options.signal;
+      return createAssistantEventStreamThenHang(
+        [
+          {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "partial answer",
+            partial: finalMessage,
+          },
+        ],
+        finalMessage,
+      );
+    });
+
+    const deltas: Array<{ delta: string; accumulatedText: string }> = [];
+    const bridge = new PiBridge(undefined, {
+      firstResponseTimeoutMs: 100,
+      streamIdleTimeoutMs: 10,
+    });
+    const resultPromise = bridge
+      .streamTurn({
+        model: createResolvedModel(),
+        compactSummary: null,
+        messages: [createStoredUserMessage()],
+        tools: new ToolRegistry(),
+        signal: new AbortController().signal,
+        onTextDelta(event) {
+          deltas.push(event);
+        },
+      })
+      .catch((caught) => caught);
+
+    const result = await waitForPromiseResult(resultPromise);
+
+    expect(deltas).toEqual([{ delta: "partial answer", accumulatedText: "partial answer" }]);
+    expect(result).toBeInstanceOf(AgentLlmError);
+    expect(result).toMatchObject({
+      kind: "timeout",
+      retryable: true,
+    });
+    expect(result).toHaveProperty("message", "LLM stream idle timed out after 10ms");
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   test("passes configured max output tokens into stream options", async () => {

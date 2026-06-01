@@ -24,6 +24,7 @@ describe("builtin tools", () => {
     expect(registry.has("background_task")).toBe(true);
     expect(registry.has("wait_task")).toBe(true);
     expect(registry.has("list_background_tasks")).toBe(true);
+    expect(registry.has("send_attachment")).toBe(true);
     expect(registry.has("publish_a2ui")).toBe(true);
     expect(registry.has("web_search")).toBe(false);
     expect(registry.has("web_fetch")).toBe(false);
@@ -45,6 +46,7 @@ describe("builtin tools", () => {
       "background_task",
       "wait_task",
       "list_background_tasks",
+      "send_attachment",
       "publish_a2ui",
     ]);
   });

@@ -102,6 +102,22 @@ export interface AssistantMessageCompletedEvent extends AgentRuntimeEventBase {
   usage: MessageUsage | null;
 }
 
+export type AssistantResponseRetryReason =
+  | "llm_failure_without_visible_output"
+  | "successful_empty_output";
+
+export interface AssistantResponseRetryingEvent extends AgentRuntimeEventBase {
+  type: "assistant_response_retrying";
+  turn: number;
+  messageId: string;
+  attempt: number;
+  maxAttempts: number;
+  reason: AssistantResponseRetryReason;
+  errorKind?: AgentLlmErrorKind;
+  errorMessage?: string;
+  rawErrorMessage?: string | null;
+}
+
 export interface ToolCallStartedEvent extends AgentRuntimeEventBase {
   type: "tool_call_started";
   turn: number;
@@ -222,6 +238,7 @@ export type AgentRuntimeEvent =
   | AssistantMessageDeltaEvent
   | AssistantReasoningDeltaEvent
   | AssistantMessageCompletedEvent
+  | AssistantResponseRetryingEvent
   | ToolCallStartedEvent
   | ToolCallCompletedEvent
   | ToolCallFailedEvent
@@ -245,6 +262,7 @@ export type AgentRuntimeEventInput =
   | Omit<AssistantMessageDeltaEvent, "eventId" | "createdAt">
   | Omit<AssistantReasoningDeltaEvent, "eventId" | "createdAt">
   | Omit<AssistantMessageCompletedEvent, "eventId" | "createdAt">
+  | Omit<AssistantResponseRetryingEvent, "eventId" | "createdAt">
   | Omit<ToolCallStartedEvent, "eventId" | "createdAt">
   | Omit<ToolCallCompletedEvent, "eventId" | "createdAt">
   | Omit<ToolCallFailedEvent, "eventId" | "createdAt">

@@ -75,6 +75,19 @@ describe("provider registry", () => {
     expect(model.provider.apiKey).toBe("anthropic-secret");
   });
 
+  test("preserves per-model service tier configuration", () => {
+    const config = createConfig();
+    const model = config.models.catalog[1];
+    if (model == null) {
+      throw new Error("expected seeded model catalog entry");
+    }
+    model.serviceTier = "fast";
+
+    const registry = new ProviderRegistry(config);
+
+    expect(registry.getRequiredModel("openai_main/gpt-5-mini").serviceTier).toBe("fast");
+  });
+
   test("returns null for missing scenario selection when the list is empty", () => {
     const config = createConfig();
     config.models.scenarios.task = [];

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,11 @@ import {
   type SandboxPermissionIssue,
   type SandboxRuntimeConfig,
 } from "@danielwpz/sandbox-runtime";
-import { getDefaultBashExecutable } from "@/src/runtime/shell-info.js";
+import {
+  detectRuntimeShellInfo,
+  getDefaultBashExecutable,
+  type RuntimeShellInfo,
+} from "@/src/runtime/shell-info.js";
 import {
   checkFilesystemPermission,
   expandExactDirectoryReadChildren,
@@ -43,7 +47,10 @@ export interface ExecuteSandboxedBashInput {
   timeoutMs: number;
 }
 
-export interface ExecuteUnsandboxedBashInput extends ExecuteSandboxedBashInput {}
+export interface ExecuteUnsandboxedBashInput extends ExecuteSandboxedBashInput {
+  platform?: NodeJS.Platform;
+  shellInfo?: RuntimeShellInfo;
+}
 
 export interface SandboxedBashResult extends SandboxExecResult {
   command: string;
@@ -53,6 +60,7 @@ export interface SandboxedBashResult extends SandboxExecResult {
 
 const logger = createSubsystemLogger("security/sandbox");
 const DEFAULT_BASH_BINARY = getDefaultBashExecutable();
+const POWERSHELL_UTF8_OUTPUT_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
 const BLOCKED_ENV_VAR_NAMES = new Set<string>([
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
@@ -203,6 +211,8 @@ export async function executeUnsandboxedBash(
       command: input.command,
       cwd,
       abortSignal,
+      platform: input.platform ?? process.platform,
+      ...(input.shellInfo == null ? {} : { shellInfo: input.shellInfo }),
     });
 
     logger.info("bash full-access host exec done", {
@@ -682,17 +692,31 @@ async function runUnsandboxedShellCommand(input: {
   command: string;
   cwd: string;
   abortSignal: AbortSignal;
+  platform: NodeJS.Platform;
+  shellInfo?: RuntimeShellInfo;
 }): Promise<SandboxExecResult> {
   if (input.abortSignal.aborted) {
     throw createAbortError();
   }
 
   return await new Promise<SandboxExecResult>((resolve, reject) => {
-    const child = spawn(DEFAULT_BASH_BINARY, ["-lc", input.command], {
+    const shell =
+      input.shellInfo?.commandShell ??
+      detectRuntimeShellInfo({ platform: input.platform }).commandShell;
+    const command =
+      shell.syntax === "powershell"
+        ? `${POWERSHELL_UTF8_OUTPUT_PREFIX}${input.command}`
+        : input.command;
+    const childEnv = sanitizeSandboxEnv(process.env);
+    if (input.platform === "win32") {
+      childEnv.SHELL = shell.executable;
+    }
+    const child = spawn(shell.executable, [...shell.args, command], {
       cwd: input.cwd,
-      env: sanitizeSandboxEnv(process.env),
-      detached: process.platform !== "win32",
+      env: childEnv,
+      detached: input.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: input.platform === "win32",
     });
 
     let stdout = "";
@@ -708,13 +732,20 @@ async function runUnsandboxedShellCommand(input: {
       fn();
     };
 
-    const killChild = () => {
+    const killChild = async () => {
       if (child.exitCode != null || child.signalCode != null) {
         return;
       }
 
       try {
-        if (process.platform !== "win32" && child.pid != null) {
+        if (input.platform === "win32" && child.pid != null) {
+          if (await terminateWindowsProcessTree(child.pid)) {
+            return;
+          }
+          child.kill("SIGKILL");
+          return;
+        }
+        if (child.pid != null) {
           process.kill(-child.pid, "SIGKILL");
         } else {
           child.kill("SIGKILL");
@@ -728,9 +759,10 @@ async function runUnsandboxedShellCommand(input: {
       }
     };
 
+    let aborting = false;
     const onAbort = () => {
-      killChild();
-      finish(() => reject(createAbortError()));
+      aborting = true;
+      void killChild().finally(() => finish(() => reject(createAbortError())));
     };
 
     const cleanup = () => {
@@ -751,8 +783,16 @@ async function runUnsandboxedShellCommand(input: {
     child.stderr?.on("data", (chunk: Buffer | string) => {
       stderr += typeof chunk === "string" ? chunk : chunk.toString("utf8");
     });
-    child.once("error", (error) => finish(() => reject(error)));
-    child.once("close", (exitCode, signal) =>
+    child.once("error", (error) => {
+      if (aborting) {
+        return;
+      }
+      finish(() => reject(error));
+    });
+    child.once("close", (exitCode, signal) => {
+      if (aborting) {
+        return;
+      }
       finish(() =>
         resolve({
           stdout,
@@ -760,8 +800,46 @@ async function runUnsandboxedShellCommand(input: {
           exitCode,
           signal,
         }),
-      ),
-    );
+      );
+    });
+  });
+}
+
+async function terminateWindowsProcessTree(pid: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const TASKKILL_TIMEOUT_MS = 5_000;
+    let taskkill: ChildProcess;
+    try {
+      taskkill = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch {
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    const timeout = setTimeout(() => {
+      try {
+        taskkill.kill("SIGKILL");
+      } catch {
+        // Best-effort cleanup if taskkill itself gets stuck.
+      }
+      finish(false);
+    }, TASKKILL_TIMEOUT_MS);
+    const finish = (killed: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      taskkill.removeAllListeners();
+      resolve(killed);
+    };
+
+    taskkill.once("error", () => finish(false));
+    taskkill.once("close", (exitCode) => finish(exitCode === 0));
   });
 }
 

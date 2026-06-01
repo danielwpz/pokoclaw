@@ -678,12 +678,43 @@ describe("lark card actions", () => {
       expect(payload?.data?.msg_type).toBe("interactive");
       const content = JSON.parse(String(payload?.data?.content)) as {
         header?: { title?: { content?: string } };
+        body?: { elements?: Array<Record<string, unknown>> };
       };
       expect(content.header?.title?.content).toBe("模型切换");
+      const form = content.body?.elements?.find((element) => element.tag === "form") as
+        | { elements?: Array<Record<string, unknown>> }
+        | undefined;
+      expect(form).toMatchObject({
+        tag: "form",
+        name: "model_switch_form",
+      });
+      expect(form?.elements?.find((element) => element.content === "**场景：chat**")).toMatchObject(
+        {
+          tag: "markdown",
+          content: "**场景：chat**",
+        },
+      );
+      expect(form?.elements?.find((element) => element.name === "chat")).toMatchObject({
+        tag: "select_static",
+        name: "chat",
+        initial_option: "gpt5",
+        required: true,
+      });
+      expect(
+        form?.elements?.find((element) => element.name === "model_switch_submit"),
+      ).toMatchObject({
+        tag: "button",
+        name: "model_switch_submit",
+        form_action_type: "submit",
+        value: {
+          action: "model_switch_submit",
+        },
+      });
     });
   });
 
-  test("returns an updated card when selecting a scenario from the model switch card", async () => {
+  test("applies submitted model switches and returns toast plus refreshed card", async () => {
+    let currentChatModelId = "deepseek";
     const modelSwitch = {
       getOverview: vi.fn(() => ({
         models: [
@@ -696,16 +727,41 @@ describe("lark card actions", () => {
             supportsVision: false,
             supportsReasoning: true,
           },
+          {
+            index: 2,
+            modelId: "deepseek",
+            providerId: "main",
+            upstreamModelId: "deepseek/deepseek-chat",
+            supportsTools: true,
+            supportsVision: false,
+            supportsReasoning: false,
+          },
         ],
         scenarios: [
           {
             scenario: "chat",
+            currentModelId: currentChatModelId,
+            configuredModelIds: ["deepseek", "gpt5"],
+          },
+          {
+            scenario: "task",
             currentModelId: "gpt5",
-            configuredModelIds: ["gpt5"],
+            configuredModelIds: ["gpt5", "deepseek"],
           },
         ],
       })),
-      switchScenarioModel: vi.fn(),
+      switchScenarioModel: vi.fn(async (input: { scenario: string; modelId: string }) => {
+        currentChatModelId = input.modelId;
+        return {
+          scenario: input.scenario,
+          previousModelId: "deepseek",
+          nextModelId: input.modelId,
+          configuredModelIds: [input.modelId, "deepseek"],
+          reloaded: true,
+          version: 2,
+          warnings: [],
+        };
+      }),
     };
     const handler = createLarkCardActionHandler({
       installationId: "default",
@@ -719,79 +775,12 @@ describe("lark card actions", () => {
 
     const result = await handler({
       action: {
-        value: {
-          action: "model_switch_select_scenario",
-          scenario: "chat",
-        },
-      },
-      operator: {
-        open_id: "ou_sender",
-      },
-    });
-
-    expect(modelSwitch.getOverview).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({
-      card: {
-        type: "raw",
-        data: {
-          header: {
-            title: {
-              content: "模型切换",
-            },
+        name: "model_switch_submit",
+        form_value: {
+          chat: {
+            value: "gpt5",
           },
-        },
-      },
-    });
-  });
-
-  test("applies a model switch from card action and returns toast plus refreshed card", async () => {
-    const modelSwitch = {
-      getOverview: vi.fn(() => ({
-        models: [
-          {
-            index: 1,
-            modelId: "gpt5",
-            providerId: "main",
-            upstreamModelId: "openai/gpt-5",
-            supportsTools: true,
-            supportsVision: false,
-            supportsReasoning: true,
-          },
-        ],
-        scenarios: [
-          {
-            scenario: "chat",
-            currentModelId: "gpt5",
-            configuredModelIds: ["gpt5"],
-          },
-        ],
-      })),
-      switchScenarioModel: vi.fn(async () => ({
-        scenario: "chat",
-        previousModelId: "deepseek",
-        nextModelId: "gpt5",
-        configuredModelIds: ["gpt5", "deepseek"],
-        reloaded: true,
-        version: 2,
-        warnings: [],
-      })),
-    };
-    const handler = createLarkCardActionHandler({
-      installationId: "default",
-      ingress: {
-        submitMessage: vi.fn(async () => ({ status: "started" as const })),
-        submitApprovalDecision: vi.fn(() => false),
-      },
-      control: {} as RuntimeControlService,
-      modelSwitch: modelSwitch as never,
-    });
-
-    const result = await handler({
-      action: {
-        value: {
-          action: "model_switch_apply",
-          scenario: "chat",
-          modelId: "gpt5",
+          task: ["gpt5"],
         },
       },
       operator: {
@@ -818,6 +807,23 @@ describe("lark card actions", () => {
           },
         },
       },
+    });
+    const updatedCard = (result as { card?: { data?: { body?: { elements?: unknown[] } } } }).card
+      ?.data;
+    const updatedElements = updatedCard?.body?.elements as Array<Record<string, unknown>>;
+    expect(
+      updatedElements.some(
+        (element) =>
+          typeof element.content === "string" && element.content.includes("**chat** → `gpt5`"),
+      ),
+    ).toBe(true);
+    const updatedForm = updatedElements.find((element) => element.tag === "form") as
+      | { elements?: Array<Record<string, unknown>> }
+      | undefined;
+    expect(updatedForm?.elements?.find((element) => element.name === "chat")).toMatchObject({
+      tag: "select_static",
+      name: "chat",
+      initial_option: "gpt5",
     });
   });
 });

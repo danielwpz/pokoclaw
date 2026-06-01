@@ -45,6 +45,53 @@ export interface PermissionRequest {
 
 const GLOB_CHARS = /[*?[\]]/;
 const SUBTREE_SUFFIX = "/**";
+const SUBTREE_MARKER = "**";
+
+function isPathSeparator(value: string | undefined): boolean {
+  return value === "/" || value === "\\";
+}
+
+function isAbsoluteFsPath(value: string): boolean {
+  return path.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
+function isFsRootPath(value: string): boolean {
+  const nativeNormalized = path.normalize(value);
+  if (path.isAbsolute(value) && nativeNormalized === path.parse(nativeNormalized).root) {
+    return true;
+  }
+
+  const win32Normalized = path.win32.normalize(value);
+  return path.win32.isAbsolute(value) && win32Normalized === path.win32.parse(win32Normalized).root;
+}
+
+function stripTrailingFsSeparatorsPreservingRoot(value: string): string {
+  let normalized = value;
+  while (normalized.length > 1 && isPathSeparator(normalized.at(-1)) && !isFsRootPath(normalized)) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+function getFsSubtreeBase(value: string): string | null {
+  if (!value.endsWith(SUBTREE_MARKER)) {
+    return null;
+  }
+
+  const separator = value.at(-SUBTREE_MARKER.length - 1);
+  if (!isPathSeparator(separator)) {
+    return null;
+  }
+
+  return stripTrailingFsSeparatorsPreservingRoot(value.slice(0, -SUBTREE_MARKER.length));
+}
+
+export function appendFsSubtreeSuffix(targetPath: string): string {
+  const normalizedTargetPath = stripTrailingFsSeparatorsPreservingRoot(
+    getFsSubtreeBase(targetPath) ?? targetPath,
+  );
+  return `${normalizedTargetPath}${SUBTREE_SUFFIX}`;
+}
 
 function assertObject(value: unknown, context: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -64,15 +111,14 @@ function assertString(value: unknown, context: string): string {
 
 function validateFsScopePath(value: unknown, context: string): string {
   const candidatePath = assertString(value, context);
-  if (!path.isAbsolute(candidatePath)) {
+  const subtreeBasePath = getFsSubtreeBase(candidatePath);
+  const pathWithoutSubtreeSuffix = subtreeBasePath ?? candidatePath;
+
+  if (!isAbsoluteFsPath(pathWithoutSubtreeSuffix)) {
     throw new Error(`${context} must be an absolute path`);
   }
 
-  const pathWithoutSubtreeSuffix = candidatePath.endsWith(SUBTREE_SUFFIX)
-    ? candidatePath.slice(0, -SUBTREE_SUFFIX.length)
-    : candidatePath;
-
-  if (pathWithoutSubtreeSuffix.length === 0) {
+  if (subtreeBasePath != null && isFsRootPath(pathWithoutSubtreeSuffix)) {
     throw new Error(`${context} must not target the filesystem root subtree`);
   }
 
@@ -82,7 +128,7 @@ function validateFsScopePath(value: unknown, context: string): string {
     );
   }
 
-  return candidatePath;
+  return subtreeBasePath == null ? candidatePath : appendFsSubtreeSuffix(subtreeBasePath);
 }
 
 function parseFsScope(input: Record<string, unknown>, kind: FsPermissionKind): FsPermissionScope {
@@ -203,7 +249,7 @@ export function serializePermissionRequest(request: PermissionRequest): string {
 }
 
 export function isFsSubtreeScopePath(scopePath: string): boolean {
-  return scopePath.endsWith(SUBTREE_SUFFIX);
+  return getFsSubtreeBase(scopePath) != null;
 }
 
 export function describePermissionScope(scope: PermissionScope): string {

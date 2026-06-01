@@ -18,13 +18,16 @@ import {
   getNextCardkitSequence,
   invokeLarkCardkitCallWithBusinessRetry,
   invokeSequencedLarkCardkitMutation,
+  isAmbiguousLarkCardkitTransportError,
   type LarkCardCreateResponse,
   type LarkCardOperationResponse,
   parseBindingMetadata,
+  readLarkHttpStatus,
   setCardkitSequenceFloorInMetadata,
 } from "@/src/channels/lark/cardkit-mutations.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import { listLarkDeliveryTargets, readStringValue } from "@/src/channels/lark/delivery-targets.js";
+import { sendLarkImageMessage } from "@/src/channels/lark/image-message.js";
 import {
   addLarkMessageReaction,
   removeLarkMessageReaction,
@@ -50,6 +53,7 @@ import {
 import type { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
 import { sendLarkTextMessage } from "@/src/channels/lark/text-message.js";
 import type {
+  OrchestratedOutboundAttachmentEventEnvelope,
   OrchestratedOutboundEventEnvelope,
   OrchestratedRuntimeEventEnvelope,
 } from "@/src/orchestration/outbound-events.js";
@@ -70,6 +74,9 @@ const APPROVAL_CARD_OBJECT_KIND = "approval_card";
 const SUBAGENT_REQUEST_CARD_OBJECT_KIND = "subagent_creation_request_card";
 const LARK_CARD_LOG_PREVIEW_MAX_LENGTH = 600;
 const LARK_CARDKIT_RECONCILE_RETRY_DELAY_MS = 1000;
+const LARK_CARD_REFERENCE_SEND_RETRY_DELAY_MS = 1000;
+const LARK_CARD_REFERENCE_SEND_RETRY_LIMIT = 1;
+const LARK_CARD_REFERENCE_SEND_FAILURE_METADATA_KEY = "cardReferenceSendFailure";
 const TASK_STATUS_DELIVERY_PREFIX = "task_status:";
 const STEER_CONFIRMED_REACTION_EMOJI = "OK";
 const LARK_OUTBOUND_DEPENDENCY_RETRY_DELAY_MS = 1_000;
@@ -311,7 +318,29 @@ export function createLarkOutboundRuntime(
     status: "active" | "finalized" | "stale";
     metadataJson: string;
     logContext: Record<string, unknown>;
+    deliveryId: string;
   }): Promise<LarkObjectBinding | null> => {
+    const existingBeforeReserve = bindingInput.bindingsRepo.getByInternalObject({
+      channelInstallationId: bindingInput.channelInstallationId,
+      internalObjectKind: bindingInput.internalObjectKind,
+      internalObjectId: bindingInput.internalObjectId,
+    });
+    if (isTerminalIncompleteCardReferenceBinding(existingBeforeReserve)) {
+      logger.warn("skipping lark card reference send for terminal incomplete binding", {
+        ...bindingInput.logContext,
+        channelInstallationId: bindingInput.channelInstallationId,
+        internalObjectKind: bindingInput.internalObjectKind,
+        internalObjectId: bindingInput.internalObjectId,
+        larkCardId: existingBeforeReserve?.larkCardId ?? null,
+        status: existingBeforeReserve?.status ?? null,
+      });
+      return null;
+    }
+
+    let metadataJson = preserveCardReferenceSendFailureMetadata({
+      nextMetadataJson: bindingInput.metadataJson,
+      existingMetadataJson: existingBeforeReserve?.metadataJson ?? null,
+    });
     const threadRootMessageId = readStringValue(bindingInput.surfaceObject.thread_id);
     let binding = bindingInput.bindingsRepo.reserveBinding({
       id: randomUUID(),
@@ -325,7 +354,7 @@ export function createLarkOutboundRuntime(
       cardElementId: bindingInput.cardElementId,
       lastSequence: bindingInput.lastSequence,
       status: bindingInput.status,
-      metadataJson: bindingInput.metadataJson,
+      metadataJson,
     });
 
     if (binding.larkMessageUuid == null) {
@@ -373,7 +402,7 @@ export function createLarkOutboundRuntime(
         cardElementId: bindingInput.cardElementId,
         lastSequence: bindingInput.lastSequence,
         status: bindingInput.status,
-        metadataJson: bindingInput.metadataJson,
+        metadataJson,
       });
       if (attachedBinding == null) {
         return null;
@@ -393,13 +422,43 @@ export function createLarkOutboundRuntime(
         larkCardId,
         larkMessageUuid: binding.larkMessageUuid,
       });
-      const response = await sendLarkInteractiveCardReferenceMessage({
-        client: bindingInput.client,
-        chatId: bindingInput.chatId,
-        surfaceObject: bindingInput.surfaceObject,
-        larkCardId,
-        larkMessageUuid: binding.larkMessageUuid,
-      });
+      let response: LarkInteractiveMessageResponse;
+      try {
+        response = await sendLarkInteractiveCardReferenceMessage({
+          client: bindingInput.client,
+          chatId: bindingInput.chatId,
+          surfaceObject: bindingInput.surfaceObject,
+          larkCardId,
+          larkMessageUuid: binding.larkMessageUuid,
+        });
+      } catch (error) {
+        if (!isRecoverableCardReferenceSendFailure(error)) {
+          throw error;
+        }
+
+        handleRecoverableCardReferenceSendFailure({
+          bindingsRepo: bindingInput.bindingsRepo,
+          binding,
+          channelInstallationId: bindingInput.channelInstallationId,
+          internalObjectKind: bindingInput.internalObjectKind,
+          internalObjectId: bindingInput.internalObjectId,
+          conversationId: bindingInput.conversationId,
+          branchId: bindingInput.branchId,
+          threadRootMessageId,
+          cardElementId: bindingInput.cardElementId,
+          lastSequence: bindingInput.lastSequence,
+          desiredStatus: bindingInput.status,
+          metadataJson,
+          deliveryId: bindingInput.deliveryId,
+          error,
+          logContext: bindingInput.logContext,
+          scheduleRetry: () =>
+            bumpVersionAndSchedule(bindingInput.deliveryId, {
+              delayMs: LARK_CARD_REFERENCE_SEND_RETRY_DELAY_MS,
+            }),
+        });
+        return null;
+      }
       const larkMessageId = response.data?.message_id ?? null;
       if (larkMessageId == null) {
         logger.warn("lark card reference send returned no message id", {
@@ -424,11 +483,12 @@ export function createLarkOutboundRuntime(
         cardElementId: bindingInput.cardElementId,
         lastSequence: bindingInput.lastSequence,
         status: bindingInput.status,
-        metadataJson: bindingInput.metadataJson,
+        metadataJson,
       });
       if (attachedBinding == null) {
         return null;
       }
+      metadataJson = attachedBinding.metadataJson ?? metadataJson;
       binding = attachedBinding;
     }
 
@@ -449,6 +509,7 @@ export function createLarkOutboundRuntime(
       activeToolSequenceBlockId: state.activeToolSequenceBlockId,
       blockCount: state.blocks.length,
       footerStatus: state.footerStatus,
+      footerNotice: state.footerNotice,
     });
 
     const deliveryTargets = listLarkDeliveryTargets(input.storage, {
@@ -485,7 +546,8 @@ export function createLarkOutboundRuntime(
       if (
         state.taskRunId != null &&
         shouldRenderStandaloneTaskCard(state.taskRunType) &&
-        taskRootBinding?.larkMessageId == null
+        taskRootBinding?.larkMessageId == null &&
+        taskRootBinding?.status !== "stale"
       ) {
         const taskStatusDeliveryId = `${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`;
         logger.debug("deferring task transcript flush until task status card exists", {
@@ -605,6 +667,7 @@ export function createLarkOutboundRuntime(
               pageObjectId,
               pageIndex: renderedPage.pageIndex,
             },
+            deliveryId: `run:${runCardObjectId}`,
           });
           if (binding == null) {
             shouldDeferDocPreview = true;
@@ -991,6 +1054,7 @@ export function createLarkOutboundRuntime(
             taskRunId,
             cardRole: "task_status",
           },
+          deliveryId: `${TASK_STATUS_DELIVERY_PREFIX}${taskRunId}`,
         });
         if (binding == null) {
           continue;
@@ -1159,7 +1223,8 @@ export function createLarkOutboundRuntime(
       if (
         state.taskRunId != null &&
         shouldRenderStandaloneTaskCard(state.taskRunType) &&
-        taskRootBinding?.larkMessageId == null
+        taskRootBinding?.larkMessageId == null &&
+        taskRootBinding?.status !== "stale"
       ) {
         const taskStatusDeliveryId = `${TASK_STATUS_DELIVERY_PREFIX}${state.taskRunId}`;
         logger.debug("deferring task approval card flush until task status card exists", {
@@ -1219,6 +1284,7 @@ export function createLarkOutboundRuntime(
             approvalId: state.approvalId,
             runId: state.runId,
           },
+          deliveryId: `approval:${approvalFlowId}`,
         });
         if (binding == null) {
           continue;
@@ -1369,6 +1435,7 @@ export function createLarkOutboundRuntime(
             requestId,
             status: entry.state.status,
           },
+          deliveryId: `subagent:${requestId}`,
         });
         if (binding == null) {
           continue;
@@ -1717,6 +1784,83 @@ export function createLarkOutboundRuntime(
     }
   };
 
+  const handleOutboundAttachmentEvent = async (
+    envelope: OrchestratedOutboundAttachmentEventEnvelope,
+  ): Promise<void> => {
+    if (envelope.event.attachmentType !== "image") {
+      logger.warn("skipping lark outbound attachment because only image delivery is implemented", {
+        eventId: envelope.event.eventId,
+        conversationId: envelope.target.conversationId,
+        branchId: envelope.target.branchId,
+        taskRunId: envelope.taskRun.taskRunId,
+        attachmentType: envelope.event.attachmentType,
+        attachmentPath: envelope.event.attachmentPath,
+      });
+      return;
+    }
+
+    const deliveryTargets = listLarkDeliveryTargets(input.storage, {
+      conversationId: envelope.target.conversationId,
+      branchId: envelope.target.branchId,
+      taskRunId: envelope.taskRun.taskRunId,
+    });
+
+    if (deliveryTargets.length === 0) {
+      logger.warn("skipping lark outbound image because no lark delivery target is paired", {
+        eventId: envelope.event.eventId,
+        conversationId: envelope.target.conversationId,
+        branchId: envelope.target.branchId,
+        attachmentPath: envelope.event.attachmentPath,
+      });
+      return;
+    }
+
+    for (const target of deliveryTargets) {
+      const chatId = readStringValue(target.surfaceObject.chat_id);
+      if (chatId == null) {
+        logger.warn("skipping lark outbound image because surface is missing chat_id", {
+          eventId: envelope.event.eventId,
+          conversationId: envelope.target.conversationId,
+          branchId: envelope.target.branchId,
+          channelInstallationId: target.channelInstallationId,
+          attachmentPath: envelope.event.attachmentPath,
+        });
+        continue;
+      }
+
+      const replyToMessageId = readStringValue(target.surfaceObject.reply_to_message_id);
+      try {
+        const result = await sendLarkImageMessage({
+          installationId: target.channelInstallationId,
+          chatId,
+          ...(replyToMessageId == null ? {} : { replyToMessageId }),
+          imagePath: envelope.event.attachmentPath,
+          clients: input.clients,
+        });
+
+        logger.info("sent lark outbound image attachment event", {
+          eventId: envelope.event.eventId,
+          channelInstallationId: target.channelInstallationId,
+          chatId,
+          replyToMessageId,
+          attachmentPath: envelope.event.attachmentPath,
+          imageKey: result.imageKey,
+          messageId: result.messageId,
+          openMessageId: result.openMessageId,
+        });
+      } catch (error) {
+        logger.error("failed to send lark outbound image attachment event", {
+          eventId: envelope.event.eventId,
+          channelInstallationId: target.channelInstallationId,
+          chatId,
+          replyToMessageId,
+          attachmentPath: envelope.event.attachmentPath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
+
   return {
     start() {
       if (unsubscribe != null) {
@@ -1796,6 +1940,10 @@ export function createLarkOutboundRuntime(
             immediate: isTaskLifecycleTerminalEvent(envelope),
           });
           return;
+        }
+
+        if (envelope.kind === "outbound_attachment_event") {
+          return handleOutboundAttachmentEvent(envelope);
         }
 
         if (envelope.kind !== "runtime_event") {
@@ -1932,6 +2080,7 @@ export function createLarkOutboundRuntime(
           activeToolSequenceBlockId: next.activeToolSequenceBlockId,
           blockCount: next.blocks.length,
           footerStatus: next.footerStatus,
+          footerNotice: next.footerNotice,
           terminal: next.terminal,
         });
         bumpVersionAndSchedule(`run:${runCardObjectId}`, {
@@ -2105,6 +2254,206 @@ async function sendLarkInteractiveCardReferenceMessage(input: {
       ...(input.larkMessageUuid == null ? {} : { uuid: input.larkMessageUuid }),
     },
   }) as Promise<LarkInteractiveMessageResponse>;
+}
+
+function isTerminalIncompleteCardReferenceBinding(binding: LarkObjectBinding | null): boolean {
+  return binding?.status === "stale" && binding.larkMessageId == null && binding.larkCardId != null;
+}
+
+function preserveCardReferenceSendFailureMetadata(input: {
+  nextMetadataJson: string;
+  existingMetadataJson: string | null;
+}): string {
+  const nextMetadata = parseBindingMetadata(input.nextMetadataJson);
+  const existingMetadata = parseBindingMetadata(input.existingMetadataJson);
+  const existingFailure = existingMetadata[LARK_CARD_REFERENCE_SEND_FAILURE_METADATA_KEY];
+  if (
+    nextMetadata[LARK_CARD_REFERENCE_SEND_FAILURE_METADATA_KEY] == null &&
+    isRecord(existingFailure)
+  ) {
+    return JSON.stringify({
+      ...nextMetadata,
+      [LARK_CARD_REFERENCE_SEND_FAILURE_METADATA_KEY]: existingFailure,
+    });
+  }
+
+  return JSON.stringify(nextMetadata);
+}
+
+function handleRecoverableCardReferenceSendFailure(input: {
+  bindingsRepo: LarkObjectBindingsRepo;
+  binding: LarkObjectBinding;
+  channelInstallationId: string;
+  internalObjectKind: string;
+  internalObjectId: string;
+  conversationId: string;
+  branchId: string;
+  threadRootMessageId: string | null;
+  cardElementId: string | null | undefined;
+  lastSequence: number | null | undefined;
+  desiredStatus: "active" | "finalized" | "stale";
+  metadataJson: string;
+  deliveryId: string;
+  error: unknown;
+  logContext: Record<string, unknown>;
+  scheduleRetry: () => void;
+}): void {
+  const failureKind = classifyRecoverableCardReferenceSendFailure(input.error);
+  if (failureKind == null) {
+    throw input.error;
+  }
+
+  const existingMetadata = parseBindingMetadata(input.binding.metadataJson ?? input.metadataJson);
+  const attempts = readCardReferenceSendFailureAttempts(existingMetadata) + 1;
+  const terminal = attempts > LARK_CARD_REFERENCE_SEND_RETRY_LIMIT;
+  const failureMetadata = buildCardReferenceSendFailureMetadata({
+    metadata: existingMetadata,
+    attempts,
+    failureKind,
+    error: input.error,
+  });
+
+  if (terminal) {
+    input.bindingsRepo.patchByInternalObject({
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+      conversationId: input.conversationId,
+      branchId: input.branchId,
+      threadRootMessageId: input.threadRootMessageId,
+      cardElementId: input.cardElementId,
+      lastSequence: input.lastSequence,
+      status: "stale",
+      metadataJson: failureMetadata,
+    });
+    logger.error("marked lark card reference binding stale after repeated send failure", {
+      ...input.logContext,
+      channelInstallationId: input.channelInstallationId,
+      internalObjectKind: input.internalObjectKind,
+      internalObjectId: input.internalObjectId,
+      deliveryId: input.deliveryId,
+      larkCardId: input.binding.larkCardId,
+      larkMessageUuid: input.binding.larkMessageUuid,
+      attempts,
+      retryLimit: LARK_CARD_REFERENCE_SEND_RETRY_LIMIT,
+      failureKind,
+      httpStatus: readLarkHttpStatus(input.error),
+    });
+    return;
+  }
+
+  const nextMessageUuid = randomUUID();
+  input.bindingsRepo.patchByInternalObject({
+    channelInstallationId: input.channelInstallationId,
+    internalObjectKind: input.internalObjectKind,
+    internalObjectId: input.internalObjectId,
+    conversationId: input.conversationId,
+    branchId: input.branchId,
+    larkMessageUuid: nextMessageUuid,
+    larkMessageId: null,
+    larkOpenMessageId: null,
+    larkCardId: null,
+    threadRootMessageId: input.threadRootMessageId,
+    cardElementId: input.cardElementId,
+    lastSequence: input.lastSequence,
+    status: input.desiredStatus,
+    metadataJson: failureMetadata,
+  });
+  logger.warn("abandoned ambiguous lark card reference binding and scheduled fresh retry", {
+    ...input.logContext,
+    channelInstallationId: input.channelInstallationId,
+    internalObjectKind: input.internalObjectKind,
+    internalObjectId: input.internalObjectId,
+    deliveryId: input.deliveryId,
+    abandonedLarkCardId: input.binding.larkCardId,
+    abandonedLarkMessageUuid: input.binding.larkMessageUuid,
+    nextLarkMessageUuid: nextMessageUuid,
+    attempts,
+    retryLimit: LARK_CARD_REFERENCE_SEND_RETRY_LIMIT,
+    failureKind,
+    delayMs: LARK_CARD_REFERENCE_SEND_RETRY_DELAY_MS,
+    httpStatus: readLarkHttpStatus(input.error),
+  });
+  input.scheduleRetry();
+}
+
+function buildCardReferenceSendFailureMetadata(input: {
+  metadata: Record<string, unknown>;
+  attempts: number;
+  failureKind: "ambiguous_transport_failure" | "card_binding_biz_count_over_limit";
+  error: unknown;
+}): string {
+  const responseData = readLarkErrorResponseData(input.error);
+  const message =
+    input.error instanceof Error ? input.error.message : truncateLogText(String(input.error), 160);
+  return JSON.stringify({
+    ...input.metadata,
+    [LARK_CARD_REFERENCE_SEND_FAILURE_METADATA_KEY]: {
+      attempts: input.attempts,
+      lastFailureKind: input.failureKind,
+      lastFailedAt: new Date().toISOString(),
+      httpStatus: readLarkHttpStatus(input.error),
+      upstreamCode: readNumberValue(responseData?.code),
+      upstreamLogId: readStringValue(responseData?.log_id),
+      messagePreview: truncateLogText(message, 160),
+    },
+  });
+}
+
+function readCardReferenceSendFailureAttempts(metadata: Record<string, unknown>): number {
+  const failure = metadata[LARK_CARD_REFERENCE_SEND_FAILURE_METADATA_KEY];
+  if (!isRecord(failure)) {
+    return 0;
+  }
+  const attempts = failure.attempts;
+  return typeof attempts === "number" && Number.isInteger(attempts) && attempts > 0 ? attempts : 0;
+}
+
+function isRecoverableCardReferenceSendFailure(error: unknown): boolean {
+  return classifyRecoverableCardReferenceSendFailure(error) != null;
+}
+
+function classifyRecoverableCardReferenceSendFailure(
+  error: unknown,
+): "ambiguous_transport_failure" | "card_binding_biz_count_over_limit" | null {
+  if (isAmbiguousLarkCardkitTransportError(error)) {
+    return "ambiguous_transport_failure";
+  }
+  return isLarkCardBindingBizCountOverLimitError(error)
+    ? "card_binding_biz_count_over_limit"
+    : null;
+}
+
+function isLarkCardBindingBizCountOverLimitError(error: unknown): boolean {
+  const responseData = readLarkErrorResponseData(error);
+  const status = readLarkHttpStatus(error);
+  const code = readNumberValue(responseData?.code);
+  const msg = readStringValue(responseData?.msg) ?? "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    status === 400 &&
+    code === 230099 &&
+    /200780|card binding biz count over limit/i.test(`${msg} ${message}`)
+  );
+}
+
+function readLarkErrorResponseData(error: unknown): Record<string, unknown> | null {
+  if (!isRecord(error)) {
+    return null;
+  }
+  const response = error.response;
+  if (!isRecord(response)) {
+    return null;
+  }
+  return isRecord(response.data) ? response.data : null;
+}
+
+function readNumberValue(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value != null && !Array.isArray(value);
 }
 
 async function sendLarkThreadMarkdownCard(input: {
@@ -2302,6 +2651,7 @@ function shouldCreateRunSegmentForEvent(envelope: OrchestratedRuntimeEventEnvelo
     case "assistant_message_started":
     case "assistant_message_delta":
     case "assistant_message_completed":
+    case "assistant_response_retrying":
     case "tool_call_started":
     case "tool_call_completed":
     case "tool_call_failed":

@@ -9,6 +9,7 @@ import {
   checkBashFullAccessPermission,
   checkDatabasePermission,
   checkFilesystemPermission,
+  normalizeFilesystemTargetPath,
   parseGrantedScopes,
 } from "@/src/security/permissions.js";
 import {
@@ -138,6 +139,61 @@ describe("effective permissions", () => {
 });
 
 describe("filesystem permission checks", () => {
+  test("expands Windows-style home-relative hard denies under the user's home", () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = tempDir;
+    try {
+      const permissions = buildEffectivePermissions(
+        [],
+        {
+          ...buildSystemPolicy(),
+          fs: {
+            read: {
+              hardDeny: ["~\\.ssh/**"],
+              deny: [],
+            },
+            write: {
+              hardDeny: ["~\\.ssh/**"],
+              deny: [],
+            },
+          },
+        },
+        buildAgentPermissionBaseline("main"),
+      );
+      const targetPath = path.join(tempDir, ".ssh", "id_rsa");
+      const normalizedTargetPath = normalizeFilesystemTargetPath(targetPath);
+
+      expect(
+        checkFilesystemPermission({
+          kind: "fs.read",
+          targetPath,
+          permissions,
+        }),
+      ).toEqual({
+        result: "deny",
+        reason: "hard_deny",
+        summary: `fs.read is blocked by system policy for ${normalizedTargetPath}`,
+      });
+      expect(
+        checkFilesystemPermission({
+          kind: "fs.write",
+          targetPath,
+          permissions,
+        }),
+      ).toEqual({
+        result: "deny",
+        reason: "hard_deny",
+        summary: `fs.write is blocked by system policy for ${normalizedTargetPath}`,
+      });
+    } finally {
+      if (originalHome == null) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
   test("main agent can read a normal home path without an explicit grant", () => {
     const permissions = buildEffectivePermissions(
       [],

@@ -123,7 +123,7 @@ describe("lark inbound message handling", () => {
 
       const submitMessage = vi.fn(async () => {
         throw new Error(
-          "Run hit the configured max turn limit (60) before producing a final response.",
+          "Run hit the configured max turn limit (100) before producing a final response.",
         );
       });
       const create = vi.fn(async () => ({ data: { message_id: "om_fail_1" } }));
@@ -148,7 +148,7 @@ describe("lark inbound message handling", () => {
       });
 
       await expect(handler(makeTextEvent("hello from lark"))).rejects.toThrow(
-        "configured max turn limit (60)",
+        "configured max turn limit (100)",
       );
       expect(create).toHaveBeenCalledOnce();
       const createCall = (create as unknown as { mock: { calls: unknown[][] } }).mock
@@ -161,7 +161,7 @@ describe("lark inbound message handling", () => {
         },
       });
       expect(createCall?.data?.content ?? "").toContain("执行失败");
-      expect(createCall?.data?.content ?? "").toContain("max turn limit (60)");
+      expect(createCall?.data?.content ?? "").toContain("max turn limit (100)");
     });
   });
 

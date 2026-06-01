@@ -175,6 +175,28 @@ Matching `secrets.toml`:
 appSecret = "paste-your-feishu-or-lark-app-secret-here"
 ```
 
+To create a fast-tier Codex model instance, add a separate catalog entry that points at the
+same upstream model and sets `serviceTier = "fast"`:
+
+```toml
+[[models.catalog]]
+id = "codex-gpt5.5-fast"
+provider = "openai_codex"
+upstreamId = "gpt-5.5"
+contextWindow = 400000
+maxOutputTokens = 16384
+supportsTools = true
+supportsVision = true
+serviceTier = "fast"
+[models.catalog.reasoning]
+enabled = true
+effort = "high"
+```
+
+`serviceTier = "fast"` is sent to the native Codex/OpenAI Responses request as
+`service_tier = "priority"`. It is a model-instance setting, like
+`reasoning.effort`, so scenarios can choose the normal or fast entry explicitly.
+
 ### Template B: OpenRouter via environment variable
 
 Replace `upstreamId` with the OpenRouter model the user actually wants. The structure stays the same.
@@ -320,6 +342,31 @@ autopilot = true
 ```
 
 Restart Pokoclaw after changing this value.
+
+On native Windows, sandboxed bash is not available yet. If `[runtime] autopilot = true` is enabled,
+commands run directly on the Windows host with full access instead of using Linux sandbox
+isolation. Pokoclaw uses PowerShell syntax by default on Windows and falls back to cmd only when
+PowerShell is unavailable. Only enable this on a machine and workspace where that trust model is
+acceptable.
+
+### LLM empty-output retries
+
+Pokoclaw retries a model response when the model times out before producing any
+visible output, or returns an empty assistant message with no tool call. The
+default is five total model attempts, including the first request.
+
+```toml
+[runtime]
+maxEmptyOutputLlmAttempts = 5
+llmFirstResponseTimeoutMs = 45000
+```
+
+Lark run cards show retry progress in the footer, for example:
+`🔁 模型调用出错，正在重试 2/5`.
+
+Use `llmFirstResponseTimeoutMs` to shorten or lengthen the per-attempt wait for
+the first semantic model event. Local testing can set it to `3000` to trigger the
+retry path quickly.
 
 ### If the user prefers file-based secrets
 

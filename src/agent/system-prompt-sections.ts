@@ -68,6 +68,9 @@ function buildBackgroundTaskSharedGuidance(): string[] {
 export interface WorkspaceRuntimePromptContext {
   currentDate?: string | null;
   timezone?: string | null;
+}
+
+export interface BashFullAccessPromptContext {
   shellInfo?: RuntimeShellInfo | null;
 }
 
@@ -118,6 +121,7 @@ export function buildApprovalAgentIdentitySection(): string {
 export function buildMainAgentOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Stay responsive as the user's single entrypoint and protect your own bandwidth for new requests, interruptions, and coordination.",
+    "- Bash commands are capped at 60 seconds to keep you responsive for new requests and interruptions. For longer-running work, use background_task (unattended one-shot) or create_subagent (interactive, multi-step).",
     "- Default to concise, mobile-friendly replies. Many users read on phones with limited screen space, so keep routine answers compact and easy to scan.",
     "- If the user explicitly asks for a deep explanation, a technical analysis, or a thorough walkthrough, then be as complete as the task requires.",
     "- You can and should handle casual conversation, quick answers, short local exploration, and top-level coordination in the main chat.",
@@ -237,6 +241,7 @@ export function buildApprovalAgentOperatingModelSection(): string {
 export function buildToolUsageSection(): string {
   return renderSection("Tool Usage", [
     "- Use the existing first-class tool when one is available instead of inventing an indirect shell workaround.",
+    "- When the user asks you to send, show, share, or deliver an image or file in the current chat, create or locate a real local file and use `send_attachment`; set `type` to `image` for images. Do not replace it with a Markdown link, file path, A2UI surface, or ordinary text/card reply.",
     "- Routine low-risk tool calls do not need narration first.",
     "- For complex, risky, or potentially destructive actions, briefly explain what you are about to do.",
     "- Tool names and arguments are exact; call them precisely as defined.",
@@ -315,7 +320,7 @@ export function buildPermissionsSection(): string {
   ]);
 }
 
-export function buildBashFullAccessSection(): string {
+export function buildBashFullAccessSection(input: BashFullAccessPromptContext = {}): string {
   return renderSection("Bash Tool", [
     "- Bash has two execution modes: `sandboxed` and `full_access`.",
     "- `sandboxed` is the default mode.",
@@ -367,7 +372,8 @@ export function buildBashFullAccessSection(): string {
     "- Example: a one-off setup or diagnostic command should omit `prefix`.",
     "- Not suitable: `npm run dev | tee out.log`",
     "- Not suitable: `curl ... && bash ...`",
-    "- Background shell operators are not supported; do not use unmanaged backgrounding like &, nohup, setsid, or disown.",
+    ...buildBackgroundShellGuidance(input.shellInfo),
+    ...buildWindowsShellSyntaxLines(input.shellInfo),
     "",
     "- Decision flow:",
     "- 1. Decide whether the real need is local task-file access or broader shell execution.",
@@ -455,6 +461,29 @@ export function buildBashFullAccessSection(): string {
   ]);
 }
 
+function buildWindowsShellSyntaxLines(shellInfo: RuntimeShellInfo | null | undefined): string[] {
+  if (shellInfo?.isWindows !== true) {
+    return [];
+  }
+
+  const syntaxLabel = shellInfo.commandShell.syntax === "powershell" ? "PowerShell" : "cmd";
+  return [
+    "",
+    "- You are running on Windows.",
+    `- The available shell syntax is ${syntaxLabel}. Write \`command\` using ${syntaxLabel} syntax.`,
+  ];
+}
+
+function buildBackgroundShellGuidance(shellInfo: RuntimeShellInfo | null | undefined): string[] {
+  if (shellInfo?.isWindows === true) {
+    return ["- Background shell jobs are not supported; run commands in the foreground."];
+  }
+
+  return [
+    "- Background shell operators are not supported; do not use unmanaged backgrounding like &, nohup, setsid, or disown.",
+  ];
+}
+
 export function buildApprovalReviewSection(): string {
   return renderSection("Approval Review", [
     "- This session exists only to review delegated approval requests from unattended runs.",
@@ -508,7 +537,6 @@ export function buildSafetySection(): string {
 }
 
 export function buildWorkspaceRuntimeSection(input: WorkspaceRuntimePromptContext = {}): string {
-  const shellInfo = input.shellInfo;
   const lines = [
     ...(input.currentDate == null || input.currentDate.trim().length === 0
       ? []
@@ -516,15 +544,6 @@ export function buildWorkspaceRuntimeSection(input: WorkspaceRuntimePromptContex
     ...(input.timezone == null || input.timezone.trim().length === 0
       ? []
       : [`- Time zone: ${input.timezone.trim()}`]),
-    ...(shellInfo == null
-      ? []
-      : [
-          `- Host platform: ${shellInfo.platformLabel} (${shellInfo.platform})`,
-          `- Host shell: ${shellInfo.hostShell.label} (detected from ${shellInfo.hostShell.detectionSource})`,
-          `- Bash tool shell: ${shellInfo.bashTool.invocation}; command syntax is ${shellInfo.bashTool.syntax}.`,
-          `- Bash default execution mode: ${shellInfo.bashTool.defaultSandboxMode}.`,
-          ...shellInfo.notes.map((note) => `- ${note}`),
-        ]),
   ];
 
   if (lines.length === 0) {

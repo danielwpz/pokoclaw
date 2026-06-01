@@ -3,53 +3,7 @@ import { describe, expect, test } from "vitest";
 import { detectRuntimeShellInfo, getDefaultBashExecutable } from "@/src/runtime/shell-info.js";
 
 describe("runtime shell info", () => {
-  test("detects Git Bash on native Windows from MSYSTEM", () => {
-    const info = detectRuntimeShellInfo({
-      platform: "win32",
-      env: {
-        MSYSTEM: "MINGW64",
-        SHELL: "C:/Program Files/Git/usr/bin/bash.exe",
-      },
-    });
-
-    expect(info.platformLabel).toBe("Windows");
-    expect(info.hostShell.kind).toBe("git_bash");
-    expect(info.hostShell.label).toBe("Git Bash / MinGW (MINGW64)");
-    expect(info.bashTool).toMatchObject({
-      executable: "bash",
-      invocation: "bash -lc <command>",
-      syntax: "bash",
-      defaultSandboxMode: "sandboxed",
-    });
-    expect(info.notes.join("\n")).toContain("native Windows process");
-  });
-
-  test("detects Command Prompt on native Windows from PROMPT and ComSpec", () => {
-    const info = detectRuntimeShellInfo({
-      platform: "win32",
-      env: {
-        PROMPT: "$P$G",
-        ComSpec: "C:\\Windows\\System32\\cmd.exe",
-      },
-    });
-
-    expect(info.hostShell.kind).toBe("cmd");
-    expect(info.hostShell.label).toBe("Command Prompt");
-    expect(info.hostShell.executable).toBe("C:\\Windows\\System32\\cmd.exe");
-  });
-
-  test("keeps unknown Windows shell explicit when env cannot identify it", () => {
-    const info = detectRuntimeShellInfo({
-      platform: "win32",
-      env: {},
-    });
-
-    expect(info.hostShell.kind).toBe("unknown_windows");
-    expect(info.notes.join("\n")).toContain("not identifiable");
-    expect(info.notes.join("\n")).toContain("does not grant full_access");
-  });
-
-  test("uses /bin/bash on non-Windows platforms without Windows shell notes", () => {
+  test("keeps non-Windows platforms on bash syntax", () => {
     const info = detectRuntimeShellInfo({
       platform: "linux",
       env: {
@@ -58,10 +12,85 @@ describe("runtime shell info", () => {
     });
 
     expect(getDefaultBashExecutable("linux")).toBe("/bin/bash");
-    expect(info.platformLabel).toBe("Linux");
-    expect(info.hostShell.kind).toBe("unknown");
-    expect(info.hostShell.label).toBe("/bin/zsh");
-    expect(info.bashTool.invocation).toBe("/bin/bash -lc <command>");
-    expect(info.notes).toEqual(["The bash tool uses bash syntax through /bin/bash -lc."]);
+    expect(info).toMatchObject({
+      platformLabel: "Linux",
+      isWindows: false,
+      commandShell: {
+        kind: "bash",
+        label: "bash",
+        executable: "/bin/bash",
+        args: ["-lc"],
+        invocation: "/bin/bash -lc <command>",
+        syntax: "bash",
+        recommended: true,
+      },
+    });
+  });
+
+  test("prefers PowerShell 7 on native Windows", () => {
+    const info = detectRuntimeShellInfo({
+      platform: "win32",
+      env: {
+        ProgramFiles: "C:\\Program Files",
+        SystemRoot: "C:\\Windows",
+      },
+      isExecutableAvailable: (candidate) =>
+        candidate === "C:\\Program Files\\PowerShell\\7\\pwsh.exe" || candidate === "cmd.exe",
+    });
+
+    expect(info).toMatchObject({
+      platformLabel: "Windows",
+      isWindows: true,
+      commandShell: {
+        kind: "powershell",
+        label: "PowerShell 7",
+        executable: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+        args: ["-NoProfile", "-NonInteractive", "-Command"],
+        invocation:
+          "C:\\Program Files\\PowerShell\\7\\pwsh.exe -NoProfile -NonInteractive -Command <command>",
+        syntax: "powershell",
+        recommended: true,
+      },
+    });
+  });
+
+  test("falls back to Windows PowerShell when pwsh is unavailable", () => {
+    const info = detectRuntimeShellInfo({
+      platform: "win32",
+      env: {
+        ProgramFiles: "C:\\Program Files",
+        SystemRoot: "C:\\Windows",
+      },
+      isExecutableAvailable: (candidate) =>
+        candidate === "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    });
+
+    expect(info.commandShell).toMatchObject({
+      kind: "powershell",
+      label: "PowerShell",
+      executable: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      syntax: "powershell",
+      recommended: true,
+    });
+  });
+
+  test("falls back to cmd only when PowerShell is unavailable", () => {
+    const info = detectRuntimeShellInfo({
+      platform: "win32",
+      env: {
+        ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      },
+      isExecutableAvailable: (candidate) => candidate === "C:\\Windows\\System32\\cmd.exe",
+    });
+
+    expect(info.commandShell).toMatchObject({
+      kind: "cmd",
+      label: "cmd",
+      executable: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c"],
+      invocation: "C:\\Windows\\System32\\cmd.exe /d /s /c <command>",
+      syntax: "cmd",
+      recommended: false,
+    });
   });
 });

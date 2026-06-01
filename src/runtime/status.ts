@@ -20,7 +20,6 @@ import type {
   EffectiveApprovalModeSource,
   RuntimeModeService,
 } from "@/src/runtime/runtime-modes.js";
-import { detectRuntimeShellInfo, type RuntimeShellInfo } from "@/src/runtime/shell-info.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -49,6 +48,7 @@ export interface StatusModelSnapshot {
   upstreamModelId: string | null;
   modelApi: string | null;
   supportsReasoning: boolean | null;
+  serviceTier?: string | null;
   source: "latest_assistant" | "agent_default" | "scenario_default" | "unknown";
 }
 
@@ -85,7 +85,6 @@ export interface ConversationStatusSnapshot {
   sessionId: string;
   model: StatusModelSnapshot;
   runtimeMode: StatusRuntimeModeSnapshot;
-  runtimeEnvironment?: RuntimeShellInfo;
   sessionUsage: StatusUsageSnapshot | null;
   latestTurnUsage: StatusUsageSnapshot | null;
   latestTurnErrorMessage: string | null;
@@ -187,7 +186,6 @@ export class RuntimeStatusService {
       sessionId: input.sessionId,
       model,
       runtimeMode,
-      runtimeEnvironment: detectRuntimeShellInfo(),
       sessionUsage,
       latestTurnUsage,
       latestTurnErrorMessage:
@@ -217,10 +215,10 @@ export function formatConversationStatusText(snapshot: ConversationStatusSnapsho
   if (snapshot.model.supportsReasoning != null) {
     lines.push(`Reasoning: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`);
   }
-  lines.push(`运行模式：${formatRuntimeModeLine(snapshot.runtimeMode)}`);
-  if (snapshot.runtimeEnvironment != null) {
-    lines.push(`Host: ${formatRuntimeShellLine(snapshot.runtimeEnvironment)}`);
+  if (snapshot.model.serviceTier != null) {
+    lines.push(`Service tier: ${snapshot.model.serviceTier}`);
   }
+  lines.push(`运行模式：${formatRuntimeModeLine(snapshot.runtimeMode)}`);
   if (snapshot.mcp != null) {
     lines.push(...formatMcpTextLines(snapshot.mcp));
   }
@@ -320,10 +318,10 @@ export function buildConversationStatusPresentation(
         ...(snapshot.model.supportsReasoning == null
           ? []
           : [`**Reasoning**: ${snapshot.model.supportsReasoning ? "支持" : "不支持"}`]),
-        `**运行模式**：${formatRuntimeModeLine(snapshot.runtimeMode)}`,
-        ...(snapshot.runtimeEnvironment == null
+        ...(snapshot.model.serviceTier == null
           ? []
-          : [`**Host**: ${formatRuntimeShellLine(snapshot.runtimeEnvironment)}`]),
+          : [`**Service tier**: ${snapshot.model.serviceTier}`]),
+        `**运行模式**：${formatRuntimeModeLine(snapshot.runtimeMode)}`,
         ...(snapshot.mcp == null ? [] : formatMcpMarkdownLines(snapshot.mcp)),
       ].join("\n"),
       [
@@ -396,10 +394,6 @@ function formatRuntimeModeLine(mode: StatusRuntimeModeSnapshot): string {
   }
 }
 
-function formatRuntimeShellLine(shellInfo: RuntimeShellInfo): string {
-  return `${shellInfo.platformLabel} / ${shellInfo.hostShell.label} / bash tool: ${shellInfo.bashTool.invocation}`;
-}
-
 function resolveStatusModel(input: {
   latestAssistant: Message | null;
   session: Session;
@@ -418,6 +412,7 @@ function resolveStatusModel(input: {
       upstreamModelId: input.latestAssistant.model ?? null,
       modelApi: input.latestAssistant.modelApi ?? null,
       supportsReasoning: latestAssistantModel?.reasoning?.enabled === true,
+      serviceTier: latestAssistantModel?.serviceTier ?? null,
       source: "latest_assistant",
     };
   }
@@ -444,6 +439,7 @@ function resolveStatusModel(input: {
     upstreamModelId: null,
     modelApi: null,
     supportsReasoning: null,
+    serviceTier: null,
     source: "unknown",
   };
 }
@@ -477,6 +473,7 @@ function modelToStatusSnapshot(
     upstreamModelId: model.upstreamId,
     modelApi: model.provider.api,
     supportsReasoning: model.reasoning?.enabled === true,
+    serviceTier: model.serviceTier ?? null,
     source,
   };
 }
@@ -625,6 +622,7 @@ function formatModelLine(model: StatusModelSnapshot): string {
     model.upstreamModelId,
     model.providerId,
     model.modelApi,
+    model.serviceTier == null ? null : `tier:${model.serviceTier}`,
   ].filter((value): value is string => value != null && value.length > 0);
   return parts.length > 0 ? parts.join(" / ") : "未知";
 }

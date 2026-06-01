@@ -1190,6 +1190,70 @@ describe("AgentManager", () => {
     });
   });
 
+  test("appends a hidden scheduled task settled notice to the owner chat session", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const messagesRepo = new MessagesRepo(handle.storage.db);
+      handle.storage.sqlite.exec(`
+        INSERT INTO cron_jobs (
+          id, owner_agent_id, target_conversation_id, target_branch_id,
+          name, schedule_kind, schedule_value, context_mode, payload_json, created_at, updated_at
+        ) VALUES (
+          'cron_2', 'agent_sub', 'conv_sub', 'branch_sub',
+          'Nightly reconcile', 'cron', '*/5 * * * *', 'group', '{"job":"reconcile"}',
+          '2026-03-25T00:00:00.000Z', '2026-03-25T00:00:00.000Z'
+        );
+        INSERT INTO sessions (
+          id, conversation_id, branch_id, owner_agent_id, purpose, context_mode, status,
+          compact_cursor, created_at, updated_at
+        ) VALUES (
+          'sess_sub_chat', 'conv_sub', 'branch_sub', 'agent_sub', 'chat', 'group', 'active',
+          0, '2026-03-25T00:00:02.000Z', '2026-03-25T00:00:03.000Z'
+        );
+      `);
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(
+            async (input: SubmitMessageInput): Promise<SubmitMessageResult> =>
+              createStartedTaskRunResult({
+                sessionId: input.sessionId,
+                scenario: "task",
+                summary: "Cron reconciliation finished.",
+                finalMessage: "Cron reconciliation finished.",
+              }),
+          ),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+      });
+
+      const result = await manager.runCronTaskExecutionFromJob({
+        cronJobId: "cron_2",
+        createdAt: new Date("2026-03-25T00:00:10.000Z"),
+      });
+
+      const hiddenNotices = messagesRepo
+        .listBySession("sess_sub_chat")
+        .filter(
+          (message) =>
+            message.messageType === "scheduled_task_run_settled" &&
+            message.visibility === "hidden_system",
+        );
+      expect(hiddenNotices).toHaveLength(1);
+      const content = JSON.parse(hiddenNotices[0]?.payloadJson ?? "{}").content as string;
+      expect(content).toContain('<system_event type="scheduled_task_run_settled">');
+      expect(content).toContain('Scheduled task "Nightly reconcile" finished.');
+      expect(content).toContain("scheduled_task_id: cron_2");
+      expect(content).toContain(`task_run_id: ${result.settled.taskRun.id}`);
+      expect(content).toContain("status: completed");
+      expect(content).toContain("finished_at:");
+      expect(content).toContain('schedule_task action="list"');
+      expect(content).toContain("query_system_db");
+      expect(content).toContain("Do not echo this raw system_event block to the user.");
+    });
+  });
+
   test("rejects cron task execution creation for unknown cron jobs", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);
@@ -1482,6 +1546,84 @@ describe("AgentManager", () => {
         event: {
           type: "assistant_message_delta",
           delta: "hello",
+        },
+      });
+    });
+  });
+
+  test("publishes outbound attachment envelopes to the outbound event bus", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      handle.storage.sqlite.exec(`
+        INSERT INTO task_runs (
+          id, run_type, owner_agent_id, conversation_id, branch_id,
+          execution_session_id, status, started_at
+        ) VALUES (
+          'task_image_1', 'delegate', 'agent_sub', 'conv_sub', 'branch_sub',
+          'sess_sub', 'running', '2026-03-25T00:00:02.500Z'
+        );
+      `);
+
+      const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+      const published: OrchestratedOutboundEventEnvelope[] = [];
+      bus.subscribe(async (event) => {
+        published.push(event);
+      });
+
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage: vi.fn(async () => ({ status: "steered" as const })),
+          submitApprovalDecision: vi.fn(() => false),
+        },
+        outboundEventBus: bus,
+      });
+
+      const result = manager.publishOutboundAttachment({
+        sourceSessionId: "sess_sub",
+        conversationId: "conv_sub",
+        branchId: "branch_sub",
+        runId: "run_1",
+        taskRunId: "task_image_1",
+        attachmentPath: "/tmp/chart.png",
+        displayPath: "chart.png",
+        type: "image",
+      });
+      await flushMicrotasks();
+
+      expect(result).toMatchObject({
+        accepted: true,
+        eventId: expect.any(String),
+      });
+      expect(published).toHaveLength(1);
+      expect(published[0]).toMatchObject({
+        kind: "outbound_attachment_event",
+        target: {
+          conversationId: "conv_sub",
+          branchId: "branch_sub",
+        },
+        session: {
+          sessionId: "sess_sub",
+          purpose: "task",
+        },
+        agent: {
+          ownerAgentId: "agent_sub",
+          ownerRole: "subagent",
+          mainAgentId: "agent_main",
+        },
+        taskRun: {
+          taskRunId: "task_image_1",
+          runType: "delegate",
+        },
+        run: {
+          runId: "run_1",
+        },
+        event: {
+          type: "outbound_attachment_requested",
+          eventId: result.eventId,
+          attachmentPath: "/tmp/chart.png",
+          displayPath: "chart.png",
+          attachmentType: "image",
         },
       });
     });

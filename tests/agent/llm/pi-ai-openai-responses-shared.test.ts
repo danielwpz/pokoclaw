@@ -36,6 +36,71 @@ function makeStoredMessage(overrides: Partial<Message>): Message {
 }
 
 describe("pi ai openai responses shared", () => {
+  test("generates unique fallback response item ids for multiple unsigned assistant text items", () => {
+    const messages: Message[] = [
+      makeStoredMessage({
+        id: "msg_user",
+        payloadJson: JSON.stringify({ content: "continue" }),
+      }),
+      makeStoredMessage({
+        id: "msg_deepseek_assistant",
+        seq: 2,
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        stopReason: "stop",
+        usageJson: JSON.stringify({
+          input: 10,
+          output: 5,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15,
+        }),
+        payloadJson: JSON.stringify({
+          content: [
+            {
+              type: "thinking",
+              thinking: "Private reasoning from a non-Responses model.",
+            },
+            {
+              type: "text",
+              text: "Visible answer from the same assistant message.",
+            },
+          ],
+        }),
+      }),
+      makeStoredMessage({
+        id: "msg_user_2",
+        seq: 3,
+        payloadJson: JSON.stringify({ content: "next" }),
+      }),
+    ];
+
+    const responseInput = convertResponsesMessages(
+      {
+        id: "codex-gpt5.5",
+        provider: "openai_codex",
+        api: "openai-codex-responses",
+        input: ["text"],
+        reasoning: true,
+      } as never,
+      {
+        systemPrompt: null,
+        messages: buildPiMessages(messages),
+      } as never,
+      new Set<string>(),
+      { includeSystemPrompt: false },
+    ) as Array<{ type?: string; id?: string }>;
+
+    const assistantItemIds = responseInput
+      .filter((entry) => entry.type === "message")
+      .map((entry) => entry.id);
+
+    expect(assistantItemIds).toHaveLength(2);
+    expect(new Set(assistantItemIds).size).toBe(assistantItemIds.length);
+  });
+
   test("preserves explicit synthetic interruption tool results instead of auto-filling missing outputs", () => {
     const messages: Message[] = [
       makeStoredMessage({

@@ -10,6 +10,10 @@ import { SandboxManager } from "@danielwpz/sandbox-runtime";
 import { getDefaultConfigPaths, loadConfig } from "@/src/config/load.js";
 import type { AppConfig } from "@/src/config/schema.js";
 import { createRuntimeBootstrap } from "@/src/runtime/bootstrap.js";
+import {
+  assertNativeWindowsRuntimeSupported,
+  shouldInitializeSandboxRuntime,
+} from "@/src/runtime/host-platform.js";
 import { readLastRuntimeLogTimestamp } from "@/src/runtime/runtime-log.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import {
@@ -42,8 +46,15 @@ export async function main(): Promise<void> {
       models: config.models.catalog.length,
     });
 
-    await initializeSandboxRuntime(config.security);
-    sandboxRuntimeInitialized = true;
+    assertNativeWindowsRuntimeSupported({ autopilotEnabled: config.runtime.autopilot });
+    if (shouldInitializeSandboxRuntime({ autopilotEnabled: config.runtime.autopilot })) {
+      await initializeSandboxRuntime(config.security);
+      sandboxRuntimeInitialized = true;
+    } else {
+      logger.warn("skipping sandbox runtime on native Windows autopilot host execution", {
+        reason: "sandbox-runtime does not support native Windows",
+      });
+    }
 
     storage = await initializeStorageOnStartup();
     runtime = createRuntimeBootstrap({

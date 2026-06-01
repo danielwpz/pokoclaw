@@ -1419,7 +1419,7 @@ describe("agent loop", () => {
     });
   });
 
-  test("uses the default max turn limit of 60 when runtime config is omitted", async () => {
+  test("uses the default max turn limit of 100 when runtime config is omitted", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
 
@@ -1479,9 +1479,9 @@ describe("agent loop", () => {
     });
 
     await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
-      "configured max turn limit (60)",
+      "configured max turn limit (100)",
     );
-    expect(turn).toBe(60);
+    expect(turn).toBe(100);
   });
 
   test("passes owner agent and workspace cwd into tool execution context", async () => {
@@ -4176,6 +4176,106 @@ describe("agent loop", () => {
     });
   });
 
+  test("retries a first-response timeout after a completed tool call", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_user",
+      sessionId: "sess_1",
+      seq: 1,
+      role: "user",
+      payloadJson: '{"content":"run quick tool, then continue"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    let runTurnCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn(input) {
+        runTurnCount += 1;
+        if (runTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "quick_check",
+                arguments: {},
+              },
+            ],
+          });
+        }
+
+        const toolMessages = input.messages.filter((message) => message.role === "tool");
+        expect(toolMessages).toHaveLength(1);
+        expect(toolMessages[0]?.payloadJson ?? "").toContain("tool ok");
+
+        if (runTurnCount === 2) {
+          throw new AgentLlmError({
+            kind: "timeout",
+            message: "LLM first response timed out after 10ms",
+            retryable: true,
+            provider: "anthropic_main",
+            model: "anthropic_main/claude-sonnet-4-5",
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "recovered after tool" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry([
+      defineTool({
+        name: "quick_check",
+        description: "Returns quickly",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute() {
+          return textToolResult("tool ok");
+        },
+      }),
+    ]);
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(runTurnCount).toBe(3);
+    expect(result.events.some((event) => event.type === "run_failed")).toBe(false);
+    expect(
+      result.events.filter((event) => event.type === "assistant_message_started"),
+    ).toHaveLength(3);
+
+    const rows = messagesRepo.listBySession("sess_1");
+    expect(rows).toHaveLength(4);
+    expect(rows[2]?.role).toBe("tool");
+    expect(rows[2]?.payloadJson ?? "").toContain("tool ok");
+    expect(rows[3]?.role).toBe("assistant");
+    expect(JSON.parse(rows[3]?.payloadJson ?? "{}")).toEqual({
+      content: [{ type: "text", text: "recovered after tool" }],
+    });
+  });
+
   test("retries a successful empty assistant output once when nothing visible was streamed", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
@@ -4232,6 +4332,14 @@ describe("agent loop", () => {
     expect(
       result.events.filter((event) => event.type === "assistant_message_started"),
     ).toHaveLength(2);
+    expect(
+      result.events.find((event) => event.type === "assistant_response_retrying"),
+    ).toMatchObject({
+      type: "assistant_response_retrying",
+      attempt: 2,
+      maxAttempts: 5,
+      reason: "successful_empty_output",
+    });
     const rows = messagesRepo.listBySession("sess_1");
     expect(rows).toHaveLength(2);
     expect(JSON.parse(rows[1]?.payloadJson ?? "{}")).toEqual({

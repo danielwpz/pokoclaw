@@ -1,5 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox";
-
+import { isNativeWindowsPlatform } from "@/src/runtime/host-platform.js";
 import { classifyBashApprovalHelper } from "@/src/security/bash-approval-helpers.js";
 import {
   type BashCommandSegment,
@@ -21,6 +21,7 @@ const MAX_TIMEOUT_SEC = 10 * 60;
 const MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC = 60;
 const MAX_OUTPUT_CHARS = 128_000;
 const MISSING_PREFIX_GUIDANCE_CODE = "bash_full_access_missing_prefix";
+const WINDOWS_BASH_REQUIRES_AUTOPILOT_CODE = "windows_bash_requires_autopilot_full_access";
 
 export const BASH_TOOL_SCHEMA = Type.Object(
   {
@@ -87,11 +88,13 @@ export function createBashTool() {
   return defineTool({
     name: "bash",
     description:
-      "Run a shell command in sandboxed or full_access mode. By default it runs sandboxed and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. The default timeout is 10 seconds. You may override it with timeoutSec, but main chat agents cannot request more than 60 seconds; use a subagent for longer work. If approved host execution outside the sandbox is genuinely necessary, rerun with sandboxMode=full_access and justification. When similar simple commands are likely soon, add prefix so future bash calls can reuse approval; choose the prefix scope based on the task.",
+      "Run a shell command in sandboxed or full_access mode. By default it runs sandboxed and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. If approved host execution outside the sandbox is genuinely necessary, rerun with sandboxMode=full_access and justification. When similar simple commands are likely soon, add prefix so future bash calls can reuse approval; choose the prefix scope based on the task.",
     inputSchema: BASH_TOOL_SCHEMA,
     getInvocationTimeoutMs: getBashInvocationTimeoutMs,
     async execute(context, args) {
-      const backgroundReason = detectUnsupportedBackgroundSyntax(args.command);
+      const backgroundReason = isNativeWindowsPlatform()
+        ? null
+        : detectUnsupportedBackgroundSyntax(args.command);
       if (backgroundReason != null) {
         throw toolRecoverableError(
           `Background shell jobs are not supported yet (${backgroundReason}). Run the command in the foreground.`,
@@ -104,18 +107,26 @@ export function createBashTool() {
 
       assertBashTimeoutAllowed(context, args);
       const timeoutMs = getBashInvocationTimeoutMs(context, args);
-      const sandboxMode = args.sandboxMode ?? "sandboxed";
-      if (sandboxMode !== "full_access" && (args.justification != null || args.prefix != null)) {
+      const requestedSandboxMode = args.sandboxMode ?? "sandboxed";
+      if (
+        requestedSandboxMode !== "full_access" &&
+        (args.justification != null || args.prefix != null)
+      ) {
         throw toolRecoverableError(buildFullAccessArgsRequireModeMessage(args), {
           code: "bash_full_access_args_require_full_access_mode",
         });
       }
+      const effectiveExecution = resolveEffectiveBashExecution({
+        context,
+        requestedSandboxMode,
+      });
+      const sandboxMode = effectiveExecution.sandboxMode;
       const security = new SecurityService(
         context.storage,
         buildSystemPolicy({ security: context.securityConfig }),
       );
       const parsedCommandSequence =
-        sandboxMode === "full_access"
+        sandboxMode === "full_access" && !effectiveExecution.windowsAutopilotHostExecution
           ? await parseConservativeBashCommandSequence(args.command)
           : null;
       const normalizedCommandPrefix =
@@ -123,8 +134,14 @@ export function createBashTool() {
           ? (parsedCommandSequence.commands[0]?.argv ?? null)
           : normalizeBashCommandPrefix(args.command);
 
-      const result =
-        sandboxMode === "full_access"
+      const result = effectiveExecution.windowsAutopilotHostExecution
+        ? await executeUnsandboxedBash({
+            context,
+            command: args.command,
+            timeoutMs,
+            ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+          })
+        : sandboxMode === "full_access"
           ? await executeBashWithFullAccessIfAllowed({
               context,
               args,
@@ -165,6 +182,36 @@ export function createBashTool() {
   });
 }
 
+type BashSandboxMode = NonNullable<BashToolArgs["sandboxMode"]>;
+
+function resolveEffectiveBashExecution(input: {
+  context: ToolExecutionContext;
+  requestedSandboxMode: BashSandboxMode;
+  platform?: NodeJS.Platform;
+}): {
+  sandboxMode: BashSandboxMode;
+  windowsAutopilotHostExecution: boolean;
+} {
+  if (!isNativeWindowsPlatform(input.platform) || input.requestedSandboxMode === "full_access") {
+    return {
+      sandboxMode: input.requestedSandboxMode,
+      windowsAutopilotHostExecution: false,
+    };
+  }
+
+  if (input.context.approvalState?.runtimeModeAutoApproval?.source === "autopilot") {
+    return {
+      sandboxMode: "full_access",
+      windowsAutopilotHostExecution: true,
+    };
+  }
+
+  throw toolRecoverableError(buildWindowsBashRequiresAutopilotMessage(), {
+    code: WINDOWS_BASH_REQUIRES_AUTOPILOT_CODE,
+    requestedSandboxMode: input.requestedSandboxMode,
+  });
+}
+
 function getBashInvocationTimeoutMs(_context: ToolExecutionContext, args: BashToolArgs): number {
   return (args.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
 }
@@ -174,7 +221,7 @@ function assertBashTimeoutAllowed(context: ToolExecutionContext, args: BashToolA
   if (context.agentKind === "main" && context.sessionPurpose === "chat") {
     if (timeoutSec > MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC) {
       throw toolRecoverableError(
-        `Main-agent bash commands cannot request more than ${MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC} seconds. Use a subagent for longer-running work.`,
+        `Bash commands are capped at ${MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC} seconds here to keep you responsive. Use background_task (unattended one-shot) or create_subagent (interactive, multi-step) for longer-running work.`,
         {
           code: "bash_timeout_exceeds_main_agent_limit",
           requestedTimeoutSec: timeoutSec,
@@ -442,6 +489,16 @@ function buildFullAccessArgsRequireModeMessage(args: BashToolArgs): string {
     "```json",
     fullAccessRetry,
     "```",
+  ].join("\n");
+}
+
+function buildWindowsBashRequiresAutopilotMessage(): string {
+  return [
+    "Native Windows cannot run sandboxed bash commands yet.",
+    "",
+    "To opt in to Windows host execution, set `[runtime] autopilot = true` in `~/.pokoclaw/system/config.toml` and restart Pokoclaw.",
+    "",
+    "With that setting enabled, commands run on the Windows host with full access. This is not Linux sandbox isolation, so only enable it on a machine and workspace where that trust model is acceptable.",
   ].join("\n");
 }
 

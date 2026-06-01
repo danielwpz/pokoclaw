@@ -26,6 +26,11 @@ import type {
   AgentRuntimeEventInput,
   AgentToolCall,
 } from "@/src/agent/events.js";
+import {
+  getNextEmptyOutputLlmAttempt,
+  getRetryableLlmFailureWithoutVisibleOutput,
+  shouldRetrySuccessfulEmptyAssistantOutput,
+} from "@/src/agent/llm/empty-output-retry.js";
 import { isAgentLlmError } from "@/src/agent/llm/errors.js";
 import type {
   AgentAssistantContentBlock,
@@ -63,6 +68,7 @@ import {
   DEFAULT_CONFIG,
   DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
   DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
+  DEFAULT_RUNTIME_MAX_EMPTY_OUTPUT_LLM_ATTEMPTS,
   DEFAULT_RUNTIME_MAX_TURNS,
 } from "@/src/config/defaults.js";
 import type {
@@ -127,7 +133,6 @@ const ASSISTANT_REASONING_CAPTURE_MAX_CHARS = 100_000;
 const ASSISTANT_REASONING_EVENT_FLUSH_CHARS = 512;
 const ASSISTANT_REASONING_EVENT_FLUSH_MS = 250;
 const ASSISTANT_REASONING_TRUNCATION_PREFIX = "...[earlier reasoning truncated]\n";
-const EMPTY_OUTPUT_LLM_RETRY_LIMIT = 1;
 const UNKNOWN_ASSISTANT_ERROR_USAGE: MessageUsage = {
   input: 0,
   output: 0,
@@ -264,6 +269,7 @@ export class AgentLoop {
   private readonly approvalFlow: SessionApprovalFlowRegistry;
   private readonly steerQueue = new SessionSteerQueueRegistry();
   private readonly defaultMaxTurns: number;
+  private readonly emptyOutputLlmMaxAttempts: number;
   private readonly approvalTimeoutMs: number;
   private readonly approvalGrantTtlMs: number;
 
@@ -282,6 +288,8 @@ export class AgentLoop {
       );
     this.approvalFlow = deps.approvalFlow ?? new SessionApprovalFlowRegistry();
     this.defaultMaxTurns = deps.runtime?.maxTurns ?? DEFAULT_RUNTIME_MAX_TURNS;
+    this.emptyOutputLlmMaxAttempts =
+      deps.runtime?.maxEmptyOutputLlmAttempts ?? DEFAULT_RUNTIME_MAX_EMPTY_OUTPUT_LLM_ATTEMPTS;
     this.approvalTimeoutMs =
       deps.approvalTimeoutMs ??
       deps.runtime?.approvalTimeoutMs ??
@@ -316,6 +324,7 @@ export class AgentLoop {
     runId?: string;
     approvalState?: ToolExecutionApprovalState;
   }): ToolExecutionContext {
+    const taskRun = new TaskRunsRepo(this.deps.storage).getByExecutionSessionId(input.sessionId);
     const runtimeControl = {
       submitApprovalDecision: (decision) => this.submitApprovalResponse(decision),
       getRuntimeStatus: (request) => {
@@ -357,6 +366,7 @@ export class AgentLoop {
       abortSignal: input.signal,
       toolCallId: input.toolCallId,
       ...(input.runId === undefined ? {} : { runId: input.runId }),
+      ...(taskRun == null ? {} : { taskRunId: taskRun.id }),
       ...(input.ownerAgentId === undefined ? {} : { ownerAgentId: input.ownerAgentId }),
       ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
       ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
@@ -604,6 +614,7 @@ export class AgentLoop {
       contextWindow: model.contextWindow,
       config: this.deps.compaction,
     });
+    let emptyOutputRetryCount = 0;
 
     try {
       this.recordEvent(events, {
@@ -649,7 +660,6 @@ export class AgentLoop {
         let streamedReasoningDeltaCount = 0;
         let streamedReasoningChars = 0;
         let overflowRecovered = false;
-        let emptyOutputRetryCount = 0;
         let response: AgentModelTurnResult;
 
         const flushPendingReasoningDelta = (force = false) => {
@@ -854,9 +864,13 @@ export class AgentLoop {
               sawStreamedText,
               sawStreamedReasoning,
               retryCount: emptyOutputRetryCount,
+              maxAttempts: this.emptyOutputLlmMaxAttempts,
             });
             if (emptyOutputRetryError != null) {
               emptyOutputRetryCount += 1;
+              const retryAttempt = getNextEmptyOutputLlmAttempt({
+                retryCount: emptyOutputRetryCount,
+              });
               logger.warn("retrying assistant response after empty-output llm failure", {
                 sessionId: input.sessionId,
                 conversationId: context.session.conversationId,
@@ -868,8 +882,23 @@ export class AgentLoop {
                 modelId: model.id,
                 errorKind: emptyOutputRetryError.kind,
                 errorMessage: emptyOutputRetryError.message,
-                retryAttempt: emptyOutputRetryCount,
-                retryLimit: EMPTY_OUTPUT_LLM_RETRY_LIMIT,
+                retryAttempt,
+                maxAttempts: this.emptyOutputLlmMaxAttempts,
+              });
+              this.recordEvent(events, {
+                type: "assistant_response_retrying",
+                turn: turn + 1,
+                messageId: assistantMessageId,
+                attempt: retryAttempt,
+                maxAttempts: this.emptyOutputLlmMaxAttempts,
+                reason: "llm_failure_without_visible_output",
+                errorKind: emptyOutputRetryError.kind,
+                errorMessage: emptyOutputRetryError.message,
+                rawErrorMessage: emptyOutputRetryError.rawMessage ?? null,
+                sessionId: input.sessionId,
+                conversationId: context.session.conversationId,
+                branchId: context.session.branchId,
+                runId,
               });
               continue;
             }
@@ -910,9 +939,13 @@ export class AgentLoop {
           sawStreamedText,
           sawStreamedReasoning,
           retryCount: emptyOutputRetryCount,
+          maxAttempts: this.emptyOutputLlmMaxAttempts,
         });
         if (successfulEmptyOutputRetry) {
           emptyOutputRetryCount += 1;
+          const retryAttempt = getNextEmptyOutputLlmAttempt({
+            retryCount: emptyOutputRetryCount,
+          });
           logger.warn("retrying assistant response after successful empty output", {
             sessionId: input.sessionId,
             conversationId: context.session.conversationId,
@@ -922,11 +955,24 @@ export class AgentLoop {
             runId,
             assistantMessageId,
             modelId: model.id,
-            retryAttempt: emptyOutputRetryCount,
-            retryLimit: EMPTY_OUTPUT_LLM_RETRY_LIMIT,
+            retryAttempt,
+            maxAttempts: this.emptyOutputLlmMaxAttempts,
+          });
+          this.recordEvent(events, {
+            type: "assistant_response_retrying",
+            turn: turn + 1,
+            messageId: assistantMessageId,
+            attempt: retryAttempt,
+            maxAttempts: this.emptyOutputLlmMaxAttempts,
+            reason: "successful_empty_output",
+            sessionId: input.sessionId,
+            conversationId: context.session.conversationId,
+            branchId: context.session.branchId,
+            runId,
           });
           continue;
         }
+        emptyOutputRetryCount = 0;
         // Some runners will stream deltas incrementally, others may only return
         // the final assistant payload. We keep one event shape and only fall back
         // to a single full-text delta if nothing was streamed.
@@ -2130,48 +2176,6 @@ function appendMessageAndHydrate(input: {
     usageJson: input.usage == null ? null : JSON.stringify(input.usage),
     createdAt: input.createdAt.toISOString(),
   };
-}
-
-function shouldRetrySuccessfulEmptyAssistantOutput(input: {
-  assistantText: string;
-  reasoningText: string;
-  toolCallsRequested: number;
-  sawStreamedText: boolean;
-  sawStreamedReasoning: boolean;
-  retryCount: number;
-}): boolean {
-  if (
-    input.retryCount >= EMPTY_OUTPUT_LLM_RETRY_LIMIT ||
-    input.sawStreamedText ||
-    input.sawStreamedReasoning
-  ) {
-    return false;
-  }
-
-  return (
-    input.assistantText.length === 0 &&
-    input.reasoningText.length === 0 &&
-    input.toolCallsRequested === 0
-  );
-}
-
-function getRetryableLlmFailureWithoutVisibleOutput(input: {
-  error: unknown;
-  sawStreamedText: boolean;
-  sawStreamedReasoning: boolean;
-  retryCount: number;
-}): import("@/src/agent/llm/errors.js").AgentLlmError | null {
-  if (
-    input.retryCount >= EMPTY_OUTPUT_LLM_RETRY_LIMIT ||
-    !isAgentLlmError(input.error) ||
-    !input.error.retryable ||
-    input.sawStreamedText ||
-    input.sawStreamedReasoning
-  ) {
-    return null;
-  }
-
-  return input.error;
 }
 
 function appendPartialStreamedAssistantMessageOnFailure(input: {

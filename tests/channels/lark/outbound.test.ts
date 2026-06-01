@@ -1,9 +1,13 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createLarkOutboundRuntime } from "@/src/channels/lark/outbound.js";
 import { buildLarkAssistantElementId } from "@/src/channels/lark/run-state.js";
 import { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
 import type {
+  OrchestratedOutboundAttachmentEventEnvelope,
   OrchestratedOutboundEventEnvelope,
   OrchestratedRuntimeEventEnvelope,
   OrchestratedSubagentCreationEventEnvelope,
@@ -92,6 +96,58 @@ function makeSubagentEnvelope(
   };
 }
 
+function makeAttachmentEnvelope(
+  event: OrchestratedOutboundAttachmentEventEnvelope["event"],
+  overrides: {
+    taskRunId?: string | null;
+    runType?: string | null;
+    executionSessionId?: string | null;
+  } = {},
+): OrchestratedOutboundAttachmentEventEnvelope {
+  return {
+    kind: "outbound_attachment_event",
+    target: {
+      conversationId: "conv_1",
+      branchId: "branch_1",
+    },
+    session: {
+      sessionId: "sess_1",
+      purpose: "chat",
+    },
+    agent: {
+      ownerAgentId: "agent_1",
+      ownerRole: "main",
+      mainAgentId: "agent_1",
+    },
+    taskRun: {
+      taskRunId: overrides.taskRunId ?? null,
+      runType: overrides.runType ?? null,
+      status: null,
+      executionSessionId: overrides.executionSessionId ?? null,
+    },
+    run: {
+      runId: "run_1",
+    },
+    object: {
+      messageId: null,
+      toolCallId: null,
+      toolName: null,
+      approvalId: null,
+    },
+    event,
+  };
+}
+
+async function waitForCondition(condition: () => boolean, attempts = 40): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for condition.");
+}
+
 function makeTaskRuntimeEnvelope(
   event: OrchestratedRuntimeEventEnvelope["event"],
 ): OrchestratedRuntimeEventEnvelope {
@@ -166,6 +222,42 @@ function makeTaskEnvelope(
   };
 }
 
+function makeLarkHttpError(
+  status: number,
+  data: Record<string, unknown>,
+): Error & { response: { status: number; data: Record<string, unknown> } } {
+  const error = new Error(`Request failed with status code ${status}`) as Error & {
+    response: { status: number; data: Record<string, unknown> };
+  };
+  error.response = {
+    status,
+    data,
+  };
+  return error;
+}
+
+function readLarkInteractiveCardId(input: unknown): string | null {
+  const content =
+    typeof input === "object" &&
+    input != null &&
+    "data" in input &&
+    typeof input.data === "object" &&
+    input.data != null &&
+    "content" in input.data &&
+    typeof input.data.content === "string"
+      ? input.data.content
+      : null;
+  if (content == null) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(content) as { data?: { card_id?: unknown } };
+    return typeof parsed.data?.card_id === "string" ? parsed.data.card_id : null;
+  } catch {
+    return null;
+  }
+}
+
 function makeApprovalRuntimeEnvelope(
   event: OrchestratedRuntimeEventEnvelope["event"],
 ): OrchestratedRuntimeEventEnvelope {
@@ -205,9 +297,12 @@ function makeApprovalRuntimeEnvelope(
 
 describe("lark outbound runtime", () => {
   let handle: TestDatabaseHandle | null = null;
+  let tempDirs: string[] = [];
 
   afterEach(async () => {
     vi.useRealTimers();
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs = [];
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
@@ -395,6 +490,262 @@ describe("lark outbound runtime", () => {
     expect(updateCard.mock.calls.at(0)?.[0]).toMatchObject({
       path: { card_id: "card_1" },
     });
+
+    await runtime.shutdown();
+  });
+
+  test("sends outbound image attachment events as native lark image messages", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const tempDir = await mkdtemp(join(tmpdir(), "pokoclaw-lark-image-"));
+    tempDirs.push(tempDir);
+    const attachmentPath = join(tempDir, "chart.png");
+    await writeFile(attachmentPath, Buffer.from("png"));
+
+    const uploadImage = vi.fn(async (_input: unknown) => ({
+      data: {
+        image_key: "img_v3_uploaded",
+      },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_image_1",
+        open_message_id: "om_open_image_1",
+      },
+    }));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                image: {
+                  create: uploadImage,
+                },
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+    bus.publish(
+      makeAttachmentEnvelope({
+        type: "outbound_attachment_requested",
+        eventId: "evt_image_1",
+        attachmentPath,
+        displayPath: "chart.png",
+        attachmentType: "image",
+        requestedAt: "2026-03-28T00:00:00.000Z",
+      }),
+    );
+
+    await waitForCondition(() => createMessage.mock.calls.length === 1);
+
+    expect(uploadImage).toHaveBeenCalledOnce();
+    expect(uploadImage.mock.calls[0]?.[0]).toMatchObject({
+      data: {
+        image_type: "message",
+      },
+    });
+    expect(createMessage).toHaveBeenCalledExactlyOnceWith({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: "oc_chat_1",
+        msg_type: "image",
+        content: JSON.stringify({ image_key: "img_v3_uploaded" }),
+      },
+    });
+
+    await runtime.shutdown();
+  });
+
+  test("continues sending outbound image attachments after one lark target fails", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES
+        ('ci_lark_bad', 'lark', 'bad', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'),
+        ('ci_lark_good', 'lark', 'good', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_bad', 'oc_bad', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    const surfaces = new ChannelSurfacesRepo(handle.storage.db);
+    surfaces.upsert({
+      id: "surface_bad",
+      channelType: "lark",
+      channelInstallationId: "bad",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_bad",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_bad" }),
+    });
+    surfaces.upsert({
+      id: "surface_good",
+      channelType: "lark",
+      channelInstallationId: "good",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_good",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_good" }),
+    });
+
+    const tempDir = await mkdtemp(join(tmpdir(), "pokoclaw-lark-image-"));
+    tempDirs.push(tempDir);
+    const attachmentPath = join(tempDir, "chart.png");
+    await writeFile(attachmentPath, Buffer.from("png"));
+
+    const uploadImage = vi.fn(async (_input: unknown) => ({
+      data: {
+        image_key: "img_v3_uploaded",
+      },
+    }));
+    let createAttempts = 0;
+    const createMessage = vi.fn(async (_input: unknown) => {
+      createAttempts += 1;
+      if (createAttempts === 1) {
+        throw new Error("simulated lark send failure");
+      }
+      return {
+        data: {
+          message_id: "om_image_2",
+          open_message_id: "om_open_image_2",
+        },
+      };
+    });
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                image: {
+                  create: uploadImage,
+                },
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+    bus.publish(
+      makeAttachmentEnvelope({
+        type: "outbound_attachment_requested",
+        eventId: "evt_image_1",
+        attachmentPath,
+        displayPath: "chart.png",
+        attachmentType: "image",
+        requestedAt: "2026-03-28T00:00:00.000Z",
+      }),
+    );
+
+    await waitForCondition(() => createMessage.mock.calls.length === 2);
+
+    expect(uploadImage).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenCalledTimes(2);
+
+    await runtime.shutdown();
+  });
+
+  test("skips non-image outbound attachment events until lark supports them", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+
+    const uploadImage = vi.fn(async (_input: unknown) => ({
+      data: {
+        image_key: "img_v3_uploaded",
+      },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_file_1",
+        open_message_id: "om_open_file_1",
+      },
+    }));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                image: {
+                  create: uploadImage,
+                },
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+    bus.publish(
+      makeAttachmentEnvelope({
+        type: "outbound_attachment_requested",
+        eventId: "evt_pdf_1",
+        attachmentPath: "/tmp/report.pdf",
+        displayPath: "report.pdf",
+        attachmentType: "pdf",
+        requestedAt: "2026-03-28T00:00:00.000Z",
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(uploadImage).not.toHaveBeenCalled();
+    expect(createMessage).not.toHaveBeenCalled();
 
     await runtime.shutdown();
   });
@@ -2082,6 +2433,339 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("does not retry the same task status card after ambiguous card reference send failure", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { card_id: "card_task_status_poisoned" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_task_status_retry" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_task_transcript" } });
+    const createMessage = vi.fn(async (input: unknown) => {
+      const cardId = readLarkInteractiveCardId(input);
+      if (cardId === "card_task_status_poisoned") {
+        throw makeLarkHttpError(500, {
+          code: 2200,
+          msg: "Internal Error",
+        });
+      }
+      if (cardId === "card_task_status_retry") {
+        throw makeLarkHttpError(400, {
+          code: 230099,
+          msg: "Failed to create card content, ext=ErrCode: 200780; ErrMsg: card binding biz count over limit; ",
+        });
+      }
+      return {
+        data: {
+          message_id: `om_${cardId ?? "unknown"}`,
+          open_message_id: `oom_${cardId ?? "unknown"}`,
+        },
+      };
+    });
+    const updateCard = vi.fn(async () => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: vi.fn(async () => ({})) },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply: vi.fn(async () => ({})),
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_task_msg_1",
+        createdAt: "2026-03-28T00:00:01.000Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_task_1",
+      }),
+    );
+    bus.publish(
+      makeTaskRuntimeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_task_msg_2",
+        createdAt: "2026-03-28T00:00:01.100Z",
+        sessionId: "sess_task",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_task_1",
+        turn: 1,
+        messageId: "msg_task_1",
+        delta: "hello",
+        accumulatedText: "hello",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const sentCardIds = createMessage.mock.calls.map((call) =>
+      readLarkInteractiveCardId(call.at(0)),
+    );
+    expect(createMessage).toHaveBeenCalledTimes(3);
+    expect(sentCardIds.filter((cardId) => cardId === "card_task_status_poisoned")).toHaveLength(1);
+    expect(sentCardIds).toContain("card_task_status_retry");
+    expect(sentCardIds).toContain("card_task_transcript");
+
+    const taskStatusBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "task:task_1",
+    });
+    expect(taskStatusBinding).toMatchObject({
+      larkCardId: "card_task_status_retry",
+      larkMessageId: null,
+      status: "stale",
+    });
+    expect(JSON.parse(taskStatusBinding?.metadataJson ?? "{}")).toMatchObject({
+      cardReferenceSendFailure: {
+        attempts: 2,
+        lastFailureKind: "card_binding_biz_count_over_limit",
+        httpStatus: 400,
+        upstreamCode: 230099,
+      },
+    });
+
+    const transcriptBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "run_task_1:seg:1",
+    });
+    expect(transcriptBinding).toMatchObject({
+      larkCardId: "card_task_transcript",
+      larkMessageId: "om_card_task_transcript",
+    });
+
+    await runtime.shutdown();
+  });
+
+  test("recovers task status card delivery when fresh retry succeeds after ambiguous send failure", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at)
+      VALUES ('sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id, name, schedule_kind, schedule_value,
+        payload_json, created_at, updated_at
+      )
+      VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1', '日报汇总', 'cron', '0 9 * * *',
+        '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id, cron_job_id, execution_session_id,
+        status, priority, attempt, description, started_at
+      )
+      VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1', 'cron_1', 'sess_task',
+        'running', 0, 1, '日报汇总执行', '2026-03-28T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const createCard = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { card_id: "card_task_status_poisoned" } })
+      .mockResolvedValueOnce({ data: { card_id: "card_task_status_retry" } });
+    const createMessage = vi.fn(async (input: unknown) => {
+      const cardId = readLarkInteractiveCardId(input);
+      if (cardId === "card_task_status_poisoned") {
+        throw makeLarkHttpError(500, {
+          code: 2200,
+          msg: "Internal Error",
+        });
+      }
+      return {
+        data: {
+          message_id: "om_task_status_retry",
+          open_message_id: "oom_task_status_retry",
+        },
+      };
+    });
+    const updateCard = vi.fn(async () => ({}));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: vi.fn(async () => ({})) },
+                },
+              },
+              im: {
+                message: {
+                  create: createMessage,
+                  reply: vi.fn(async () => ({})),
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(createMessage).toHaveBeenCalledTimes(2);
+    expect(createMessage.mock.calls.map((call) => readLarkInteractiveCardId(call.at(0)))).toEqual([
+      "card_task_status_poisoned",
+      "card_task_status_retry",
+    ]);
+
+    const taskStatusBinding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "task:task_1",
+    });
+    expect(taskStatusBinding).toMatchObject({
+      larkCardId: "card_task_status_retry",
+      larkMessageId: "om_task_status_retry",
+      larkOpenMessageId: "oom_task_status_retry",
+      status: "active",
+    });
+    expect(JSON.parse(taskStatusBinding?.metadataJson ?? "{}")).toMatchObject({
+      cardReferenceSendFailure: {
+        attempts: 1,
+        lastFailureKind: "ambiguous_transport_failure",
+        httpStatus: 500,
+        upstreamCode: 2200,
+      },
+    });
+
+    await runtime.shutdown();
+  });
+
   test("does not render approval-session runtime transcript into the visible lark chat", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);
@@ -3732,7 +4416,7 @@ describe("lark outbound runtime", () => {
         modelId: "model_1",
         errorKind: "unknown",
         errorMessage:
-          "Run hit the configured max turn limit (60) before producing a final response.",
+          "Run hit the configured max turn limit (100) before producing a final response.",
         retryable: false,
       }),
     );
@@ -3745,7 +4429,7 @@ describe("lark outbound runtime", () => {
       | { data?: { card?: { data?: string } } }
       | undefined;
     expect(updatePayload?.data?.card?.data ?? "").toContain("执行失败");
-    expect(updatePayload?.data?.card?.data ?? "").toContain("max turn limit (60)");
+    expect(updatePayload?.data?.card?.data ?? "").toContain("max turn limit (100)");
 
     await runtime.shutdown();
   });
