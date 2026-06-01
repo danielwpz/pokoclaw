@@ -1897,6 +1897,64 @@ Use this exact bash argument object on the next retry if full access is warrante
     });
   });
 
+  test.each([
+    {
+      command: "Start-Sleep 60 &",
+      reason: "unmanaged PowerShell '&' background job operator",
+    },
+    {
+      command: "npm run dev &",
+      reason: "unmanaged PowerShell '&' background job operator",
+    },
+    {
+      command: "Start-Job -ScriptBlock { Start-Sleep 60 }",
+      reason: "unmanaged PowerShell Start-Job backgrounding",
+    },
+  ])("rejects PowerShell background execution on native Windows: $command", async ({
+    command,
+    reason,
+  }) => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          shellInfo: detectRuntimeShellInfo({
+            platform: "win32",
+            env: {},
+            isExecutableAvailable: (candidate) => candidate === "pwsh.exe",
+          }),
+          approvalState: {
+            runtimeModeAutoApproval: {
+              source: "autopilot",
+            },
+          },
+        },
+        { command },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_background_not_supported",
+        reason,
+      },
+    } satisfies Partial<ToolFailure>);
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
   test("allows logical && while still rejecting background keywords", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);

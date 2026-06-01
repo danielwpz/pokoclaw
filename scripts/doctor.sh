@@ -15,6 +15,10 @@ fail() {
   printf '[doctor] error: %s\n' "$*" >&2
 }
 
+warn() {
+  printf '[doctor] warning: %s\n' "$*" >&2
+}
+
 print_windows_autopilot_notice() {
   cat <<EOF
 [doctor] Pokoclaw only supports native Windows shell execution through an explicit Autopilot opt-in.
@@ -123,28 +127,42 @@ check_common_tools() {
 
 check_windows_shell() {
   local failures=0
+  local has_powershell=0
+  local has_cmd=0
 
   if command -v pwsh.exe >/dev/null 2>&1; then
     ok "found PowerShell: $(command -v pwsh.exe)"
+    has_powershell=1
   elif command -v pwsh >/dev/null 2>&1; then
     ok "found PowerShell: $(command -v pwsh)"
+    has_powershell=1
   elif command -v powershell.exe >/dev/null 2>&1; then
     ok "found PowerShell: $(command -v powershell.exe)"
+    has_powershell=1
   elif command -v powershell >/dev/null 2>&1; then
     ok "found PowerShell: $(command -v powershell)"
-  else
-    fail "missing PowerShell"
-    info "Pokoclaw expects PowerShell on native Windows. Install or repair PowerShell before relying on cmd fallback."
-    failures=$((failures + 1))
+    has_powershell=1
   fi
 
   if command -v cmd.exe >/dev/null 2>&1; then
     ok "found cmd fallback: $(command -v cmd.exe)"
+    has_cmd=1
   elif [[ -n "${ComSpec:-${COMSPEC:-}}" ]]; then
     ok "found cmd fallback: ${ComSpec:-${COMSPEC:-}}"
+    has_cmd=1
   else
     fail "missing cmd.exe fallback"
     failures=$((failures + 1))
+  fi
+
+  if [[ "${has_powershell}" -eq 0 ]]; then
+    if [[ "${has_cmd}" -eq 1 ]]; then
+      warn "missing PowerShell; Pokoclaw will use cmd fallback if Windows host execution is enabled"
+      info "PowerShell is the recommended Windows shell. Install or repair PowerShell when practical."
+    else
+      fail "missing PowerShell"
+      failures=$((failures + 1))
+    fi
   fi
 
   return "${failures}"

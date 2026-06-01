@@ -61,6 +61,12 @@ export interface SandboxedBashResult extends SandboxExecResult {
 const logger = createSubsystemLogger("security/sandbox");
 const DEFAULT_BASH_BINARY = getDefaultBashExecutable();
 const POWERSHELL_UTF8_OUTPUT_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
+const POWERSHELL_EXIT_CODE_RELAY_SUFFIX = [
+  "if (-not $?) {",
+  "  if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) { exit $global:LASTEXITCODE }",
+  "  exit 1",
+  "}",
+].join("\n");
 const BLOCKED_ENV_VAR_NAMES = new Set<string>([
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
@@ -704,9 +710,7 @@ async function runUnsandboxedShellCommand(input: {
       input.shellInfo?.commandShell ??
       detectRuntimeShellInfo({ platform: input.platform }).commandShell;
     const command =
-      shell.syntax === "powershell"
-        ? `${POWERSHELL_UTF8_OUTPUT_PREFIX}${input.command}`
-        : input.command;
+      shell.syntax === "powershell" ? buildPowerShellCommand(input.command) : input.command;
     const childEnv = sanitizeSandboxEnv(process.env);
     if (input.platform === "win32") {
       childEnv.SHELL = shell.executable;
@@ -841,6 +845,10 @@ async function terminateWindowsProcessTree(pid: number): Promise<boolean> {
     taskkill.once("error", () => finish(false));
     taskkill.once("close", (exitCode) => finish(exitCode === 0));
   });
+}
+
+function buildPowerShellCommand(command: string): string {
+  return `${POWERSHELL_UTF8_OUTPUT_PREFIX}${command}\n${POWERSHELL_EXIT_CODE_RELAY_SUFFIX}`;
 }
 
 function createAbortError(): Error {

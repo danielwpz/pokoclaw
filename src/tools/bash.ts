@@ -92,9 +92,7 @@ export function createBashTool() {
     inputSchema: BASH_TOOL_SCHEMA,
     getInvocationTimeoutMs: getBashInvocationTimeoutMs,
     async execute(context, args) {
-      const backgroundReason = isNativeWindowsPlatform()
-        ? null
-        : detectUnsupportedBackgroundSyntax(args.command);
+      const backgroundReason = detectUnsupportedBackgroundSyntaxForContext(context, args.command);
       if (backgroundReason != null) {
         throw toolRecoverableError(
           `Background shell jobs are not supported yet (${backgroundReason}). Run the command in the foreground.`,
@@ -474,6 +472,36 @@ function detectUnsupportedBackgroundSyntax(command: string): string | null {
   return null;
 }
 
+function detectUnsupportedBackgroundSyntaxForContext(
+  context: ToolExecutionContext,
+  command: string,
+): string | null {
+  if (!isNativeWindowsPlatform()) {
+    return detectUnsupportedBackgroundSyntax(command);
+  }
+
+  const shellSyntax = context.shellInfo?.commandShell.syntax ?? "powershell";
+  if (shellSyntax === "cmd") {
+    return null;
+  }
+
+  return detectUnsupportedPowerShellBackgroundSyntax(command);
+}
+
+function detectUnsupportedPowerShellBackgroundSyntax(command: string): string | null {
+  const scrubbed = stripQuotedShellContent(command);
+  if (findPowerShellBackgroundAmpersand(scrubbed)) {
+    return "unmanaged PowerShell '&' background job operator";
+  }
+
+  const keywordMatch = scrubbed.match(/\b(Start-Job|Start-ThreadJob)\b/i);
+  if (keywordMatch?.[1] != null) {
+    return `unmanaged PowerShell ${keywordMatch[1]} backgrounding`;
+  }
+
+  return null;
+}
+
 function buildFullAccessArgsRequireModeMessage(args: BashToolArgs): string {
   const sandboxedRetry = renderBashArgsJson(selectBashArgs(args, { mode: "sandboxed" }));
   const fullAccessRetry = renderBashArgsJson(selectBashArgs(args, { mode: "full_access" }));
@@ -727,6 +755,22 @@ function findUnquotedBackgroundAmpersand(command: string): boolean {
   return false;
 }
 
+function findPowerShellBackgroundAmpersand(command: string): boolean {
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] !== "&") {
+      continue;
+    }
+
+    if (isPowerShellNonBackgroundAmpersand(command, index)) {
+      continue;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 function isNonBackgroundAmpersand(command: string, index: number): boolean {
   const prev = index > 0 ? command[index - 1] : "";
   const next = index + 1 < command.length ? command[index + 1] : "";
@@ -748,6 +792,38 @@ function isNonBackgroundAmpersand(command: string, index: number): boolean {
   }
 
   return false;
+}
+
+function isPowerShellNonBackgroundAmpersand(command: string, index: number): boolean {
+  const prev = index > 0 ? command[index - 1] : "";
+  const next = index + 1 < command.length ? command[index + 1] : "";
+
+  if (prev === "&" || next === "&") {
+    return true;
+  }
+
+  if (prev === ">" || prev === "<" || next === ">") {
+    return true;
+  }
+
+  const previousSignificantIndex = findPreviousNonWhitespaceIndex(command, index);
+  if (previousSignificantIndex < 0) {
+    return true;
+  }
+
+  const previousSignificant = command[previousSignificantIndex] ?? "";
+  return "([{=,;|".includes(previousSignificant);
+}
+
+function findPreviousNonWhitespaceIndex(command: string, index: number): number {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const char = command[cursor];
+    if (char != null && !/\s/.test(char)) {
+      return cursor;
+    }
+  }
+
+  return -1;
 }
 
 function renderBashResult(input: {

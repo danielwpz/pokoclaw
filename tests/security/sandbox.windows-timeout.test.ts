@@ -157,6 +157,54 @@ describe("Windows host bash timeout cleanup", () => {
     expect(spawnCalls[1]?.child.kill).toHaveBeenCalledWith("SIGKILL");
     expect(spawnCalls[0]?.child.kill).toHaveBeenCalledWith("SIGKILL");
   }, 8_000);
+
+  test("wraps PowerShell host commands with a native exit-code relay", async () => {
+    spawnMock.mockImplementation(
+      (command: string, args: string[] = [], options: Record<string, unknown> = {}) => {
+        const child = createFakeChild(123);
+        spawnCalls.push({ command, args, options, child });
+        queueMicrotask(() => child.emit("close", 7, null));
+        return child;
+      },
+    );
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-windows-timeout-"));
+    const { executeUnsandboxedBash } = await import("@/src/security/sandbox.js");
+
+    const result = await executeUnsandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: {} as ToolExecutionContext["storage"],
+        toolCallId: "tool_1",
+      },
+      command: "robocopy src dest",
+      cwd: tempDir,
+      timeoutMs: 10_000,
+      platform: "win32",
+      shellInfo: windowsPowerShellShellInfo(),
+    });
+
+    expect(result.exitCode).toBe(7);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]).toMatchObject({
+      command: "pwsh.exe",
+      args: ["-NoProfile", "-NonInteractive", "-Command", expect.any(String)],
+      options: {
+        windowsHide: true,
+      },
+    });
+    expect(spawnCalls[0]?.args[3]).toContain(
+      "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;",
+    );
+    expect(spawnCalls[0]?.args[3]).toContain("robocopy src dest");
+    expect(spawnCalls[0]?.args[3]).toContain(
+      "if ($global:LASTEXITCODE -is [int] -and $global:LASTEXITCODE -ne 0) { exit $global:LASTEXITCODE }",
+    );
+  });
 });
 
 function windowsPowerShellShellInfo() {
