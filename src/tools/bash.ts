@@ -482,10 +482,19 @@ function detectUnsupportedBackgroundSyntaxForContext(
 
   const shellSyntax = context.shellInfo?.commandShell.syntax ?? "powershell";
   if (shellSyntax === "cmd") {
-    return null;
+    return detectUnsupportedCmdBackgroundSyntax(command);
   }
 
   return detectUnsupportedPowerShellBackgroundSyntax(command);
+}
+
+function detectUnsupportedCmdBackgroundSyntax(command: string): string | null {
+  const scrubbed = stripQuotedShellContent(command);
+  if (findCmdStartBackgroundFlag(scrubbed)) {
+    return "unmanaged cmd START /B backgrounding";
+  }
+
+  return null;
 }
 
 function detectUnsupportedPowerShellBackgroundSyntax(command: string): string | null {
@@ -753,6 +762,11 @@ function findUnquotedBackgroundAmpersand(command: string): boolean {
   }
 
   return false;
+}
+
+function findCmdStartBackgroundFlag(command: string): boolean {
+  const segments = command.split(/&&?|\|\|?|\r?\n/g);
+  return segments.some((segment) => /^\s*\(?\s*start\b[^\r\n&|]*\/b(?:\s|$)/i.test(segment));
 }
 
 function findPowerShellBackgroundAmpersand(command: string): boolean {

@@ -1955,6 +1955,53 @@ Use this exact bash argument object on the next retry if full access is warrante
     expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
   });
 
+  test.each([
+    "start /b npm run dev",
+    'start "" /B long-task',
+  ])("rejects cmd background execution on native Windows fallback: %s", async (command) => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          shellInfo: detectRuntimeShellInfo({
+            platform: "win32",
+            env: {
+              ComSpec: "C:\\Windows\\System32\\cmd.exe",
+            },
+            isExecutableAvailable: (candidate) => candidate === "C:\\Windows\\System32\\cmd.exe",
+          }),
+          approvalState: {
+            runtimeModeAutoApproval: {
+              source: "autopilot",
+            },
+          },
+        },
+        { command },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_background_not_supported",
+        reason: "unmanaged cmd START /B backgrounding",
+      },
+    } satisfies Partial<ToolFailure>);
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
   test("allows logical && while still rejecting background keywords", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
