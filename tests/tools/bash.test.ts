@@ -6,6 +6,7 @@ const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() =
 }));
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import { detectRuntimeShellInfo } from "@/src/runtime/shell-info.js";
 import type { ExecuteUnsandboxedBashInput } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
@@ -154,6 +155,11 @@ describe("bash tool", () => {
     mockProcessPlatform("win32");
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
+    const shellInfo = detectRuntimeShellInfo({
+      platform: "win32",
+      env: {},
+      isExecutableAvailable: (candidate) => candidate === "pwsh.exe",
+    });
     executeUnsandboxedBashMock.mockResolvedValue({
       command: "pwd",
       cwd: "/tmp/work",
@@ -174,6 +180,7 @@ describe("bash tool", () => {
         cwd: "/tmp/work",
         securityConfig: DEFAULT_CONFIG.security,
         storage: handle.storage.db,
+        shellInfo,
         approvalState: {
           runtimeModeAutoApproval: {
             source: "autopilot",
@@ -191,6 +198,7 @@ describe("bash tool", () => {
       }),
       command: "pwd",
       timeoutMs: 10_000,
+      shellInfo,
     });
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({

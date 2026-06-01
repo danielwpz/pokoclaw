@@ -139,6 +139,7 @@ export function createBashTool() {
             context,
             command: args.command,
             timeoutMs,
+            ...(context.shellInfo == null ? {} : { shellInfo: context.shellInfo }),
             ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
           })
         : sandboxMode === "full_access"
@@ -276,6 +277,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
       context: input.context,
       command: input.args.command,
       timeoutMs: input.timeoutMs,
+      ...(input.context.shellInfo == null ? {} : { shellInfo: input.context.shellInfo }),
       ...(input.args.cwd === undefined ? {} : { cwd: input.args.cwd }),
     });
   }
@@ -295,6 +297,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
         context: input.context,
         command: input.args.command,
         timeoutMs: input.timeoutMs,
+        ...(input.context.shellInfo == null ? {} : { shellInfo: input.context.shellInfo }),
         ...(input.args.cwd === undefined ? {} : { cwd: input.args.cwd }),
       });
     }

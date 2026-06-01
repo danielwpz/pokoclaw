@@ -164,7 +164,7 @@ function findExecutableInPath(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): string | null {
-  const pathValue = getEnv(env, "PATH");
+  const pathValue = getEnv(env, "PATH", { maxLength: null });
   if (pathValue == null) {
     return null;
   }
@@ -172,7 +172,9 @@ function findExecutableInPath(
   const delimiter = platform === "win32" ? ";" : ":";
   const extensions =
     platform === "win32"
-      ? (getEnv(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+      ? (getEnv(env, "PATHEXT", { maxLength: null }) ?? ".COM;.EXE;.BAT;.CMD")
+          .split(";")
+          .filter(Boolean)
       : [""];
   const candidateExt = path.extname(candidate);
   const names =
@@ -214,25 +216,32 @@ function formatPlatformLabel(platform: NodeJS.Platform): string {
   }
 }
 
-function getEnv(env: NodeJS.ProcessEnv, name: string): string | null {
+function getEnv(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  options: { maxLength?: number | null } = {},
+): string | null {
   const direct = env[name];
   if (direct != null && direct.trim().length > 0) {
-    return sanitizeEnvText(direct);
+    return sanitizeEnvText(direct, options.maxLength);
   }
 
   const entry = Object.entries(env).find(([key]) => key.toLowerCase() === name.toLowerCase());
   const value = entry?.[1];
-  return value == null || value.trim().length === 0 ? null : sanitizeEnvText(value);
+  return value == null || value.trim().length === 0
+    ? null
+    : sanitizeEnvText(value, options.maxLength);
 }
 
-function sanitizeEnvText(value: string): string {
+function sanitizeEnvText(value: string, maxLength: number | null = 160): string {
   let sanitized = "";
   for (const char of value) {
     const codePoint = char.codePointAt(0);
     sanitized += codePoint == null || codePoint < 32 || codePoint === 127 ? " " : char;
   }
 
-  return sanitized.replace(/\s+/g, " ").trim().slice(0, 160);
+  const normalized = sanitized.replace(/\s+/g, " ").trim();
+  return maxLength == null ? normalized : normalized.slice(0, maxLength);
 }
 
 function basename(value: string): string {

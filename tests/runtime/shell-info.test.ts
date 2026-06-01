@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { detectRuntimeShellInfo, getDefaultBashExecutable } from "@/src/runtime/shell-info.js";
@@ -92,5 +95,35 @@ describe("runtime shell info", () => {
       syntax: "cmd",
       recommended: false,
     });
+  });
+
+  test("does not truncate PATH before Windows executable lookup", () => {
+    const originalCwd = process.cwd();
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pokoclaw-shell-info-"));
+    const longPrefix = Array.from(
+      { length: 24 },
+      (_, index) => `C:\\very\\long\\unavailable\\directory\\${index}`,
+    ).join(";");
+
+    try {
+      writeFileSync(path.join(tempDir, "pwsh.exe"), "");
+      process.chdir(tempDir);
+
+      const info = detectRuntimeShellInfo({
+        platform: "win32",
+        env: {
+          PATH: `${longPrefix};.`,
+        },
+      });
+
+      expect(info.commandShell).toMatchObject({
+        kind: "powershell",
+        executable: "pwsh.exe",
+        syntax: "powershell",
+      });
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
