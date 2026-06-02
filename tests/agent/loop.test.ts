@@ -1533,6 +1533,11 @@ describe("agent loop", () => {
         execute(context) {
           expect(context.ownerAgentId).toBe("agent_1");
           expect(context.cwd).toBe(POKOCLAW_WORKSPACE_DIR);
+          expect(context.shellInfo).toMatchObject({
+            platform: process.platform,
+            isWindows: process.platform === "win32",
+          });
+          expect(context.shellInfo?.commandShell.executable).toEqual(expect.any(String));
           return textToolResult("ok");
         },
       }),

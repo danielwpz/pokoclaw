@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import { detectRuntimeShellInfo } from "@/src/runtime/shell-info.js";
 import type { ToolExecutionContext } from "@/src/tools/core/types.js";
 
 const { spawnMock, spawnCalls } = vi.hoisted(() => ({
@@ -81,6 +82,7 @@ describe("Windows host bash timeout cleanup", () => {
         cwd: tempDir,
         timeoutMs: 5,
         platform: "win32",
+        shellInfo: windowsPowerShellShellInfo(),
       }),
     ).rejects.toMatchObject({
       name: "ToolFailure",
@@ -91,7 +93,17 @@ describe("Windows host bash timeout cleanup", () => {
       },
     });
 
-    expect(spawnCalls.map((call) => path.basename(call.command))).toEqual(["bash", "taskkill"]);
+    expect(spawnCalls.map((call) => path.basename(call.command))).toEqual(["pwsh.exe", "taskkill"]);
+    expect(spawnCalls[0]).toMatchObject({
+      command: "pwsh.exe",
+      args: ["-NoProfile", "-NonInteractive", "-Command", expect.any(String)],
+      options: {
+        windowsHide: true,
+      },
+    });
+    expect(spawnCalls[0]?.args[3]).toContain(
+      "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;",
+    );
     expect(spawnCalls[1]).toMatchObject({
       command: "taskkill",
       args: ["/pid", "123", "/t", "/f"],
@@ -129,6 +141,7 @@ describe("Windows host bash timeout cleanup", () => {
       cwd: tempDir,
       timeoutMs: 5,
       platform: "win32",
+      shellInfo: windowsPowerShellShellInfo(),
     });
 
     await expect(promise).rejects.toMatchObject({
@@ -140,11 +153,72 @@ describe("Windows host bash timeout cleanup", () => {
       },
     });
 
-    expect(spawnCalls.map((call) => path.basename(call.command))).toEqual(["bash", "taskkill"]);
+    expect(spawnCalls.map((call) => path.basename(call.command))).toEqual(["pwsh.exe", "taskkill"]);
     expect(spawnCalls[1]?.child.kill).toHaveBeenCalledWith("SIGKILL");
     expect(spawnCalls[0]?.child.kill).toHaveBeenCalledWith("SIGKILL");
   }, 8_000);
+
+  test("wraps PowerShell host commands with a native exit-code relay", async () => {
+    spawnMock.mockImplementation(
+      (command: string, args: string[] = [], options: Record<string, unknown> = {}) => {
+        const child = createFakeChild(123);
+        spawnCalls.push({ command, args, options, child });
+        queueMicrotask(() => child.emit("close", 7, null));
+        return child;
+      },
+    );
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-windows-timeout-"));
+    const { executeUnsandboxedBash } = await import("@/src/security/sandbox.js");
+
+    const result = await executeUnsandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: {} as ToolExecutionContext["storage"],
+        toolCallId: "tool_1",
+      },
+      command: "robocopy src dest; Write-Output done",
+      cwd: tempDir,
+      timeoutMs: 10_000,
+      platform: "win32",
+      shellInfo: windowsPowerShellShellInfo(),
+    });
+
+    expect(result.exitCode).toBe(7);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]).toMatchObject({
+      command: "pwsh.exe",
+      args: ["-NoProfile", "-NonInteractive", "-Command", expect.any(String)],
+      options: {
+        windowsHide: true,
+      },
+    });
+    expect(spawnCalls[0]?.args[3]).toContain(
+      "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;",
+    );
+    const commandArg = spawnCalls[0]?.args[3];
+    expect(commandArg).toContain("robocopy src dest; Write-Output done");
+    expect(spawnCalls[0]?.args[3]).toContain("$global:__pokoclaw_success = $?");
+    expect(spawnCalls[0]?.args[3]).toContain(
+      "$global:__pokoclaw_last_exit_code = $global:LASTEXITCODE",
+    );
+    expect(spawnCalls[0]?.args[3]).toContain(
+      "if ($global:__pokoclaw_last_exit_code -is [int] -and $global:__pokoclaw_last_exit_code -ne 0) { exit $global:__pokoclaw_last_exit_code }",
+    );
+  });
 });
+
+function windowsPowerShellShellInfo() {
+  return detectRuntimeShellInfo({
+    platform: "win32",
+    env: {},
+    isExecutableAvailable: (candidate) => candidate === "pwsh.exe",
+  });
+}
 
 function createFakeChild(pid: number): FakeChildProcess {
   const child = new EventEmitter() as FakeChildProcess;

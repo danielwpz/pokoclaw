@@ -92,7 +92,7 @@ export function createBashTool() {
     inputSchema: BASH_TOOL_SCHEMA,
     getInvocationTimeoutMs: getBashInvocationTimeoutMs,
     async execute(context, args) {
-      const backgroundReason = detectUnsupportedBackgroundSyntax(args.command);
+      const backgroundReason = detectUnsupportedBackgroundSyntaxForContext(context, args.command);
       if (backgroundReason != null) {
         throw toolRecoverableError(
           `Background shell jobs are not supported yet (${backgroundReason}). Run the command in the foreground.`,
@@ -137,6 +137,7 @@ export function createBashTool() {
             context,
             command: args.command,
             timeoutMs,
+            ...(context.shellInfo == null ? {} : { shellInfo: context.shellInfo }),
             ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
           })
         : sandboxMode === "full_access"
@@ -274,6 +275,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
       context: input.context,
       command: input.args.command,
       timeoutMs: input.timeoutMs,
+      ...(input.context.shellInfo == null ? {} : { shellInfo: input.context.shellInfo }),
       ...(input.args.cwd === undefined ? {} : { cwd: input.args.cwd }),
     });
   }
@@ -293,6 +295,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
         context: input.context,
         command: input.args.command,
         timeoutMs: input.timeoutMs,
+        ...(input.context.shellInfo == null ? {} : { shellInfo: input.context.shellInfo }),
         ...(input.args.cwd === undefined ? {} : { cwd: input.args.cwd }),
       });
     }
@@ -469,6 +472,45 @@ function detectUnsupportedBackgroundSyntax(command: string): string | null {
   return null;
 }
 
+function detectUnsupportedBackgroundSyntaxForContext(
+  context: ToolExecutionContext,
+  command: string,
+): string | null {
+  if (!isNativeWindowsPlatform()) {
+    return detectUnsupportedBackgroundSyntax(command);
+  }
+
+  const shellSyntax = context.shellInfo?.commandShell.syntax ?? "powershell";
+  if (shellSyntax === "cmd") {
+    return detectUnsupportedCmdBackgroundSyntax(command);
+  }
+
+  return detectUnsupportedPowerShellBackgroundSyntax(command);
+}
+
+function detectUnsupportedCmdBackgroundSyntax(command: string): string | null {
+  const scrubbed = stripQuotedShellContent(command);
+  if (findCmdStartBackgroundFlag(scrubbed)) {
+    return "unmanaged cmd START /B backgrounding";
+  }
+
+  return null;
+}
+
+function detectUnsupportedPowerShellBackgroundSyntax(command: string): string | null {
+  const scrubbed = stripQuotedShellContent(command);
+  if (findPowerShellBackgroundAmpersand(scrubbed)) {
+    return "unmanaged PowerShell '&' background job operator";
+  }
+
+  const keywordMatch = scrubbed.match(/\b(Start-Job|Start-ThreadJob)\b/i);
+  if (keywordMatch?.[1] != null) {
+    return `unmanaged PowerShell ${keywordMatch[1]} backgrounding`;
+  }
+
+  return null;
+}
+
 function buildFullAccessArgsRequireModeMessage(args: BashToolArgs): string {
   const sandboxedRetry = renderBashArgsJson(selectBashArgs(args, { mode: "sandboxed" }));
   const fullAccessRetry = renderBashArgsJson(selectBashArgs(args, { mode: "full_access" }));
@@ -494,9 +536,9 @@ function buildWindowsBashRequiresAutopilotMessage(): string {
   return [
     "Native Windows cannot run sandboxed bash commands yet.",
     "",
-    "To opt in to Windows bash host execution, set `[runtime] autopilot = true` in `~/.pokoclaw/system/config.toml` and restart Pokoclaw.",
+    "To opt in to Windows host execution, set `[runtime] autopilot = true` in `~/.pokoclaw/system/config.toml` and restart Pokoclaw.",
     "",
-    "With that setting enabled, bash commands run on the Windows host with full access. This is not Linux sandbox isolation, so only enable it on a machine and workspace where that trust model is acceptable.",
+    "With that setting enabled, commands run on the Windows host with full access. This is not Linux sandbox isolation, so only enable it on a machine and workspace where that trust model is acceptable.",
   ].join("\n");
 }
 
@@ -722,6 +764,31 @@ function findUnquotedBackgroundAmpersand(command: string): boolean {
   return false;
 }
 
+function findCmdStartBackgroundFlag(command: string): boolean {
+  const segments = command.split(/&&?|\|\|?|\r?\n/g);
+  return segments.some((segment) => {
+    const match = segment.match(/^\s*\(?\s*start\b([^\r\n&|]*)/i);
+    const args = match?.[1];
+    return args == null ? false : /(?:^|\s)\/b(?:\s|$)/i.test(args);
+  });
+}
+
+function findPowerShellBackgroundAmpersand(command: string): boolean {
+  for (let index = 0; index < command.length; index += 1) {
+    if (command[index] !== "&") {
+      continue;
+    }
+
+    if (isPowerShellNonBackgroundAmpersand(command, index)) {
+      continue;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 function isNonBackgroundAmpersand(command: string, index: number): boolean {
   const prev = index > 0 ? command[index - 1] : "";
   const next = index + 1 < command.length ? command[index + 1] : "";
@@ -743,6 +810,38 @@ function isNonBackgroundAmpersand(command: string, index: number): boolean {
   }
 
   return false;
+}
+
+function isPowerShellNonBackgroundAmpersand(command: string, index: number): boolean {
+  const prev = index > 0 ? command[index - 1] : "";
+  const next = index + 1 < command.length ? command[index + 1] : "";
+
+  if (prev === "&" || next === "&") {
+    return true;
+  }
+
+  if (prev === ">" || prev === "<" || next === ">") {
+    return true;
+  }
+
+  const previousSignificantIndex = findPreviousNonWhitespaceIndex(command, index);
+  if (previousSignificantIndex < 0) {
+    return true;
+  }
+
+  const previousSignificant = command[previousSignificantIndex] ?? "";
+  return "([{=,;|".includes(previousSignificant);
+}
+
+function findPreviousNonWhitespaceIndex(command: string, index: number): number {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const char = command[cursor];
+    if (char != null && !/\s/.test(char)) {
+      return cursor;
+    }
+  }
+
+  return -1;
 }
 
 function renderBashResult(input: {

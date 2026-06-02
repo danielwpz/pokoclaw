@@ -15,16 +15,20 @@ fail() {
   printf '[doctor] error: %s\n' "$*" >&2
 }
 
+warn() {
+  printf '[doctor] warning: %s\n' "$*" >&2
+}
+
 print_windows_autopilot_notice() {
   cat <<EOF
-[doctor] Pokoclaw only supports native Windows bash through an explicit Autopilot opt-in.
+[doctor] Pokoclaw only supports native Windows shell execution through an explicit Autopilot opt-in.
 [doctor]
 [doctor] Set this in ~/.pokoclaw/system/config.toml and restart Pokoclaw:
 [doctor]
 [doctor]   [runtime]
 [doctor]   autopilot = true
 [doctor]
-[doctor] With that setting enabled, bash commands run on the Windows host with full access.
+[doctor] With that setting enabled, shell commands run on the Windows host with full access.
 [doctor] This is not Linux sandbox isolation.
 EOF
 }
@@ -50,6 +54,31 @@ print_unknown_unsupported() {
 [doctor]
 [doctor] Please open an issue or PR with details about your environment.
 EOF
+}
+
+print_windows_shell_context() {
+  info "windows shell context:"
+  info "  uname: $(uname -s 2>/dev/null || printf 'unknown')"
+  info "  ComSpec: ${ComSpec:-${COMSPEC:-<unset>}}"
+  if command -v pwsh.exe >/dev/null 2>&1; then
+    info "  PowerShell: $(command -v pwsh.exe)"
+  elif command -v pwsh >/dev/null 2>&1; then
+    info "  PowerShell: $(command -v pwsh)"
+  elif command -v powershell.exe >/dev/null 2>&1; then
+    info "  PowerShell: $(command -v powershell.exe)"
+  elif command -v powershell >/dev/null 2>&1; then
+    info "  PowerShell: $(command -v powershell)"
+  else
+    info "  PowerShell: <missing>"
+  fi
+  if command -v cmd.exe >/dev/null 2>&1; then
+    info "  cmd fallback: $(command -v cmd.exe)"
+  elif [[ -n "${ComSpec:-${COMSPEC:-}}" ]]; then
+    info "  cmd fallback: ${ComSpec:-${COMSPEC:-}}"
+  else
+    info "  cmd fallback: <missing>"
+  fi
+  info "  Windows command syntax: PowerShell by default, cmd only as fallback"
 }
 
 check_command() {
@@ -92,6 +121,49 @@ check_common_tools() {
   check_node_version || failures=$((failures + 1))
   check_command "pnpm" "Install pnpm 10.15.0 or use Corepack to activate the repo package manager." || failures=$((failures + 1))
   check_command "rg" "Install ripgrep. On Debian/Ubuntu: sudo apt-get install -y ripgrep" || failures=$((failures + 1))
+
+  return "${failures}"
+}
+
+check_windows_shell() {
+  local failures=0
+  local has_powershell=0
+  local has_cmd=0
+
+  if command -v pwsh.exe >/dev/null 2>&1; then
+    ok "found PowerShell: $(command -v pwsh.exe)"
+    has_powershell=1
+  elif command -v pwsh >/dev/null 2>&1; then
+    ok "found PowerShell: $(command -v pwsh)"
+    has_powershell=1
+  elif command -v powershell.exe >/dev/null 2>&1; then
+    ok "found PowerShell: $(command -v powershell.exe)"
+    has_powershell=1
+  elif command -v powershell >/dev/null 2>&1; then
+    ok "found PowerShell: $(command -v powershell)"
+    has_powershell=1
+  fi
+
+  if command -v cmd.exe >/dev/null 2>&1; then
+    ok "found cmd fallback: $(command -v cmd.exe)"
+    has_cmd=1
+  elif [[ -n "${ComSpec:-${COMSPEC:-}}" ]]; then
+    ok "found cmd fallback: ${ComSpec:-${COMSPEC:-}}"
+    has_cmd=1
+  else
+    fail "missing cmd.exe fallback"
+    failures=$((failures + 1))
+  fi
+
+  if [[ "${has_powershell}" -eq 0 ]]; then
+    if [[ "${has_cmd}" -eq 1 ]]; then
+      warn "missing PowerShell; Pokoclaw will use cmd fallback if Windows host execution is enabled"
+      info "PowerShell is the recommended Windows shell. Install or repair PowerShell when practical."
+    else
+      fail "missing PowerShell"
+      failures=$((failures + 1))
+    fi
+  fi
 
   return "${failures}"
 }
@@ -194,7 +266,9 @@ main() {
       ;;
     MINGW* | MSYS* | CYGWIN*)
       print_windows_autopilot_notice
+      print_windows_shell_context
       check_common_tools || failures=$((failures + $?))
+      check_windows_shell || failures=$((failures + $?))
       ;;
     *)
       print_unknown_unsupported "${os_name}"

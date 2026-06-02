@@ -6,6 +6,7 @@ const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() =
 }));
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
+import { detectRuntimeShellInfo } from "@/src/runtime/shell-info.js";
 import type { ExecuteUnsandboxedBashInput } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
@@ -154,6 +155,11 @@ describe("bash tool", () => {
     mockProcessPlatform("win32");
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
+    const shellInfo = detectRuntimeShellInfo({
+      platform: "win32",
+      env: {},
+      isExecutableAvailable: (candidate) => candidate === "pwsh.exe",
+    });
     executeUnsandboxedBashMock.mockResolvedValue({
       command: "pwd",
       cwd: "/tmp/work",
@@ -174,6 +180,7 @@ describe("bash tool", () => {
         cwd: "/tmp/work",
         securityConfig: DEFAULT_CONFIG.security,
         storage: handle.storage.db,
+        shellInfo,
         approvalState: {
           runtimeModeAutoApproval: {
             source: "autopilot",
@@ -191,6 +198,7 @@ describe("bash tool", () => {
       }),
       command: "pwd",
       timeoutMs: 10_000,
+      shellInfo,
     });
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
@@ -1845,6 +1853,206 @@ Use this exact bash argument object on the next retry if full access is warrante
     } satisfies Partial<ToolFailure>);
 
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("allows the PowerShell call operator on native Windows autopilot execution", async () => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command: "& 'C:\\Program Files\\Git\\bin\\git.exe' --version",
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "git version 2.50.0.windows.1\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        approvalState: {
+          runtimeModeAutoApproval: {
+            source: "autopilot",
+          },
+        },
+      },
+      {
+        command: "& 'C:\\Program Files\\Git\\bin\\git.exe' --version",
+      },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledTimes(1);
+    expect(result.details).toMatchObject({
+      command: "& 'C:\\Program Files\\Git\\bin\\git.exe' --version",
+      exitCode: 0,
+    });
+  });
+
+  test.each([
+    {
+      command: "Start-Sleep 60 &",
+      reason: "unmanaged PowerShell '&' background job operator",
+    },
+    {
+      command: "npm run dev &",
+      reason: "unmanaged PowerShell '&' background job operator",
+    },
+    {
+      command: "Start-Job -ScriptBlock { Start-Sleep 60 }",
+      reason: "unmanaged PowerShell Start-Job backgrounding",
+    },
+  ])("rejects PowerShell background execution on native Windows: $command", async ({
+    command,
+    reason,
+  }) => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          shellInfo: detectRuntimeShellInfo({
+            platform: "win32",
+            env: {},
+            isExecutableAvailable: (candidate) => candidate === "pwsh.exe",
+          }),
+          approvalState: {
+            runtimeModeAutoApproval: {
+              source: "autopilot",
+            },
+          },
+        },
+        { command },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_background_not_supported",
+        reason,
+      },
+    } satisfies Partial<ToolFailure>);
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    "start /b npm run dev",
+    'start "" /B long-task',
+  ])("rejects cmd background execution on native Windows fallback: %s", async (command) => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    await expect(
+      registry.execute(
+        "bash",
+        {
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: "/tmp/work",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+          shellInfo: detectRuntimeShellInfo({
+            platform: "win32",
+            env: {
+              ComSpec: "C:\\Windows\\System32\\cmd.exe",
+            },
+            isExecutableAvailable: (candidate) => candidate === "C:\\Windows\\System32\\cmd.exe",
+          }),
+          approvalState: {
+            runtimeModeAutoApproval: {
+              source: "autopilot",
+            },
+          },
+        },
+        { command },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "bash_background_not_supported",
+        reason: "unmanaged cmd START /B backgrounding",
+      },
+    } satisfies Partial<ToolFailure>);
+
+    expect(executeUnsandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("does not treat a cmd START /D path containing /b as backgrounding", async () => {
+    mockProcessPlatform("win32");
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    const command = "start /D C:/b /WAIT program";
+    executeUnsandboxedBashMock.mockResolvedValue({
+      command,
+      cwd: "/tmp/work",
+      timeoutMs: 10_000,
+      stdout: "ok\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+
+    const registry = new ToolRegistry([createBashTool()]);
+
+    const result = await registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        shellInfo: detectRuntimeShellInfo({
+          platform: "win32",
+          env: {
+            ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          },
+          isExecutableAvailable: (candidate) => candidate === "C:\\Windows\\System32\\cmd.exe",
+        }),
+        approvalState: {
+          runtimeModeAutoApproval: {
+            source: "autopilot",
+          },
+        },
+      },
+      { command },
+    );
+
+    expect(executeUnsandboxedBashMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command,
+      }),
+    );
+    expect(result.details).toMatchObject({
+      command,
+      exitCode: 0,
+    });
   });
 
   test("allows logical && while still rejecting background keywords", async () => {

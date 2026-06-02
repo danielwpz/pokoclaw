@@ -31,6 +31,7 @@ import {
   buildToolUsageSection,
   buildWorkspaceRuntimeSection,
 } from "@/src/agent/system-prompt-sections.js";
+import type { RuntimeShellInfo } from "@/src/runtime/shell-info.js";
 
 function joinSections(sections: string[]): string {
   return sections.filter((section) => section.trim().length > 0).join("\n\n");
@@ -48,6 +49,7 @@ interface BuildAgentSystemPromptInput {
   memoryCatalog?: string | null;
   currentDate?: string | null;
   timezone?: string | null;
+  shellInfo?: RuntimeShellInfo | null;
   skillsCatalog?: string | null;
 }
 
@@ -57,7 +59,9 @@ function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildTaskAgentOperatingModelSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
-    buildBashFullAccessSection(),
+    buildBashFullAccessSection({
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+    }),
     buildSafetySection(),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
@@ -92,7 +96,9 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildMainAgentSubagentSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
-    buildBashFullAccessSection(),
+    buildBashFullAccessSection({
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+    }),
     buildInteractiveUiSection(),
     buildSafetySection(),
     buildWorkspaceRuntimeSection({
@@ -135,7 +141,9 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
     buildSubagentScheduledTasksSection(),
     buildToolUsageSection(),
     buildPermissionsSection(),
-    buildBashFullAccessSection(),
+    buildBashFullAccessSection({
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+    }),
     buildInteractiveUiSection(),
     buildSafetySection(),
     buildWorkspaceRuntimeSection({

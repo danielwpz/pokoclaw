@@ -4,6 +4,8 @@
  * `system-prompt.ts` composes these building blocks into role-specific prompts.
  * Keep behavioral wording here so policy changes are localized and testable.
  */
+import type { RuntimeShellInfo } from "@/src/runtime/shell-info.js";
+
 function renderSection(title: string, lines: string[]): string {
   const content = lines.map((line) => line.trimEnd());
   while (content[0] === "") {
@@ -66,6 +68,10 @@ function buildBackgroundTaskSharedGuidance(): string[] {
 export interface WorkspaceRuntimePromptContext {
   currentDate?: string | null;
   timezone?: string | null;
+}
+
+export interface BashFullAccessPromptContext {
+  shellInfo?: RuntimeShellInfo | null;
 }
 
 export interface SubagentProfilePromptContext {
@@ -314,7 +320,7 @@ export function buildPermissionsSection(): string {
   ]);
 }
 
-export function buildBashFullAccessSection(): string {
+export function buildBashFullAccessSection(input: BashFullAccessPromptContext = {}): string {
   return renderSection("Bash Tool", [
     "- Bash has two execution modes: `sandboxed` and `full_access`.",
     "- `sandboxed` is the default mode.",
@@ -366,7 +372,8 @@ export function buildBashFullAccessSection(): string {
     "- Example: a one-off setup or diagnostic command should omit `prefix`.",
     "- Not suitable: `npm run dev | tee out.log`",
     "- Not suitable: `curl ... && bash ...`",
-    "- Background shell operators are not supported; do not use unmanaged backgrounding like &, nohup, setsid, or disown.",
+    ...buildBackgroundShellGuidance(input.shellInfo),
+    ...buildWindowsShellSyntaxLines(input.shellInfo),
     "",
     "- Decision flow:",
     "- 1. Decide whether the real need is local task-file access or broader shell execution.",
@@ -452,6 +459,29 @@ export function buildBashFullAccessSection(): string {
     "}",
     "```",
   ]);
+}
+
+function buildWindowsShellSyntaxLines(shellInfo: RuntimeShellInfo | null | undefined): string[] {
+  if (shellInfo?.isWindows !== true) {
+    return [];
+  }
+
+  const syntaxLabel = shellInfo.commandShell.syntax === "powershell" ? "PowerShell" : "cmd";
+  return [
+    "",
+    "- You are running on Windows.",
+    `- The available shell syntax is ${syntaxLabel}. Write \`command\` using ${syntaxLabel} syntax.`,
+  ];
+}
+
+function buildBackgroundShellGuidance(shellInfo: RuntimeShellInfo | null | undefined): string[] {
+  if (shellInfo?.isWindows === true) {
+    return ["- Background shell jobs are not supported; run commands in the foreground."];
+  }
+
+  return [
+    "- Background shell operators are not supported; do not use unmanaged backgrounding like &, nohup, setsid, or disown.",
+  ];
 }
 
 export function buildApprovalReviewSection(): string {

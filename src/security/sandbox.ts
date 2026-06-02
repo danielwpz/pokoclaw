@@ -9,7 +9,11 @@ import {
   type SandboxPermissionIssue,
   type SandboxRuntimeConfig,
 } from "@danielwpz/sandbox-runtime";
-
+import {
+  detectRuntimeShellInfo,
+  getDefaultBashExecutable,
+  type RuntimeShellInfo,
+} from "@/src/runtime/shell-info.js";
 import {
   checkFilesystemPermission,
   expandExactDirectoryReadChildren,
@@ -45,6 +49,7 @@ export interface ExecuteSandboxedBashInput {
 
 export interface ExecuteUnsandboxedBashInput extends ExecuteSandboxedBashInput {
   platform?: NodeJS.Platform;
+  shellInfo?: RuntimeShellInfo;
 }
 
 export interface SandboxedBashResult extends SandboxExecResult {
@@ -54,7 +59,15 @@ export interface SandboxedBashResult extends SandboxExecResult {
 }
 
 const logger = createSubsystemLogger("security/sandbox");
-const DEFAULT_BASH_BINARY = process.platform === "win32" ? "bash" : "/bin/bash";
+const DEFAULT_BASH_BINARY = getDefaultBashExecutable();
+const POWERSHELL_UTF8_OUTPUT_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
+const POWERSHELL_EXIT_CODE_RELAY_SUFFIX = [
+  "$global:__pokoclaw_success = $?",
+  "$global:__pokoclaw_last_exit_code = $global:LASTEXITCODE",
+  "if ($global:__pokoclaw_last_exit_code -is [int] -and $global:__pokoclaw_last_exit_code -ne 0) { exit $global:__pokoclaw_last_exit_code }",
+  "if (-not $global:__pokoclaw_success) { exit 1 }",
+  "exit 0",
+].join("\n");
 const BLOCKED_ENV_VAR_NAMES = new Set<string>([
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
@@ -206,6 +219,7 @@ export async function executeUnsandboxedBash(
       cwd,
       abortSignal,
       platform: input.platform ?? process.platform,
+      ...(input.shellInfo == null ? {} : { shellInfo: input.shellInfo }),
     });
 
     logger.info("bash full-access host exec done", {
@@ -686,17 +700,28 @@ async function runUnsandboxedShellCommand(input: {
   cwd: string;
   abortSignal: AbortSignal;
   platform: NodeJS.Platform;
+  shellInfo?: RuntimeShellInfo;
 }): Promise<SandboxExecResult> {
   if (input.abortSignal.aborted) {
     throw createAbortError();
   }
 
   return await new Promise<SandboxExecResult>((resolve, reject) => {
-    const child = spawn(DEFAULT_BASH_BINARY, ["-lc", input.command], {
+    const shell =
+      input.shellInfo?.commandShell ??
+      detectRuntimeShellInfo({ platform: input.platform }).commandShell;
+    const command =
+      shell.syntax === "powershell" ? buildPowerShellCommand(input.command) : input.command;
+    const childEnv = sanitizeSandboxEnv(process.env);
+    if (input.platform === "win32") {
+      childEnv.SHELL = shell.executable;
+    }
+    const child = spawn(shell.executable, [...shell.args, command], {
       cwd: input.cwd,
-      env: sanitizeSandboxEnv(process.env),
+      env: childEnv,
       detached: input.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: input.platform === "win32",
     });
 
     let stdout = "";
@@ -821,6 +846,10 @@ async function terminateWindowsProcessTree(pid: number): Promise<boolean> {
     taskkill.once("error", () => finish(false));
     taskkill.once("close", (exitCode) => finish(exitCode === 0));
   });
+}
+
+function buildPowerShellCommand(command: string): string {
+  return `${POWERSHELL_UTF8_OUTPUT_PREFIX}${command}\n${POWERSHELL_EXIT_CODE_RELAY_SUFFIX}`;
 }
 
 function createAbortError(): Error {

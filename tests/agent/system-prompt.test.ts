@@ -24,6 +24,7 @@ import {
   buildToolUsageSection,
   buildWorkspaceRuntimeSection,
 } from "@/src/agent/system-prompt-sections.js";
+import { detectRuntimeShellInfo } from "@/src/runtime/shell-info.js";
 
 describe("agent system prompt", () => {
   test("builds the current structured sections and omits future empty sections", () => {
@@ -263,6 +264,63 @@ describe("agent system prompt", () => {
         "- If you are unsure about the current time, or need an exact time, use bash to get it.",
       ),
     ).toBe(true);
+  });
+
+  test("injects Windows PowerShell syntax guidance into the bash tool section", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      currentDate: "2026-03-30",
+      timezone: "Asia/Shanghai",
+      shellInfo: detectRuntimeShellInfo({
+        platform: "win32",
+        env: {
+          ProgramFiles: "C:\\Program Files",
+        },
+        isExecutableAvailable: (candidate) =>
+          candidate === "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      }),
+    });
+
+    expect(prompt).toContain("You are running on Windows.");
+    expect(prompt).toContain(
+      "The available shell syntax is PowerShell. Write `command` using PowerShell syntax.",
+    );
+    expect(prompt).not.toContain("The available shell syntax is cmd");
+    expect(prompt).not.toContain("Host platform:");
+  });
+
+  test("injects cmd syntax only when Windows falls back to cmd", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      shellInfo: detectRuntimeShellInfo({
+        platform: "win32",
+        env: {
+          ComSpec: "C:\\Windows\\System32\\cmd.exe",
+        },
+        isExecutableAvailable: (candidate) => candidate === "C:\\Windows\\System32\\cmd.exe",
+      }),
+    });
+
+    expect(prompt).toContain("You are running on Windows.");
+    expect(prompt).toContain(
+      "The available shell syntax is cmd. Write `command` using cmd syntax.",
+    );
+    expect(prompt).not.toContain("The available shell syntax is PowerShell");
+  });
+
+  test("does not change bash tool guidance on non-Windows hosts", () => {
+    const linuxShellInfo = detectRuntimeShellInfo({
+      platform: "linux",
+      env: {
+        SHELL: "/bin/zsh",
+      },
+    });
+
+    expect(buildBashFullAccessSection({ shellInfo: linuxShellInfo })).toBe(
+      buildBashFullAccessSection(),
+    );
   });
 
   test("keeps the prompt prefix stable when only the injected runtime date changes", () => {

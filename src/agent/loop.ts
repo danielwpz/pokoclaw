@@ -86,6 +86,7 @@ import {
 import type { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import type { RuntimeModeService } from "@/src/runtime/runtime-modes.js";
+import { detectRuntimeShellInfo, type RuntimeShellInfo } from "@/src/runtime/shell-info.js";
 import { SessionSteerQueueRegistry, type SteerInput } from "@/src/runtime/steer-queue.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import type { PermissionRequest } from "@/src/security/scope.js";
@@ -322,6 +323,7 @@ export class AgentLoop {
     toolCallId: string;
     runId?: string;
     approvalState?: ToolExecutionApprovalState;
+    shellInfo?: RuntimeShellInfo | null;
   }): ToolExecutionContext {
     const taskRun = new TaskRunsRepo(this.deps.storage).getByExecutionSessionId(input.sessionId);
     const runtimeControl = {
@@ -369,6 +371,7 @@ export class AgentLoop {
       ...(input.ownerAgentId === undefined ? {} : { ownerAgentId: input.ownerAgentId }),
       ...(input.agentKind === undefined ? {} : { agentKind: input.agentKind }),
       ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
+      ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
       runtimeControl,
     };
   }
@@ -543,6 +546,7 @@ export class AgentLoop {
         ? buildSubagentWorkspaceDir(ownerAgent.id)
         : null;
     const promptRuntimeContext = resolveLocalCalendarContext();
+    const shellInfo = detectRuntimeShellInfo();
     const memorySnapshot = this.memoryResolver.resolveForRun({
       agentKind: ownerAgent?.kind ?? null,
       privateWorkspaceDir,
@@ -584,6 +588,7 @@ export class AgentLoop {
       description: ownerAgent?.description ?? null,
       currentDate: promptRuntimeContext.currentDate,
       timezone: promptRuntimeContext.timezone,
+      shellInfo,
       workdir: ownerAgent?.workdir ?? null,
       privateWorkspaceDir,
       bootstrapPrompt: bootstrapSnapshot?.prompt ?? null,
@@ -1145,6 +1150,7 @@ export class AgentLoop {
               runId,
               events,
               signal: handle.signal,
+              shellInfo,
               ...(runApprovalState == null ? {} : { approvalState: runApprovalState }),
             });
 
@@ -1566,6 +1572,7 @@ export class AgentLoop {
     runId: string;
     events: AgentRuntimeEvent[];
     signal: AbortSignal;
+    shellInfo: RuntimeShellInfo;
     approvalState?: ToolExecutionApprovalState;
   }): Promise<ExecutedToolCall> {
     const queuedSteer: SteerInput[] = [];
@@ -1589,6 +1596,7 @@ export class AgentLoop {
             signal: input.signal,
             toolCallId: input.toolCall.id,
             runId: input.runId,
+            shellInfo: input.shellInfo,
             ...(input.ownerAgent?.workdir == null ? {} : { cwd: input.ownerAgent.workdir }),
             ...(approvalState == null ? {} : { approvalState }),
           }),
@@ -1742,6 +1750,7 @@ export class AgentLoop {
       runId: string;
       events: AgentRuntimeEvent[];
       signal: AbortSignal;
+      shellInfo: RuntimeShellInfo;
     };
     approval: ApprovalWaitOutcome & { approvalId: number; request: PermissionRequest };
     approvalState?: ToolExecutionApprovalState;
@@ -1825,6 +1834,7 @@ export class AgentLoop {
           signal: input.input.signal,
           toolCallId: retryTarget.id,
           runId: input.input.runId,
+          shellInfo: input.input.shellInfo,
           ...(input.input.ownerAgent?.workdir == null
             ? {}
             : { cwd: input.input.ownerAgent.workdir }),

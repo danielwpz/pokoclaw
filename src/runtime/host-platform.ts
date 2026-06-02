@@ -11,7 +11,7 @@ export function assertNativeWindowsRuntimeSupported(input: {
   }
 
   throw new Error(
-    "Native Windows requires `[runtime] autopilot = true` in ~/.pokoclaw/system/config.toml. With this opt-in, bash commands run on the Windows host with full access instead of Linux sandbox isolation.",
+    "Native Windows requires `[runtime] autopilot = true` in ~/.pokoclaw/system/config.toml. With this opt-in, shell commands run on the Windows host with full access instead of Linux sandbox isolation.",
   );
 }
 

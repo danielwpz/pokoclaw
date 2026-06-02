@@ -92,9 +92,11 @@ Current checks:
   - bubblewrap filesystem smoke
   - bubblewrap network namespace smoke
 - native Windows-like shells (`MINGW*`, `MSYS*`, `CYGWIN*`):
-  - common checks only
+  - common checks
+  - PowerShell availability
+  - cmd fallback availability
   - sandboxed bash is not available yet
-  - runnable startup requires explicit `[runtime] autopilot = true`, which makes bash commands run directly on the Windows host with full access and no Linux sandbox isolation
+  - runnable startup requires explicit `[runtime] autopilot = true`, which makes commands run directly on the Windows host with full access and no Linux sandbox isolation
 - WSL:
   - currently unsupported; the doctor exits with a clear message and points contributors to the GitHub repository
 
@@ -290,7 +292,7 @@ Check these first:
 - inconsistent provider or model IDs
 - a provider with no usable model mapping
 - an empty scenario list for a setup that is supposed to be runnable
-- on native Windows, startup failure because `[runtime] autopilot = true` is not set; enabling it means bash commands run directly on the Windows host with full access and no Linux sandbox isolation
+- on native Windows, startup failure because `[runtime] autopilot = true` is not set; enabling it means commands run directly on the Windows host with full access and no Linux sandbox isolation
 - on Linux, sandbox setup failures:
   - missing `bwrap`, `socat`, or `rg`
   - bubblewrap namespace or setuid failures from Phase 1
