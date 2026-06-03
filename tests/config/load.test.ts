@@ -187,7 +187,7 @@ describe("config loader", () => {
       recentTurnsPreserve: 3,
     });
     expect(config.runtime).toEqual({
-      maxTurns: 100,
+      maxTurns: 0,
       maxEmptyOutputLlmAttempts: 5,
       llmFirstResponseTimeoutMs: 45_000,
       approvalTimeoutMs: 180_000,
@@ -730,6 +730,15 @@ describe("config loader", () => {
       approvalGrantTtlMs: 172_800_000,
       autopilot: true,
     });
+  });
+
+  test("loads zero runtime max turns as unlimited", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(configPath, ["[runtime]", "maxTurns = 0", ""].join("\n"), "utf8");
+
+    const config = await loadConfig({ configTomlPath: configPath });
+
+    expect(config.runtime.maxTurns).toBe(0);
   });
 
   test("rejects invalid runtime autopilot config", async () => {

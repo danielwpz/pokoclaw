@@ -316,6 +316,8 @@ export class LarkA2uiService {
         messageType: "a2ui_user_action",
         channelMessageId: `a2ui:${publication.surfaceId}:${randomUUID()}`,
         createdAt: new Date(),
+        // A2UI callbacks should stay short: handle the structured user action and update/respond,
+        // rather than letting one button click start an unbounded chat run in the background.
         maxTurns: 6,
       })
       .catch((error: unknown) => {

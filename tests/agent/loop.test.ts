@@ -1419,7 +1419,7 @@ describe("agent loop", () => {
     });
   });
 
-  test("uses the default max turn limit of 100 when runtime config is omitted", async () => {
+  test("does not cap turns at 100 when runtime max turns is unlimited by default", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);
 
@@ -1447,6 +1447,11 @@ describe("agent loop", () => {
     const runner: AgentModelRunner = {
       async runTurn() {
         turn += 1;
+        if (turn > 100) {
+          return makeAssistantResult({
+            content: [{ type: "text", text: "done" }],
+          });
+        }
         return makeAssistantResult({
           stopReason: "toolUse",
           content: [{ type: "toolCall", id: `tool_${turn}`, name: "probe", arguments: {} }],
@@ -1478,10 +1483,10 @@ describe("agent loop", () => {
       compaction: DEFAULT_CONFIG.compaction,
     });
 
-    await expect(loop.run({ sessionId: "sess_1", scenario: "chat" })).rejects.toThrow(
-      "configured max turn limit (100)",
-    );
-    expect(turn).toBe(100);
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(turn).toBe(101);
+    expect(result.toolExecutions).toBe(100);
   });
 
   test("passes owner agent and workspace cwd into tool execution context", async () => {

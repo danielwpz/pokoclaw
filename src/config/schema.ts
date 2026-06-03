@@ -938,7 +938,7 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
   );
 
   return {
-    maxTurns: validatePositiveInteger(
+    maxTurns: validateNonNegativeInteger(
       config.maxTurns ?? defaults.maxTurns,
       "config.toml runtime.maxTurns",
     ),

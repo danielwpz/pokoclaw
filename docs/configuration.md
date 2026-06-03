@@ -349,6 +349,20 @@ isolation. Pokoclaw uses PowerShell syntax by default on Windows and falls back 
 PowerShell is unavailable. Only enable this on a machine and workspace where that trust model is
 acceptable.
 
+### Runtime turn limit
+
+`runtime.maxTurns` caps the number of model turns in one agent run. A model turn is one model
+request; tool results can lead to another turn.
+
+The default is `0`, which means no turn limit:
+
+```toml
+[runtime]
+maxTurns = 0
+```
+
+Set a positive integer to enforce a limit for normal runs.
+
 ### LLM empty-output retries
 
 Pokoclaw retries a model response when the model times out before producing any

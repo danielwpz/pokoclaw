@@ -1,6 +1,7 @@
 import type { RawConfig } from "@/src/config/schema.js";
 
-export const DEFAULT_RUNTIME_MAX_TURNS = 100;
+// 0 means unlimited; positive values cap model turns per run.
+export const DEFAULT_RUNTIME_MAX_TURNS = 0;
 export const DEFAULT_RUNTIME_MAX_EMPTY_OUTPUT_LLM_ATTEMPTS = 5;
 export const DEFAULT_RUNTIME_LLM_FIRST_RESPONSE_TIMEOUT_MS = 45_000;
 export const DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS = 3 * 60 * 1000;

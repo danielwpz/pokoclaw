@@ -504,6 +504,7 @@ export class AgentLoop {
 
   async run(input: RunAgentLoopInput): Promise<RunAgentLoopResult> {
     const handle = this.deps.cancel.begin(input.sessionId);
+    // maxTurns = 0 means unlimited; otherwise it caps model turns for this run.
     const maxTurns = input.maxTurns ?? this.defaultMaxTurns;
     let context = this.deps.sessions.getContext(input.sessionId);
     const runtimeImagesByMessageId = new Map<string, AgentUserRuntimeImagePayload[]>(
@@ -633,7 +634,7 @@ export class AgentLoop {
       let runApprovalState = buildRuntimeModeToolExecutionState(
         this.deps.runtimeModes?.getEffectiveApprovalMode(context.session.ownerAgentId),
       );
-      for (let turn = 0; turn < maxTurns; turn += 1) {
+      for (let turn = 0; maxTurns === 0 || turn < maxTurns; turn += 1) {
         throwIfAborted(handle.signal);
         let turnToolExecutions = 0;
         logger.debug("starting model turn", {
