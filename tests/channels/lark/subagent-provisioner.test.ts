@@ -232,6 +232,82 @@ describe("lark subagent provisioner", () => {
     });
   });
 
+  test("surfaces non-zero lark response codes returned over successful HTTP responses", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_1', 'lark', 'default', '2026-03-29T00:00:00.000Z', '2026-03-29T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, title, created_at, updated_at)
+      VALUES ('conv_main', 'ci_1', 'chat_main', 'dm', 'Main', '2026-03-29T00:00:00.000Z', '2026-03-29T00:00:00.000Z');
+    `);
+
+    const chatCreate = vi.fn(async () => ({ data: { chat_id: "chat_sub_3" } }));
+    const chatDelete = vi.fn(async () => ({ data: {} }));
+    const chatMembersGet = vi.fn(async () => ({
+      data: {
+        items: [{ member_id: "ou_user_1" }],
+        has_more: false,
+      },
+    }));
+    const chatMembersCreate = vi.fn(async () => ({
+      code: 99991664,
+      msg: "member id type is invalid",
+      data: {
+        member_id_type: "open_id",
+      },
+    }));
+
+    const provisioner = createLarkSubagentConversationSurfaceProvisioner({
+      storage: handle.storage.db,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                chat: {
+                  create: chatCreate,
+                  delete: chatDelete,
+                  link: vi.fn(async () => ({ data: {} })),
+                },
+                chatMembers: {
+                  get: chatMembersGet,
+                  create: chatMembersCreate,
+                },
+                message: {
+                  create: vi.fn(async () => ({ data: { message_id: "om_welcome_3" } })),
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    const result = await provisioner.provisionSubagentSurface({
+      conversationId: "conv_sub_3",
+      sourceConversationId: "conv_main",
+      channelInstanceId: "ci_1",
+      title: "PR Review",
+      description: "Review pull requests and summarize findings.",
+      initialTask: "Review the current PR and report concrete issues.",
+      workdir: "/Users/example/work/pokoclaw",
+      privateWorkspaceDir: "/Users/example/.pokoclaw/workspace/subagents/abcd1234",
+      preferredSurface: "independent_chat",
+    });
+
+    if (result.status !== "failed") {
+      throw new Error(`expected provisioning to fail, got ${result.status}`);
+    }
+    expect(result.retryable).toBe(true);
+    expect(result.reason).toContain("add subagent chat members: member id type is invalid");
+    expect(result.reason).toContain("larkCode=99991664");
+    expect(result.reason).toContain("larkMsg=member id type is invalid");
+    expect(result.reason).toContain('"member_id_type":"open_id"');
+    expect(chatDelete).toHaveBeenCalledExactlyOnceWith({
+      path: { chat_id: "chat_sub_3" },
+    });
+  });
+
   test("supports explicit cleanup of a provisioned subagent chat", async () => {
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`

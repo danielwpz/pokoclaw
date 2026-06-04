@@ -377,7 +377,7 @@ async function runLarkApiStep<T>(context: string, operation: () => Promise<T>): 
   try {
     return await operation();
   } catch (error: unknown) {
-    throw new LarkApiStepError(context, extractLarkApiErrorDetails(error));
+    throw new LarkApiStepError(context, extractLarkApiErrorDetails(error), { cause: error });
   }
 }
 
@@ -385,8 +385,9 @@ class LarkApiStepError extends Error {
   constructor(
     readonly step: string,
     readonly details: LarkApiErrorDetails,
+    options?: ErrorOptions,
   ) {
-    super(`${step}: ${formatLarkApiErrorDetails(details)}`);
+    super(`${step}: ${formatLarkApiErrorDetails(details)}`, options);
     this.name = "LarkApiStepError";
   }
 }
