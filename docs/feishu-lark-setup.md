@@ -106,7 +106,6 @@ In **Permissions**, use **Batch import** and paste this permission set:
       "im:chat.moderation:read",
       "im:chat.tabs:read",
       "im:chat.tabs:write_only",
-      "im:chat.top_notice:write_only",
       "im:chat.widgets:read",
       "im:chat.widgets:write_only",
       "im:chat:create",
@@ -150,6 +149,10 @@ In **Permissions**, use **Batch import** and paste this permission set:
   }
 }
 ```
+
+SubAgent group provisioning uses the bot/app tenant token. Keep chat creation and member-management
+permissions in `tenant` scopes; putting `im:chat.members:write_only` only in `user` scopes is not
+enough for Pokoclaw to add users to a SubAgent group.
 
 If the platform UI or permission names have changed, adapt carefully instead of pretending the old list is exact.
 

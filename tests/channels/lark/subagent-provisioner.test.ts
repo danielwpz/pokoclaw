@@ -40,7 +40,6 @@ describe("lark subagent provisioner", () => {
     }));
     const chatMembersCreate = vi.fn(async () => ({ data: { invalid_id_list: [] } }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "om_welcome_1" } }));
-    const putTopNotice = vi.fn(async () => ({ data: {} }));
 
     const provisioner = createLarkSubagentConversationSurfaceProvisioner({
       storage: handle.storage.db,
@@ -60,9 +59,6 @@ describe("lark subagent provisioner", () => {
                 },
                 message: {
                   create: messageCreate,
-                },
-                chatTopNotice: {
-                  putTopNotice,
                 },
               },
             },
@@ -153,12 +149,6 @@ describe("lark subagent provisioner", () => {
     expect(initialTaskPanel).toBeDefined();
     expect(initialTaskPanel?.expanded).toBe(false);
     expect(initialTaskPanel?.header?.title?.content).toContain("初始任务");
-    expect(putTopNotice).toHaveBeenCalledExactlyOnceWith({
-      path: { chat_id: "chat_sub_1" },
-      data: {
-        chat_top_notice: [{ action_type: "1", message_id: "om_welcome_1" }],
-      },
-    });
   });
 
   test("cleans up the created chat when provisioning fails after chat.create", async () => {
@@ -180,7 +170,13 @@ describe("lark subagent provisioner", () => {
       },
     }));
     const chatMembersCreate = vi.fn(async () => {
-      throw new Error("member add failed");
+      throw makeLarkHttpError(400, {
+        code: 99991663,
+        msg: "missing tenant permission",
+        details: {
+          missing_scope: "im:chat.members:write_only",
+        },
+      });
     });
 
     const provisioner = createLarkSubagentConversationSurfaceProvisioner({
@@ -202,9 +198,6 @@ describe("lark subagent provisioner", () => {
                 message: {
                   create: vi.fn(async () => ({ data: { message_id: "om_welcome_2" } })),
                 },
-                chatTopNotice: {
-                  putTopNotice: vi.fn(async () => ({ data: {} })),
-                },
               },
             },
           }) as never,
@@ -223,11 +216,17 @@ describe("lark subagent provisioner", () => {
       preferredSurface: "independent_chat",
     });
 
-    expect(result).toMatchObject({
-      status: "failed",
-      reason: "member add failed",
-      retryable: true,
-    });
+    if (result.status !== "failed") {
+      throw new Error(`expected provisioning to fail, got ${result.status}`);
+    }
+    expect(result.retryable).toBe(true);
+    expect(result.reason).toContain(
+      "add subagent chat members: Request failed with status code 400",
+    );
+    expect(result.reason).toContain("httpStatus=400");
+    expect(result.reason).toContain("larkCode=99991663");
+    expect(result.reason).toContain("larkMsg=missing tenant permission");
+    expect(result.reason).toContain('"missing_scope":"im:chat.members:write_only"');
     expect(chatDelete).toHaveBeenCalledExactlyOnceWith({
       path: { chat_id: "chat_sub_2" },
     });
@@ -267,3 +266,17 @@ describe("lark subagent provisioner", () => {
     });
   });
 });
+
+function makeLarkHttpError(
+  status: number,
+  data: Record<string, unknown>,
+): Error & { response: { status: number; data: Record<string, unknown> } } {
+  const error = new Error(`Request failed with status code ${status}`) as Error & {
+    response: { status: number; data: Record<string, unknown> };
+  };
+  error.response = {
+    status,
+    data,
+  };
+  return error;
+}
