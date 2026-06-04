@@ -11,6 +11,15 @@ import { ChannelInstancesRepo } from "@/src/storage/repos/channel-instances.repo
 import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
 
 const logger = createSubsystemLogger("channels/lark-subagent-provisioner");
+const LARK_API_RESPONSE_LOG_MAX_CHARS = 4000;
+
+interface LarkApiErrorDetails {
+  message: string;
+  httpStatus?: number;
+  larkCode?: string | number;
+  larkMsg?: string;
+  responseBody?: string;
+}
 
 export interface CreateLarkSubagentConversationSurfaceProvisionerInput {
   storage: StorageDb;
@@ -65,13 +74,16 @@ export function createLarkSubagentConversationSurfaceProvisioner(
       const installationId = channelInstance.accountKey;
       const client = input.clients.getOrCreate(installationId);
       let externalChatId: string | null = null;
+      let memberCount: number | null = null;
 
       try {
-        const createResp = await client.sdk.im.chat.create({
-          data: {
-            name: buildSubagentChatName(params.title),
-          },
-        });
+        const createResp = await runLarkApiStep("create subagent chat", () =>
+          client.sdk.im.chat.create({
+            data: {
+              name: buildSubagentChatName(params.title),
+            },
+          }),
+        );
         assertLarkOk(createResp, "create subagent chat");
 
         externalChatId = createResp?.data?.chat_id ?? "";
@@ -82,21 +94,25 @@ export function createLarkSubagentConversationSurfaceProvisioner(
             retryable: true,
           };
         }
+        const createdExternalChatId = externalChatId;
 
         const memberIds = await listChatMemberIds(client, sourceConversation.externalChatId);
+        memberCount = memberIds.length;
         if (memberIds.length > 0) {
-          const addResp = await client.sdk.im.chatMembers.create({
-            path: { chat_id: externalChatId },
-            params: { member_id_type: "open_id" },
-            data: { id_list: memberIds },
-          });
+          const addResp = await runLarkApiStep("add subagent chat members", () =>
+            client.sdk.im.chatMembers.create({
+              path: { chat_id: createdExternalChatId },
+              params: { member_id_type: "open_id" },
+              data: { id_list: memberIds },
+            }),
+          );
           assertLarkOk(addResp, "add subagent chat members");
         }
 
-        const shareLink = await getChatShareLink(client, externalChatId);
+        const shareLink = await getChatShareLink(client, createdExternalChatId);
         await publishWelcomeNotice({
           client,
-          chatId: externalChatId,
+          chatId: createdExternalChatId,
           title: params.title,
           description: params.description,
           initialTask: params.initialTask,
@@ -108,7 +124,7 @@ export function createLarkSubagentConversationSurfaceProvisioner(
         logger.info("provisioned lark subagent chat surface", {
           title: params.title,
           sourceConversationId: params.sourceConversationId,
-          externalChatId,
+          externalChatId: createdExternalChatId,
           shareLink,
           channelInstallationId: installationId,
           memberCount: memberIds.length,
@@ -116,28 +132,31 @@ export function createLarkSubagentConversationSurfaceProvisioner(
 
         return {
           status: "provisioned",
-          externalChatId,
+          externalChatId: createdExternalChatId,
           shareLink,
           conversationKind: "group",
           channelSurface: {
             channelType: "lark",
             channelInstallationId: installationId,
-            surfaceKey: buildLarkChatSurfaceKey(externalChatId),
+            surfaceKey: buildLarkChatSurfaceKey(createdExternalChatId),
             surfaceObjectJson: JSON.stringify({
-              chat_id: externalChatId,
+              chat_id: createdExternalChatId,
             }),
           },
         };
       } catch (error: unknown) {
         const cleanupError =
           externalChatId == null ? null : await cleanupProvisioningFailure(client, externalChatId);
-        const reason = error instanceof Error ? error.message : String(error);
+        const reason = describeLarkApiError(error);
         logger.error("failed to provision lark subagent chat surface", {
           title: params.title,
           sourceConversationId: params.sourceConversationId,
+          sourceExternalChatId: sourceConversation.externalChatId,
           installationId,
           externalChatId,
+          memberCount,
           cleanupError,
+          ...buildLarkApiErrorLogContext(error),
           error: reason,
         });
         return {
@@ -159,14 +178,16 @@ async function listChatMemberIds(client: LarkSdkClient, chatId: string): Promise
   let hasMore = true;
 
   while (hasMore) {
-    const response = await client.sdk.im.chatMembers.get({
-      path: { chat_id: chatId },
-      params: {
-        member_id_type: "open_id",
-        page_size: 100,
-        ...(pageToken == null ? {} : { page_token: pageToken }),
-      },
-    });
+    const response = await runLarkApiStep(`list chat members for ${chatId}`, () =>
+      client.sdk.im.chatMembers.get({
+        path: { chat_id: chatId },
+        params: {
+          member_id_type: "open_id",
+          page_size: 100,
+          ...(pageToken == null ? {} : { page_token: pageToken }),
+        },
+      }),
+    );
     assertLarkOk(response, `list chat members for ${chatId}`);
 
     for (const item of response.data?.items ?? []) {
@@ -188,26 +209,31 @@ function buildSubagentChatName(title: string): string {
 
 async function getChatShareLink(client: LarkSdkClient, chatId: string): Promise<string | null> {
   try {
-    const response = await client.sdk.im.chat.link({
-      path: { chat_id: chatId },
-      data: { validity_period: "permanently" },
-    });
+    const response = await runLarkApiStep(`get subagent chat share link for ${chatId}`, () =>
+      client.sdk.im.chat.link({
+        path: { chat_id: chatId },
+        data: { validity_period: "permanently" },
+      }),
+    );
     assertLarkOk(response, `get subagent chat share link for ${chatId}`);
     const shareLink = response.data?.share_link ?? "";
     return shareLink.length > 0 ? shareLink : null;
   } catch (error: unknown) {
     logger.warn("failed to get lark subagent chat share link", {
       chatId,
-      error: error instanceof Error ? error.message : String(error),
+      ...buildLarkApiErrorLogContext(error),
+      error: describeLarkApiError(error),
     });
     return null;
   }
 }
 
 async function deleteChat(client: LarkSdkClient, chatId: string): Promise<void> {
-  const response = await client.sdk.im.chat.delete({
-    path: { chat_id: chatId },
-  });
+  const response = await runLarkApiStep(`delete subagent chat ${chatId}`, () =>
+    client.sdk.im.chat.delete({
+      path: { chat_id: chatId },
+    }),
+  );
   assertLarkOk(response, `delete subagent chat ${chatId}`);
 }
 
@@ -219,7 +245,7 @@ async function cleanupProvisioningFailure(
     await deleteChat(client, chatId);
     return null;
   } catch (error: unknown) {
-    return error instanceof Error ? error.message : String(error);
+    return describeLarkApiError(error);
   }
 }
 
@@ -234,35 +260,22 @@ async function publishWelcomeNotice(input: {
   shareLink: string | null;
 }): Promise<void> {
   try {
-    const response = await input.client.sdk.im.message.create({
-      params: { receive_id_type: "chat_id" },
-      data: {
-        receive_id: input.chatId,
-        msg_type: "interactive",
-        content: JSON.stringify(buildSubagentWelcomeCard(input)),
-      },
-    });
+    const response = await runLarkApiStep(`send subagent welcome card to ${input.chatId}`, () =>
+      input.client.sdk.im.message.create({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: input.chatId,
+          msg_type: "interactive",
+          content: JSON.stringify(buildSubagentWelcomeCard(input)),
+        },
+      }),
+    );
     assertLarkOk(response, `send subagent welcome card to ${input.chatId}`);
-
-    const messageId = response.data?.message_id ?? "";
-    if (messageId.length === 0) {
-      logger.warn("sent subagent welcome card without message_id", {
-        chatId: input.chatId,
-      });
-      return;
-    }
-
-    const topNoticeResp = await input.client.sdk.im.chatTopNotice.putTopNotice({
-      path: { chat_id: input.chatId },
-      data: {
-        chat_top_notice: [{ action_type: "1", message_id: messageId }],
-      },
-    });
-    assertLarkOk(topNoticeResp, `pin subagent welcome card in ${input.chatId}`);
   } catch (error: unknown) {
     logger.warn("failed to publish lark subagent welcome notice", {
       chatId: input.chatId,
-      error: error instanceof Error ? error.message : String(error),
+      ...buildLarkApiErrorLogContext(error),
+      error: describeLarkApiError(error),
     });
   }
 }
@@ -349,12 +362,151 @@ function buildSubagentWelcomeCard(input: {
 
 function assertLarkOk(
   response: {
-    code?: number | undefined;
+    code?: number | string | undefined;
     msg?: string | undefined;
+    data?: unknown;
   },
   context: string,
 ): void {
-  if (response.code !== undefined && response.code !== 0) {
-    throw new Error(`${context}: ${response.msg ?? `code=${response.code}`}`);
+  if (response.code !== undefined && !isLarkSuccessCode(response.code)) {
+    throw new LarkApiStepError(context, extractLarkApiResponseDetails(response));
   }
+}
+
+async function runLarkApiStep<T>(context: string, operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error: unknown) {
+    throw new LarkApiStepError(context, extractLarkApiErrorDetails(error), { cause: error });
+  }
+}
+
+class LarkApiStepError extends Error {
+  constructor(
+    readonly step: string,
+    readonly details: LarkApiErrorDetails,
+    options?: ErrorOptions,
+  ) {
+    super(`${step}: ${formatLarkApiErrorDetails(details)}`, options);
+    this.name = "LarkApiStepError";
+  }
+}
+
+function describeLarkApiError(error: unknown): string {
+  if (error instanceof LarkApiStepError) {
+    return error.message;
+  }
+
+  return formatLarkApiErrorDetails(extractLarkApiErrorDetails(error));
+}
+
+function buildLarkApiErrorLogContext(error: unknown): Record<string, unknown> {
+  if (error instanceof LarkApiStepError) {
+    return {
+      apiStep: error.step,
+      apiError: error.details,
+    };
+  }
+
+  return {
+    apiError: extractLarkApiErrorDetails(error),
+  };
+}
+
+function extractLarkApiErrorDetails(error: unknown): LarkApiErrorDetails {
+  const message = error instanceof Error ? error.message : String(error);
+  const response = readRecordProperty(error, "response");
+  const responseBody = response == null ? undefined : response.data;
+  const httpStatus = response == null ? undefined : readNumber(response.status);
+  return {
+    message,
+    ...(response == null ? {} : extractLarkApiBodyDetails(responseBody)),
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+    ...(responseBody === undefined ? {} : { responseBody: formatUnknownForLog(responseBody) }),
+  };
+}
+
+function extractLarkApiResponseDetails(response: {
+  code?: number | string | undefined;
+  msg?: string | undefined;
+  data?: unknown;
+}): LarkApiErrorDetails {
+  const responseBody = formatUnknownForLog(response);
+  return {
+    message: response.msg ?? `code=${response.code}`,
+    ...(response.code === undefined ? {} : { larkCode: response.code }),
+    ...(response.msg === undefined ? {} : { larkMsg: response.msg }),
+    responseBody,
+  };
+}
+
+function extractLarkApiBodyDetails(body: unknown): Partial<LarkApiErrorDetails> {
+  if (!isRecord(body)) {
+    return {};
+  }
+
+  const code = readStringOrNumber(body.code);
+  const msg = readString(body.msg) ?? readString(body.message);
+  return {
+    ...(code === undefined ? {} : { larkCode: code }),
+    ...(msg === undefined ? {} : { larkMsg: msg }),
+  };
+}
+
+function isLarkSuccessCode(code: number | string): boolean {
+  return code === 0 || code === "0";
+}
+
+function formatLarkApiErrorDetails(details: LarkApiErrorDetails): string {
+  return [
+    details.message,
+    ...(details.httpStatus === undefined ? [] : [`httpStatus=${details.httpStatus}`]),
+    ...(details.larkCode === undefined ? [] : [`larkCode=${details.larkCode}`]),
+    ...(details.larkMsg === undefined ? [] : [`larkMsg=${details.larkMsg}`]),
+    ...(details.responseBody === undefined ? [] : [`responseBody=${details.responseBody}`]),
+  ].join(" ");
+}
+
+function formatUnknownForLog(value: unknown): string {
+  const text = typeof value === "string" ? value : safeJsonStringify(value);
+  return text.length <= LARK_API_RESPONSE_LOG_MAX_CHARS
+    ? text
+    : `${text.slice(0, LARK_API_RESPONSE_LOG_MAX_CHARS)}...`;
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function readRecordProperty(value: unknown, property: string): Record<string, unknown> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const child = value[property];
+  return isRecord(child) ? child : null;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readStringOrNumber(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  return readString(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
