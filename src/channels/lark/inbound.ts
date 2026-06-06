@@ -8,6 +8,8 @@
 
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   type AgentUserImagePayload,
@@ -39,6 +41,7 @@ import {
   type RuntimeStatusService,
 } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
+import { POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
 import { ChannelInstancesRepo } from "@/src/storage/repos/channel-instances.repo.js";
@@ -62,6 +65,7 @@ const LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH = 144;
 const LARK_CARD_ACTION_LOG_PREVIEW_MAX_LENGTH = 320;
 const LARK_INTERACTIVE_TEXT_NODE_LIMIT = 48;
 const LARK_INTERACTIVE_TEXT_CHAR_LIMIT = 4_000;
+const LARK_INBOUND_ASSET_DIR = path.join(POKOCLAW_WORKSPACE_DIR, "lark-inbound");
 const LARK_INTERACTIVE_TEXT_TRUNCATED_NOTICE = "[卡片内容过长，引用文本已截断]";
 const RUN_CARD_OBJECT_KIND = "run_card";
 const STEER_PENDING_REACTION_EMOJI = "Typing";
@@ -143,6 +147,7 @@ export interface CreateLarkInboundRuntimeInput {
     }): void;
   };
   steerReactionState?: LarkSteerReactionState;
+  assetStoreDir?: string;
 }
 
 export interface LarkInboundRuntimeStatus {
@@ -198,6 +203,7 @@ export interface NormalizedLarkTextMessage {
   chatType: string | null;
   text: string;
   imageKeys?: string[];
+  fileAssets?: LarkInboundFileDescriptor[];
   createdAt?: Date;
 }
 
@@ -206,6 +212,21 @@ interface LarkInboundImageAsset {
   messageId: string;
   data: string;
   mimeType: string;
+}
+
+type LarkInboundFileAssetKind = "audio" | "file";
+
+interface LarkInboundFileDescriptor {
+  kind: LarkInboundFileAssetKind;
+  fileKey: string;
+  fileName?: string;
+}
+
+interface LarkInboundSavedFileAsset extends LarkInboundFileDescriptor {
+  messageId: string;
+  localPath: string;
+  mimeType: string;
+  byteLength: number;
 }
 
 interface LarkQuotedMessage {
@@ -303,6 +324,7 @@ export function normalizeLarkTextMessage(
     return { skipReason: "text message content is empty" };
   }
   const imageKeys = extractLarkImageKeys(messageType, contentRaw);
+  const fileAssets = extractLarkFileDescriptors(messageType, contentRaw);
 
   const parentMessageId = readString(message.parent_id);
   const threadId = readString(message.thread_id);
@@ -327,6 +349,12 @@ export function normalizeLarkTextMessage(
     chatType,
     imageKeyCount: imageKeys.length,
     imageKeys,
+    fileAssetCount: fileAssets.length,
+    fileAssets: fileAssets.map((asset) => ({
+      kind: asset.kind,
+      fileKey: asset.fileKey,
+      fileName: asset.fileName ?? null,
+    })),
     contentPreview: truncateLogText(text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
   });
 
@@ -341,6 +369,7 @@ export function normalizeLarkTextMessage(
     chatType,
     text,
     ...(imageKeys.length === 0 ? {} : { imageKeys }),
+    ...(fileAssets.length === 0 ? {} : { fileAssets }),
     ...(createdAt == null ? {} : { createdAt }),
   };
 }
@@ -362,6 +391,7 @@ export function createLarkMessageReceiveHandler(input: {
   }) => Promise<LarkQuotedMessage | null>;
   taskThreads?: CreateLarkInboundRuntimeInput["taskThreads"];
   steerReactionState?: LarkSteerReactionState;
+  assetStoreDir?: string;
 }): (data: unknown) => Promise<void> {
   return async (data: unknown) => {
     const normalized = normalizeLarkTextMessage(data);
@@ -571,10 +601,22 @@ export function createLarkMessageReceiveHandler(input: {
       contentPreview: truncateLogText(hydrated.text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
     });
 
-    const content =
+    const baseContent =
       route.kind === "ordinary_thread"
         ? hydrated.text
         : await buildInboundMessageContent(hydrated, input);
+    const savedFileAssets =
+      input.clients == null
+        ? []
+        : await fetchAndStoreLarkInboundFileAssets({
+            installationId: input.installationId,
+            messageId: hydrated.messageId,
+            descriptors: hydrated.fileAssets ?? [],
+            assetStoreDir: input.assetStoreDir ?? LARK_INBOUND_ASSET_DIR,
+            clients: input.clients,
+            ...(hydrated.createdAt == null ? {} : { createdAt: hydrated.createdAt }),
+          });
+    const content = appendSavedFileAssetPaths(baseContent, savedFileAssets);
     const imageAssets =
       input.clients == null
         ? []
@@ -589,6 +631,24 @@ export function createLarkMessageReceiveHandler(input: {
       imageAssets,
     });
     const runtimeImages = buildLarkInboundRuntimeImages(imageAssets);
+
+    if ((hydrated.fileAssets?.length ?? 0) > 0 || savedFileAssets.length > 0) {
+      logger.info("prepared lark inbound file assets", {
+        installationId: input.installationId,
+        chatId: hydrated.chatId,
+        messageId: hydrated.messageId,
+        requestedFileAssetCount: hydrated.fileAssets?.length ?? 0,
+        savedFileAssetCount: savedFileAssets.length,
+        savedFileAssets: savedFileAssets.map((asset) => ({
+          kind: asset.kind,
+          fileKey: asset.fileKey,
+          fileName: asset.fileName ?? null,
+          localPath: asset.localPath,
+          mimeType: asset.mimeType,
+          byteLength: asset.byteLength,
+        })),
+      });
+    }
 
     if ((hydrated.imageKeys?.length ?? 0) > 0 || runtimeImages.length > 0) {
       logger.info("prepared lark inbound image payloads", {
@@ -1158,6 +1218,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           ...(input.steerReactionState == null
             ? {}
             : { steerReactionState: input.steerReactionState }),
+          ...(input.assetStoreDir == null ? {} : { assetStoreDir: input.assetStoreDir }),
         });
         const onCardAction = createLarkCardActionHandler({
           installationId: installation.installationId,
@@ -2309,6 +2370,98 @@ function extractLarkImageKeys(messageType: string, content: string): string[] {
   }
 }
 
+function extractLarkFileDescriptors(
+  messageType: string,
+  content: string,
+): LarkInboundFileDescriptor[] {
+  if (content.length === 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(content);
+    if (!isRecord(parsed)) {
+      return [];
+    }
+
+    switch (messageType) {
+      case "audio": {
+        const fileKey = readString(parsed.file_key);
+        return fileKey == null ? [] : [{ kind: "audio", fileKey }];
+      }
+      case "file": {
+        const fileKey = readString(parsed.file_key);
+        if (fileKey == null) {
+          return [];
+        }
+        const fileName = readString(parsed.file_name) ?? readString(parsed.name);
+        return [{ kind: "file", fileKey, ...(fileName == null ? {} : { fileName }) }];
+      }
+      case "media": {
+        const fileKey = readString(parsed.file_key);
+        if (fileKey == null) {
+          return [];
+        }
+        const fileName = readString(parsed.file_name) ?? readString(parsed.name);
+        return [{ kind: "file", fileKey, ...(fileName == null ? {} : { fileName }) }];
+      }
+      case "post":
+        return extractLarkPostFileDescriptors(parsed);
+      default:
+        return [];
+    }
+  } catch {
+    return [];
+  }
+}
+
+function extractLarkPostFileDescriptors(
+  parsed: Record<string, unknown>,
+): LarkInboundFileDescriptor[] {
+  const body = unwrapLarkPostContent(parsed);
+  if (body == null) {
+    return [];
+  }
+
+  const descriptors: LarkInboundFileDescriptor[] = [];
+  const content = Array.isArray(body.content) ? body.content : [];
+  for (const paragraph of content) {
+    if (!Array.isArray(paragraph)) {
+      continue;
+    }
+    for (const element of paragraph) {
+      if (!isRecord(element) || readString(element.tag) !== "media") {
+        continue;
+      }
+      const fileKey = readString(element.file_key);
+      if (fileKey == null) {
+        continue;
+      }
+      const fileName = readString(element.file_name) ?? readString(element.name);
+      descriptors.push({
+        kind: "file",
+        fileKey,
+        ...(fileName == null ? {} : { fileName }),
+      });
+    }
+  }
+  return dedupeLarkFileDescriptors(descriptors);
+}
+
+function dedupeLarkFileDescriptors(
+  descriptors: LarkInboundFileDescriptor[],
+): LarkInboundFileDescriptor[] {
+  const seen = new Set<string>();
+  return descriptors.filter((descriptor) => {
+    const key = `${descriptor.kind}:${descriptor.fileKey}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function parseLarkMessageContent(messageType: string, content: string): string {
   if (content.length === 0) {
     return "";
@@ -2973,6 +3126,158 @@ async function fetchLarkInboundImageAssets(input: {
   return assets;
 }
 
+async function fetchAndStoreLarkInboundFileAssets(input: {
+  installationId: string;
+  messageId: string;
+  createdAt?: Date;
+  descriptors: LarkInboundFileDescriptor[];
+  assetStoreDir: string;
+  clients: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<LarkInboundSavedFileAsset[]> {
+  if (input.descriptors.length === 0) {
+    logger.debug("no lark inbound file assets to fetch", {
+      installationId: input.installationId,
+      messageId: input.messageId,
+    });
+    return [];
+  }
+
+  logger.debug("fetching lark inbound file assets", {
+    installationId: input.installationId,
+    messageId: input.messageId,
+    fileAssetCount: input.descriptors.length,
+    fileAssets: input.descriptors.map((asset) => ({
+      kind: asset.kind,
+      fileKey: asset.fileKey,
+      fileName: asset.fileName ?? null,
+    })),
+  });
+
+  const client = input.clients.getOrCreate(input.installationId);
+  const targetDir = buildLarkInboundAssetMessageDir({
+    assetStoreDir: input.assetStoreDir,
+    messageId: input.messageId,
+    ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
+  });
+  const savedAssets: LarkInboundSavedFileAsset[] = [];
+  for (const descriptor of input.descriptors) {
+    try {
+      logger.debug("requesting lark inbound file resource", {
+        installationId: input.installationId,
+        messageId: input.messageId,
+        kind: descriptor.kind,
+        fileKey: descriptor.fileKey,
+        fileName: descriptor.fileName ?? null,
+      });
+      const response = await client.sdk.im.messageResource.get({
+        path: {
+          message_id: input.messageId,
+          file_key: descriptor.fileKey,
+        },
+        params: {
+          type: descriptor.kind === "audio" ? "audio" : "file",
+        },
+      });
+      const buffer = await readLarkResourceBuffer(response.getReadableStream());
+      if (buffer.length === 0) {
+        throw new Error("empty lark inbound file resource");
+      }
+      const mimeType = normalizeLarkFileMimeType(response.headers?.["content-type"]);
+      await mkdir(targetDir, { recursive: true });
+      const localPath = path.join(
+        targetDir,
+        buildLarkInboundAssetFileName({
+          descriptor,
+          mimeType,
+          index: savedAssets.length,
+        }),
+      );
+      await writeFile(localPath, buffer);
+      savedAssets.push({
+        ...descriptor,
+        messageId: input.messageId,
+        localPath,
+        mimeType,
+        byteLength: buffer.length,
+      });
+      logger.info("saved lark inbound file resource", {
+        installationId: input.installationId,
+        messageId: input.messageId,
+        kind: descriptor.kind,
+        fileKey: descriptor.fileKey,
+        fileName: descriptor.fileName ?? null,
+        localPath,
+        mimeType,
+        byteLength: buffer.length,
+      });
+    } catch (error) {
+      logger.warn("failed to fetch lark inbound file resource", {
+        installationId: input.installationId,
+        messageId: input.messageId,
+        kind: descriptor.kind,
+        fileKey: descriptor.fileKey,
+        fileName: descriptor.fileName ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  logger.debug("finished fetching lark inbound file assets", {
+    installationId: input.installationId,
+    messageId: input.messageId,
+    requestedFileAssetCount: input.descriptors.length,
+    savedFileAssetCount: savedAssets.length,
+  });
+
+  return savedAssets;
+}
+
+function appendSavedFileAssetPaths(
+  content: string,
+  savedAssets: LarkInboundSavedFileAsset[],
+): string {
+  if (savedAssets.length === 0) {
+    return content;
+  }
+
+  const lines = savedAssets.map((asset) => {
+    const label = asset.fileName == null ? asset.fileKey : asset.fileName;
+    return `- ${asset.kind}: ${label} -> ${asset.localPath}`;
+  });
+  return [content, "", "Saved local files:", ...lines].join("\n");
+}
+
+function buildLarkInboundAssetMessageDir(input: {
+  assetStoreDir: string;
+  createdAt?: Date;
+  messageId: string;
+}): string {
+  const dateSegment =
+    input.createdAt == null || Number.isNaN(input.createdAt.getTime())
+      ? "undated"
+      : input.createdAt.toISOString().slice(0, 10);
+  return path.join(input.assetStoreDir, dateSegment, sanitizePathSegment(input.messageId));
+}
+
+function buildLarkInboundAssetFileName(input: {
+  descriptor: LarkInboundFileDescriptor;
+  mimeType: string;
+  index: number;
+}): string {
+  const fileName = sanitizeFileName(input.descriptor.fileName);
+  const key = sanitizePathSegment(input.descriptor.fileKey).slice(0, 32);
+  const fallbackExt = extensionFromMimeType(input.mimeType) ?? ".bin";
+  if (fileName != null) {
+    const parsed = path.parse(fileName);
+    const ext = parsed.ext.length > 0 ? parsed.ext : fallbackExt;
+    const name = parsed.name.length > 0 ? parsed.name : input.descriptor.kind;
+    return `${name}-${key}${ext}`;
+  }
+  return `${input.descriptor.kind}-${key || input.index}${fallbackExt}`;
+}
+
 async function readLarkResourceBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
@@ -3003,6 +3308,82 @@ function normalizeLarkImageMimeType(value: unknown): string {
   }
 
   return "image/png";
+}
+
+function normalizeLarkFileMimeType(value: unknown): string {
+  const normalized = normalizeContentTypeHeader(value);
+  return normalized ?? "application/octet-stream";
+}
+
+function normalizeContentTypeHeader(value: unknown): string | null {
+  if (typeof value === "string") {
+    const normalized = value.split(";")[0]?.trim().toLowerCase();
+    return normalized == null || normalized.length === 0 ? null : normalized;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item !== "string") {
+        continue;
+      }
+      const normalized = item.split(";")[0]?.trim().toLowerCase();
+      if (normalized != null && normalized.length > 0) {
+        return normalized;
+      }
+    }
+  }
+
+  return null;
+}
+
+function extensionFromMimeType(mimeType: string): string | null {
+  switch (mimeType.toLowerCase()) {
+    case "audio/mpeg":
+    case "audio/mp3":
+      return ".mp3";
+    case "audio/mp4":
+    case "audio/x-m4a":
+      return ".m4a";
+    case "audio/ogg":
+      return ".ogg";
+    case "audio/wav":
+    case "audio/x-wav":
+      return ".wav";
+    case "audio/webm":
+      return ".webm";
+    case "video/mp4":
+      return ".mp4";
+    case "application/pdf":
+      return ".pdf";
+    case "text/plain":
+      return ".txt";
+    default:
+      return null;
+  }
+}
+
+function sanitizeFileName(value: string | undefined): string | null {
+  if (value == null) {
+    return null;
+  }
+  const baseName = path.basename(value.replaceAll("\\", "/")).trim();
+  if (baseName.length === 0 || baseName === "." || baseName === "..") {
+    return null;
+  }
+  const sanitized = [...baseName]
+    .map((char) => (isUnsafeFileNameChar(char) ? "_" : char))
+    .join("")
+    .replace(/\s+/g, " ");
+  return sanitized.length === 0 ? null : sanitized;
+}
+
+function isUnsafeFileNameChar(char: string): boolean {
+  return char.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(char);
+}
+
+function sanitizePathSegment(value: string): string {
+  const sanitized = value.trim().replace(/[^a-zA-Z0-9._-]/g, "_");
+  return sanitized.length === 0 ? "unknown" : sanitized;
 }
 
 async function fetchQuotedLarkMessage(input: {
