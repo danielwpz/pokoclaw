@@ -135,6 +135,61 @@ describe("finish_task tool", () => {
     });
   });
 
+  test("reports all missing finish image read permissions together", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    handle.storage.sqlite.exec(`
+      INSERT INTO sessions (
+        id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+      ) VALUES (
+        'sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active',
+        '2026-03-30T00:00:00.000Z', '2026-03-30T00:00:00.000Z'
+      );
+    `);
+
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-finish-task-"));
+    const firstImagePath = path.join(tempDir, "first.png");
+    const secondImagePath = path.join(tempDir, "second.png");
+    await writeFile(firstImagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(secondImagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const registry = new ToolRegistry([createFinishTaskTool()]);
+    await expect(
+      registry.execute(
+        "finish_task",
+        {
+          sessionId: "sess_task",
+          conversationId: "conv_1",
+          ownerAgentId: "agent_1",
+          cwd: tempDir,
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: handle.storage.db,
+        },
+        {
+          status: "completed",
+          summary: "Charts generated.",
+          finalMessage: "Generated the final charts.",
+          images: [{ path: "first.png" }, { path: "second.png" }],
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        entries: expect.arrayContaining([
+          expect.objectContaining({
+            path: await resolveExpectedToolAbsolutePath(firstImagePath),
+          }),
+          expect.objectContaining({
+            path: await resolveExpectedToolAbsolutePath(secondImagePath),
+          }),
+        ]),
+      },
+    } satisfies Partial<ToolFailure>);
+  });
+
   test("rejects finish_task outside unattended task sessions", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);

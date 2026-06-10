@@ -1037,6 +1037,7 @@ export function createLarkOutboundRuntime(
         client,
         state,
         metadataJson,
+        cacheMetadataJson: existing?.metadataJson ?? null,
       });
       metadataJson = taskCardImages.metadataJson;
       const rendered = buildLarkRenderedTaskCard(state, {
@@ -2187,6 +2188,7 @@ async function resolveTaskCardImages(input: {
   client: LarkSdkClient;
   state: LarkRunState;
   metadataJson: string;
+  cacheMetadataJson?: string | null;
 }): Promise<{ metadataJson: string; images: LarkTaskCardImage[] }> {
   if (input.state.terminalImageAttachments.length === 0) {
     return {
@@ -2196,7 +2198,8 @@ async function resolveTaskCardImages(input: {
   }
 
   const metadata = parseBindingMetadata(input.metadataJson);
-  const cachedImages = readCachedTaskResultImages(metadata.taskResultImages);
+  const cacheMetadata = parseBindingMetadata(input.cacheMetadataJson ?? input.metadataJson);
+  const cachedImages = readCachedTaskResultImages(cacheMetadata.taskResultImages);
   const nextCache: CachedTaskResultImage[] = [];
   const images: LarkTaskCardImage[] = [];
 

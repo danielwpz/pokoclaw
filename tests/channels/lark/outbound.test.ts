@@ -888,6 +888,25 @@ describe("lark outbound runtime", () => {
     });
     expect(binding?.metadataJson).toContain("img_v3_finished");
 
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_completed",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "completed",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        finishedAt: "2026-03-28T00:01:00.000Z",
+        durationMs: 60_000,
+        resultSummary: "Generated the final chart.",
+        resultImages: [{ path: imagePath, displayPath: "chart.png", alt: "Completion chart" }],
+        executionSessionId: "sess_task",
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(uploadImage).toHaveBeenCalledOnce();
+
     await runtime.shutdown();
   });
 

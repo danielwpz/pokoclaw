@@ -8,8 +8,8 @@ import {
 import { toolInternalError, toolRecoverableError } from "@/src/tools/core/errors.js";
 import { defineTool, textToolResult } from "@/src/tools/core/types.js";
 import {
+  createFilesystemAccessController,
   formatDisplayPath,
-  requireFilesystemAccess,
   resolveToolCwd,
 } from "@/src/tools/helpers/common.js";
 
@@ -84,25 +84,37 @@ export function createFinishTaskTool() {
       }
 
       const cwd = resolveToolCwd(context);
-      const images = await Promise.all(
-        (args.images ?? []).map(async (image) => {
-          const absolutePath = requireFilesystemAccess(context, {
-            kind: "fs.read",
-            targetPath: image.path,
-          });
-          const displayPath = formatDisplayPath(image.path, cwd);
-          await validateFinishTaskImage({
-            absolutePath,
-            displayPath,
-          });
-          const alt = normalizeOptionalString(image.alt);
-          return {
-            path: absolutePath,
-            displayPath,
-            ...(alt == null ? {} : { alt }),
-          };
-        }),
+      const requestedImages = args.images ?? [];
+      const filesystem = createFilesystemAccessController(context);
+      const imageAccess = filesystem.authorize(
+        requestedImages.map((image) => ({
+          kind: "fs.read",
+          targetPath: image.path,
+        })),
       );
+      const images = [];
+      for (let index = 0; index < requestedImages.length; index += 1) {
+        const image = requestedImages[index];
+        if (image == null) {
+          continue;
+        }
+        const absolutePath = imageAccess[index]?.normalizedPath;
+        if (absolutePath == null) {
+          continue;
+        }
+        const displayPath = formatDisplayPath(image.path, cwd);
+        await validateFinishTaskImage({
+          absolutePath,
+          displayPath,
+        });
+        const alt = normalizeOptionalString(image.alt);
+        const normalizedImage = {
+          path: absolutePath,
+          displayPath,
+          ...(alt == null ? {} : { alt }),
+        };
+        images.push(normalizedImage);
+      }
 
       const details: TaskCompletionDetails = {
         taskCompletion: {
