@@ -136,6 +136,7 @@ In **Permissions**, use **Batch import** and paste this permission set:
       "im:message:send_sys_msg",
       "im:message:update",
       "im:resource",
+      "im:resource:upload",
       "im:tag:read",
       "im:tag:write",
       "im:url_preview.update",
@@ -153,6 +154,9 @@ In **Permissions**, use **Batch import** and paste this permission set:
 SubAgent group provisioning uses the bot/app tenant token. Keep chat creation and member-management
 permissions in `tenant` scopes; putting `im:chat.members:write_only` only in `user` scopes is not
 enough for Pokoclaw to add users to a SubAgent group.
+
+Image messages and task finish-card images upload Lark resources before sending. Keep
+`im:resource:upload` in `tenant` scopes, or image upload can fail with Lark error `99991672`.
 
 If the platform UI or permission names have changed, adapt carefully instead of pretending the old list is exact.
 
