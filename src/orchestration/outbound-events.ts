@@ -14,6 +14,7 @@ import {
 import type { AgentRuntimeRole } from "@/src/security/policy.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import type { Session, SubagentCreationRequest, TaskRun } from "@/src/storage/schema/types.js";
+import type { TaskCompletionImageAttachment } from "@/src/tasks/task-completion.js";
 
 export type OutboundAttachmentType =
   | "image"
@@ -81,6 +82,7 @@ export interface TaskRunCompletedOutboundEvent {
   finishedAt: string | null;
   durationMs: number | null;
   resultSummary: string | null;
+  resultImages?: TaskRunResultImageAttachment[];
   executionSessionId: string | null;
 }
 
@@ -94,6 +96,7 @@ export interface TaskRunFailedOutboundEvent {
   durationMs: number | null;
   resultSummary: string | null;
   errorText: string | null;
+  resultImages?: TaskRunResultImageAttachment[];
   executionSessionId: string | null;
 }
 
@@ -106,6 +109,7 @@ export interface TaskRunBlockedOutboundEvent {
   finishedAt: string | null;
   durationMs: number | null;
   resultSummary: string | null;
+  resultImages?: TaskRunResultImageAttachment[];
   executionSessionId: string | null;
 }
 
@@ -128,6 +132,8 @@ export type TaskRunOutboundEvent =
   | TaskRunBlockedOutboundEvent
   | TaskRunFailedOutboundEvent
   | TaskRunCancelledOutboundEvent;
+
+export type TaskRunResultImageAttachment = TaskCompletionImageAttachment;
 
 export interface OrchestratedTaskRunEventEnvelope extends OutboundEventContext {
   kind: "task_run_event";

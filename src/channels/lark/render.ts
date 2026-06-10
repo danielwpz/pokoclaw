@@ -27,6 +27,7 @@ export {
   describeTaskRunTerminal,
   getLarkTaskTerminalMessagePresentation,
   type LarkRenderedTaskCard,
+  type LarkTaskCardImage,
   type LarkTaskTerminalMessagePresentation,
 } from "@/src/channels/lark/render/task-card.js";
 

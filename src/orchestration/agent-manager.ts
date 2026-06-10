@@ -71,6 +71,7 @@ import {
   parseBackgroundTaskPayload,
 } from "@/src/tasks/background-task-payload.js";
 import { TaskExecutionRunner, type TaskExecutionRunResult } from "@/src/tasks/runner.js";
+import type { TaskCompletionImageAttachment } from "@/src/tasks/task-completion.js";
 
 const logger = createSubsystemLogger("orchestration/agent-manager");
 
@@ -694,6 +695,7 @@ export class AgentManager {
   completeTaskExecution(input: {
     taskRunId: string;
     resultSummary?: string | null;
+    resultImages?: TaskCompletionImageAttachment[];
     finishedAt?: Date;
   }): SettledTaskExecution {
     const settled = completeTaskExecution({
@@ -703,7 +705,9 @@ export class AgentManager {
       ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
     });
     logSettledTaskExecution("completed", settled);
-    this.publishTaskRunSettledEvent("task_run_completed", settled);
+    this.publishTaskRunSettledEvent("task_run_completed", settled, {
+      ...(input.resultImages === undefined ? {} : { resultImages: input.resultImages }),
+    });
     this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
     this.appendScheduledTaskRunSettledNoticeIfNeeded(settled.taskRun);
     return settled;
@@ -712,6 +716,7 @@ export class AgentManager {
   blockTaskExecution(input: {
     taskRunId: string;
     resultSummary?: string | null;
+    resultImages?: TaskCompletionImageAttachment[];
     finishedAt?: Date;
   }): SettledTaskExecution {
     const settled = blockTaskExecution({
@@ -721,7 +726,9 @@ export class AgentManager {
       ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
     });
     logSettledTaskExecution("blocked", settled);
-    this.publishTaskRunSettledEvent("task_run_blocked", settled);
+    this.publishTaskRunSettledEvent("task_run_blocked", settled, {
+      ...(input.resultImages === undefined ? {} : { resultImages: input.resultImages }),
+    });
     this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
     this.appendScheduledTaskRunSettledNoticeIfNeeded(settled.taskRun);
     return settled;
@@ -731,6 +738,7 @@ export class AgentManager {
     taskRunId: string;
     errorText?: string | null;
     resultSummary?: string | null;
+    resultImages?: TaskCompletionImageAttachment[];
     finishedAt?: Date;
   }): SettledTaskExecution {
     const settled = failTaskExecution({
@@ -741,7 +749,9 @@ export class AgentManager {
       ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
     });
     logSettledTaskExecution("failed", settled);
-    this.publishTaskRunSettledEvent("task_run_failed", settled);
+    this.publishTaskRunSettledEvent("task_run_failed", settled, {
+      ...(input.resultImages === undefined ? {} : { resultImages: input.resultImages }),
+    });
     this.appendBackgroundTaskCompletionNoticeIfNeeded(settled.taskRun);
     this.appendScheduledTaskRunSettledNoticeIfNeeded(settled.taskRun);
     return settled;
@@ -848,8 +858,12 @@ export class AgentManager {
   private publishTaskRunSettledEvent(
     eventType: "task_run_completed" | "task_run_blocked" | "task_run_failed" | "task_run_cancelled",
     settled: SettledTaskExecution,
+    options: {
+      resultImages?: TaskCompletionImageAttachment[];
+    } = {},
   ): void {
     const taskRun = settled.taskRun;
+    const resultImages = options.resultImages ?? [];
     const event =
       eventType === "task_run_completed"
         ? {
@@ -861,6 +875,7 @@ export class AgentManager {
             finishedAt: taskRun.finishedAt,
             durationMs: taskRun.durationMs,
             resultSummary: taskRun.resultSummary,
+            ...(resultImages.length === 0 ? {} : { resultImages }),
             executionSessionId: taskRun.executionSessionId,
           }
         : eventType === "task_run_blocked"
@@ -873,6 +888,7 @@ export class AgentManager {
               finishedAt: taskRun.finishedAt,
               durationMs: taskRun.durationMs,
               resultSummary: taskRun.resultSummary,
+              ...(resultImages.length === 0 ? {} : { resultImages }),
               executionSessionId: taskRun.executionSessionId,
             }
           : eventType === "task_run_failed"
@@ -886,6 +902,7 @@ export class AgentManager {
                 durationMs: taskRun.durationMs,
                 resultSummary: taskRun.resultSummary,
                 errorText: taskRun.errorText,
+                ...(resultImages.length === 0 ? {} : { resultImages }),
                 executionSessionId: taskRun.executionSessionId,
               }
             : {

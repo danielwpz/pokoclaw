@@ -15,7 +15,7 @@ import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { SessionRuntimeIngress } from "@/src/runtime/ingress.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
-import { TaskExecutionRunner } from "@/src/tasks/runner.js";
+import { TaskExecutionRunner, type TaskExecutionRunnerLifecycle } from "@/src/tasks/runner.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { createFinishTaskTool } from "@/src/tools/finish-task.js";
 import {
@@ -227,6 +227,79 @@ describe("TaskExecutionRunner", () => {
       id: created.executionSession.id,
       status: "completed",
     });
+  });
+
+  test("passes finish_task images to task lifecycle settlement", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedFixture(handle);
+    const db = requireHandle(handle).storage.db;
+
+    const created = createTaskExecution({
+      db,
+      params: {
+        runType: "delegate",
+        ownerAgentId: "agent_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        description: "Generate a chart.",
+      },
+    });
+
+    const completeTaskExecutionMock: TaskExecutionRunnerLifecycle["completeTaskExecution"] = vi.fn(
+      (input) =>
+        completeTaskExecution({
+          db,
+          ...input,
+        }),
+    );
+    const runner = new TaskExecutionRunner({
+      ingress: {
+        submitMessage: vi.fn(async () =>
+          makeStartedRun({
+            sessionId: created.executionSession.id,
+            scenario: "task",
+            stopSignal: {
+              reason: "task_completion",
+              payload: {
+                taskCompletion: {
+                  status: "completed",
+                  summary: "Chart generated.",
+                  finalMessage: "Generated the final chart.",
+                  images: [
+                    {
+                      path: "/tmp/chart.png",
+                      displayPath: "chart.png",
+                      alt: "Completion chart",
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        ),
+      },
+      lifecycle: {
+        ...createLifecycle(db),
+        completeTaskExecution: completeTaskExecutionMock,
+      },
+    });
+
+    const result = await runner.runCreatedTaskExecution({ created });
+
+    expect(result.status).toBe("completed");
+    expect(completeTaskExecutionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskRunId: created.taskRun.id,
+        resultSummary: "Generated the final chart.",
+        resultImages: [
+          {
+            path: "/tmp/chart.png",
+            displayPath: "chart.png",
+            alt: "Completion chart",
+          },
+        ],
+      }),
+    );
   });
 
   test("completes a task execution through the real ingress and loop path when finish_task is called", async () => {

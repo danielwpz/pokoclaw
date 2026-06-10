@@ -8,6 +8,7 @@ import {
   resolveTaskCompletionResultSummary,
   TASK_COMPLETION_TOOL_NAME,
   type TaskCompletionDetails,
+  type TaskCompletionImageAttachment,
   type TaskCompletionSignal,
 } from "@/src/tasks/task-completion.js";
 import {
@@ -26,17 +27,20 @@ export interface TaskExecutionRunnerLifecycle {
   blockTaskExecution(input: {
     taskRunId: string;
     resultSummary?: string | null;
+    resultImages?: TaskCompletionImageAttachment[];
     finishedAt?: Date;
   }): SettledTaskExecution;
   completeTaskExecution(input: {
     taskRunId: string;
     resultSummary?: string | null;
+    resultImages?: TaskCompletionImageAttachment[];
     finishedAt?: Date;
   }): SettledTaskExecution;
   failTaskExecution(input: {
     taskRunId: string;
     errorText?: string | null;
     resultSummary?: string | null;
+    resultImages?: TaskCompletionImageAttachment[];
     finishedAt?: Date;
   }): SettledTaskExecution;
   cancelTaskExecution(input: {
@@ -324,11 +328,13 @@ export class TaskExecutionRunner {
     | Extract<TaskExecutionRunResult, { status: "failed" }> {
     const finishedAt = new Date();
     const resultSummary = resolveTaskCompletionResultSummary(input.completion);
+    const resultImages = input.completion.images ?? [];
 
     if (input.completion.status === "completed") {
       const settled = this.deps.lifecycle.completeTaskExecution({
         taskRunId: input.taskRunId,
         resultSummary,
+        ...(resultImages.length === 0 ? {} : { resultImages }),
         finishedAt,
       });
       return {
@@ -343,6 +349,7 @@ export class TaskExecutionRunner {
       const settled = this.deps.lifecycle.blockTaskExecution({
         taskRunId: input.taskRunId,
         resultSummary,
+        ...(resultImages.length === 0 ? {} : { resultImages }),
         finishedAt,
       });
       return {
@@ -357,6 +364,7 @@ export class TaskExecutionRunner {
       taskRunId: input.taskRunId,
       errorText: input.completion.finalMessage,
       resultSummary,
+      ...(resultImages.length === 0 ? {} : { resultImages }),
       finishedAt,
     });
     return {

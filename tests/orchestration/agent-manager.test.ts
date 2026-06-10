@@ -1496,6 +1496,13 @@ describe("AgentManager", () => {
       manager.completeTaskExecution({
         taskRunId: created.taskRun.id,
         resultSummary: "done",
+        resultImages: [
+          {
+            path: "/tmp/chart.png",
+            displayPath: "chart.png",
+            alt: "Completion chart",
+          },
+        ],
       });
       await flushMicrotasks();
 
@@ -1505,6 +1512,13 @@ describe("AgentManager", () => {
           type: "task_run_completed",
           taskRunId: created.taskRun.id,
           resultSummary: "done",
+          resultImages: [
+            {
+              path: "/tmp/chart.png",
+              displayPath: "chart.png",
+              alt: "Completion chart",
+            },
+          ],
         },
         taskRun: {
           taskRunId: created.taskRun.id,

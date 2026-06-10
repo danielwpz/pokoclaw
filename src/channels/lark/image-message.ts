@@ -11,15 +11,14 @@ export interface SendLarkImageMessageResult {
   openMessageId?: string;
 }
 
-export async function sendLarkImageMessage(input: {
+export async function uploadLarkImageMessageAsset(input: {
   installationId: string;
   chatId: string;
-  replyToMessageId?: string | null;
   imagePath: string;
   clients?: {
     getOrCreate(installationId: string): LarkSdkClient;
   };
-}): Promise<SendLarkImageMessageResult> {
+}): Promise<{ imageKey: string }> {
   if (input.clients == null) {
     throw new Error("Lark image sending is not configured in this runtime.");
   }
@@ -43,6 +42,24 @@ export async function sendLarkImageMessage(input: {
     imageKey,
   });
 
+  return { imageKey };
+}
+
+export async function sendLarkImageMessage(input: {
+  installationId: string;
+  chatId: string;
+  replyToMessageId?: string | null;
+  imagePath: string;
+  clients?: {
+    getOrCreate(installationId: string): LarkSdkClient;
+  };
+}): Promise<SendLarkImageMessageResult> {
+  if (input.clients == null) {
+    throw new Error("Lark image sending is not configured in this runtime.");
+  }
+
+  const client = input.clients.getOrCreate(input.installationId);
+  const { imageKey } = await uploadLarkImageMessageAsset(input);
   const content = JSON.stringify({ image_key: imageKey });
   const response =
     input.replyToMessageId != null && input.replyToMessageId.length > 0
