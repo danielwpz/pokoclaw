@@ -27,10 +27,7 @@ import {
 } from "@/src/channels/lark/cardkit-mutations.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
 import { listLarkDeliveryTargets, readStringValue } from "@/src/channels/lark/delivery-targets.js";
-import {
-  sendLarkImageMessage,
-  uploadLarkImageMessageAsset,
-} from "@/src/channels/lark/image-message.js";
+import { sendLarkImageMessage } from "@/src/channels/lark/image-message.js";
 import {
   addLarkMessageReaction,
   removeLarkMessageReaction,
@@ -44,7 +41,6 @@ import {
   describeTaskRunTerminal,
   getLarkTaskTerminalMessagePresentation,
   type LarkSubagentCreationRequestCardState,
-  type LarkTaskCardImage,
 } from "@/src/channels/lark/render.js";
 import {
   type LarkRunState,
@@ -55,6 +51,7 @@ import {
   shouldHandleLarkTaskRunEvent,
 } from "@/src/channels/lark/run-state.js";
 import type { LarkSteerReactionState } from "@/src/channels/lark/steer-reaction-state.js";
+import { resolveTaskCardImages } from "@/src/channels/lark/task-card-images.js";
 import { sendLarkTextMessage } from "@/src/channels/lark/text-message.js";
 import type {
   OrchestratedOutboundAttachmentEventEnvelope,
@@ -1031,7 +1028,7 @@ export function createLarkOutboundRuntime(
         },
         existing?.metadataJson ?? null,
       );
-      let taskCardImages: { metadataJson: string; images: LarkTaskCardImage[] };
+      let taskCardImages: Awaited<ReturnType<typeof resolveTaskCardImages>>;
       try {
         taskCardImages = await resolveTaskCardImages({
           channelInstallationId: target.channelInstallationId,
@@ -2207,115 +2204,6 @@ function resolveOutboundAttachmentReplyToMessageId(input: {
     replyToMessageId: taskRootBinding?.larkMessageId ?? surfaceReplyToMessageId,
     taskStatusCardMissing: taskRootBinding?.larkMessageId == null,
   };
-}
-
-interface CachedTaskResultImage {
-  path: string;
-  displayPath: string;
-  alt?: string;
-  imageKey: string;
-}
-
-async function resolveTaskCardImages(input: {
-  channelInstallationId: string;
-  chatId: string;
-  client: LarkSdkClient;
-  state: LarkRunState;
-  metadataJson: string;
-  cacheMetadataJson?: string | null;
-}): Promise<{ metadataJson: string; images: LarkTaskCardImage[] }> {
-  if (input.state.terminalImageAttachments.length === 0) {
-    return {
-      metadataJson: input.metadataJson,
-      images: [],
-    };
-  }
-
-  const metadata = parseBindingMetadata(input.metadataJson);
-  const cacheMetadata = parseBindingMetadata(input.cacheMetadataJson ?? input.metadataJson);
-  const cachedImages = readCachedTaskResultImages(cacheMetadata.taskResultImages);
-  const nextCache: CachedTaskResultImage[] = [];
-  const images: LarkTaskCardImage[] = [];
-
-  for (const attachment of input.state.terminalImageAttachments) {
-    const cached = cachedImages.find((item) => item.path === attachment.path) ?? null;
-    let imageKey = cached?.imageKey ?? null;
-    if (imageKey == null) {
-      try {
-        const uploaded = await uploadLarkImageMessageAsset({
-          installationId: input.channelInstallationId,
-          chatId: input.chatId,
-          imagePath: attachment.path,
-          clients: {
-            getOrCreate: (installationId) => {
-              if (installationId !== input.channelInstallationId) {
-                throw new Error(`Unexpected lark installation id ${installationId}`);
-              }
-              return input.client;
-            },
-          },
-        });
-        imageKey = uploaded.imageKey;
-      } catch (error) {
-        logger.error("failed to upload lark task result image for task card", {
-          channelInstallationId: input.channelInstallationId,
-          taskRunId: input.state.taskRunId,
-          path: attachment.path,
-          displayPath: attachment.displayPath,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-    }
-
-    const cachedImage: CachedTaskResultImage = {
-      path: attachment.path,
-      displayPath: attachment.displayPath,
-      ...(attachment.alt == null ? {} : { alt: attachment.alt }),
-      imageKey,
-    };
-    nextCache.push(cachedImage);
-    images.push({
-      imageKey,
-      displayPath: attachment.displayPath,
-      ...(attachment.alt == null ? {} : { alt: attachment.alt }),
-    });
-  }
-
-  return {
-    metadataJson: JSON.stringify({
-      ...metadata,
-      taskResultImages: nextCache,
-    }),
-    images,
-  };
-}
-
-function readCachedTaskResultImages(value: unknown): CachedTaskResultImage[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const images: CachedTaskResultImage[] = [];
-  for (const item of value) {
-    if (!isRecord(item)) {
-      continue;
-    }
-    const path = readStringValue(item.path);
-    const displayPath = readStringValue(item.displayPath);
-    const imageKey = readStringValue(item.imageKey);
-    if (path == null || displayPath == null || imageKey == null) {
-      continue;
-    }
-    const alt = readStringValue(item.alt);
-    images.push({
-      path,
-      displayPath,
-      imageKey,
-      ...(alt == null ? {} : { alt }),
-    });
-  }
-  return images;
 }
 
 async function maybeSendFeishuDocPreviewMessages(input: {
