@@ -1031,14 +1031,25 @@ export function createLarkOutboundRuntime(
         },
         existing?.metadataJson ?? null,
       );
-      const taskCardImages = await resolveTaskCardImages({
-        channelInstallationId: target.channelInstallationId,
-        chatId,
-        client,
-        state,
-        metadataJson,
-        cacheMetadataJson: existing?.metadataJson ?? null,
-      });
+      let taskCardImages: { metadataJson: string; images: LarkTaskCardImage[] };
+      try {
+        taskCardImages = await resolveTaskCardImages({
+          channelInstallationId: target.channelInstallationId,
+          chatId,
+          client,
+          state,
+          metadataJson,
+          cacheMetadataJson: existing?.metadataJson ?? null,
+        });
+      } catch (error) {
+        scheduleDependentRetry(`${TASK_STATUS_DELIVERY_PREFIX}${taskRunId}`, {
+          reason: "task_result_image_upload_failed",
+          taskRunId,
+          channelInstallationId: target.channelInstallationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
       metadataJson = taskCardImages.metadataJson;
       const rendered = buildLarkRenderedTaskCard(state, {
         ...(taskTitle == null ? {} : { title: taskTitle }),
@@ -1842,13 +1853,30 @@ export function createLarkOutboundRuntime(
         continue;
       }
 
-      const replyToMessageId = resolveOutboundAttachmentReplyToMessageId({
+      const replyTarget = resolveOutboundAttachmentReplyToMessageId({
         bindingsRepo: new LarkObjectBindingsRepo(input.storage),
         channelInstallationId: target.channelInstallationId,
         surfaceObject: target.surfaceObject,
         taskRunId: envelope.taskRun.taskRunId,
         taskRunType: envelope.taskRun.runType,
       });
+      if (replyTarget.taskStatusCardMissing) {
+        logger.error(
+          "falling back to lark surface reply target because task status card is missing",
+          {
+            eventId: envelope.event.eventId,
+            conversationId: envelope.target.conversationId,
+            branchId: envelope.target.branchId,
+            taskRunId: envelope.taskRun.taskRunId,
+            taskRunType: envelope.taskRun.runType,
+            channelInstallationId: target.channelInstallationId,
+            chatId,
+            fallbackReplyToMessageId: replyTarget.replyToMessageId,
+            attachmentPath: envelope.event.attachmentPath,
+          },
+        );
+      }
+      const replyToMessageId = replyTarget.replyToMessageId;
       try {
         const result = await sendLarkImageMessage({
           installationId: target.channelInstallationId,
@@ -2160,10 +2188,13 @@ function resolveOutboundAttachmentReplyToMessageId(input: {
   surfaceObject: Record<string, unknown>;
   taskRunId: string | null;
   taskRunType: string | null;
-}): string | null {
+}): { replyToMessageId: string | null; taskStatusCardMissing: boolean } {
   const surfaceReplyToMessageId = readStringValue(input.surfaceObject.reply_to_message_id);
   if (input.taskRunId == null || !shouldRenderStandaloneTaskCard(input.taskRunType)) {
-    return surfaceReplyToMessageId;
+    return {
+      replyToMessageId: surfaceReplyToMessageId,
+      taskStatusCardMissing: false,
+    };
   }
 
   const taskRootBinding = input.bindingsRepo.getByInternalObject({
@@ -2172,7 +2203,10 @@ function resolveOutboundAttachmentReplyToMessageId(input: {
     internalObjectId: buildTaskRunCardObjectId(input.taskRunId),
   });
 
-  return taskRootBinding?.larkMessageId ?? surfaceReplyToMessageId;
+  return {
+    replyToMessageId: taskRootBinding?.larkMessageId ?? surfaceReplyToMessageId,
+    taskStatusCardMissing: taskRootBinding?.larkMessageId == null,
+  };
 }
 
 interface CachedTaskResultImage {
@@ -2230,7 +2264,7 @@ async function resolveTaskCardImages(input: {
           displayPath: attachment.displayPath,
           error: error instanceof Error ? error.message : String(error),
         });
-        continue;
+        throw error;
       }
     }
 
