@@ -20,6 +20,7 @@ export function buildApprovedToolExecutionState(input: {
   baseState?: ToolExecutionApprovalState;
   request: PermissionRequest;
   approvalId: number;
+  approvedToolCallId?: string;
   skippedHumanApproval: boolean;
 }): ToolExecutionApprovalState | undefined {
   if (!input.skippedHumanApproval) {
@@ -38,13 +39,12 @@ export function buildApprovedToolExecutionState(input: {
   }
 
   if (input.request.scopes.some((scope) => scope.kind === "bash.full_access")) {
+    const toolCallId = input.baseState?.bashFullAccess?.toolCallId ?? input.approvedToolCallId;
     nextState.bashFullAccess = {
       approved: true,
       mode: "one_shot",
       approvalId: input.approvalId,
-      ...(input.baseState?.bashFullAccess?.toolCallId == null
-        ? {}
-        : { toolCallId: input.baseState.bashFullAccess.toolCallId }),
+      ...(toolCallId == null ? {} : { toolCallId }),
     };
   }
 

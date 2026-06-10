@@ -15,7 +15,11 @@ import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { PermissionGrantsRepo } from "@/src/storage/repos/permission-grants.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
-import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/core/errors.js";
+import {
+  toolApprovalRequired,
+  toolFatalError,
+  toolRecoverableError,
+} from "@/src/tools/core/errors.js";
 import { ToolRegistry } from "@/src/tools/core/registry.js";
 import { defineTool, textToolResult } from "@/src/tools/core/types.js";
 import { createFilesystemAccessController } from "@/src/tools/helpers/common.js";
@@ -418,6 +422,97 @@ describe("agent loop yolo and autopilot", () => {
         (event) => event.type === "approval_requested" || event.type === "approval_resolved",
       ),
     ).toBe(false);
+    expect(new PermissionGrantsRepo(handle.storage.db).listByOwner("agent_1")).toEqual([]);
+    expect(new ApprovalsRepo(handle.storage.db).listByOwner("agent_1")).toMatchObject([
+      {
+        status: "approved",
+      },
+    ]);
+  });
+
+  test("yolo retries prefix-scoped bash full_access approval as one-shot for the same tool call", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    const { sessionsRepo, messagesRepo } = seedSession(handle, "run prefixed full access command");
+    const runtimeModes = new RuntimeModeService({
+      storage: handle.storage.db,
+      autopilotEnabled: false,
+    });
+    runtimeModes.toggleYolo({
+      ownerAgentId: "agent_1",
+      updatedAt: new Date("2026-03-22T00:00:02.000Z"),
+    });
+
+    let modelTurnCount = 0;
+    let toolExecuteCount = 0;
+    const runner: AgentModelRunner = {
+      async runTurn() {
+        modelTurnCount += 1;
+        if (modelTurnCount === 1) {
+          return makeAssistantResult({
+            stopReason: "toolUse",
+            content: [
+              { type: "toolCall", id: "tool_1", name: "prefixed_full_access", arguments: {} },
+            ],
+          });
+        }
+
+        return makeAssistantResult({
+          content: [{ type: "text", text: "done" }],
+        });
+      },
+    };
+
+    const tools = new ToolRegistry([
+      defineTool({
+        name: "prefixed_full_access",
+        description: "Needs prefixed full access first",
+        inputSchema: NO_ARGS_TOOL_SCHEMA,
+        execute(context) {
+          toolExecuteCount += 1;
+          const approval = context.approvalState?.bashFullAccess;
+          if (approval?.approved === true) {
+            if (approval.toolCallId !== context.toolCallId) {
+              throw toolFatalError(
+                "Full-access one-shot approval was not scoped to this tool call.",
+                {
+                  approvalToolCallId: approval.toolCallId ?? null,
+                  currentToolCallId: context.toolCallId ?? null,
+                },
+              );
+            }
+
+            return textToolResult("ok");
+          }
+
+          throw toolApprovalRequired({
+            request: {
+              scopes: [{ kind: "bash.full_access", prefix: ["/tmp/report.sh"] }],
+            },
+            reasonText: "Need to run the report script with full access.",
+            grantOnApprove: true,
+          });
+        },
+      }),
+    ]);
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig()),
+      tools,
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: runner,
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+      runtimeModes,
+    });
+
+    const result = await loop.run({ sessionId: "sess_1", scenario: "chat" });
+
+    expect(toolExecuteCount).toBe(2);
+    expect(result.events.some((event) => event.type === "tool_call_failed")).toBe(false);
     expect(new PermissionGrantsRepo(handle.storage.db).listByOwner("agent_1")).toEqual([]);
     expect(new ApprovalsRepo(handle.storage.db).listByOwner("agent_1")).toMatchObject([
       {

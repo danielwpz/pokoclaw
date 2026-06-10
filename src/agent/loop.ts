@@ -1647,6 +1647,7 @@ export class AgentLoop {
             request: approval.request,
             approvalId: approval.approvalId,
             skippedHumanApproval: approval.skippedHumanApproval === true,
+            approvedToolCallId: error.retryToolCallId ?? input.toolCall.id,
             ...(error.approvalState == null ? {} : { baseState: error.approvalState }),
           });
 
