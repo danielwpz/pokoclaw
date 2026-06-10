@@ -4,10 +4,17 @@ export const TASK_COMPLETION_TOOL_NAME = "finish_task";
 
 export type TaskCompletionStatus = "completed" | "blocked" | "failed";
 
+export interface TaskCompletionImageAttachment {
+  path: string;
+  displayPath: string;
+  alt?: string;
+}
+
 export interface TaskCompletionSignal {
   status: TaskCompletionStatus;
   summary: string;
   finalMessage: string;
+  images?: TaskCompletionImageAttachment[];
 }
 
 export interface TaskCompletionDetails {
@@ -36,6 +43,7 @@ export function extractTaskCompletionSignal(input: {
   const status = normalizeCompletionStatus(details.taskCompletion.status);
   const summary = normalizeNonEmptyString(details.taskCompletion.summary);
   const finalMessage = normalizeNonEmptyString(details.taskCompletion.finalMessage);
+  const images = normalizeCompletionImages(details.taskCompletion.images);
   if (status == null || summary == null || finalMessage == null) {
     return null;
   }
@@ -44,6 +52,7 @@ export function extractTaskCompletionSignal(input: {
     status,
     summary,
     finalMessage,
+    ...(images.length === 0 ? {} : { images }),
   };
 }
 
@@ -61,6 +70,31 @@ function normalizeNonEmptyString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeCompletionImages(value: unknown): TaskCompletionImageAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const images: TaskCompletionImageAttachment[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const path = normalizeNonEmptyString(item.path);
+    const displayPath = normalizeNonEmptyString(item.displayPath);
+    if (path == null || displayPath == null) {
+      continue;
+    }
+    const alt = normalizeNonEmptyString(item.alt);
+    images.push({
+      path,
+      displayPath,
+      ...(alt == null ? {} : { alt }),
+    });
+  }
+  return images;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

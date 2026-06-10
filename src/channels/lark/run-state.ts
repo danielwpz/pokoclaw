@@ -22,6 +22,7 @@ import {
 import type {
   OrchestratedRuntimeEventEnvelope,
   OrchestratedTaskRunEventEnvelope,
+  TaskRunResultImageAttachment,
 } from "@/src/orchestration/outbound-events.js";
 import { appendCappedTextTail } from "@/src/shared/capped-text.js";
 
@@ -89,6 +90,7 @@ export interface LarkRunState {
   terminal: LarkRunTerminal;
   terminalErrorKind: string | null;
   terminalMessage: string | null;
+  terminalImageAttachments: TaskRunResultImageAttachment[];
 }
 
 export const LARK_ASSISTANT_PLACEHOLDER_TEXT = "_正在思考..._";
@@ -130,15 +132,28 @@ export function reduceLarkRunState(
     case "task_run_started":
       return onTaskRunStarted(hydratedState, envelope.event);
     case "task_run_completed":
-      return finalizeTaskRun(hydratedState, "completed", envelope.event.resultSummary);
+      return finalizeTaskRun(
+        hydratedState,
+        "completed",
+        envelope.event.resultSummary,
+        null,
+        envelope.event.resultImages,
+      );
     case "task_run_blocked":
-      return finalizeTaskRun(hydratedState, "blocked", envelope.event.resultSummary);
+      return finalizeTaskRun(
+        hydratedState,
+        "blocked",
+        envelope.event.resultSummary,
+        null,
+        envelope.event.resultImages,
+      );
     case "task_run_failed":
       return finalizeTaskRun(
         hydratedState,
         "failed",
         envelope.event.resultSummary ?? envelope.event.errorText,
         envelope.event.errorText,
+        envelope.event.resultImages,
       );
     case "task_run_cancelled":
       return finalizeTaskRun(
@@ -202,6 +217,7 @@ function createInitialRunState(input: {
     terminal: "running",
     terminalErrorKind: null,
     terminalMessage: null,
+    terminalImageAttachments: [],
   };
 }
 
@@ -217,6 +233,7 @@ function onTaskRunStarted(
     terminal: "running",
     terminalErrorKind: null,
     terminalMessage: null,
+    terminalImageAttachments: [],
   };
 }
 
@@ -514,6 +531,7 @@ function finalizeRun(
         : event.type === "run_cancelled"
           ? event.reason
           : null,
+    terminalImageAttachments: [],
   };
 }
 
@@ -522,6 +540,7 @@ function finalizeTaskRun(
   terminal: Extract<LarkRunTerminal, "completed" | "blocked" | "failed" | "cancelled">,
   terminalMessage: string | null,
   terminalErrorKind: string | null = null,
+  terminalImageAttachments: TaskRunResultImageAttachment[] | undefined = undefined,
 ): LarkRunState {
   return {
     ...state,
@@ -539,6 +558,7 @@ function finalizeTaskRun(
     terminal,
     terminalErrorKind,
     terminalMessage,
+    terminalImageAttachments: terminalImageAttachments ?? [],
   };
 }
 
@@ -564,6 +584,7 @@ export function markLarkRunAwaitingApproval(
     terminal: input.approvalTarget === "main_agent" ? "running" : "awaiting_approval",
     terminalErrorKind: null,
     terminalMessage: null,
+    terminalImageAttachments: [],
   };
 }
 
@@ -595,6 +616,7 @@ export function markLarkRunApprovalResolved(
         : input.actor === "system:timeout"
           ? "授权请求已超时。"
           : "用户拒绝了这次授权请求。",
+    terminalImageAttachments: [],
   };
 }
 

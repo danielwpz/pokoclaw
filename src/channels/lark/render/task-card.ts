@@ -11,8 +11,15 @@ export interface LarkTaskTerminalMessagePresentation {
   truncated: boolean;
 }
 
+export interface LarkTaskCardImage {
+  imageKey: string;
+  displayPath: string;
+  alt?: string;
+}
+
 export interface BuildLarkRenderedTaskCardOptions {
   title?: string | null;
+  images?: LarkTaskCardImage[];
 }
 
 export function buildLarkRenderedTaskCard(
@@ -45,7 +52,7 @@ export function buildLarkRenderedTaskCard(
       },
     },
     body: {
-      elements: buildTaskCardElements(state),
+      elements: buildTaskCardElements(state, options.images ?? []),
     },
   };
 
@@ -119,52 +126,71 @@ export function describeTaskRunIcon(terminal: LarkRunState["terminal"]): string 
   return "robot_outlined";
 }
 
-function buildTaskCardElements(state: LarkRunState): Array<Record<string, unknown>> {
+function buildTaskCardElements(
+  state: LarkRunState,
+  images: LarkTaskCardImage[],
+): Array<Record<string, unknown>> {
   const taskKind = describeTaskRunKind(state.taskRunType);
   const terminalMessage = getLarkTaskTerminalMessagePresentation(state.terminalMessage);
 
   if (state.terminal === "completed") {
-    return [
-      {
-        tag: "markdown",
-        content:
-          terminalMessage.displayText == null
-            ? `✅ ${taskKind}已完成`
-            : terminalMessage.displayText,
-      },
-    ];
+    return appendTaskCardImageElements(
+      [
+        {
+          tag: "markdown",
+          content:
+            terminalMessage.displayText == null
+              ? `✅ ${taskKind}已完成`
+              : terminalMessage.displayText,
+        },
+      ],
+      images,
+    );
   }
 
   if (state.terminal === "blocked") {
-    return [
-      {
-        tag: "markdown",
-        content:
-          terminalMessage.displayText == null ? `⏸ ${taskKind}已阻塞` : terminalMessage.displayText,
-      },
-    ];
+    return appendTaskCardImageElements(
+      [
+        {
+          tag: "markdown",
+          content:
+            terminalMessage.displayText == null
+              ? `⏸ ${taskKind}已阻塞`
+              : terminalMessage.displayText,
+        },
+      ],
+      images,
+    );
   }
 
   if (state.terminal === "failed") {
-    return [
-      {
-        tag: "markdown",
-        content:
-          terminalMessage.displayText == null
-            ? `❌ ${taskKind}执行失败`
-            : terminalMessage.displayText,
-      },
-    ];
+    return appendTaskCardImageElements(
+      [
+        {
+          tag: "markdown",
+          content:
+            terminalMessage.displayText == null
+              ? `❌ ${taskKind}执行失败`
+              : terminalMessage.displayText,
+        },
+      ],
+      images,
+    );
   }
 
   if (state.terminal === "cancelled") {
-    return [
-      {
-        tag: "markdown",
-        content:
-          terminalMessage.displayText == null ? `⏹ ${taskKind}已停止` : terminalMessage.displayText,
-      },
-    ];
+    return appendTaskCardImageElements(
+      [
+        {
+          tag: "markdown",
+          content:
+            terminalMessage.displayText == null
+              ? `⏹ ${taskKind}已停止`
+              : terminalMessage.displayText,
+        },
+      ],
+      images,
+    );
   }
 
   if (state.terminal === "awaiting_approval") {
@@ -199,6 +225,29 @@ function buildTaskCardElements(state: LarkRunState): Array<Record<string, unknow
       tag: "markdown",
       content: `⏳ ${taskKind}正在运行`,
     },
+  ];
+}
+
+function appendTaskCardImageElements(
+  elements: Array<Record<string, unknown>>,
+  images: LarkTaskCardImage[],
+): Array<Record<string, unknown>> {
+  if (images.length === 0) {
+    return elements;
+  }
+
+  return [
+    ...elements,
+    ...images.map((image) => ({
+      tag: "img",
+      img_key: image.imageKey,
+      alt: {
+        tag: "plain_text",
+        content: image.alt ?? image.displayPath,
+      },
+      mode: "fit_horizontal",
+      preview: true,
+    })),
   ];
 }
 

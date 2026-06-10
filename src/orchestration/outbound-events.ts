@@ -81,6 +81,7 @@ export interface TaskRunCompletedOutboundEvent {
   finishedAt: string | null;
   durationMs: number | null;
   resultSummary: string | null;
+  resultImages?: TaskRunResultImageAttachment[];
   executionSessionId: string | null;
 }
 
@@ -94,6 +95,7 @@ export interface TaskRunFailedOutboundEvent {
   durationMs: number | null;
   resultSummary: string | null;
   errorText: string | null;
+  resultImages?: TaskRunResultImageAttachment[];
   executionSessionId: string | null;
 }
 
@@ -106,6 +108,7 @@ export interface TaskRunBlockedOutboundEvent {
   finishedAt: string | null;
   durationMs: number | null;
   resultSummary: string | null;
+  resultImages?: TaskRunResultImageAttachment[];
   executionSessionId: string | null;
 }
 
@@ -128,6 +131,12 @@ export type TaskRunOutboundEvent =
   | TaskRunBlockedOutboundEvent
   | TaskRunFailedOutboundEvent
   | TaskRunCancelledOutboundEvent;
+
+export interface TaskRunResultImageAttachment {
+  path: string;
+  displayPath: string;
+  alt?: string;
+}
 
 export interface OrchestratedTaskRunEventEnvelope extends OutboundEventContext {
   kind: "task_run_event";

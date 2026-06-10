@@ -586,6 +586,311 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("sends task outbound image attachments as replies to the task status card", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (
+        id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+      ) VALUES (
+        'sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active',
+        '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id,
+        schedule_kind, schedule_value, payload_json, created_at, updated_at
+      ) VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1',
+        'cron', '0 * * * *', '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id,
+        cron_job_id, execution_session_id, status, started_at
+      ) VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1',
+        'cron_1', 'sess_task', 'running', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO channel_threads (
+        id, channel_type, channel_installation_id, home_conversation_id, external_chat_id,
+        external_thread_id, subject_kind, root_task_run_id, opened_from_message_id,
+        status, created_at, updated_at
+      ) VALUES (
+        'thread_task_1', 'lark', 'default', 'conv_1', 'oc_chat_1',
+        'omt_task_thread_1', 'task', 'task_1', 'om_old_thread_root_1',
+        'active', '2026-03-28T00:00:01.000Z', '2026-03-28T00:00:01.000Z'
+      );
+
+      INSERT INTO lark_object_bindings (
+        id, channel_installation_id, conversation_id, branch_id,
+        internal_object_kind, internal_object_id, lark_message_id, lark_card_id,
+        thread_root_message_id, status, created_at, updated_at
+      ) VALUES (
+        'binding_task_card_1', 'default', 'conv_1', 'branch_1',
+        'run_card', 'task:task_1', 'om_task_status_card_1', 'card_task_status_1',
+        'omt_task_thread_1', 'active', '2026-03-28T00:00:02.000Z', '2026-03-28T00:00:02.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const tempDir = await mkdtemp(join(tmpdir(), "pokoclaw-lark-image-"));
+    tempDirs.push(tempDir);
+    const attachmentPath = join(tempDir, "chart.png");
+    await writeFile(attachmentPath, Buffer.from("png"));
+
+    const uploadImage = vi.fn(async (_input: unknown) => ({
+      data: {
+        image_key: "img_v3_uploaded",
+      },
+    }));
+    const reply = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_image_reply_1",
+        open_message_id: "om_open_image_reply_1",
+      },
+    }));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              im: {
+                image: {
+                  create: uploadImage,
+                },
+                message: {
+                  create: vi.fn(async () => {
+                    throw new Error("should not use chat create for task thread images");
+                  }),
+                  reply,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+    bus.publish(
+      makeAttachmentEnvelope(
+        {
+          type: "outbound_attachment_requested",
+          eventId: "evt_image_1",
+          attachmentPath,
+          displayPath: "chart.png",
+          attachmentType: "image",
+          requestedAt: "2026-03-28T00:00:03.000Z",
+        },
+        {
+          taskRunId: "task_1",
+          runType: "cron",
+          executionSessionId: "sess_task",
+        },
+      ),
+    );
+
+    await waitForCondition(() => reply.mock.calls.length === 1);
+
+    expect(uploadImage).toHaveBeenCalledOnce();
+    expect(reply).toHaveBeenCalledExactlyOnceWith({
+      path: { message_id: "om_task_status_card_1" },
+      data: {
+        msg_type: "image",
+        content: JSON.stringify({ image_key: "img_v3_uploaded" }),
+        reply_in_thread: true,
+      },
+    });
+
+    await runtime.shutdown();
+  });
+
+  test("renders task completion images inside the task status card", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO agents (id, conversation_id, main_agent_id, kind, created_at)
+      VALUES ('agent_1', 'conv_1', NULL, 'main', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO sessions (
+        id, conversation_id, branch_id, owner_agent_id, purpose, status, created_at, updated_at
+      ) VALUES (
+        'sess_task', 'conv_1', 'branch_1', 'agent_1', 'task', 'active',
+        '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO cron_jobs (
+        id, owner_agent_id, target_conversation_id, target_branch_id,
+        schedule_kind, schedule_value, payload_json, created_at, updated_at
+      ) VALUES (
+        'cron_1', 'agent_1', 'conv_1', 'branch_1',
+        'cron', '0 * * * *', '{}', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z'
+      );
+
+      INSERT INTO task_runs (
+        id, run_type, owner_agent_id, conversation_id, branch_id,
+        cron_job_id, execution_session_id, status, started_at
+      ) VALUES (
+        'task_1', 'cron', 'agent_1', 'conv_1', 'branch_1',
+        'cron_1', 'sess_task', 'running', '2026-03-28T00:00:00.000Z'
+      );
+    `);
+
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    const tempDir = await mkdtemp(join(tmpdir(), "pokoclaw-lark-task-card-image-"));
+    tempDirs.push(tempDir);
+    const imagePath = join(tempDir, "chart.png");
+    await writeFile(imagePath, Buffer.from("png"));
+
+    const uploadImage = vi.fn(async (_input: unknown) => ({
+      data: {
+        image_key: "img_v3_finished",
+      },
+    }));
+    const createCard = vi.fn(async (_input: unknown) => ({
+      data: {
+        card_id: "card_task_status_1",
+      },
+    }));
+    const createMessage = vi.fn(async (_input: unknown) => ({
+      data: {
+        message_id: "om_task_card_1",
+        open_message_id: "om_task_open_1",
+      },
+    }));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: {
+                    create: createCard,
+                    update: vi.fn(async () => ({})),
+                  },
+                  cardElement: {
+                    content: vi.fn(async () => ({})),
+                  },
+                },
+              },
+              im: {
+                image: {
+                  create: uploadImage,
+                },
+                message: {
+                  create: createMessage,
+                },
+              },
+            },
+          }) as never,
+      },
+    });
+
+    runtime.start();
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_started",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "running",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        initiatorSessionId: null,
+        parentRunId: null,
+        cronJobId: "cron_1",
+        executionSessionId: "sess_task",
+      }),
+    );
+    bus.publish(
+      makeTaskEnvelope({
+        type: "task_run_completed",
+        taskRunId: "task_1",
+        runType: "cron",
+        status: "completed",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        finishedAt: "2026-03-28T00:01:00.000Z",
+        durationMs: 60_000,
+        resultSummary: "Generated the final chart.",
+        resultImages: [{ path: imagePath, displayPath: "chart.png", alt: "Completion chart" }],
+        executionSessionId: "sess_task",
+      }),
+    );
+
+    await waitForCondition(() => createMessage.mock.calls.length === 1);
+
+    expect(uploadImage).toHaveBeenCalledOnce();
+    const cardCreateInput = createCard.mock.calls[0]?.[0] as
+      | { data?: { data?: string } }
+      | undefined;
+    const card = JSON.parse(cardCreateInput?.data?.data ?? "{}") as {
+      body?: { elements?: unknown[] };
+    };
+    expect(card.body?.elements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tag: "img",
+          img_key: "img_v3_finished",
+          alt: {
+            tag: "plain_text",
+            content: "Completion chart",
+          },
+        }),
+      ]),
+    );
+    const binding = new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+      channelInstallationId: "default",
+      internalObjectKind: "run_card",
+      internalObjectId: "task:task_1",
+    });
+    expect(binding?.metadataJson).toContain("img_v3_finished");
+
+    await runtime.shutdown();
+  });
+
   test("continues sending outbound image attachments after one lark target fails", async () => {
     handle = await createTestDatabase(import.meta.url);
     handle.storage.sqlite.exec(`
