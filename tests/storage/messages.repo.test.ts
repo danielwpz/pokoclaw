@@ -76,12 +76,15 @@ describe("messages repo", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
+      channelMessageId: "om_msg_1",
       payloadJson: '{"content":"hello"}',
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
 
     const rows = repo.listBySession("sess_1");
     expect(rows.map((row) => row.id)).toEqual(["msg_1", "msg_2"]);
+    expect(repo.findBySessionAndChannelMessageId("sess_1", "om_msg_1")?.id).toBe("msg_1");
+    expect(repo.findBySessionAndChannelMessageId("sess_1", "om_missing")).toBeNull();
   });
 
   test("listBySession supports afterSeq + limit and isolates other sessions", async () => {

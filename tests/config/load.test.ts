@@ -194,6 +194,9 @@ describe("config loader", () => {
       approvalGrantTtlMs: 604_800_000,
       autopilot: false,
     });
+    expect(config.attachments).toEqual({
+      maxFileBytes: 20 * 1024 * 1024,
+    });
     expect(config.projectContext).toEqual({
       enabled: true,
       maxBytes: 8192,
@@ -276,6 +279,39 @@ describe("config loader", () => {
       maxBytes: 4096,
       files: ["AGENTS.md", "CONTRIBUTING.md"],
     });
+  });
+
+  test("loads and validates the inbound attachment size limit", () => {
+    const config = buildAppConfigFromInputs(
+      {
+        attachments: {
+          max_file_bytes: 1_048_576,
+        },
+      },
+      undefined,
+    );
+
+    expect(config.attachments).toEqual({ maxFileBytes: 1_048_576 });
+    expect(() =>
+      buildAppConfigFromInputs(
+        {
+          attachments: {
+            max_file_bytes: 0,
+          },
+        },
+        undefined,
+      ),
+    ).toThrow("config.toml attachments.max_file_bytes must be a positive integer");
+    expect(() =>
+      buildAppConfigFromInputs(
+        {
+          attachments: {
+            max_file_bytes: 20 * 1024 * 1024 + 1,
+          },
+        },
+        undefined,
+      ),
+    ).toThrow("config.toml attachments.max_file_bytes cannot exceed 20971520");
   });
 
   test("rejects unsafe project_context file names", () => {

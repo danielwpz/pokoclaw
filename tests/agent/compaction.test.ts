@@ -276,7 +276,21 @@ describe("compaction helpers", () => {
       sessionId: "sess_1",
       seq: 1,
       role: "user",
-      payloadJson: '{"content":"first request"}',
+      payloadJson: JSON.stringify({
+        content: "first request",
+        attachments: [
+          {
+            type: "attachment",
+            status: "available",
+            kind: "file",
+            name: "brief.md",
+            localPath: "/workspace/uploads/brief--12345678.md",
+            relativePath: "uploads/brief--12345678.md",
+            mimeType: "text/markdown",
+            sizeBytes: 128,
+          },
+        ],
+      }),
       tokenTotal: 9_000,
       createdAt: new Date("2026-03-22T00:00:01.000Z"),
     });
@@ -385,6 +399,7 @@ describe("compaction helpers", () => {
       '{"input":500,"output":123,"cacheRead":0,"cacheWrite":0,"totalTokens":623}',
     );
     expect(prompts[0]).toContain("<previous-summary>");
+    expect(prompts[0]).toContain("/workspace/uploads/brief--12345678.md");
     expect(emitted).toEqual(["compaction_started", "compaction_completed"]);
   });
 });

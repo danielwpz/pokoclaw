@@ -1,3 +1,4 @@
+import { MAX_INBOUND_ATTACHMENT_BYTES } from "@/src/attachments/types.js";
 import { computeNextRunAt } from "@/src/cron/schedule.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -70,6 +71,10 @@ export interface RuntimeConfig {
   approvalTimeoutMs: number;
   approvalGrantTtlMs: number;
   autopilot: boolean;
+}
+
+export interface AttachmentsConfig {
+  maxFileBytes: number;
 }
 
 export interface ProjectContextConfig {
@@ -183,6 +188,7 @@ export interface RawConfig {
   models: ModelsConfig;
   compaction: CompactionConfig;
   runtime: RuntimeConfig;
+  attachments: AttachmentsConfig;
   projectContext: ProjectContextConfig;
   selfHarness: SelfHarnessConfig;
   tools: ToolsConfig;
@@ -267,6 +273,10 @@ interface RuntimeConfigInput {
   approvalTimeoutMs?: unknown;
   approvalGrantTtlMs?: unknown;
   autopilot?: unknown;
+}
+
+interface AttachmentsConfigInput {
+  max_file_bytes?: unknown;
 }
 
 interface ProjectContextConfigInput {
@@ -364,6 +374,7 @@ interface FileConfigInput {
   models?: unknown;
   compaction?: unknown;
   runtime?: unknown;
+  attachments?: unknown;
   project_context?: unknown;
   "self-harness"?: unknown;
   tools?: unknown;
@@ -417,6 +428,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     "models",
     "compaction",
     "runtime",
+    "attachments",
     "project_context",
     "self-harness",
     "tools",
@@ -435,6 +447,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
   const models = validateModelsConfig(config.models, defaults.models, providers);
   const compaction = validateCompactionConfig(config.compaction, defaults.compaction);
   const runtime = validateRuntimeConfig(config.runtime, defaults.runtime);
+  const attachments = validateAttachmentsConfig(config.attachments, defaults.attachments);
   const projectContext = validateProjectContextConfig(
     config.project_context,
     defaults.projectContext,
@@ -455,6 +468,7 @@ export function validateFileConfig(input: unknown, defaults: RawConfig): RawConf
     models,
     compaction,
     runtime,
+    attachments,
     projectContext,
     selfHarness,
     tools,
@@ -485,6 +499,7 @@ function cloneRawConfig(config: RawConfig): RawConfig {
     },
     compaction: { ...config.compaction },
     runtime: { ...config.runtime },
+    attachments: { ...config.attachments },
     projectContext: {
       enabled: config.projectContext.enabled,
       maxBytes: config.projectContext.maxBytes,
@@ -964,6 +979,30 @@ function validateRuntimeConfig(input: unknown, defaults: RuntimeConfig): Runtime
       "config.toml runtime.autopilot",
     ),
   };
+}
+
+function validateAttachmentsConfig(input: unknown, defaults: AttachmentsConfig): AttachmentsConfig {
+  if (input == null) {
+    return { ...defaults };
+  }
+
+  if (!isPlainObject(input)) {
+    throw new Error("config.toml attachments must be a table/object");
+  }
+
+  const config = input as AttachmentsConfigInput;
+  assertAllowedKeys(config, new Set(["max_file_bytes"]), "config.toml attachments");
+
+  const maxFileBytes = validatePositiveInteger(
+    config.max_file_bytes ?? defaults.maxFileBytes,
+    "config.toml attachments.max_file_bytes",
+  );
+  if (maxFileBytes > MAX_INBOUND_ATTACHMENT_BYTES) {
+    throw new Error(
+      `config.toml attachments.max_file_bytes cannot exceed ${MAX_INBOUND_ATTACHMENT_BYTES}`,
+    );
+  }
+  return { maxFileBytes };
 }
 
 function validateProjectContextConfig(

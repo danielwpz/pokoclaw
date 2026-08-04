@@ -58,6 +58,7 @@ export function buildAppConfigFromInputs(
     models: resolvedConfig.models,
     compaction: resolvedConfig.compaction,
     runtime: resolvedConfig.runtime,
+    attachments: resolvedConfig.attachments,
     projectContext: resolvedConfig.projectContext,
     selfHarness: resolvedConfig.selfHarness,
     tools: resolvedConfig.tools,

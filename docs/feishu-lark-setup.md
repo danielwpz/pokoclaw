@@ -158,6 +158,13 @@ enough for Pokoclaw to add users to a SubAgent group.
 Image messages and task finish-card images upload Lark resources before sending. Keep
 `im:resource:upload` in `tenant` scopes, or image upload can fail with Lark error `99991672`.
 
+Incoming images, ordinary files, audio, and video are downloaded directly through the Feishu/Lark
+message-resource API and saved in the current agent's local workspace. Keep `im:resource` in
+`tenant` scopes for this flow. Pokoclaw calls the OpenAPI through the Node SDK; it does not use
+`lark-cli` or copy incoming files into Feishu Drive. The current per-file limit is 20 MiB, configured
+by `[attachments].max_file_bytes`; larger resources are reported to the agent as unavailable until
+multipart support is added.
+
 If the platform UI or permission names have changed, adapt carefully instead of pretending the old list is exact.
 
 ### 3C-6. Enable bot capability

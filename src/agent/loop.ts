@@ -6,6 +6,7 @@
  * Cross-session orchestration (task routing, channel rendering, etc.) is out of scope.
  */
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import {
   approvalBelongsToActiveRound,
   parseApprovalResumeRunId,
@@ -64,6 +65,7 @@ import {
   buildApprovedToolExecutionState,
   buildRuntimeModeToolExecutionState,
 } from "@/src/agent/tool-approval-state.js";
+import { resolveAgentWorkspaceDir } from "@/src/agent/workspace.js";
 import {
   DEFAULT_CONFIG,
   DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
@@ -93,7 +95,7 @@ import type { PermissionRequest } from "@/src/security/scope.js";
 import { SecurityService } from "@/src/security/service.js";
 import { appendCappedTextTail } from "@/src/shared/capped-text.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
-import { buildSubagentWorkspaceDir, POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
+import { POKOCLAW_WORKSPACE_DIR } from "@/src/shared/paths.js";
 import { resolveLocalCalendarContext } from "@/src/shared/time.js";
 import {
   APPROVAL_DENIED_USER_INTERVENTION_CODE,
@@ -542,10 +544,12 @@ export class AgentLoop {
         ? null
         : new AgentsRepo(this.deps.storage).getById(context.session.ownerAgentId);
     const ownerAgentId = context.session.ownerAgentId;
-    const privateWorkspaceDir =
-      ownerAgent?.kind === "sub" && ownerAgent.id.length > 0
-        ? buildSubagentWorkspaceDir(ownerAgent.id)
-        : null;
+    const agentWorkspaceDir =
+      ownerAgent == null
+        ? POKOCLAW_WORKSPACE_DIR
+        : resolveAgentWorkspaceDir(ownerAgent, POKOCLAW_WORKSPACE_DIR);
+    const privateWorkspaceDir = ownerAgent?.kind === "sub" ? agentWorkspaceDir : null;
+    const attachmentRootDir = path.join(agentWorkspaceDir, "uploads");
     const promptRuntimeContext = resolveLocalCalendarContext();
     const shellInfo = detectRuntimeShellInfo();
     const memorySnapshot = this.memoryResolver.resolveForRun({
@@ -592,6 +596,7 @@ export class AgentLoop {
       shellInfo,
       workdir: ownerAgent?.workdir ?? null,
       privateWorkspaceDir,
+      attachmentRootDir,
       bootstrapPrompt: bootstrapSnapshot?.prompt ?? null,
       projectContextPrompt,
       memoryCatalog: memorySnapshot.prompt,

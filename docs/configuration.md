@@ -105,6 +105,28 @@ max_bytes = 8192
 files = ["AGENTS.md", "CLAUDE.md"]
 ```
 
+## Inbound attachments
+
+Incoming Feishu/Lark images, files, audio, and video are downloaded before the user turn is
+submitted to the agent. Available resources are saved under the owning agent's workspace:
+
+- Main Agent sessions: `~/.pokoclaw/workspace/uploads/`
+- SubAgent sessions: `~/.pokoclaw/workspace/subagents/<agent-id>/uploads/`
+- TaskAgent sessions: the `uploads/` directory of the Main Agent or SubAgent that owns the task
+
+Stored names use a normalized original filename plus an 8-character stable hash. The agent receives
+the exact local path as structured host metadata in the same user turn. Images are also persisted,
+while the existing first-turn vision input remains unchanged.
+
+The current implementation supports at most 20 MiB per attachment and does not perform multipart
+downloads or copy inbound resources into Feishu Drive. Override the per-file limit with normal system
+configuration when a smaller boundary is desired:
+
+```toml
+[attachments]
+max_file_bytes = 20971520
+```
+
 The five scenario keys are:
 
 - `chat`

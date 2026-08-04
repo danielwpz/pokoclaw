@@ -84,6 +84,9 @@ function createConfig(): AppConfig {
       approvalGrantTtlMs: 604_800_000,
       autopilot: false,
     },
+    attachments: {
+      maxFileBytes: 20 * 1024 * 1024,
+    },
     projectContext: {
       enabled: true,
       maxBytes: 8192,
