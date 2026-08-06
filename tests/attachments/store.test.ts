@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -86,6 +86,39 @@ describe("filesystem inbound attachment store", () => {
     expect(await readFile(first.localPath, "utf8")).toBe("first");
   });
 
+  test("replaces an existing destination whose size differs from the declared content length", async () => {
+    const workspaceDir = await createTemporaryWorkspace(temporaryDirs);
+    const store = new FilesystemInboundAttachmentStore();
+    const baseInput = {
+      workspaceDir,
+      messageId: "om_msg_1",
+      sourceId: "lark:default:om_msg_1:file:file_key_1",
+      kind: "file" as const,
+      originalName: "notes.md",
+      createdAt: new Date("2026-08-04T10:00:00.000Z"),
+      maxBytes: 1_024,
+    };
+    const first = await store.save({
+      ...baseInput,
+      resource: {
+        stream: Readable.from(Buffer.from("first")),
+        mimeType: "text/markdown",
+      },
+    });
+    const second = await store.save({
+      ...baseInput,
+      resource: {
+        stream: Readable.from(Buffer.from("second")),
+        mimeType: "text/markdown",
+        contentLength: 6,
+      },
+    });
+
+    expect(second.localPath).toBe(first.localPath);
+    expect(second.sizeBytes).toBe(6);
+    expect(await readFile(first.localPath, "utf8")).toBe("second");
+  });
+
   test("rejects streams that cross the byte limit and removes partial files", async () => {
     const workspaceDir = await createTemporaryWorkspace(temporaryDirs);
     const save = new FilesystemInboundAttachmentStore().save({
@@ -109,6 +142,57 @@ describe("filesystem inbound attachment store", () => {
     const files = await readdir(workspaceDir, { recursive: true });
     expect(files.some((name) => name.endsWith(".part"))).toBe(false);
     expect(files.some((name) => name.endsWith(".bin"))).toBe(false);
+  });
+
+  test("rejects streams whose byte length does not match the declared content length", async () => {
+    const workspaceDir = await createTemporaryWorkspace(temporaryDirs);
+    const save = new FilesystemInboundAttachmentStore().save({
+      workspaceDir,
+      messageId: "om_msg_1",
+      sourceId: "lark:default:om_msg_1:file:file_key_truncated",
+      kind: "file",
+      originalName: "truncated.bin",
+      createdAt: new Date("2026-08-04T10:00:00.000Z"),
+      resource: {
+        stream: Readable.from(Buffer.from("short")),
+        mimeType: "application/octet-stream",
+        contentLength: 10,
+      },
+      maxBytes: 1_024,
+    });
+
+    await expect(save).rejects.toMatchObject({
+      reason: "download_failed",
+    } satisfies Partial<InboundAttachmentStoreError>);
+    const files = await readdir(workspaceDir, { recursive: true });
+    expect(files.some((name) => name.endsWith(".part"))).toBe(false);
+    expect(files.some((name) => name.endsWith(".bin"))).toBe(false);
+  });
+
+  test("rejects an uploads symlink that escapes the workspace", async () => {
+    const workspaceDir = await createTemporaryWorkspace(temporaryDirs);
+    const outsideDir = await createTemporaryWorkspace(temporaryDirs);
+    await symlink(outsideDir, path.join(workspaceDir, "uploads"), "dir");
+
+    const save = new FilesystemInboundAttachmentStore().save({
+      workspaceDir,
+      messageId: "om_msg_1",
+      sourceId: "lark:default:om_msg_1:file:file_key_escape",
+      kind: "file",
+      originalName: "escape.txt",
+      createdAt: new Date("2026-08-04T10:00:00.000Z"),
+      resource: {
+        stream: Readable.from(Buffer.from("must-stay-inside")),
+        mimeType: "text/plain",
+        contentLength: 16,
+      },
+      maxBytes: 1_024,
+    });
+
+    await expect(save).rejects.toMatchObject({
+      reason: "download_failed",
+    } satisfies Partial<InboundAttachmentStoreError>);
+    expect(await readdir(outsideDir, { recursive: true })).toEqual([]);
   });
 
   test("uses the shared workspace for main agents and the private workspace for subagents", () => {

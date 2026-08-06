@@ -70,6 +70,7 @@ export class FilesystemInboundAttachmentStore {
     const relativePath = path.join(UPLOADS_DIRNAME, dateSegment, messageSegment, storedName);
     const localPath = path.resolve(workspaceDir, relativePath);
     assertPathWithinWorkspace(workspaceDir, localPath);
+    const targetDir = path.dirname(localPath);
 
     if (input.resource.contentLength != null && input.resource.contentLength > input.maxBytes) {
       input.resource.stream.destroy();
@@ -84,17 +85,34 @@ export class FilesystemInboundAttachmentStore {
       throw new InboundAttachmentStoreError("empty", "Attachment resource is empty");
     }
 
+    try {
+      await prepareSafeAttachmentDirectory(workspaceDir, targetDir);
+    } catch (error) {
+      input.resource.stream.destroy();
+      if (error instanceof InboundAttachmentStoreError) {
+        throw error;
+      }
+      throw new InboundAttachmentStoreError(
+        "download_failed",
+        "Failed to prepare inbound attachment directory",
+        { cause: error },
+      );
+    }
+
     const sizeBytes = await withFileLock(
       localPath,
       async () => {
-        const existingSize = await readReusableFileSize(localPath, input.maxBytes);
+        await assertSafeAttachmentDirectory(workspaceDir, targetDir);
+        const existingSize = await readReusableFileSize(
+          localPath,
+          input.maxBytes,
+          input.resource.contentLength,
+        );
         if (existingSize != null) {
           input.resource.stream.destroy();
           return existingSize;
         }
 
-        const targetDir = path.dirname(localPath);
-        await mkdir(targetDir, { recursive: true, mode: 0o700 });
         const temporaryPath = path.join(targetDir, `.${storedName}.${randomUUID()}.part`);
         let writtenBytes = 0;
         const byteLimiter = new Transform({
@@ -124,6 +142,16 @@ export class FilesystemInboundAttachmentStore {
           if (writtenBytes === 0) {
             throw new InboundAttachmentStoreError("empty", "Attachment resource is empty");
           }
+          if (
+            input.resource.contentLength != null &&
+            writtenBytes !== input.resource.contentLength
+          ) {
+            throw new InboundAttachmentStoreError(
+              "download_failed",
+              `Attachment length mismatch: expected ${input.resource.contentLength} bytes but received ${writtenBytes}`,
+            );
+          }
+          await assertSafeAttachmentDirectory(workspaceDir, targetDir);
           await rename(temporaryPath, localPath);
           return writtenBytes;
         } catch (error) {
@@ -199,10 +227,19 @@ function validateSaveInput(input: SaveInboundAttachmentInput): void {
   }
 }
 
-async function readReusableFileSize(localPath: string, maxBytes: number): Promise<number | null> {
+async function readReusableFileSize(
+  localPath: string,
+  maxBytes: number,
+  expectedBytes: number | undefined,
+): Promise<number | null> {
   try {
     const fileStat = await lstat(localPath);
-    if (!fileStat.isFile() || fileStat.size <= 0 || fileStat.size > maxBytes) {
+    if (
+      !fileStat.isFile() ||
+      fileStat.size <= 0 ||
+      fileStat.size > maxBytes ||
+      (expectedBytes != null && fileStat.size !== expectedBytes)
+    ) {
       await rm(localPath, { force: true });
       return null;
     }
@@ -350,6 +387,65 @@ function assertPathWithinWorkspace(workspaceDir: string, localPath: string): voi
   const relative = path.relative(workspaceDir, localPath);
   if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error(`Attachment path escapes workspace: ${localPath}`);
+  }
+}
+
+async function prepareSafeAttachmentDirectory(
+  workspaceDir: string,
+  targetDir: string,
+): Promise<void> {
+  await mkdir(workspaceDir, { recursive: true, mode: 0o700 });
+  await assertDirectoryIsNotSymlink(workspaceDir);
+
+  const relative = path.relative(workspaceDir, targetDir);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new InboundAttachmentStoreError(
+      "download_failed",
+      `Attachment directory escapes workspace: ${targetDir}`,
+    );
+  }
+
+  let currentDir = workspaceDir;
+  for (const segment of relative.split(path.sep)) {
+    currentDir = path.join(currentDir, segment);
+    try {
+      await mkdir(currentDir, { mode: 0o700 });
+    } catch (error) {
+      if (!isNodeError(error, "EEXIST")) {
+        throw error;
+      }
+    }
+    await assertDirectoryIsNotSymlink(currentDir);
+  }
+}
+
+async function assertSafeAttachmentDirectory(
+  workspaceDir: string,
+  targetDir: string,
+): Promise<void> {
+  await assertDirectoryIsNotSymlink(workspaceDir);
+  const relative = path.relative(workspaceDir, targetDir);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new InboundAttachmentStoreError(
+      "download_failed",
+      `Attachment directory escapes workspace: ${targetDir}`,
+    );
+  }
+
+  let currentDir = workspaceDir;
+  for (const segment of relative.split(path.sep)) {
+    currentDir = path.join(currentDir, segment);
+    await assertDirectoryIsNotSymlink(currentDir);
+  }
+}
+
+async function assertDirectoryIsNotSymlink(directoryPath: string): Promise<void> {
+  const directoryStat = await lstat(directoryPath);
+  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+    throw new InboundAttachmentStoreError(
+      "download_failed",
+      `Attachment directory must be a real directory: ${directoryPath}`,
+    );
   }
 }
 

@@ -302,11 +302,12 @@ export function appendHostAttachmentContext(
   content: string,
   attachments: AgentUserAttachmentPayload[],
 ): string {
+  const escapedContent = escapeUserAuthoredAttachmentDelimiters(content);
   if (attachments.length === 0) {
-    return content;
+    return escapedContent;
   }
 
-  const lines = content.trimEnd().length > 0 ? [content.trimEnd(), ""] : [];
+  const lines = escapedContent.trimEnd().length > 0 ? [escapedContent.trimEnd(), ""] : [];
   lines.push("<host_attachments>");
   lines.push(
     "The user attached files to this message. Available files were saved by the host before this message was delivered.",
@@ -333,6 +334,10 @@ export function appendHostAttachmentContext(
   );
   lines.push("</host_attachments>");
   return lines.join("\n");
+}
+
+function escapeUserAuthoredAttachmentDelimiters(content: string): string {
+  return content.replace(/<\s*\/?\s*host_attachments\b[^>]*>/gi, (tag) => escapeXml(tag));
 }
 
 function appendUnsupportedVisionNotice(content: string, images: AgentUserImagePayload[]): string {
