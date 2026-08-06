@@ -27,6 +27,7 @@ import { McpToolSource } from "@/src/mcp/tool-source.js";
 import { MeditationPipelineRunner } from "@/src/meditation/runner.js";
 import { MeditationScheduler } from "@/src/meditation/scheduler.js";
 import { AgentManager, type AgentManagerDependencies } from "@/src/orchestration/agent-manager.js";
+import { InboundAttachmentService } from "@/src/orchestration/inbound-attachments.js";
 import type { OrchestratedOutboundEventEnvelope } from "@/src/orchestration/outbound-events.js";
 import {
   dispatchPreparedBackOnlineRecovery,
@@ -129,6 +130,10 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     storage: input.storage,
     autopilotEnabled: input.config.runtime.autopilot,
   });
+  const attachmentStore = new InboundAttachmentService({
+    storage: input.storage,
+    maxFileBytes: input.config.attachments.maxFileBytes,
+  });
   const providerApiKeyResolver = new CodexProviderApiKeyResolver();
   const llmBridge = new PiBridge(providerApiKeyResolver, {
     firstResponseTimeoutMs: input.config.runtime.llmFirstResponseTimeoutMs,
@@ -209,6 +214,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     status,
     runtimeModes,
     modelSwitch: scenarioModelSwitch,
+    attachmentStore,
     outboundEventBus,
     clients: larkClients,
     a2uiCallbacks: a2ui,

@@ -1,3 +1,4 @@
+import { MAX_INBOUND_ATTACHMENT_BYTES } from "@/src/attachments/types.js";
 import type { RawConfig } from "@/src/config/schema.js";
 
 // 0 means unlimited; positive values cap model turns per run.
@@ -6,6 +7,7 @@ export const DEFAULT_RUNTIME_MAX_EMPTY_OUTPUT_LLM_ATTEMPTS = 5;
 export const DEFAULT_RUNTIME_LLM_FIRST_RESPONSE_TIMEOUT_MS = 45_000;
 export const DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS = 3 * 60 * 1000;
 export const DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = MAX_INBOUND_ATTACHMENT_BYTES;
 export const DEFAULT_PROJECT_CONTEXT_MAX_BYTES = 8192;
 export const DEFAULT_PROJECT_CONTEXT_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
 
@@ -38,6 +40,9 @@ export const DEFAULT_CONFIG: RawConfig = {
     approvalTimeoutMs: DEFAULT_RUNTIME_APPROVAL_TIMEOUT_MS,
     approvalGrantTtlMs: DEFAULT_RUNTIME_APPROVAL_GRANT_TTL_MS,
     autopilot: false,
+  },
+  attachments: {
+    maxFileBytes: DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
   },
   projectContext: {
     enabled: true,

@@ -9,6 +9,7 @@ import {
   buildApprovalAgentIdentitySection,
   buildApprovalAgentOperatingModelSection,
   buildApprovalReviewSection,
+  buildAttachmentsSection,
   buildBashFullAccessSection,
   buildBootstrapSection,
   buildFutureRuntimeSections,
@@ -44,6 +45,7 @@ interface BuildAgentSystemPromptInput {
   description?: string | null;
   workdir?: string | null;
   privateWorkspaceDir?: string | null;
+  attachmentRootDir?: string | null;
   bootstrapPrompt?: string | null;
   projectContextPrompt?: string | null;
   memoryCatalog?: string | null;
@@ -63,6 +65,11 @@ function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
       ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
     }),
     buildSafetySection(),
+    buildAttachmentsSection({
+      ...(input.attachmentRootDir === undefined
+        ? {}
+        : { attachmentRootDir: input.attachmentRootDir }),
+    }),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
@@ -101,6 +108,11 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     }),
     buildInteractiveUiSection(),
     buildSafetySection(),
+    buildAttachmentsSection({
+      ...(input.attachmentRootDir === undefined
+        ? {}
+        : { attachmentRootDir: input.attachmentRootDir }),
+    }),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),
@@ -146,6 +158,11 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
     }),
     buildInteractiveUiSection(),
     buildSafetySection(),
+    buildAttachmentsSection({
+      ...(input.attachmentRootDir === undefined
+        ? {}
+        : { attachmentRootDir: input.attachmentRootDir }),
+    }),
     buildWorkspaceRuntimeSection({
       ...(input.currentDate === undefined ? {} : { currentDate: input.currentDate }),
       ...(input.timezone === undefined ? {} : { timezone: input.timezone }),

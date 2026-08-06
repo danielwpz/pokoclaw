@@ -49,6 +49,19 @@ describe("agent system prompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  test("explains host attachment metadata and the current agent upload directory", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "chat",
+      agentKind: "main",
+      attachmentRootDir: "/workspace/uploads",
+    });
+
+    expect(prompt).toContain("## User Attachments");
+    expect(prompt).toContain("<host_attachments>");
+    expect(prompt).toContain("Use those exact paths when inspecting the files.");
+    expect(prompt).toContain("This agent's inbound attachment directory is /workspace/uploads.");
+  });
+
   test("adds a dedicated Memory section and appends the memory catalog at the end when provided", () => {
     const memoryCatalog = [
       "<memory_files>",

@@ -125,7 +125,7 @@ Delegated approval operates within a policy ceiling defined in `config.toml`. Se
 
 ## 4. Storage Follows Access Control
 
-Pokoclaw has three storage layers. The layering is not organizational — it maps to access control boundaries.
+Pokoclaw uses distinct storage areas that map to access control boundaries.
 
 | Layer | Location | Who can access | What lives here |
 |-------|----------|---------------|-----------------|
@@ -133,8 +133,15 @@ Pokoclaw has three storage layers. The layering is not organizational — it map
 | `secrets.toml` | `~/.pokoclaw/system/` | Host runtime only | API keys, tokens, credentials |
 | **SQLite** | `~/.pokoclaw/system/pokoclaw.db` | Host runtime | Sessions, task runs, approval ledger, cron state, runtime snapshots |
 | Memory files | `~/.pokoclaw/workspace/` | User + agents | Layered Markdown memory (see below) |
+| Inbound attachments | Agent workspace `uploads/` | User + owning agent | Locally persisted user-provided files with normalized names and stable hashes |
 
 Agents receive `*_ref` fields in structured config (e.g., `api_key_ref = "env:ANTHROPIC_API_KEY"`). The host runtime resolves the actual value at use time. Agents never see raw secrets. Spawned processes also have environment variables filtered as a defense-in-depth measure.
+
+Channel adapters expose inbound resources as streams. A channel-neutral orchestration service resolves
+the session owner and persists each stream inside that agent's workspace before runtime submission.
+The persisted attachment record contains normalized metadata and the resulting exact local path;
+channel credentials remain on the host side. Image payloads continue through the existing first-turn
+vision path in addition to local persistence.
 
 Memory is in Markdown files — readable and editable by both users and agents directly, not just by code:
 

@@ -14,6 +14,7 @@ import type {
   AgentToolResultPayload,
   AgentUserPayload,
 } from "@/src/agent/llm/messages.js";
+import { parseAgentUserAttachments } from "@/src/agent/llm/messages.js";
 import type { ResolvedModel } from "@/src/agent/llm/models.js";
 import type { ProviderRegistry } from "@/src/agent/llm/provider-registry.js";
 import {
@@ -59,6 +60,7 @@ Rules:
 - Preserve still-relevant information from the previous summary.
 - Update progress and next steps to reflect newly completed or changed work.
 - Preserve exact identifiers, URLs, file paths, names, timestamps, and errors when they matter.
+- Preserve the exact local paths of user attachments that may still be needed.
 - Remove stale items if the new conversation clearly supersedes them.
 
 Use the same EXACT structure as the previous summary.`;
@@ -845,6 +847,7 @@ function serializeUserMessage(message: Message): string {
   }
 
   const imageCount = Array.isArray(payload.images) ? payload.images.length : 0;
+  const attachments = parseAgentUserAttachments(payload.attachments);
   if (imageCount > 0) {
     logger.debug("serializing user message with image placeholders for compaction", {
       storageMessageId: message.id,
@@ -856,9 +859,22 @@ function serializeUserMessage(message: Message): string {
       })),
     });
   }
-  return imageCount > 0
-    ? `[User]: ${payload.content}\n[Attached images: ${imageCount}]`
-    : `[User]: ${payload.content}`;
+  const lines = [`[User]: ${payload.content}`];
+  if (imageCount > 0) {
+    lines.push(`[Attached images: ${imageCount}]`);
+  }
+  for (const attachment of attachments) {
+    if (attachment.status === "available") {
+      lines.push(
+        `[Attached ${attachment.kind}: ${attachment.name}; local path: ${attachment.localPath}; MIME: ${attachment.mimeType}; size: ${attachment.sizeBytes} bytes]`,
+      );
+    } else {
+      lines.push(
+        `[Unavailable ${attachment.kind} attachment: ${attachment.name}; reason: ${attachment.reason}]`,
+      );
+    }
+  }
+  return lines.join("\n");
 }
 
 function serializeAssistantMessage(message: Message): string {

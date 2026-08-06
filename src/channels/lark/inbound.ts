@@ -17,8 +17,15 @@ import {
 } from "@/src/agent/llm/messages.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import type { AgentLoopAfterToolResultHook } from "@/src/agent/loop.js";
+import type { AgentUserAttachmentPayload } from "@/src/attachments/types.js";
 import { buildSlashCommandHelpPresentation } from "@/src/channels/help.js";
 import type { LarkSdkClient } from "@/src/channels/lark/client.js";
+import {
+  extractLarkInboundAttachmentDescriptors,
+  type LarkInboundAttachmentDescriptor,
+  type LarkInboundImageAsset,
+  processLarkInboundAttachments,
+} from "@/src/channels/lark/inbound-attachments.js";
 import { addLarkMessageReaction } from "@/src/channels/lark/reactions.js";
 import {
   buildLarkRenderedModelSwitchCard,
@@ -30,6 +37,7 @@ import type { ConfiguredLarkInstallation } from "@/src/channels/lark/types.js";
 import { handleLarkYoloCommand, isLarkYoloCommand } from "@/src/channels/lark/yolo-command.js";
 import type { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { ResolveSubagentCreationRequestResult } from "@/src/orchestration/agent-manager.js";
+import type { SessionInboundAttachmentStore } from "@/src/orchestration/inbound-attachments.js";
 import { materializeForkedSessionSnapshotInStorage } from "@/src/orchestration/session-fork.js";
 import type { RuntimeControlService } from "@/src/runtime/control.js";
 import type { SubmitMessageResult } from "@/src/runtime/ingress.js";
@@ -104,6 +112,7 @@ export interface CreateLarkInboundRuntimeInput {
   clients?: {
     getOrCreate(installationId: string): LarkSdkClient;
   };
+  attachmentStore?: SessionInboundAttachmentStore;
   wsClientFactory?: (installation: ConfiguredLarkInstallation) => Lark.WSClient;
   subagentRequests?: {
     approve(requestId: string): Promise<ResolveSubagentCreationRequestResult>;
@@ -198,14 +207,8 @@ export interface NormalizedLarkTextMessage {
   chatType: string | null;
   text: string;
   imageKeys?: string[];
+  attachmentDescriptors?: LarkInboundAttachmentDescriptor[];
   createdAt?: Date;
-}
-
-interface LarkInboundImageAsset {
-  id: string;
-  messageId: string;
-  data: string;
-  mimeType: string;
 }
 
 interface LarkQuotedMessage {
@@ -302,7 +305,10 @@ export function normalizeLarkTextMessage(
     });
     return { skipReason: "text message content is empty" };
   }
-  const imageKeys = extractLarkImageKeys(messageType, contentRaw);
+  const attachmentDescriptors = extractLarkInboundAttachmentDescriptors(messageType, contentRaw);
+  const imageKeys = attachmentDescriptors
+    .filter((descriptor) => descriptor.kind === "image")
+    .map((descriptor) => descriptor.resourceKey);
 
   const parentMessageId = readString(message.parent_id);
   const threadId = readString(message.thread_id);
@@ -327,6 +333,7 @@ export function normalizeLarkTextMessage(
     chatType,
     imageKeyCount: imageKeys.length,
     imageKeys,
+    attachmentCount: attachmentDescriptors.length,
     contentPreview: truncateLogText(text, LARK_INBOUND_LOG_PREVIEW_MAX_LENGTH),
   });
 
@@ -341,6 +348,7 @@ export function normalizeLarkTextMessage(
     chatType,
     text,
     ...(imageKeys.length === 0 ? {} : { imageKeys }),
+    ...(attachmentDescriptors.length === 0 ? {} : { attachmentDescriptors }),
     ...(createdAt == null ? {} : { createdAt }),
   };
 }
@@ -356,6 +364,7 @@ export function createLarkMessageReceiveHandler(input: {
   clients?: {
     getOrCreate(installationId: string): LarkSdkClient;
   };
+  attachmentStore?: SessionInboundAttachmentStore;
   quoteMessageFetcher?: (input: {
     installationId: string;
     messageId: string;
@@ -556,6 +565,20 @@ export function createLarkMessageReceiveHandler(input: {
       return;
     }
 
+    if (
+      new MessagesRepo(input.storage).findBySessionAndChannelMessageId(
+        route.sessionId,
+        hydrated.messageId,
+      ) != null
+    ) {
+      logger.info("ignoring previously persisted lark inbound message", {
+        installationId: input.installationId,
+        sessionId: route.sessionId,
+        messageId: hydrated.messageId,
+      });
+      return;
+    }
+
     logger.info("submitting lark inbound message to runtime ingress", {
       installationId: input.installationId,
       chatId: hydrated.chatId,
@@ -575,27 +598,38 @@ export function createLarkMessageReceiveHandler(input: {
       route.kind === "ordinary_thread"
         ? hydrated.text
         : await buildInboundMessageContent(hydrated, input);
-    const imageAssets =
+    const processedAttachments =
       input.clients == null
-        ? []
-        : await fetchLarkInboundImageAssets({
+        ? { attachments: [], imageAssets: [] }
+        : await processLarkInboundAttachments({
             installationId: input.installationId,
+            sessionId: route.sessionId,
             messageId: hydrated.messageId,
-            imageKeys: hydrated.imageKeys ?? [],
+            descriptors: hydrated.attachmentDescriptors ?? [],
             clients: input.clients,
+            ...(hydrated.createdAt == null ? {} : { createdAt: hydrated.createdAt }),
+            ...(input.attachmentStore == null ? {} : { attachmentStore: input.attachmentStore }),
           });
+    const imageAssets = processedAttachments.imageAssets;
     const userPayload = buildLarkInboundUserPayload({
       content,
       imageAssets,
+      attachments: processedAttachments.attachments,
     });
     const runtimeImages = buildLarkInboundRuntimeImages(imageAssets);
 
-    if ((hydrated.imageKeys?.length ?? 0) > 0 || runtimeImages.length > 0) {
-      logger.info("prepared lark inbound image payloads", {
+    if (
+      (hydrated.attachmentDescriptors?.length ?? 0) > 0 ||
+      processedAttachments.attachments.length > 0 ||
+      runtimeImages.length > 0
+    ) {
+      logger.info("prepared lark inbound attachment payloads", {
         installationId: input.installationId,
         chatId: hydrated.chatId,
         messageId: hydrated.messageId,
         imageKeyCount: hydrated.imageKeys?.length ?? 0,
+        attachmentDescriptorCount: hydrated.attachmentDescriptors?.length ?? 0,
+        persistedAttachmentCount: processedAttachments.attachments.length,
         fetchedImageAssetCount: imageAssets.length,
         fetchedImageAssets: imageAssets.map((image) => ({
           id: image.id,
@@ -604,6 +638,7 @@ export function createLarkMessageReceiveHandler(input: {
           byteLength: Buffer.from(image.data, "base64").length,
         })),
         userPayloadImageCount: userPayload?.images?.length ?? 0,
+        userPayloadAttachmentCount: userPayload?.attachments?.length ?? 0,
         runtimeImageCount: runtimeImages.length,
       });
     }
@@ -1143,6 +1178,7 @@ export function createLarkInboundRuntime(input: CreateLarkInboundRuntimeInput): 
           ingress: input.ingress,
           control: input.control,
           ...(input.clients == null ? {} : { clients: input.clients }),
+          ...(input.attachmentStore == null ? {} : { attachmentStore: input.attachmentStore }),
           ...(input.status == null ? {} : { status: input.status }),
           ...(input.runtimeModes == null ? {} : { runtimeModes: input.runtimeModes }),
           ...(input.modelSwitch == null ? {} : { modelSwitch: input.modelSwitch }),
@@ -2261,54 +2297,6 @@ async function buildOrdinaryThreadKickoffContent(input: {
   return lines.join("\n");
 }
 
-function extractLarkImageKeys(messageType: string, content: string): string[] {
-  if (content.length === 0) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(content);
-    if (!isRecord(parsed)) {
-      return [];
-    }
-
-    switch (messageType) {
-      case "image": {
-        const imageKey = readString(parsed.image_key);
-        return imageKey == null ? [] : [imageKey];
-      }
-      case "post": {
-        const body = unwrapLarkPostContent(parsed);
-        if (body == null) {
-          return [];
-        }
-
-        const keys: string[] = [];
-        const content = Array.isArray(body.content) ? body.content : [];
-        for (const paragraph of content) {
-          if (!Array.isArray(paragraph)) {
-            continue;
-          }
-          for (const element of paragraph) {
-            if (!isRecord(element) || readString(element.tag) !== "img") {
-              continue;
-            }
-            const imageKey = readString(element.image_key);
-            if (imageKey != null) {
-              keys.push(imageKey);
-            }
-          }
-        }
-        return keys;
-      }
-      default:
-        return [];
-    }
-  } catch {
-    return [];
-  }
-}
-
 function parseLarkMessageContent(messageType: string, content: string): string {
   if (content.length === 0) {
     return "";
@@ -2328,7 +2316,17 @@ function parseLarkMessageContent(messageType: string, content: string): string {
       case "audio":
         return typeof parsed.file_key === "string" ? `[语音 ${parsed.file_key}]` : "[语音]";
       case "file":
-        return typeof parsed.file_key === "string" ? `[文件 ${parsed.file_key}]` : "[文件]";
+        return typeof parsed.file_name === "string"
+          ? `[文件 ${parsed.file_name}]`
+          : typeof parsed.file_key === "string"
+            ? `[文件 ${parsed.file_key}]`
+            : "[文件]";
+      case "media":
+        return typeof parsed.file_name === "string"
+          ? `[视频 ${parsed.file_name}]`
+          : typeof parsed.file_key === "string"
+            ? `[视频 ${parsed.file_key}]`
+            : "[视频]";
       case "post":
         return parseLarkPostMessageContent(parsed);
       case "interactive": {
@@ -2849,21 +2847,27 @@ export function createLarkQuoteMessageFetcher(input: {
 function buildLarkInboundUserPayload(input: {
   content: string;
   imageAssets: LarkInboundImageAsset[];
+  attachments: AgentUserAttachmentPayload[];
 }): AgentUserPayload | null {
-  if (input.imageAssets.length === 0) {
+  if (input.imageAssets.length === 0 && input.attachments.length === 0) {
     return null;
   }
 
   return {
     content: input.content,
-    images: input.imageAssets.map(
-      (image): AgentUserImagePayload => ({
-        type: "image",
-        id: image.id,
-        messageId: normalizeAgentUserImageMessageId(image.id, image.messageId),
-        mimeType: image.mimeType,
-      }),
-    ),
+    ...(input.imageAssets.length === 0
+      ? {}
+      : {
+          images: input.imageAssets.map(
+            (image): AgentUserImagePayload => ({
+              type: "image",
+              id: image.id,
+              messageId: normalizeAgentUserImageMessageId(image.id, image.messageId),
+              mimeType: image.mimeType,
+            }),
+          ),
+        }),
+    ...(input.attachments.length === 0 ? {} : { attachments: input.attachments }),
   };
 }
 
@@ -2891,118 +2895,6 @@ function buildLarkInboundRuntimeImages(
     });
   }
   return runtimeImages;
-}
-
-async function fetchLarkInboundImageAssets(input: {
-  installationId: string;
-  messageId: string;
-  imageKeys: string[];
-  clients: {
-    getOrCreate(installationId: string): LarkSdkClient;
-  };
-}): Promise<LarkInboundImageAsset[]> {
-  if (input.imageKeys.length === 0) {
-    logger.debug("no lark inbound images to fetch", {
-      installationId: input.installationId,
-      messageId: input.messageId,
-    });
-    return [];
-  }
-
-  logger.debug("fetching lark inbound image assets", {
-    installationId: input.installationId,
-    messageId: input.messageId,
-    imageKeyCount: input.imageKeys.length,
-    imageKeys: input.imageKeys,
-  });
-
-  const client = input.clients.getOrCreate(input.installationId);
-  const assets: LarkInboundImageAsset[] = [];
-  for (const imageKey of input.imageKeys) {
-    try {
-      logger.debug("requesting lark inbound image resource", {
-        installationId: input.installationId,
-        messageId: input.messageId,
-        imageKey,
-      });
-      const response = await client.sdk.im.messageResource.get({
-        path: {
-          message_id: input.messageId,
-          file_key: imageKey,
-        },
-        params: {
-          type: "image",
-        },
-      });
-      const buffer = await readLarkResourceBuffer(response.getReadableStream());
-      if (buffer.length === 0) {
-        throw new Error("empty lark inbound image resource");
-      }
-      const mimeType = normalizeLarkImageMimeType(response.headers?.["content-type"]);
-      const data = buffer.toString("base64");
-      assets.push({
-        id: imageKey,
-        messageId: input.messageId,
-        data,
-        mimeType,
-      });
-      logger.debug("fetched lark inbound image resource", {
-        installationId: input.installationId,
-        messageId: input.messageId,
-        imageKey,
-        mimeType,
-        byteLength: buffer.length,
-      });
-    } catch (error) {
-      logger.warn("failed to fetch lark inbound image resource", {
-        installationId: input.installationId,
-        messageId: input.messageId,
-        imageKey,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  logger.debug("finished fetching lark inbound image assets", {
-    installationId: input.installationId,
-    messageId: input.messageId,
-    requestedImageKeyCount: input.imageKeys.length,
-    fetchedAssetCount: assets.length,
-  });
-
-  return assets;
-}
-
-async function readLarkResourceBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
-}
-
-function normalizeLarkImageMimeType(value: unknown): string {
-  if (typeof value === "string") {
-    const normalized = value.split(";")[0]?.trim().toLowerCase();
-    if (normalized?.startsWith("image/")) {
-      return normalized;
-    }
-    return "image/png";
-  }
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (typeof item !== "string") {
-        continue;
-      }
-      const normalized = item.split(";")[0]?.trim().toLowerCase();
-      if (normalized?.startsWith("image/")) {
-        return normalized;
-      }
-    }
-  }
-
-  return "image/png";
 }
 
 async function fetchQuotedLarkMessage(input: {

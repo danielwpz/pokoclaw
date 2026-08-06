@@ -122,6 +122,19 @@ export class MessagesRepo {
     );
   }
 
+  findBySessionAndChannelMessageId(sessionId: string, channelMessageId: string): Message | null {
+    return (
+      this.db
+        .select()
+        .from(messages)
+        .where(
+          and(eq(messages.sessionId, sessionId), eq(messages.channelMessageId, channelMessageId)),
+        )
+        .orderBy(asc(messages.seq))
+        .get() ?? null
+    );
+  }
+
   getNextSeq(sessionId: string): number {
     const row = this.db
       .select({ maxSeq: max(messages.seq) })
