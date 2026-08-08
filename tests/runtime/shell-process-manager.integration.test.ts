@@ -69,7 +69,7 @@ describe("managed bash process integration", () => {
       storage: database.storage.db,
       shellProcesses: manager,
     };
-    const command = `${JSON.stringify(process.execPath)} -e 'const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" }); console.log("CHILD_PID:" + child.pid); setInterval(() => {}, 1000)'`;
+    const command = `${JSON.stringify(process.execPath)} -e 'const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", "setInterval(() => console.log(\\"CHILD_TICK\\"), 50)"], { stdio: "inherit" }); console.log("CHILD_PID:" + child.pid); setInterval(() => {}, 1000)'`;
 
     const started = await registry.execute("bash", context, {
       command,
@@ -123,7 +123,15 @@ describe("managed bash process integration", () => {
       exitReason: "timeout",
     });
     await sleep(100);
-    expect(isProcessAlive(childPid as number)).toBe(false);
+    const ticksAfterTimeout = countOutputMatches(manager, processRunId as string, "CHILD_TICK");
+    expect(ticksAfterTimeout).toBeGreaterThan(0);
+    await sleep(200);
+    expect(countOutputMatches(manager, processRunId as string, "CHILD_TICK")).toBe(
+      ticksAfterTimeout,
+    );
+    if (process.platform !== "linux") {
+      expect(isProcessAlive(childPid as number)).toBe(false);
+    }
 
     const yielded = await registry.execute("bash", context, {
       command: `${JSON.stringify(process.execPath)} -e 'setTimeout(() => console.log("YIELD_DONE"), 100)'`,
@@ -172,6 +180,18 @@ describe("managed bash process integration", () => {
     });
   });
 });
+
+function countOutputMatches(
+  manager: ShellProcessManager,
+  processRunId: string,
+  marker: string,
+): number {
+  const output = manager
+    .get({ id: processRunId, ownerAgentId: "agent_1" })
+    .output.chunks.map((chunk) => chunk.text)
+    .join("");
+  return output.split(marker).length - 1;
+}
 
 function isProcessAlive(pid: number): boolean {
   try {
