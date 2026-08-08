@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const { executeSandboxedBashMock, executeUnsandboxedBashMock } = vi.hoisted(() => ({
@@ -789,7 +790,7 @@ Use this exact bash argument object on the next retry if full access is warrante
         ownerAgentId: "agent_1",
         sourceSessionId: "sess_1",
         command: "node server.js",
-        cwd: "/tmp/work",
+        cwd: path.resolve("/tmp/work"),
         sandboxMode: "sandboxed",
         timeoutMs: null,
         notifyOnExit: "next_turn",
