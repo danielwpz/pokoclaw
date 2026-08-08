@@ -210,6 +210,44 @@ describe("Windows host bash timeout cleanup", () => {
       "if ($global:__pokoclaw_last_exit_code -is [int] -and $global:__pokoclaw_last_exit_code -ne 0) { exit $global:__pokoclaw_last_exit_code }",
     );
   });
+
+  test("terminates a managed Windows process tree with taskkill", async () => {
+    spawnMock.mockImplementation(
+      (command: string, args: string[] = [], options: Record<string, unknown> = {}) => {
+        const child = createFakeChild(command === "taskkill" ? 456 : 123);
+        spawnCalls.push({ command, args, options, child });
+        if (command === "taskkill") {
+          queueMicrotask(() => {
+            child.emit("close", 0, null);
+            spawnCalls[0]?.child.emit("close", null, "SIGTERM");
+          });
+        }
+        return child;
+      },
+    );
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-windows-managed-"));
+    const { startUnsandboxedBash } = await import("@/src/security/sandbox.js");
+    const managed = await startUnsandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: {} as ToolExecutionContext["storage"],
+      },
+      command: "node server.js",
+      cwd: tempDir,
+      abortSignal: new AbortController().signal,
+      platform: "win32",
+      shellInfo: windowsPowerShellShellInfo(),
+    });
+
+    await managed.terminate({ graceMs: 100 });
+    expect(await managed.wait()).toMatchObject({ exitCode: null, signal: "SIGTERM" });
+    expect(spawnCalls.map((call) => path.basename(call.command))).toEqual(["pwsh.exe", "taskkill"]);
+    expect(spawnCalls[1]).toMatchObject({ args: ["/pid", "123", "/t", "/f"] });
+  });
 });
 
 function windowsPowerShellShellInfo() {

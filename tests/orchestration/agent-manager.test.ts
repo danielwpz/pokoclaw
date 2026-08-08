@@ -8,6 +8,7 @@ import { RuntimeEventBus } from "@/src/runtime/event-bus.js";
 import type { SubmitMessageInput, SubmitMessageResult } from "@/src/runtime/ingress.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { ShellProcessRunsRepo } from "@/src/storage/repos/shell-process-runs.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import {
   createTestDatabase,
@@ -129,6 +130,50 @@ function seedFixture(handle: TestDatabaseHandle): void {
   `);
 }
 
+function createSettledShellProcess(
+  handle: TestDatabaseHandle,
+  input: {
+    notifyOnExit: "next_turn" | "wake";
+    exitReason?: "process_exit" | "runtime_shutdown";
+  },
+) {
+  const repo = new ShellProcessRunsRepo(handle.storage.db);
+  repo.create({
+    id: "process_shell_1",
+    ownerAgentId: "agent_main",
+    sourceSessionId: "sess_main",
+    conversationId: "conv_main",
+    branchId: "branch_main",
+    commandPreview: "node server.js",
+    commandHash: "hash",
+    cwd: "/tmp/work",
+    sandboxMode: "sandboxed",
+    timeoutMs: 30_000,
+    notifyOnExit: input.notifyOnExit,
+    startedAt: new Date("2026-08-07T00:00:00.000Z"),
+  });
+  repo.markHandedOff("process_shell_1", new Date("2026-08-07T00:00:01.000Z"));
+  repo.settle({
+    id: "process_shell_1",
+    status: input.exitReason === "runtime_shutdown" ? "killed" : "completed",
+    finishedAt: new Date("2026-08-07T00:00:02.000Z"),
+    durationMs: 2_000,
+    exitCode: input.exitReason === "runtime_shutdown" ? null : 0,
+    exitSignal: input.exitReason === "runtime_shutdown" ? "SIGTERM" : null,
+    exitReason: input.exitReason ?? "process_exit",
+    stdoutChars: 6,
+    stderrChars: 0,
+    outputTail: "[stdout]\nready\n",
+    outputTruncated: false,
+    notificationStatus: "pending",
+  });
+  const processRun = repo.getById("process_shell_1");
+  if (processRun == null) {
+    throw new Error("Expected shell process fixture to exist.");
+  }
+  return processRun;
+}
+
 describe("AgentManager", () => {
   test("forwards user messages to runtime ingress", async () => {
     const submitMessage = vi.fn(
@@ -184,6 +229,159 @@ describe("AgentManager", () => {
       actor: "user:demo",
     });
     expect(submitMessage).not.toHaveBeenCalled();
+  });
+
+  test("stores a next-turn managed process completion notice exactly once", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const processRun = createSettledShellProcess(handle, { notifyOnExit: "next_turn" });
+      const submitMessage = vi.fn(
+        async (): Promise<SubmitMessageResult> => ({
+          status: "steered",
+        }),
+      );
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+          isSessionActive: () => false,
+        },
+      });
+
+      manager.appendShellProcessCompletionNotice(processRun);
+      manager.appendShellProcessCompletionNotice(processRun);
+
+      const notices = new MessagesRepo(handle.storage.db)
+        .listBySession("sess_main")
+        .filter((message) => message.messageType === "shell_process_completion");
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ role: "user", visibility: "hidden_system" });
+      expect(notices[0]?.payloadJson).toContain("process_shell_1");
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(new ShellProcessRunsRepo(handle.storage.db).getById(processRun.id)).toMatchObject({
+        notificationStatus: "delivered",
+      });
+    });
+  });
+
+  test("starts a fresh hidden run for wake notifications", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const processRun = createSettledShellProcess(handle, { notifyOnExit: "wake" });
+      const submitMessage = vi.fn(
+        async (): Promise<SubmitMessageResult> => ({
+          status: "steered",
+        }),
+      );
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+          isSessionActive: () => false,
+        },
+      });
+
+      manager.appendShellProcessCompletionNotice(processRun);
+
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          sessionId: "sess_main",
+          scenario: "chat",
+          messageType: "shell_process_completion",
+          visibility: "hidden_system",
+          content: expect.stringContaining("process_run_id: process_shell_1"),
+        }),
+      );
+      expect(new ShellProcessRunsRepo(handle.storage.db).getById(processRun.id)).toMatchObject({
+        notificationStatus: "delivered",
+      });
+    });
+  });
+
+  test("defers a wake notification until the source session run is idle", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const processRun = createSettledShellProcess(handle, { notifyOnExit: "wake" });
+      let laneActive = true;
+      const submitMessage = vi.fn(
+        async (): Promise<SubmitMessageResult> => ({
+          status: "steered",
+        }),
+      );
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+          isSessionActive: () => laneActive,
+        },
+      });
+      manager.emitRuntimeEvent({
+        type: "run_started",
+        eventId: "evt_shell_run_started",
+        createdAt: "2026-08-07T00:00:00.000Z",
+        sessionId: "sess_main",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        runId: "run_main_shell",
+        scenario: "chat",
+        modelId: "test-model",
+      });
+
+      manager.appendShellProcessCompletionNotice(processRun);
+      expect(submitMessage).not.toHaveBeenCalled();
+
+      laneActive = false;
+      manager.emitRuntimeEvent({
+        type: "run_completed",
+        eventId: "evt_shell_run_completed",
+        createdAt: "2026-08-07T00:00:01.000Z",
+        sessionId: "sess_main",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        runId: "run_main_shell",
+        scenario: "chat",
+        modelId: "test-model",
+        appendedMessageIds: [],
+        toolExecutions: 0,
+        compactionRequested: false,
+      });
+      await waitForCondition(() => submitMessage.mock.calls.length === 1);
+
+      expect(submitMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageType: "shell_process_completion" }),
+      );
+    });
+  });
+
+  test("does not wake the agent for a process stopped during runtime shutdown", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const processRun = createSettledShellProcess(handle, {
+        notifyOnExit: "wake",
+        exitReason: "runtime_shutdown",
+      });
+      const submitMessage = vi.fn();
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+          isSessionActive: () => false,
+        },
+      });
+
+      manager.appendShellProcessCompletionNotice(processRun);
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(
+        new MessagesRepo(handle.storage.db)
+          .listBySession("sess_main")
+          .some((message) => message.messageType === "shell_process_completion"),
+      ).toBe(true);
+    });
   });
 
   test("delivers delegated approval requests for main-agent-targeted runtime events", async () => {

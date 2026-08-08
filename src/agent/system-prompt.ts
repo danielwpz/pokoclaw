@@ -63,6 +63,7 @@ function buildTaskAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildPermissionsSection(),
     buildBashFullAccessSection({
       ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+      managedProcessesAvailable: false,
     }),
     buildSafetySection(),
     buildAttachmentsSection({
@@ -105,6 +106,7 @@ function buildMainAgentSystemPrompt(input: BuildAgentSystemPromptInput): string 
     buildPermissionsSection(),
     buildBashFullAccessSection({
       ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+      managedProcessesAvailable: true,
     }),
     buildInteractiveUiSection(),
     buildSafetySection(),
@@ -155,6 +157,7 @@ function buildSubagentSystemPrompt(input: BuildAgentSystemPromptInput): string {
     buildPermissionsSection(),
     buildBashFullAccessSection({
       ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
+      managedProcessesAvailable: true,
     }),
     buildInteractiveUiSection(),
     buildSafetySection(),

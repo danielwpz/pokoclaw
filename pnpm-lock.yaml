@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@danielwpz/sandbox-runtime':
-        specifier: 0.0.43-pokeclaw.3
-        version: 0.0.43-pokeclaw.3
+        specifier: github:danielwpz/sandbox-runtime#4f91960933786a87c3d9093e5038c6c7fd02263d
+        version: https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/4f91960933786a87c3d9093e5038c6c7fd02263d
       '@larksuiteoapi/node-sdk':
         specifier: ^1.60.0
         version: 1.60.0
@@ -302,8 +302,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@danielwpz/sandbox-runtime@0.0.43-pokeclaw.3':
-    resolution: {integrity: sha512-yjgXNcr80S3e39qVaNK6MCq9lKelyjY5nlVrUVUBnuzPUVmpg2kt76BRpWI4NZtkUGsLwCqQpCkSq6YZc3H3QQ==}
+  '@danielwpz/sandbox-runtime@https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/4f91960933786a87c3d9093e5038c6c7fd02263d':
+    resolution: {tarball: https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/4f91960933786a87c3d9093e5038c6c7fd02263d}
+    version: 0.0.43-pokeclaw.4
     engines: {node: '>=18.0.0'}
     hasBin: true
 
@@ -1166,8 +1167,8 @@ packages:
   '@types/lodash-es@4.17.12':
     resolution: {integrity: sha512-0NgftHUcV4v34VhXm8QBSftKVXtbkBG3ViCjs6+eJ5a6y6Mi/jiFGPc1sC7QK+9BFhWrURE3EOggmWaSxL9OzQ==}
 
-  '@types/lodash@4.17.24':
-    resolution: {integrity: sha512-gIW7lQLZbue7lRSWEFql49QJJWThrTFFeIMJdp3eH4tKoxm1OvEPg02rm4wCCSHS0cL3/Fizimb35b7k8atwsQ==}
+  '@types/lodash@4.17.25':
+    resolution: {integrity: sha512-+K1NIO8I+F9/wNulfVvu23QYd0Pe9/OCqRrim4NoYIf1VoEDL90Ve4ClzpyqBLc7NpGGWRvYNCKZ1BE/Jpf8dQ==}
 
   '@types/node@25.5.0':
     resolution: {integrity: sha512-jp2P3tQMSxWugkCUKLRPVUpGaL5MVFwF8RDuSRztfwgN1wmqJeMSbKlnEtQqU8UrhTmzEmZdu2I6v2dpp7XIxw==}
@@ -2200,10 +2201,6 @@ packages:
     resolution: {integrity: sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A==}
     engines: {node: '>=8'}
 
-  shell-quote@1.8.3:
-    resolution: {integrity: sha512-ObmnIF4hXNg1BqhnHmgbDETF8dLPCggZWBjkQfhZpbszZnYur5DUljTcCHii5LC3J5E0yeO/1LIMyH+UvHQgyw==}
-    engines: {node: '>= 0.4'}
-
   side-channel-list@1.0.0:
     resolution: {integrity: sha512-FCLHtRD/gnpCiCHEiJLOwdmFP+wzCmDEkc9y7NsYxeF4u7Btsn1ZuwgwJGxImImHicJArLP4R0yX4c2KCrMrTA==}
     engines: {node: '>= 0.4'}
@@ -2976,13 +2973,12 @@ snapshots:
   '@biomejs/cli-win32-x64@2.4.8':
     optional: true
 
-  '@danielwpz/sandbox-runtime@0.0.43-pokeclaw.3':
+  '@danielwpz/sandbox-runtime@https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/4f91960933786a87c3d9093e5038c6c7fd02263d':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       '@types/lodash-es': 4.17.12
       commander: 12.1.0
       lodash-es: 4.18.1
-      shell-quote: 1.8.3
       zod: 3.25.76
 
   '@drizzle-team/brocli@0.10.2': {}
@@ -3754,9 +3750,9 @@ snapshots:
 
   '@types/lodash-es@4.17.12':
     dependencies:
-      '@types/lodash': 4.17.24
+      '@types/lodash': 4.17.25
 
-  '@types/lodash@4.17.24': {}
+  '@types/lodash@4.17.25': {}
 
   '@types/node@25.5.0':
     dependencies:
@@ -4784,8 +4780,6 @@ snapshots:
       shebang-regex: 3.0.0
 
   shebang-regex@3.0.0: {}
-
-  shell-quote@1.8.3: {}
 
   side-channel-list@1.0.0:
     dependencies:

@@ -56,4 +56,5 @@ export { LarkObjectBindingsRepo } from "@/src/storage/repos/lark-object-bindings
 export { type AppendMessageInput, MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 export { PermissionGrantsRepo } from "@/src/storage/repos/permission-grants.repo.js";
 export { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+export { ShellProcessRunsRepo } from "@/src/storage/repos/shell-process-runs.repo.js";
 export { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";

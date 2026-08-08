@@ -1,11 +1,13 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const { executeSandboxedCommandMock } = vi.hoisted(() => ({
+const { executeSandboxedCommandMock, startSandboxedCommandMock } = vi.hoisted(() => ({
   executeSandboxedCommandMock: vi.fn(),
+  startSandboxedCommandMock: vi.fn(),
 }));
 
 import { SandboxPermissionError } from "@danielwpz/sandbox-runtime";
@@ -17,6 +19,8 @@ import {
   buildSandboxConfigForAgent,
   executeSandboxedBash,
   executeUnsandboxedBash,
+  startSandboxedBash,
+  startUnsandboxedBash,
 } from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
 import {
@@ -39,6 +43,7 @@ vi.mock("@danielwpz/sandbox-runtime", async () => {
   return {
     ...actual,
     executeSandboxedCommand: executeSandboxedCommandMock,
+    startSandboxedCommand: startSandboxedCommandMock,
   };
 });
 
@@ -81,6 +86,7 @@ describe("sandbox config compilation", () => {
 
   beforeEach(() => {
     executeSandboxedCommandMock.mockReset();
+    startSandboxedCommandMock.mockReset();
   });
 
   afterEach(async () => {
@@ -330,6 +336,58 @@ describe("sandbox config compilation", () => {
     }
   });
 
+  test("starts a managed sandbox command with live streams and startup-only cancellation", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-managed-sandbox-test-"));
+    grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const terminate = vi.fn(async () => {});
+    startSandboxedCommandMock.mockResolvedValue({
+      pid: 123,
+      stdout,
+      stderr,
+      wait: vi.fn(async () => ({ stdout: "ready\n", stderr: "", exitCode: 0, signal: null })),
+      terminate,
+    });
+    const startupController = new AbortController();
+
+    const managed = await startSandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_2",
+        ownerAgentId: "agent_sub",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+      },
+      command: "node server.js",
+      cwd: tempDir,
+      abortSignal: startupController.signal,
+    });
+
+    expect(managed).toMatchObject({ pid: 123, stdout, stderr });
+    expect(await managed.wait()).toEqual({
+      stdout: "ready\n",
+      stderr: "",
+      exitCode: 0,
+      signal: null,
+    });
+    await managed.terminate({ graceMs: 250 });
+    expect(terminate).toHaveBeenCalledWith({ graceMs: 250 });
+    expect(startSandboxedCommandMock).toHaveBeenCalledWith(
+      "node server.js",
+      expect.objectContaining({
+        binShell: "/bin/bash",
+        cwd: normalizeFilesystemTargetPath(tempDir),
+        abortSignal: startupController.signal,
+        maxOutputChars: 128_000,
+      }),
+    );
+  });
+
   test("executes full-access bash through host spawn with sanitized env", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
@@ -398,6 +456,43 @@ describe("sandbox config compilation", () => {
         process.env.PATH = originalPath;
       }
     }
+  });
+
+  test("starts and terminates a managed full-access process", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-managed-host-test-"));
+    const managed = await startUnsandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_2",
+        ownerAgentId: "agent_sub",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+      },
+      command: 'printf "ready\\n"; while true; do sleep 1; done',
+      cwd: tempDir,
+      abortSignal: new AbortController().signal,
+      platform: "linux",
+    });
+
+    expect(managed.pid).toEqual(expect.any(Number));
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("Managed process did not emit output.")),
+        1_000,
+      );
+      managed.stdout?.once("data", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+    await managed.terminate({ graceMs: 100 });
+    const result = await managed.wait();
+    expect(result.stdout).toContain("ready");
+    expect(result.exitCode === null || result.exitCode !== 0).toBe(true);
   });
 
   test("turns full-access host spawn timeout into a recoverable failure", async () => {

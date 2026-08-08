@@ -45,6 +45,7 @@ import {
   type RuntimeOrchestrationBridge,
 } from "@/src/runtime/orchestration-bridge.js";
 import { RuntimeModeService } from "@/src/runtime/runtime-modes.js";
+import { ShellProcessManager } from "@/src/runtime/shell-process-manager.js";
 import { RuntimeStatusService } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
@@ -120,6 +121,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const bridge = createRuntimeOrchestrationBridge();
   const outboundEventBus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
   const cancel = new SessionRunAbortRegistry();
+  const shellProcesses = new ShellProcessManager(input.storage);
   const control = new RuntimeControlService(cancel, {
     harnessEvents: new HarnessEventsRepo(input.storage),
     sessions,
@@ -159,6 +161,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     runtime: input.config.runtime,
     runtimeModes,
     runtimeControl: bridge.runtimeControl,
+    shellProcesses,
     control,
     emitEvent: bridge.emitRuntimeEvent,
   });
@@ -179,6 +182,9 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       }),
   });
   bridge.attachManager(manager);
+  shellProcesses.attachCompletionHandler((processRun) => {
+    manager.appendShellProcessCompletionNotice(processRun);
+  });
   a2ui = new LarkA2uiService({
     storage: input.storage,
     clients: larkClients,
@@ -336,6 +342,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
           starting = null;
         });
       lark.start();
+      shellProcesses.recoverAfterRestart();
       cron.start();
       meditation.start();
       eventLoopWatchdog.start();
@@ -385,7 +392,9 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
         eventLoopWatchdog.stop();
         unsubscribeMcpConfig();
         a2ui?.shutdown();
+        shellProcesses.beginShutdown();
         await lark.shutdown();
+        await shellProcesses.shutdown();
         await mcp.shutdown();
         meditation.stop();
         cron.stop();

@@ -413,7 +413,6 @@ Use this exact bash argument object on the next retry if full access is warrante
 \`\`\`json
 {
   "command": "git --version",
-  "timeoutSec": 10,
   "sandboxMode": "full_access",
   "justification": "<one short sentence explaining why this exact command needs full access for the current user request>"
 }
@@ -551,7 +550,17 @@ Use this exact bash argument object on the next retry if full access is warrante
       details: {
         code: "invalid_tool_args",
         toolName: "bash",
-        allowedFields: ["command", "cwd", "timeoutSec", "sandboxMode", "justification", "prefix"],
+        allowedFields: [
+          "command",
+          "cwd",
+          "timeoutSec",
+          "background",
+          "yieldMs",
+          "notifyOnExit",
+          "sandboxMode",
+          "justification",
+          "prefix",
+        ],
         issues: expect.arrayContaining([
           expect.objectContaining({ path: "/timeoutMs", message: "Unexpected property" }),
         ]),
@@ -593,7 +602,7 @@ Use this exact bash argument object on the next retry if full access is warrante
         },
       ),
     ).rejects.toThrow(
-      /Allowed fields: command, cwd, timeoutSec, sandboxMode, justification, prefix\./i,
+      /Allowed fields: command, cwd, timeoutSec, background, yieldMs, notifyOnExit, sandboxMode, justification, prefix\./i,
     );
   });
 
@@ -691,6 +700,29 @@ Use this exact bash argument object on the next retry if full access is warrante
     );
   });
 
+  test("preserves managed-process arguments in full-access correction examples", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    const failure = new ToolRegistry([createBashTool()]).execute(
+      "bash",
+      managedBashContext(handle, {}),
+      {
+        command: "node server.js",
+        background: true,
+        timeoutSec: 0,
+        notifyOnExit: "wake",
+        sandboxMode: "full_access",
+      },
+    );
+
+    await expect(failure).rejects.toMatchObject({
+      details: { code: "bash_full_access_requires_justification" },
+    });
+    await expect(failure).rejects.toThrow(/"background": true/);
+    await expect(failure).rejects.toThrow(/"timeoutSec": 0/);
+    await expect(failure).rejects.toThrow(/"notifyOnExit": "wake"/);
+  });
+
   test("rejects bash timeouts over 60 seconds for main chat agents", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);
@@ -726,6 +758,201 @@ Use this exact bash argument object on the next retry if full access is warrante
     } satisfies Partial<ToolFailure>);
 
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("defaults an intentional background service to next-turn notification", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    const running = makeManagedProcessView({ timeoutMs: null });
+    const shellProcesses = {
+      start: vi.fn(async () => running),
+      markHandedOff: vi.fn(() => running),
+    };
+    const tool = createBashTool();
+    const registry = new ToolRegistry([tool]);
+
+    const result = await registry.execute("bash", managedBashContext(handle, shellProcesses), {
+      command: "node server.js",
+      background: true,
+      timeoutSec: 0,
+    });
+
+    expect(
+      tool.getInvocationTimeoutMs?.(managedBashContext(handle, shellProcesses), {
+        command: "node server.js",
+        background: true,
+        timeoutSec: 0,
+      }),
+    ).toBe(20_000);
+    expect(shellProcesses.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerAgentId: "agent_1",
+        sourceSessionId: "sess_1",
+        command: "node server.js",
+        cwd: "/tmp/work",
+        sandboxMode: "sandboxed",
+        timeoutMs: null,
+        notifyOnExit: "next_turn",
+        startHandle: expect.any(Function),
+      }),
+    );
+    expect(shellProcesses.markHandedOff).toHaveBeenCalledWith("process_1", "agent_1");
+    expect(result.details).toMatchObject({
+      processRunId: "process_1",
+      processStatus: "running",
+      backgrounded: true,
+      timeoutMs: null,
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("process_run_id: process_1"),
+    });
+    expect(executeSandboxedBashMock).not.toHaveBeenCalled();
+  });
+
+  test("allows either managed mode to override its notification default", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    for (const args of [
+      {
+        command: "node server.js",
+        background: true,
+        timeoutSec: 0,
+        notifyOnExit: "wake",
+      },
+      {
+        command: "pnpm download-assets",
+        yieldMs: 500,
+        timeoutSec: 120,
+        notifyOnExit: "next_turn",
+      },
+    ] as const) {
+      const running = makeManagedProcessView({ timeoutMs: args.timeoutSec * 1_000 || null });
+      const shellProcesses = {
+        start: vi.fn(async () => running),
+        waitForSettlement: vi.fn(async () => running),
+        markHandedOff: vi.fn(() => running),
+      };
+
+      await new ToolRegistry([createBashTool()]).execute(
+        "bash",
+        managedBashContext(handle, shellProcesses),
+        args,
+      );
+
+      expect(shellProcesses.start).toHaveBeenCalledWith(
+        expect.objectContaining({ notifyOnExit: args.notifyOnExit }),
+      );
+      expect(shellProcesses.markHandedOff).toHaveBeenCalledWith("process_1", "agent_1");
+    }
+  });
+
+  test("waits for yieldMs and returns a normal bash result when the command finishes", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    const running = makeManagedProcessView({ timeoutMs: 120_000 });
+    const completed = makeManagedProcessView({
+      timeoutMs: 120_000,
+      status: "completed",
+      exitCode: 0,
+      chunks: [{ cursorStart: 0, cursorEnd: 6, stream: "stdout", text: "built\n" }],
+    });
+    const shellProcesses = {
+      start: vi.fn(async () => running),
+      waitForSettlement: vi.fn(async () => completed),
+      suppressCompletionNotice: vi.fn(() => completed),
+    };
+
+    const result = await new ToolRegistry([createBashTool()]).execute(
+      "bash",
+      managedBashContext(handle, shellProcesses),
+      { command: "pnpm build", yieldMs: 500, timeoutSec: 120 },
+    );
+
+    expect(shellProcesses.start).toHaveBeenCalledWith(
+      expect.objectContaining({ notifyOnExit: "wake" }),
+    );
+    expect(shellProcesses.waitForSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "process_1", ownerAgentId: "agent_1", waitMs: 500 }),
+    );
+    expect(shellProcesses.suppressCompletionNotice).toHaveBeenCalledWith("process_1", "agent_1");
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("built"),
+    });
+    expect(result.details).toMatchObject({
+      processStatus: "completed",
+      backgrounded: false,
+      exitCode: 0,
+    });
+  });
+
+  test("preserves a structured sandbox failure discovered after managed settlement", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    const running = makeManagedProcessView({ timeoutMs: 120_000 });
+    const permissionError = toolRecoverableError("Write access is missing.", {
+      code: "permission_denied",
+      requestable: true,
+    });
+    const failed = {
+      ...makeManagedProcessView({ timeoutMs: 120_000, status: "failed", exitCode: 1 }),
+      settlementError: permissionError,
+    };
+    const shellProcesses = {
+      start: vi.fn(async () => running),
+      waitForSettlement: vi.fn(async () => failed),
+      suppressCompletionNotice: vi.fn(() => failed),
+    };
+
+    await expect(
+      new ToolRegistry([createBashTool()]).execute(
+        "bash",
+        managedBashContext(handle, shellProcesses),
+        { command: "touch blocked.txt", yieldMs: 500, timeoutSec: 120 },
+      ),
+    ).rejects.toBe(permissionError);
+  });
+
+  test("returns corrective errors for ambiguous or unsafe managed arguments", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+    const registry = new ToolRegistry([createBashTool()]);
+    const context = managedBashContext(handle, {});
+
+    await expect(
+      registry.execute("bash", context, {
+        command: "node server.js",
+        background: true,
+        yieldMs: 1_000,
+      }),
+    ).rejects.toMatchObject({ details: { code: "bash_managed_mode_conflict" } });
+    await expect(
+      registry.execute("bash", context, { command: "node server.js", timeoutSec: 0 }),
+    ).rejects.toMatchObject({
+      details: { code: "bash_zero_timeout_requires_managed_process" },
+    });
+    await expect(
+      registry.execute("bash", context, {
+        command: "echo done",
+        notifyOnExit: "wake",
+      }),
+    ).rejects.toMatchObject({ details: { code: "bash_notify_requires_managed_process" } });
+    await expect(
+      registry.execute("bash", context, {
+        command: "node server.js",
+        background: true,
+        notifyOnExit: "none",
+      }),
+    ).rejects.toMatchObject({ details: { code: "invalid_tool_args" } });
+    await expect(
+      registry.execute(
+        "bash",
+        { ...context, sessionPurpose: "task" },
+        { command: "node server.js", background: true },
+      ),
+    ).rejects.toMatchObject({ details: { code: "bash_managed_process_not_available" } });
   });
 
   test("rejects full-access-only arguments in sandboxed mode", async () => {
@@ -1827,30 +2054,32 @@ Use this exact bash argument object on the next retry if full access is warrante
 
     const registry = new ToolRegistry([createBashTool()]);
 
-    await expect(
-      registry.execute(
-        "bash",
-        {
-          sessionId: "sess_1",
-          conversationId: "conv_1",
-          ownerAgentId: "agent_1",
-          cwd: "/tmp/work",
-          securityConfig: DEFAULT_CONFIG.security,
-          storage: handle.storage.db,
-        },
-        {
-          command: "sleep 60 &",
-        },
-      ),
-    ).rejects.toMatchObject({
+    const failure = registry.execute(
+      "bash",
+      {
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        ownerAgentId: "agent_1",
+        cwd: "/tmp/work",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+      },
+      {
+        command: "sleep 60 &",
+      },
+    );
+    await expect(failure).rejects.toMatchObject({
       name: "ToolFailure",
       kind: "recoverable_error",
-      message:
-        "Background shell jobs are not supported yet (unmanaged '&' background operator). Run the command in the foreground.",
+      message: expect.stringContaining("Remove the shell background syntax"),
       details: {
         code: "bash_background_not_supported",
       },
     } satisfies Partial<ToolFailure>);
+    await expect(failure).rejects.toThrow(/"background": true/);
+    await expect(failure).rejects.toThrow(
+      /same command with unmanaged '&' background operator removed/,
+    );
 
     expect(executeSandboxedBashMock).not.toHaveBeenCalled();
   });
@@ -2284,4 +2513,74 @@ Use this exact bash argument object on the next retry if full access is warrante
 
 function escapeXml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function managedBashContext(handle: TestDatabaseHandle, shellProcesses: object) {
+  return {
+    sessionId: "sess_1",
+    conversationId: "conv_1",
+    ownerAgentId: "agent_1",
+    agentKind: "sub",
+    sessionPurpose: "chat",
+    cwd: "/tmp/work",
+    securityConfig: DEFAULT_CONFIG.security,
+    storage: handle.storage.db,
+    shellProcesses: shellProcesses as never,
+  };
+}
+
+function makeManagedProcessView(input: {
+  timeoutMs: number | null;
+  status?: "running" | "completed" | "failed";
+  exitCode?: number | null;
+  chunks?: Array<{
+    cursorStart: number;
+    cursorEnd: number;
+    stream: "stdout" | "stderr";
+    text: string;
+  }>;
+}) {
+  const chunks = input.chunks ?? [];
+  return {
+    processRun: {
+      id: "process_1",
+      ownerAgentId: "agent_1",
+      sourceSessionId: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      toolCallId: "tool_1",
+      sourceRunId: "run_1",
+      commandPreview: "node server.js",
+      commandHash: "hash",
+      cwd: "/tmp/work",
+      sandboxMode: "sandboxed",
+      status: input.status ?? "running",
+      pid: 42,
+      timeoutMs: input.timeoutMs,
+      notifyOnExit: "next_turn",
+      startedAt: "2026-08-07T00:00:00.000Z",
+      handedOffAt: input.status == null ? "2026-08-07T00:00:01.000Z" : null,
+      finishedAt: input.status === "completed" ? "2026-08-07T00:00:02.000Z" : null,
+      durationMs: input.status === "completed" ? 2_000 : null,
+      exitCode: input.exitCode ?? null,
+      exitSignal: null,
+      exitReason: input.status === "completed" ? "process_exit" : null,
+      errorText: null,
+      stdoutChars: chunks
+        .filter((chunk) => chunk.stream === "stdout")
+        .reduce((total, chunk) => total + chunk.text.length, 0),
+      stderrChars: chunks
+        .filter((chunk) => chunk.stream === "stderr")
+        .reduce((total, chunk) => total + chunk.text.length, 0),
+      outputTail: "",
+      outputTruncated: false,
+      notificationStatus: "none",
+    },
+    output: {
+      chunks,
+      nextCursor: chunks.at(-1)?.cursorEnd ?? 0,
+      truncatedBefore: false,
+      outputTruncated: false,
+    },
+  };
 }

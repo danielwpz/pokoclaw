@@ -1835,6 +1835,63 @@ describe("lark run state", () => {
     expect(JSON.stringify(toolPanel)).not.toContain('"content": [');
   });
 
+  test("renders the managed process id and status for handed-off bash calls", () => {
+    let state = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_bash_managed_1",
+        createdAt: "2026-08-07T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_bash_managed_1",
+        toolName: "bash",
+        args: { command: "npm run dev", background: true, timeoutSec: 0 },
+      }),
+    );
+    state = reduceLarkRunState(
+      state,
+      makeEnvelope({
+        type: "tool_call_completed",
+        eventId: "evt_bash_managed_2",
+        createdAt: "2026-08-07T00:00:01.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_bash_managed_1",
+        toolName: "bash",
+        messageId: "tool_msg_managed_1",
+        result: {
+          content: [{ type: "text", text: "<shell_process>running</shell_process>" }],
+          details: {
+            command: "npm run dev",
+            cwd: "/tmp/work",
+            timeoutMs: null,
+            exitCode: null,
+            signal: null,
+            processRunId: "process_123",
+            processStatus: "running",
+            backgrounded: true,
+          },
+        },
+      }),
+    );
+
+    const card = renderLarkRunCard(state);
+    const elements = ((card.body as { elements: unknown[] }).elements ?? []) as Array<
+      Record<string, unknown>
+    >;
+    const toolPanel = elements.find((element) => element.tag === "collapsible_panel");
+    expect(JSON.stringify(toolPanel)).toContain("**Managed process**");
+    expect(JSON.stringify(toolPanel)).toContain("process_123");
+    expect(JSON.stringify(toolPanel)).toContain("running");
+  });
+
   test("normalizes multiline bash command summaries into one line in the title", () => {
     const state = reduceLarkRunState(
       null,

@@ -72,6 +72,7 @@ export interface WorkspaceRuntimePromptContext {
 
 export interface BashFullAccessPromptContext {
   shellInfo?: RuntimeShellInfo | null;
+  managedProcessesAvailable?: boolean;
 }
 
 export interface SubagentProfilePromptContext {
@@ -138,7 +139,7 @@ export function buildApprovalAgentIdentitySection(): string {
 export function buildMainAgentOperatingModelSection(): string {
   return renderSection("Operating Model", [
     "- Stay responsive as the user's single entrypoint and protect your own bandwidth for new requests, interruptions, and coordination.",
-    "- Bash commands are capped at 60 seconds to keep you responsive for new requests and interruptions. For longer-running work, use background_task (unattended one-shot) or create_subagent (interactive, multi-step).",
+    "- Keep ordinary bash calls short. For a single command that may outlive the initial wait, use bash `yieldMs`; for an intentional service, use bash `background: true`. Use background_task for independent agent work and create_subagent for an interactive multi-step workstream.",
     "- Default to concise, mobile-friendly replies. Many users read on phones with limited screen space, so keep routine answers compact and easy to scan.",
     "- If the user explicitly asks for a deep explanation, a technical analysis, or a thorough walkthrough, then be as complete as the task requires.",
     "- You can and should handle casual conversation, quick answers, short local exploration, and top-level coordination in the main chat.",
@@ -338,6 +339,7 @@ export function buildPermissionsSection(): string {
 }
 
 export function buildBashFullAccessSection(input: BashFullAccessPromptContext = {}): string {
+  const managedProcessesAvailable = input.managedProcessesAvailable === true;
   return renderSection("Bash Tool", [
     "- Bash has two execution modes: `sandboxed` and `full_access`.",
     "- `sandboxed` is the default mode.",
@@ -389,7 +391,8 @@ export function buildBashFullAccessSection(input: BashFullAccessPromptContext = 
     "- Example: a one-off setup or diagnostic command should omit `prefix`.",
     "- Not suitable: `npm run dev | tee out.log`",
     "- Not suitable: `curl ... && bash ...`",
-    ...buildBackgroundShellGuidance(input.shellInfo),
+    ...buildBackgroundShellGuidance(input.shellInfo, managedProcessesAvailable),
+    ...buildManagedShellProcessGuidance(managedProcessesAvailable),
     ...buildWindowsShellSyntaxLines(input.shellInfo),
     "",
     "- Decision flow:",
@@ -445,9 +448,9 @@ export function buildBashFullAccessSection(input: BashFullAccessPromptContext = 
     "- Example: reusable approval for a simple stable command family",
     "```json",
     "{",
-    '  "command": "npm run dev",',
+    '  "command": "npm config get registry",',
     '  "sandboxMode": "full_access",',
-    '  "justification": "Need to start the requested dev server.",',
+    '  "justification": "Need to inspect the requested npm configuration outside the sandbox.",',
     '  "prefix": ["npm"]',
     "}",
     "```",
@@ -491,13 +494,76 @@ function buildWindowsShellSyntaxLines(shellInfo: RuntimeShellInfo | null | undef
   ];
 }
 
-function buildBackgroundShellGuidance(shellInfo: RuntimeShellInfo | null | undefined): string[] {
+function buildBackgroundShellGuidance(
+  shellInfo: RuntimeShellInfo | null | undefined,
+  managedProcessesAvailable: boolean,
+): string[] {
+  if (!managedProcessesAvailable) {
+    return [
+      "- Managed shell processes are not available in this session. Run commands synchronously and do not use native shell backgrounding.",
+    ];
+  }
   if (shellInfo?.isWindows === true) {
-    return ["- Background shell jobs are not supported; run commands in the foreground."];
+    return [
+      "- Do not use unmanaged Windows background jobs such as `START /B`, `Start-Job`, or a trailing PowerShell `&`. Use bash `background` or `yieldMs` so Pokoclaw owns the process.",
+    ];
   }
 
   return [
-    "- Background shell operators are not supported; do not use unmanaged backgrounding like &, nohup, setsid, or disown.",
+    "- Do not use unmanaged backgrounding like &, nohup, setsid, or disown. Use bash `background` or `yieldMs` so Pokoclaw owns the process tree.",
+  ];
+}
+
+function buildManagedShellProcessGuidance(available: boolean): string[] {
+  if (!available) {
+    return [];
+  }
+
+  return [
+    "",
+    "- Managed process modes are explicit; Pokoclaw does not guess whether a command is a service or merely slow.",
+    "- Use `background: true` only when the command is intentionally long-lived, such as a development server, watcher, or worker.",
+    "- Use `yieldMs` when the command should normally finish, but you only want to wait briefly before allowing it to continue under Pokoclaw management.",
+    "- Do not combine `background` and `yieldMs`.",
+    "- `timeoutSec` is the total process lifetime, not just the initial wait. The managed default is 1800 seconds. When it expires, Pokoclaw terminates the whole managed process tree and records status `timed_out`.",
+    "- Use `timeoutSec: 0` only for a deliberately unlimited managed service. Ordinary synchronous calls cannot use zero.",
+    "- A handed-off process continues after the bash tool call and agent run return. Pokoclaw stops attached managed processes during runtime shutdown; after an unclean restart, their records become `lost`.",
+    "- Bash returns `process_run_id` when a process is handed off. Use the `process` tool to list it, poll incremental output, inspect logs, or kill the whole process tree.",
+    "- `notifyOnExit` controls what happens only if a handed-off process later exits. With `yieldMs`, it defaults to `wake`; with `background: true`, it defaults to `next_turn`. You may explicitly override either default.",
+    "- Use `wake` when the process result is still needed to finish the current user request, when the user asked to be notified, or when you promised to follow up. It proactively starts a fresh agent run after the source session becomes idle, even if the user sends nothing else.",
+    "- Use `next_turn` when no immediate follow-up is needed, especially for an intentionally long-lived service after successful startup. It adds hidden completion context to the next user-driven agent turn and does not start a run by itself.",
+    "- Decide from the user's intent and your obligation to follow up, not merely from how long the process may run. If the request is ambiguous, the mode default is the safe baseline: finite yielded work wakes; intentional background services wait for the next turn.",
+    "- A managed shell process is one command execution. `background_task` is different: it runs independent multi-tool agent work. Do not use a shell process as a substitute for scheduling, delegation, or interactive agent work.",
+    "",
+    "- Example: a build that may take longer than the initial wait; the default `wake` will continue the current request when it finishes",
+    "```json",
+    '{"command":"pnpm build","yieldMs":10000,"timeoutSec":1800}',
+    "```",
+    "",
+    "- Example: finite work whose result is not needed until the user returns; override the yielded default",
+    "```json",
+    '{"command":"pnpm download-assets","yieldMs":10000,"timeoutSec":1800,"notifyOnExit":"next_turn"}',
+    "```",
+    "",
+    "- Example: an intentional development server; the default `next_turn` avoids an unsolicited run when it eventually exits",
+    "```json",
+    '{"command":"pnpm dev","background":true,"timeoutSec":0}',
+    "```",
+    "",
+    "- Example: a development server the user explicitly asked you to monitor; override the background default",
+    "```json",
+    '{"command":"pnpm dev","background":true,"timeoutSec":0,"notifyOnExit":"wake"}',
+    "```",
+    "",
+    "- Example: read only new output after a previous poll",
+    "```json",
+    '{"action":"poll","processRunId":"<process_run_id>","afterCursor":1234}',
+    "```",
+    "",
+    "- Example: stop the server and all managed descendants",
+    "```json",
+    '{"action":"kill","processRunId":"<process_run_id>"}',
+    "```",
   ];
 }
 

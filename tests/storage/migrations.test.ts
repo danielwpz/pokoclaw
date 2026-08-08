@@ -280,8 +280,8 @@ describe("storage migrations", () => {
       const result = runStorageMigrations(sqlite, { now: () => FIXED_NOW });
 
       expect(result).toEqual({
-        latestVersion: 3,
-        newlyAppliedVersions: [2, 3],
+        latestVersion: 4,
+        newlyAppliedVersions: [2, 3, 4],
         stampedBaseline: true,
       });
       expect(listLedgerRows(sqlite)).toEqual([
@@ -294,6 +294,11 @@ describe("storage migrations", () => {
         {
           version: 3,
           name: "a2ui_surface_publications",
+          applied_at: "2026-04-27T00:00:00.000Z",
+        },
+        {
+          version: 4,
+          name: "shell_process_runs",
           applied_at: "2026-04-27T00:00:00.000Z",
         },
       ]);

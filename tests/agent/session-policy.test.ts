@@ -140,4 +140,19 @@ describe("session policy", () => {
       }),
     ).toBe(false);
   });
+
+  test("allows process only in main or sub chat sessions", () => {
+    expect(
+      isToolAllowedForSession({ purpose: "chat", agentKind: "main", toolName: "process" }),
+    ).toBe(true);
+    expect(
+      isToolAllowedForSession({ purpose: "chat", agentKind: "sub", toolName: "process" }),
+    ).toBe(true);
+    expect(
+      isToolAllowedForSession({ purpose: "task", agentKind: "sub", toolName: "process" }),
+    ).toBe(false);
+    expect(
+      isToolAllowedForSession({ purpose: "approval", agentKind: "main", toolName: "process" }),
+    ).toBe(false);
+  });
 });

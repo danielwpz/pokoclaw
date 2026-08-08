@@ -67,6 +67,7 @@ describe("storage db bootstrap", () => {
       expect(tableNames).toContain("cron_jobs");
       expect(tableNames).toContain("task_runs");
       expect(tableNames).toContain("task_workstreams");
+      expect(tableNames).toContain("shell_process_runs");
       expect(tableNames).toContain("approval_ledger");
       expect(tableNames).toContain("agent_permission_grants");
       expect(tableNames).toContain("auth_events");
@@ -91,13 +92,14 @@ describe("storage db bootstrap", () => {
         { version: 1, name: "init" },
         { version: 2, name: "agent_runtime_modes" },
         { version: 3, name: "a2ui_surface_publications" },
+        { version: 4, name: "shell_process_runs" },
       ]);
     } finally {
       await destroyTestDatabase(handle);
     }
   });
 
-  test("applies a2ui migration to an existing v2 database", async () => {
+  test("applies later migrations to an existing v2 database", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-a2ui-migration-"));
     const legacyMigrationsDir = path.join(tmpDir, "legacy-migrations");
     const dbPath = path.join(tmpDir, "pokoclaw.db");
@@ -129,12 +131,17 @@ describe("storage db bootstrap", () => {
           { version: 1, name: "init" },
           { version: 2, name: "agent_runtime_modes" },
           { version: 3, name: "a2ui_surface_publications" },
+          { version: 4, name: "shell_process_runs" },
         ]);
 
         const table = upgradedStorage.sqlite
           .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
           .get("a2ui_surface_publications");
         expect(table).toEqual({ name: "a2ui_surface_publications" });
+        const processTable = upgradedStorage.sqlite
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get("shell_process_runs");
+        expect(processTable).toEqual({ name: "shell_process_runs" });
       } finally {
         upgradedStorage.close();
       }

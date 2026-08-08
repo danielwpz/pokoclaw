@@ -190,6 +190,8 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
   const timeoutMs = firstNumber(args?.timeoutMs, details?.timeoutMs);
   const exitCode = firstNumber(details?.exitCode);
   const signal = firstString(details?.signal);
+  const processRunId = firstString(details?.processRunId);
+  const processStatus = firstString(details?.processStatus);
   const stdout = extractBashText(result, "stdout");
   const stderr = extractBashText(result, "stderr");
 
@@ -209,6 +211,10 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
       maxLines: 8,
     })}\n\`\`\``;
     return content;
+  }
+
+  if (processRunId != null) {
+    content += `\n\n**Managed process**\n- process_run_id: \`${processRunId}\`\n- status: \`${processStatus ?? "unknown"}\``;
   }
 
   if (exitCode != null || signal != null) {
@@ -305,6 +311,8 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
       return summarizePermissionReview(args);
     case "bash":
       return summarizeBash(args);
+    case "process":
+      return summarizeProcess(args);
     case "read":
     case "write":
     case "edit":
@@ -317,6 +325,10 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
     default:
       return summarizeGeneric(args);
   }
+}
+
+function summarizeProcess(args: Record<string, unknown> | null): string {
+  return summarizeParts(readString(args?.action), readString(args?.processRunId));
 }
 
 function summarizeFailedToolError(errorMessage: string): string {

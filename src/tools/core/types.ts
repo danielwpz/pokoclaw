@@ -4,6 +4,7 @@ import { Check, Clone, Default } from "@sinclair/typebox/value";
 import type { SecurityConfig } from "@/src/config/schema.js";
 import type { RunLiveObservabilitySnapshot } from "@/src/runtime/run-observability.js";
 import type { RuntimeShellInfo } from "@/src/runtime/shell-info.js";
+import type { ShellProcessManager } from "@/src/runtime/shell-process-manager.js";
 import type { PermissionScope } from "@/src/security/scope.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import type { ToolInputSchema } from "@/src/tools/core/schema.js";
@@ -39,6 +40,7 @@ export interface ToolExecutionContext {
   taskRunId?: string;
   approvalState?: ToolExecutionApprovalState;
   runtimeControl?: ToolRuntimeControl;
+  shellProcesses?: ShellProcessManager;
   shellInfo?: RuntimeShellInfo | null;
 }
 
