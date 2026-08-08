@@ -64,7 +64,7 @@
     "vitest": "^4.1.0"
   },
   "dependencies": {
-    "@danielwpz/sandbox-runtime": "github:danielwpz/sandbox-runtime#4f91960933786a87c3d9093e5038c6c7fd02263d",
+    "@danielwpz/sandbox-runtime": "github:danielwpz/sandbox-runtime#b6a02bd9bc2bb3777b42d3587c2cb8c07fa3bd5b",
     "@larksuiteoapi/node-sdk": "^1.60.0",
     "@mariozechner/pi-agent-core": "0.70.2",
     "@mariozechner/pi-ai": "0.70.2",

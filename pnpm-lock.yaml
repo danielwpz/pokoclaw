@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@danielwpz/sandbox-runtime':
-        specifier: github:danielwpz/sandbox-runtime#4f91960933786a87c3d9093e5038c6c7fd02263d
-        version: https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/4f91960933786a87c3d9093e5038c6c7fd02263d
+        specifier: github:danielwpz/sandbox-runtime#b6a02bd9bc2bb3777b42d3587c2cb8c07fa3bd5b
+        version: https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/b6a02bd9bc2bb3777b42d3587c2cb8c07fa3bd5b
       '@larksuiteoapi/node-sdk':
         specifier: ^1.60.0
         version: 1.60.0
@@ -302,8 +302,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@danielwpz/sandbox-runtime@https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/4f91960933786a87c3d9093e5038c6c7fd02263d':
-    resolution: {tarball: https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/4f91960933786a87c3d9093e5038c6c7fd02263d}
+  '@danielwpz/sandbox-runtime@https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/b6a02bd9bc2bb3777b42d3587c2cb8c07fa3bd5b':
+    resolution: {tarball: https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/b6a02bd9bc2bb3777b42d3587c2cb8c07fa3bd5b}
     version: 0.0.43-pokeclaw.4
     engines: {node: '>=18.0.0'}
     hasBin: true
@@ -2973,7 +2973,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.4.8':
     optional: true
 
-  '@danielwpz/sandbox-runtime@https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/4f91960933786a87c3d9093e5038c6c7fd02263d':
+  '@danielwpz/sandbox-runtime@https://codeload.github.com/danielwpz/sandbox-runtime/tar.gz/b6a02bd9bc2bb3777b42d3587c2cb8c07fa3bd5b':
     dependencies:
       '@pondwader/socks5-server': 1.0.10
       '@types/lodash-es': 4.17.12
