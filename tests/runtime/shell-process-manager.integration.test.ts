@@ -41,20 +41,24 @@ describe("managed bash process integration", () => {
         '2026-08-07T00:00:00.000Z', '2026-08-07T00:00:00.000Z'
       );
     `);
-    await SandboxManager.initialize({
-      filesystem: {
-        readMode: "deny_only",
-        denyRead: [],
-        allowRead: [],
-        allowWrite: [],
-        denyWrite: [],
+    await SandboxManager.initialize(
+      {
+        filesystem: {
+          readMode: "deny_only",
+          denyRead: [],
+          allowRead: [],
+          allowWrite: [],
+          denyWrite: [],
+        },
+        network: {
+          mode: "deny_only",
+          allowedDomains: [],
+          deniedDomains: [],
+        },
       },
-      network: {
-        mode: "deny_only",
-        allowedDomains: [],
-        deniedDomains: [],
-      },
-    });
+      undefined,
+      true,
+    );
 
     manager = new ShellProcessManager(database.storage.db);
     const registry = new ToolRegistry([createBashTool(), createProcessTool()]);
@@ -178,6 +182,23 @@ describe("managed bash process integration", () => {
         },
       },
     });
+
+    if (process.platform === "darwin") {
+      await expect(
+        registry.execute("bash", context, {
+          command: "touch /private/tmp/pokoclaw-managed-permission-integration-probe",
+          yieldMs: 1_000,
+          timeoutSec: 5,
+        }),
+      ).rejects.toMatchObject({
+        name: "ToolFailure",
+        kind: "recoverable_error",
+        details: {
+          code: "permission_denied",
+          requestable: true,
+        },
+      });
+    }
   });
 });
 

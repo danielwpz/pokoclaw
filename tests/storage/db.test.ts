@@ -93,6 +93,7 @@ describe("storage db bootstrap", () => {
         { version: 2, name: "agent_runtime_modes" },
         { version: 3, name: "a2ui_surface_publications" },
         { version: 4, name: "shell_process_runs" },
+        { version: 5, name: "shell_process_output_chunks" },
       ]);
     } finally {
       await destroyTestDatabase(handle);
@@ -132,6 +133,7 @@ describe("storage db bootstrap", () => {
           { version: 2, name: "agent_runtime_modes" },
           { version: 3, name: "a2ui_surface_publications" },
           { version: 4, name: "shell_process_runs" },
+          { version: 5, name: "shell_process_output_chunks" },
         ]);
 
         const table = upgradedStorage.sqlite
@@ -142,6 +144,10 @@ describe("storage db bootstrap", () => {
           .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
           .get("shell_process_runs");
         expect(processTable).toEqual({ name: "shell_process_runs" });
+        const processColumns = upgradedStorage.sqlite
+          .prepare("PRAGMA table_info(shell_process_runs)")
+          .all() as Array<{ name: string }>;
+        expect(processColumns.map((column) => column.name)).toContain("output_chunks_json");
       } finally {
         upgradedStorage.close();
       }

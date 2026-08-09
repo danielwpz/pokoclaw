@@ -36,6 +36,7 @@ export interface SettleShellProcessRunInput {
   stdoutChars: number;
   stderrChars: number;
   outputTail: string;
+  outputChunksJson?: string | null;
   outputTruncated: boolean;
   notificationStatus: "none" | "pending" | "suppressed";
 }
@@ -71,6 +72,7 @@ export class ShellProcessRunsRepo {
       stdoutChars: 0,
       stderrChars: 0,
       outputTail: "",
+      outputChunksJson: null,
       outputTruncated: false,
       notificationStatus: "none",
     };
@@ -149,6 +151,9 @@ export class ShellProcessRunsRepo {
         stdoutChars: input.stdoutChars,
         stderrChars: input.stderrChars,
         outputTail: input.outputTail,
+        ...(input.outputChunksJson === undefined
+          ? {}
+          : { outputChunksJson: input.outputChunksJson }),
         outputTruncated: input.outputTruncated,
         notificationStatus: input.notificationStatus,
       })

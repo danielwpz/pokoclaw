@@ -307,6 +307,34 @@ describe("AgentManager", () => {
     });
   });
 
+  test("downgrades a recovered wake notification to next-turn context", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const processRun = createSettledShellProcess(handle, { notifyOnExit: "wake" });
+      const submitMessage = vi.fn();
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+          isSessionActive: () => false,
+        },
+      });
+
+      manager.appendShellProcessCompletionNotice(processRun, { allowWake: false });
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(
+        new MessagesRepo(handle.storage.db)
+          .listBySession("sess_main")
+          .filter((message) => message.messageType === "shell_process_completion"),
+      ).toHaveLength(1);
+      expect(new ShellProcessRunsRepo(handle.storage.db).getById(processRun.id)).toMatchObject({
+        notificationStatus: "delivered",
+      });
+    });
+  });
+
   test("defers a wake notification until the source session run is idle", async () => {
     await withHandle(async (handle) => {
       seedFixture(handle);

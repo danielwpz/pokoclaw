@@ -442,6 +442,7 @@ describe("agent system prompt", () => {
       "With `yieldMs`, it defaults to `wake`; with `background: true`, it defaults to `next_turn`",
     );
     expect(prompt).toContain("the mode default is the safe baseline");
+    expect(prompt).toContain("Runtime shutdown or restart never triggers a `wake` Agent run");
     expect(prompt).toContain('"yieldMs":10000,"timeoutSec":1800,"notifyOnExit":"next_turn"');
     expect(prompt).toContain('"background":true,"timeoutSec":0');
     expect(prompt).toContain('"background":true,"timeoutSec":0,"notifyOnExit":"wake"');

@@ -182,8 +182,8 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
       }),
   });
   bridge.attachManager(manager);
-  shellProcesses.attachCompletionHandler((processRun) => {
-    manager.appendShellProcessCompletionNotice(processRun);
+  shellProcesses.attachCompletionHandler((processRun, delivery) => {
+    manager.appendShellProcessCompletionNotice(processRun, delivery);
   });
   a2ui = new LarkA2uiService({
     storage: input.storage,

@@ -528,6 +528,7 @@ function buildManagedShellProcessGuidance(available: boolean): string[] {
     "- `timeoutSec` is the total process lifetime, not just the initial wait. The managed default is 1800 seconds. When it expires, Pokoclaw terminates the whole managed process tree and records status `timed_out`.",
     "- Use `timeoutSec: 0` only for a deliberately unlimited managed service. Ordinary synchronous calls cannot use zero.",
     "- A handed-off process continues after the bash tool call and agent run return. Pokoclaw stops attached managed processes during runtime shutdown; after an unclean restart, their records become `lost`.",
+    "- Runtime shutdown or restart never triggers a `wake` Agent run. Any interrupted or still-pending process notice is kept as hidden context for the next user-driven turn.",
     "- Bash returns `process_run_id` when a process is handed off. Use the `process` tool to list it, poll incremental output, inspect logs, or kill the whole process tree.",
     "- `notifyOnExit` controls what happens only if a handed-off process later exits. With `yieldMs`, it defaults to `wake`; with `background: true`, it defaults to `next_turn`. You may explicitly override either default.",
     "- Use `wake` when the process result is still needed to finish the current user request, when the user asked to be notified, or when you promised to follow up. It proactively starts a fresh agent run after the source session becomes idle, even if the user sends nothing else.",

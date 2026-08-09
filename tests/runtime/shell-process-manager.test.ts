@@ -87,6 +87,16 @@ describe("ShellProcessManager", () => {
     expect(notices).toEqual([started.processRun.id]);
 
     const coldManager = new ShellProcessManager(requireDatabase().storage.db);
+    const completeOutput = coldManager.get({
+      id: started.processRun.id,
+      ownerAgentId: "agent_1",
+      afterCursor: 0,
+    });
+    expect(completeOutput.output.chunks.map((chunk) => [chunk.stream, chunk.text])).toEqual([
+      ["stdout", "ready\n"],
+      ["stderr", "warning\n"],
+      ["stdout", "done\n"],
+    ]);
     const incremental = coldManager.get({
       id: started.processRun.id,
       ownerAgentId: "agent_1",
@@ -215,6 +225,37 @@ describe("ShellProcessManager", () => {
     ).toMatchObject({ status: "killed", exitReason: "runtime_shutdown" });
   });
 
+  test("settles quietly when the owning conversation is deleted before process exit", async () => {
+    const manager = await prepare();
+    const controlled = createControlledHandle();
+    const notices: string[] = [];
+    const unhandledRejections: unknown[] = [];
+    const captureUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on("unhandledRejection", captureUnhandledRejection);
+
+    try {
+      const started = await manager.start(makeStartInput(() => Promise.resolve(controlled.handle)));
+      manager.markHandedOff(started.processRun.id, "agent_1");
+      manager.attachCompletionHandler((run) => notices.push(run.id));
+
+      requireDatabase()
+        .storage.sqlite.prepare("DELETE FROM conversations WHERE id = ?")
+        .run("conv_1");
+      controlled.resolve({ stdout: "", stderr: "", exitCode: 0, signal: null });
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(
+        new ShellProcessRunsRepo(requireDatabase().storage.db).getById(started.processRun.id),
+      ).toBeNull();
+      expect(notices).toEqual([]);
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", captureUnhandledRejection);
+      await manager.shutdown();
+    }
+  });
+
   test("marks active records lost after restart without signaling a reused pid", async () => {
     const manager = await prepare();
     const controlled = createControlledHandle();
@@ -222,6 +263,10 @@ describe("ShellProcessManager", () => {
     manager.markHandedOff(started.processRun.id, "agent_1");
 
     const recovered = new ShellProcessManager(requireDatabase().storage.db);
+    const deliveries: Array<{ processRunId: string; allowWake: boolean }> = [];
+    recovered.attachCompletionHandler((processRun, delivery) => {
+      deliveries.push({ processRunId: processRun.id, allowWake: delivery.allowWake });
+    });
     recovered.recoverAfterRestart();
     const record = new ShellProcessRunsRepo(requireDatabase().storage.db).getById(
       started.processRun.id,
@@ -232,6 +277,7 @@ describe("ShellProcessManager", () => {
       notificationStatus: "pending",
     });
     expect(controlled.terminate).not.toHaveBeenCalled();
+    expect(deliveries).toEqual([{ processRunId: started.processRun.id, allowWake: false }]);
 
     controlled.resolve({ stdout: "", stderr: "", exitCode: 0, signal: null });
     await manager.shutdown();

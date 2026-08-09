@@ -6,6 +6,7 @@ import {
   executeSandboxedCommand,
   isSandboxPermissionError,
   type SandboxExecResult,
+  SandboxManager,
   type SandboxPermissionIssue,
   type SandboxRuntimeConfig,
   startSandboxedCommand,
@@ -81,6 +82,8 @@ const POWERSHELL_EXIT_CODE_RELAY_SUFFIX = [
 ].join("\n");
 const MANAGED_BASH_CAPTURE_CHARS = 128_000;
 const MANAGED_BASH_TERMINATION_GRACE_MS = 5_000;
+const MANAGED_MACOS_VIOLATION_POLL_INTERVAL_MS = 50;
+const MANAGED_MACOS_VIOLATION_TIMEOUT_MS = 1_500;
 const BLOCKED_ENV_VAR_NAMES = new Set<string>([
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
@@ -229,6 +232,10 @@ export async function startSandboxedBash(
     command: truncateForLog(input.command),
   });
 
+  const macOsViolationCursor =
+    (input.platform ?? process.platform) === "darwin"
+      ? SandboxManager.getSandboxViolationStore().getTotalCount()
+      : null;
   const handle = await startSandboxedCommand(input.command, {
     binShell: DEFAULT_BASH_BINARY,
     customConfig: sandboxConfig,
@@ -245,7 +252,37 @@ export async function startSandboxedBash(
     terminate: (options) => handle.terminate(options),
     wait: async () => {
       try {
-        return await handle.wait();
+        const result = await handle.wait();
+        if (
+          macOsViolationCursor != null &&
+          result.exitCode !== 0 &&
+          looksLikeSandboxPermissionStderr(result.stderr)
+        ) {
+          // sandbox-runtime performs its own short late-event poll. Keep a
+          // consumer-side grace window because macOS unified-log delivery can
+          // exceed that window under load, especially during parallel runs.
+          const issues = await pollManagedMacOsPermissionIssues(
+            input.command,
+            macOsViolationCursor,
+          );
+          if (issues.length > 0) {
+            throw translateSandboxPermissionError({
+              context: input.context,
+              ownerAgentId,
+              security,
+              error: {
+                issues,
+                stdout: result.stdout,
+                stderr: annotateManagedSandboxStderr(result.stderr, issues),
+                exitCode: result.exitCode,
+                signal: result.signal,
+              },
+              cwd,
+              command: input.command,
+            });
+          }
+        }
+        return result;
       } catch (error) {
         if (isSandboxPermissionError(error)) {
           throw translateSandboxPermissionError({
@@ -261,6 +298,63 @@ export async function startSandboxedBash(
       }
     },
   };
+}
+
+async function pollManagedMacOsPermissionIssues(
+  command: string,
+  afterSequence: number,
+): Promise<SandboxPermissionIssue[]> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= MANAGED_MACOS_VIOLATION_TIMEOUT_MS) {
+    const issues = SandboxManager.getSandboxViolationStore()
+      .getViolationsForCommandSince(command, afterSequence)
+      .flatMap((violation) => parseManagedMacOsPermissionIssue(violation.line));
+    if (issues.length > 0) {
+      return issues;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, MANAGED_MACOS_VIOLATION_POLL_INTERVAL_MS);
+    });
+  }
+  return [];
+}
+
+function parseManagedMacOsPermissionIssue(line: string): SandboxPermissionIssue[] {
+  const match = line.match(/\b(?<operation>file-(?:read|write)[a-z-]*)\s+(?<path>\/.+)/i);
+  const operation = match?.groups?.operation;
+  const targetPath = match?.groups?.path;
+  if (operation == null || targetPath == null) {
+    return [];
+  }
+  if (operation.startsWith("file-read")) {
+    return [{ kind: "fs.read", path: targetPath, detail: operation, raw: line }];
+  }
+  if (operation.startsWith("file-write")) {
+    return [{ kind: "fs.write", path: targetPath, detail: operation, raw: line }];
+  }
+  return [];
+}
+
+function looksLikeSandboxPermissionStderr(stderr: string): boolean {
+  return /operation not permitted|permission denied/i.test(stderr);
+}
+
+function annotateManagedSandboxStderr(
+  stderr: string,
+  issues: readonly SandboxPermissionIssue[],
+): string {
+  const rawViolations = issues.flatMap((issue) => (issue.raw == null ? [] : [issue.raw]));
+  if (rawViolations.length === 0) {
+    return stderr;
+  }
+  const separator = stderr.length > 0 && !stderr.endsWith("\n") ? "\n" : "";
+  return (
+    stderr +
+    separator +
+    "<sandbox_violations>\n" +
+    rawViolations.join("\n") +
+    "\n</sandbox_violations>"
+  );
 }
 
 export async function executeUnsandboxedBash(

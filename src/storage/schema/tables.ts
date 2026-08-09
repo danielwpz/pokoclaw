@@ -470,6 +470,7 @@ export const shellProcessRuns = sqliteTable(
     stdoutChars: integer("stdout_chars").notNull().default(0),
     stderrChars: integer("stderr_chars").notNull().default(0),
     outputTail: text("output_tail").notNull().default(""),
+    outputChunksJson: text("output_chunks_json"),
     outputTruncated: integer("output_truncated", { mode: "boolean" }).notNull().default(false),
     notificationStatus: text("notification_status").notNull().default("none"),
   },

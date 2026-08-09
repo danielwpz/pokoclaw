@@ -160,6 +160,7 @@ function makeView(): ShellProcessView {
       stdoutChars: 304,
       stderrChars: 0,
       outputTail: "",
+      outputChunksJson: null,
       outputTruncated: false,
       notificationStatus: "none",
     },

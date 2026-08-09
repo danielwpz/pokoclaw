@@ -156,7 +156,10 @@ export class AgentManager {
     return this.deps.ingress.submitMessage(input);
   }
 
-  appendShellProcessCompletionNotice(processRun: ShellProcessRun): void {
+  appendShellProcessCompletionNotice(
+    processRun: ShellProcessRun,
+    delivery: { allowWake?: boolean } = {},
+  ): void {
     const repo = new ShellProcessRunsRepo(this.deps.storage);
     const storedProcessRun = repo.getById(processRun.id);
     if (storedProcessRun == null || storedProcessRun.notificationStatus !== "pending") {
@@ -188,6 +191,7 @@ export class AgentManager {
       content: renderShellProcessCompletionNotice(storedProcessRun),
       createdAt: finishedAt,
       wake:
+        delivery.allowWake !== false &&
         storedProcessRun.notifyOnExit === "wake" &&
         storedProcessRun.exitReason !== "runtime_shutdown" &&
         storedProcessRun.exitReason !== "runtime_restart",

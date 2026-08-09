@@ -10,7 +10,7 @@ const { executeSandboxedCommandMock, startSandboxedCommandMock } = vi.hoisted(()
   startSandboxedCommandMock: vi.fn(),
 }));
 
-import { SandboxPermissionError } from "@danielwpz/sandbox-runtime";
+import { SandboxManager, SandboxPermissionError } from "@danielwpz/sandbox-runtime";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { normalizeFilesystemTargetPath } from "@/src/security/permissions.js";
@@ -90,6 +90,7 @@ describe("sandbox config compilation", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (handle != null) {
       await destroyTestDatabase(handle);
       handle = null;
@@ -386,6 +387,113 @@ describe("sandbox config compilation", () => {
         maxOutputChars: 128_000,
       }),
     );
+  });
+
+  test("translates a managed sandbox permission failure discovered by wait", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-managed-sandbox-test-"));
+    grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
+    const blockedPath = normalizeFilesystemTargetPath(path.join(tempDir, "blocked.txt"));
+    startSandboxedCommandMock.mockResolvedValue({
+      pid: 123,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      wait: vi.fn(async () => {
+        throw new SandboxPermissionError({
+          issues: [{ kind: "fs.write", path: blockedPath }],
+          stdout: "",
+          stderr: "operation not permitted",
+          exitCode: 1,
+          signal: null,
+        });
+      }),
+      terminate: vi.fn(async () => {}),
+    });
+
+    const managed = await startSandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_2",
+        ownerAgentId: "agent_sub",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+      },
+      command: "touch blocked.txt",
+      cwd: tempDir,
+      abortSignal: new AbortController().signal,
+    });
+
+    await expect(managed.wait()).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        failedToolCallId: "tool_1",
+      },
+    } satisfies Partial<ToolFailure>);
+  });
+
+  test("re-polls late macOS violations when managed wait resolves a permission failure", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedAgentFixture(handle);
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "pokoclaw-managed-sandbox-test-"));
+    grantFilesystemScope(handle, "agent_sub", { kind: "fs.read", path: `${tempDir}/**` });
+    const command = "touch blocked.txt";
+    const blockedPath = normalizeFilesystemTargetPath(path.join(tempDir, "blocked.txt"));
+    const violationStore = SandboxManager.getSandboxViolationStore();
+    vi.spyOn(violationStore, "getTotalCount").mockReturnValue(41);
+    const getViolationsForCommandSince = vi
+      .spyOn(violationStore, "getViolationsForCommandSince")
+      .mockReturnValue([
+        {
+          line: `Sandbox: bash deny file-write-data ${blockedPath}`,
+          command,
+          timestamp: new Date(),
+        },
+      ]);
+    startSandboxedCommandMock.mockResolvedValue({
+      pid: 123,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      wait: vi.fn(async () => ({
+        stdout: "",
+        stderr: "touch: blocked.txt: Operation not permitted",
+        exitCode: 1,
+        signal: null,
+      })),
+      terminate: vi.fn(async () => {}),
+    });
+
+    const managed = await startSandboxedBash({
+      context: {
+        sessionId: "sess_1",
+        conversationId: "conv_2",
+        ownerAgentId: "agent_sub",
+        cwd: tempDir,
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: handle.storage.db,
+        toolCallId: "tool_1",
+      },
+      command,
+      cwd: tempDir,
+      abortSignal: new AbortController().signal,
+      platform: "darwin",
+    });
+
+    await expect(managed.wait()).rejects.toMatchObject({
+      name: "ToolFailure",
+      kind: "recoverable_error",
+      details: {
+        code: "permission_denied",
+        requestable: true,
+        failedToolCallId: "tool_1",
+      },
+    } satisfies Partial<ToolFailure>);
+    expect(getViolationsForCommandSince).toHaveBeenCalledWith(command, 41);
   });
 
   test("executes full-access bash through host spawn with sanitized env", async () => {

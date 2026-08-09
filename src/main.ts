@@ -103,20 +103,24 @@ export async function main(): Promise<void> {
 
 async function initializeSandboxRuntime(securityConfig: AppConfig["security"]): Promise<void> {
   const systemPolicy = buildSystemPolicy({ security: securityConfig });
-  await SandboxManager.initialize({
-    filesystem: {
-      readMode: "deny_only",
-      denyRead: [],
-      allowRead: [],
-      allowWrite: [],
-      denyWrite: [],
+  await SandboxManager.initialize(
+    {
+      filesystem: {
+        readMode: "deny_only",
+        denyRead: [],
+        allowRead: [],
+        allowWrite: [],
+        denyWrite: [],
+      },
+      network: {
+        mode: "deny_only",
+        allowedDomains: [],
+        deniedDomains: systemPolicy.network.hardDenyHosts,
+      },
     },
-    network: {
-      mode: "deny_only",
-      allowedDomains: [],
-      deniedDomains: systemPolicy.network.hardDenyHosts,
-    },
-  });
+    undefined,
+    true,
+  );
   logger.info("sandbox runtime initialized", {
     networkHardDenyHosts: systemPolicy.network.hardDenyHosts.length,
   });

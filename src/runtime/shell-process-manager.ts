@@ -79,7 +79,14 @@ export interface ShellProcessView {
   settlementError?: unknown;
 }
 
-export type ShellProcessCompletionHandler = (processRun: ShellProcessRun) => void;
+export interface ShellProcessCompletionDelivery {
+  allowWake: boolean;
+}
+
+export type ShellProcessCompletionHandler = (
+  processRun: ShellProcessRun,
+  delivery: ShellProcessCompletionDelivery,
+) => void;
 
 interface LiveShellProcess {
   id: string;
@@ -90,7 +97,7 @@ interface LiveShellProcess {
   timeoutHandle: ReturnType<typeof setTimeout> | null;
   requestedExitReason: ShellProcessExitReason | null;
   notificationSuppressed: boolean;
-  settlement: Promise<ShellProcessRun>;
+  settlement: Promise<ShellProcessRun | null>;
 }
 
 type ShellProcessStartupCancellationReason = "timeout" | "runtime_shutdown";
@@ -147,15 +154,19 @@ export class ShellProcessManager {
           processRun.handedOffAt == null || processRun.notifyOnExit === "none" ? "none" : "pending",
       });
     }
-    this.dispatchPendingNotifications();
+    // Restart recovery may happen months after the original work. Preserve the
+    // completion as next-turn context, but never start an Agent run from boot.
+    this.dispatchPendingNotifications({ allowWake: false });
   }
 
-  dispatchPendingNotifications(): void {
+  dispatchPendingNotifications(
+    delivery: ShellProcessCompletionDelivery = { allowWake: true },
+  ): void {
     if (this.completionHandler == null) {
       return;
     }
     for (const processRun of this.repo.listPendingNotifications()) {
-      this.deliverCompletion(processRun);
+      this.deliverCompletion(processRun, delivery);
     }
   }
 
@@ -263,6 +274,11 @@ export class ShellProcessManager {
       await handle.terminate({ graceMs: DEFAULT_TERMINATION_GRACE_MS }).catch(() => {});
       const result = await handle.wait().catch(() => null);
       const finishedAt = new Date();
+      const capturedOutput = buildOutputViewFromResult(result);
+      const persistedOutput = readOutputViewAfter(
+        capturedOutput,
+        Math.max(0, capturedOutput.nextCursor - MAX_PERSISTED_OUTPUT_CHARS),
+      );
       this.repo.settle({
         id,
         status: "killed",
@@ -274,9 +290,8 @@ export class ShellProcessManager {
         errorText: "Pokoclaw began shutting down while this managed process was starting.",
         stdoutChars: result?.stdout.length ?? 0,
         stderrChars: result?.stderr.length ?? 0,
-        outputTail: `${result?.stdout ?? ""}${result?.stderr ?? ""}`.slice(
-          -MAX_PERSISTED_OUTPUT_CHARS,
-        ),
+        outputTail: renderOutputChunkText(persistedOutput.chunks),
+        outputChunksJson: serializePersistedOutputChunks(persistedOutput.chunks),
         outputTruncated:
           (result?.stdout.length ?? 0) + (result?.stderr.length ?? 0) > MAX_PERSISTED_OUTPUT_CHARS,
         notificationStatus: "none",
@@ -302,9 +317,20 @@ export class ShellProcessManager {
       timeoutHandle: null,
       requestedExitReason: null,
       notificationSuppressed: false,
-      settlement: new Promise<ShellProcessRun>(() => {}),
+      settlement: new Promise<ShellProcessRun | null>(() => {}),
     };
     live.settlement = this.settleWhenFinished(live);
+    // Handed-off processes are intentionally fire-and-forget. Keep their
+    // settlement failures observable without allowing an unhandled rejection
+    // to terminate the always-on runtime; explicit waiters still observe the
+    // original promise rejection.
+    void live.settlement.catch((error: unknown) => {
+      logger.error("managed shell process settlement failed", {
+        processRunId: live.id,
+        ownerAgentId: live.ownerAgentId,
+        error: renderErrorText(error),
+      });
+    });
     this.active.set(id, live);
 
     if (input.timeoutMs != null) {
@@ -459,7 +485,7 @@ export class ShellProcessManager {
     }
   }
 
-  private async settleWhenFinished(live: LiveShellProcess): Promise<ShellProcessRun> {
+  private async settleWhenFinished(live: LiveShellProcess): Promise<ShellProcessRun | null> {
     let result: ShellCommandResult | null = null;
     let waitError: unknown = null;
     try {
@@ -496,32 +522,48 @@ export class ShellProcessManager {
       }
       this.settlementOutputs.delete(oldest);
     }
-    const processBeforeSettlement = this.repo.getById(live.id);
-    this.repo.settle({
-      id: live.id,
-      status,
-      finishedAt,
-      durationMs: Math.max(0, finishedAt.getTime() - live.startedAtMs),
-      exitCode: result?.exitCode ?? null,
-      exitSignal: result?.signal ?? null,
-      exitReason: live.requestedExitReason ?? (waitError == null ? "process_exit" : "wait_failed"),
-      errorText: waitError == null ? null : renderErrorText(waitError),
-      stdoutChars: outputSnapshot.stdoutChars,
-      stderrChars: outputSnapshot.stderrChars,
-      outputTail: outputSnapshot.renderTail(MAX_PERSISTED_OUTPUT_CHARS),
-      outputTruncated:
-        outputSnapshot.outputTruncated ||
-        outputSnapshot.stdoutChars + outputSnapshot.stderrChars > MAX_PERSISTED_OUTPUT_CHARS,
-      notificationStatus: live.notificationSuppressed
-        ? "suppressed"
-        : processBeforeSettlement?.handedOffAt == null
-          ? "none"
-          : "pending",
-    });
-    this.active.delete(live.id);
-    const settled = this.repo.getById(live.id);
+    const totalOutputChars = outputSnapshot.stdoutChars + outputSnapshot.stderrChars;
+    const persistedOutput = live.output.readAfter(
+      Math.max(0, totalOutputChars - MAX_PERSISTED_OUTPUT_CHARS),
+    );
+    let settled: ShellProcessRun | null = null;
+    try {
+      const processBeforeSettlement = this.repo.getById(live.id);
+      this.repo.settle({
+        id: live.id,
+        status,
+        finishedAt,
+        durationMs: Math.max(0, finishedAt.getTime() - live.startedAtMs),
+        exitCode: result?.exitCode ?? null,
+        exitSignal: result?.signal ?? null,
+        exitReason:
+          live.requestedExitReason ?? (waitError == null ? "process_exit" : "wait_failed"),
+        errorText: waitError == null ? null : renderErrorText(waitError),
+        stdoutChars: outputSnapshot.stdoutChars,
+        stderrChars: outputSnapshot.stderrChars,
+        outputTail: renderOutputChunkText(persistedOutput.chunks),
+        outputChunksJson: serializePersistedOutputChunks(persistedOutput.chunks),
+        outputTruncated:
+          outputSnapshot.outputTruncated || totalOutputChars > MAX_PERSISTED_OUTPUT_CHARS,
+        notificationStatus: live.notificationSuppressed
+          ? "suppressed"
+          : processBeforeSettlement?.handedOffAt == null
+            ? "none"
+            : "pending",
+      });
+      settled = this.repo.getById(live.id);
+    } finally {
+      this.active.delete(live.id);
+    }
     if (settled == null) {
-      throw new Error(`Settled shell process record disappeared: ${live.id}`);
+      this.settlementOutputs.delete(live.id);
+      this.settlementErrors.delete(live.id);
+      logger.warn("managed shell process record disappeared before settlement", {
+        processRunId: live.id,
+        ownerAgentId: live.ownerAgentId,
+        status,
+      });
+      return null;
     }
 
     logger.info("managed shell process settled", {
@@ -535,14 +577,17 @@ export class ShellProcessManager {
       outputTruncated: settled.outputTruncated,
     });
     if (settled.notificationStatus === "pending") {
-      this.deliverCompletion(settled);
+      this.deliverCompletion(settled, { allowWake: true });
     }
     return settled;
   }
 
-  private deliverCompletion(processRun: ShellProcessRun): void {
+  private deliverCompletion(
+    processRun: ShellProcessRun,
+    delivery: ShellProcessCompletionDelivery,
+  ): void {
     try {
-      this.completionHandler?.(processRun);
+      this.completionHandler?.(processRun, delivery);
     } catch (error) {
       logger.error("managed shell process completion handler failed", {
         processRunId: processRun.id,
@@ -703,11 +748,112 @@ function readOutputViewAfter(
   };
 }
 
+function buildOutputViewFromResult(result: ShellCommandResult | null): ShellProcessOutputView {
+  if (result == null) {
+    return {
+      chunks: [],
+      nextCursor: 0,
+      truncatedBefore: false,
+      outputTruncated: false,
+    };
+  }
+
+  const chunks: ShellProcessOutputChunk[] = [];
+  let cursor = 0;
+  if (result.stdout.length > 0) {
+    chunks.push({
+      cursorStart: cursor,
+      cursorEnd: cursor + result.stdout.length,
+      stream: "stdout",
+      text: result.stdout,
+    });
+    cursor += result.stdout.length;
+  }
+  if (result.stderr.length > 0) {
+    chunks.push({
+      cursorStart: cursor,
+      cursorEnd: cursor + result.stderr.length,
+      stream: "stderr",
+      text: result.stderr,
+    });
+    cursor += result.stderr.length;
+  }
+  return {
+    chunks,
+    nextCursor: cursor,
+    truncatedBefore: false,
+    outputTruncated: false,
+  };
+}
+
+function renderOutputChunkText(chunks: readonly ShellProcessOutputChunk[]): string {
+  return chunks.map((chunk) => chunk.text).join("");
+}
+
+function serializePersistedOutputChunks(chunks: readonly ShellProcessOutputChunk[]): string {
+  return JSON.stringify({ version: 1, chunks });
+}
+
+function parsePersistedOutputChunks(value: string | null): ShellProcessOutputChunk[] | null {
+  if (value == null) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as {
+      version?: unknown;
+      chunks?: unknown;
+    };
+    if (parsed.version !== 1 || !Array.isArray(parsed.chunks)) {
+      return null;
+    }
+
+    const chunks: ShellProcessOutputChunk[] = [];
+    let previousCursorEnd = -1;
+    for (const candidate of parsed.chunks) {
+      if (candidate == null || typeof candidate !== "object") {
+        return null;
+      }
+      const chunk = candidate as Partial<ShellProcessOutputChunk>;
+      if (
+        !Number.isSafeInteger(chunk.cursorStart) ||
+        !Number.isSafeInteger(chunk.cursorEnd) ||
+        (chunk.cursorStart as number) < 0 ||
+        (chunk.cursorEnd as number) < (chunk.cursorStart as number) ||
+        (chunk.cursorStart as number) < previousCursorEnd ||
+        (chunk.stream !== "stdout" && chunk.stream !== "stderr") ||
+        typeof chunk.text !== "string" ||
+        chunk.text.length !== (chunk.cursorEnd as number) - (chunk.cursorStart as number)
+      ) {
+        return null;
+      }
+      chunks.push(chunk as ShellProcessOutputChunk);
+      previousCursorEnd = chunk.cursorEnd as number;
+    }
+    return chunks;
+  } catch {
+    return null;
+  }
+}
+
 function readPersistedOutputAfter(
   processRun: ShellProcessRun,
   afterCursor: number,
 ): ShellProcessOutputView {
   const nextCursor = processRun.stdoutChars + processRun.stderrChars;
+  const structuredChunks = parsePersistedOutputChunks(processRun.outputChunksJson);
+  if (structuredChunks != null) {
+    return readOutputViewAfter(
+      {
+        chunks: structuredChunks,
+        nextCursor,
+        truncatedBefore: false,
+        outputTruncated: processRun.outputTruncated,
+      },
+      afterCursor,
+    );
+  }
+
   const tailStart = Math.max(0, nextCursor - processRun.outputTail.length);
   const normalizedCursor = Math.max(0, Math.floor(afterCursor));
   const cursorStart = Math.max(tailStart, Math.min(normalizedCursor, nextCursor));
