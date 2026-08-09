@@ -18,6 +18,7 @@ import type {
   meditationState,
   messages,
   sessions,
+  shellProcessRuns,
   subagentCreationRequests,
   taskRuns,
   taskWorkstreams,
@@ -61,6 +62,9 @@ export type NewCronJob = InferInsertModel<typeof cronJobs>;
 
 export type TaskRun = InferSelectModel<typeof taskRuns>;
 export type NewTaskRun = InferInsertModel<typeof taskRuns>;
+
+export type ShellProcessRun = InferSelectModel<typeof shellProcessRuns>;
+export type NewShellProcessRun = InferInsertModel<typeof shellProcessRuns>;
 
 export type MeditationState = InferSelectModel<typeof meditationState>;
 export type NewMeditationState = InferInsertModel<typeof meditationState>;

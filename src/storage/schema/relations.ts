@@ -17,6 +17,7 @@ import {
   larkObjectBindings,
   messages,
   sessions,
+  shellProcessRuns,
   subagentCreationRequests,
   taskRuns,
   taskWorkstreams,
@@ -40,6 +41,7 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   sessions: many(sessions),
   taskWorkstreams: many(taskWorkstreams),
   taskRuns: many(taskRuns),
+  shellProcessRuns: many(shellProcessRuns),
   harnessEvents: many(harnessEvents),
   subagentCreationRequests: many(subagentCreationRequests),
 }));
@@ -56,6 +58,7 @@ export const conversationBranchesRelations = relations(conversationBranches, ({ 
   sessions: many(sessions),
   taskWorkstreams: many(taskWorkstreams),
   taskRuns: many(taskRuns),
+  shellProcessRuns: many(shellProcessRuns),
   harnessEvents: many(harnessEvents),
 }));
 
@@ -101,6 +104,7 @@ export const agentsRelations = relations(agents, ({ one, many }) => ({
   taskWorkstreams: many(taskWorkstreams),
   cronJobs: many(cronJobs),
   taskRuns: many(taskRuns),
+  shellProcessRuns: many(shellProcessRuns),
   approvals: many(approvalLedger),
   permissionGrants: many(agentPermissionGrants),
   runtimeMode: one(agentRuntimeModes, {
@@ -174,6 +178,7 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   approvals: many(approvalLedger),
   subagentCreationRequests: many(subagentCreationRequests),
   harnessEvents: many(harnessEvents),
+  shellProcessRuns: many(shellProcessRuns),
 }));
 
 export const messagesRelations = relations(messages, ({ one }) => ({
@@ -232,6 +237,25 @@ export const taskRunsRelations = relations(taskRuns, ({ one }) => ({
   cronJob: one(cronJobs, {
     fields: [taskRuns.cronJobId],
     references: [cronJobs.id],
+  }),
+}));
+
+export const shellProcessRunsRelations = relations(shellProcessRuns, ({ one }) => ({
+  ownerAgent: one(agents, {
+    fields: [shellProcessRuns.ownerAgentId],
+    references: [agents.id],
+  }),
+  sourceSession: one(sessions, {
+    fields: [shellProcessRuns.sourceSessionId],
+    references: [sessions.id],
+  }),
+  conversation: one(conversations, {
+    fields: [shellProcessRuns.conversationId],
+    references: [conversations.id],
+  }),
+  branch: one(conversationBranches, {
+    fields: [shellProcessRuns.branchId],
+    references: [conversationBranches.id],
   }),
 }));
 

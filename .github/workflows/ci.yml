@@ -82,6 +82,7 @@ jobs:
             bubblewrap \
             ca-certificates \
             ripgrep \
+            socat \
             zsh
 
       - name: Enable bubblewrap namespace support

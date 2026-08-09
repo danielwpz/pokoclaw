@@ -6,14 +6,17 @@ import {
   executeSandboxedCommand,
   isSandboxPermissionError,
   type SandboxExecResult,
+  SandboxManager,
   type SandboxPermissionIssue,
   type SandboxRuntimeConfig,
+  startSandboxedCommand,
 } from "@danielwpz/sandbox-runtime";
 import {
   detectRuntimeShellInfo,
   getDefaultBashExecutable,
   type RuntimeShellInfo,
 } from "@/src/runtime/shell-info.js";
+import type { ShellCommandHandle } from "@/src/runtime/shell-process-manager.js";
 import {
   checkFilesystemPermission,
   expandExactDirectoryReadChildren,
@@ -52,6 +55,15 @@ export interface ExecuteUnsandboxedBashInput extends ExecuteSandboxedBashInput {
   shellInfo?: RuntimeShellInfo;
 }
 
+export interface StartManagedBashInput {
+  context: ToolExecutionContext;
+  command: string;
+  cwd?: string;
+  abortSignal: AbortSignal;
+  platform?: NodeJS.Platform;
+  shellInfo?: RuntimeShellInfo;
+}
+
 export interface SandboxedBashResult extends SandboxExecResult {
   command: string;
   cwd: string;
@@ -68,6 +80,10 @@ const POWERSHELL_EXIT_CODE_RELAY_SUFFIX = [
   "if (-not $global:__pokoclaw_success) { exit 1 }",
   "exit 0",
 ].join("\n");
+const MANAGED_BASH_CAPTURE_CHARS = 128_000;
+const MANAGED_BASH_TERMINATION_GRACE_MS = 5_000;
+const MANAGED_MACOS_VIOLATION_POLL_INTERVAL_MS = 50;
+const MANAGED_MACOS_VIOLATION_TIMEOUT_MS = 1_500;
 const BLOCKED_ENV_VAR_NAMES = new Set<string>([
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
@@ -188,6 +204,159 @@ export async function executeSandboxedBash(
   });
 }
 
+export async function startSandboxedBash(
+  input: StartManagedBashInput,
+): Promise<ShellCommandHandle> {
+  const ownerAgentId = requireOwnerAgentId(input.context);
+  const systemPolicy = buildSystemPolicy({ security: input.context.securityConfig });
+  const security = new SecurityService(input.context.storage, systemPolicy);
+  const cwd = await resolveSandboxCwd({
+    context: input.context,
+    security,
+    ...(input.cwd === undefined ? {} : { requestedCwd: input.cwd }),
+  });
+  const sandboxConfig = buildSandboxConfigForAgent({
+    storage: input.context.storage,
+    ownerAgentId,
+    systemPolicy,
+    ...(input.context.approvalState?.ephemeralPermissionScopes == null
+      ? {}
+      : { ephemeralScopes: input.context.approvalState.ephemeralPermissionScopes }),
+  });
+
+  logger.info("managed bash sandbox start", {
+    sessionId: input.context.sessionId,
+    ownerAgentId,
+    toolCallId: input.context.toolCallId,
+    cwd: shortenPathForLog(cwd),
+    command: truncateForLog(input.command),
+  });
+
+  const macOsViolationCursor =
+    (input.platform ?? process.platform) === "darwin"
+      ? SandboxManager.getSandboxViolationStore().getTotalCount()
+      : null;
+  const handle = await startSandboxedCommand(input.command, {
+    binShell: DEFAULT_BASH_BINARY,
+    customConfig: sandboxConfig,
+    abortSignal: input.abortSignal,
+    cwd,
+    env: sanitizeSandboxEnv(process.env),
+    maxOutputChars: MANAGED_BASH_CAPTURE_CHARS,
+  });
+
+  return {
+    pid: handle.pid,
+    stdout: handle.stdout,
+    stderr: handle.stderr,
+    terminate: (options) => handle.terminate(options),
+    wait: async () => {
+      try {
+        const result = await handle.wait();
+        if (
+          macOsViolationCursor != null &&
+          result.exitCode !== 0 &&
+          looksLikeSandboxPermissionStderr(result.stderr)
+        ) {
+          // sandbox-runtime performs its own short late-event poll. Keep a
+          // consumer-side grace window because macOS unified-log delivery can
+          // exceed that window under load, especially during parallel runs.
+          const issues = await pollManagedMacOsPermissionIssues(
+            input.command,
+            macOsViolationCursor,
+          );
+          if (issues.length > 0) {
+            throw translateSandboxPermissionError({
+              context: input.context,
+              ownerAgentId,
+              security,
+              error: {
+                issues,
+                stdout: result.stdout,
+                stderr: annotateManagedSandboxStderr(result.stderr, issues),
+                exitCode: result.exitCode,
+                signal: result.signal,
+              },
+              cwd,
+              command: input.command,
+            });
+          }
+        }
+        return result;
+      } catch (error) {
+        if (isSandboxPermissionError(error)) {
+          throw translateSandboxPermissionError({
+            context: input.context,
+            ownerAgentId,
+            security,
+            error,
+            cwd,
+            command: input.command,
+          });
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+async function pollManagedMacOsPermissionIssues(
+  command: string,
+  afterSequence: number,
+): Promise<SandboxPermissionIssue[]> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= MANAGED_MACOS_VIOLATION_TIMEOUT_MS) {
+    const issues = SandboxManager.getSandboxViolationStore()
+      .getViolationsForCommandSince(command, afterSequence)
+      .flatMap((violation) => parseManagedMacOsPermissionIssue(violation.line));
+    if (issues.length > 0) {
+      return issues;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, MANAGED_MACOS_VIOLATION_POLL_INTERVAL_MS);
+    });
+  }
+  return [];
+}
+
+function parseManagedMacOsPermissionIssue(line: string): SandboxPermissionIssue[] {
+  const match = line.match(/\b(?<operation>file-(?:read|write)[a-z-]*)\s+(?<path>\/.+)/i);
+  const operation = match?.groups?.operation;
+  const targetPath = match?.groups?.path;
+  if (operation == null || targetPath == null) {
+    return [];
+  }
+  if (operation.startsWith("file-read")) {
+    return [{ kind: "fs.read", path: targetPath, detail: operation, raw: line }];
+  }
+  if (operation.startsWith("file-write")) {
+    return [{ kind: "fs.write", path: targetPath, detail: operation, raw: line }];
+  }
+  return [];
+}
+
+function looksLikeSandboxPermissionStderr(stderr: string): boolean {
+  return /operation not permitted|permission denied/i.test(stderr);
+}
+
+function annotateManagedSandboxStderr(
+  stderr: string,
+  issues: readonly SandboxPermissionIssue[],
+): string {
+  const rawViolations = issues.flatMap((issue) => (issue.raw == null ? [] : [issue.raw]));
+  if (rawViolations.length === 0) {
+    return stderr;
+  }
+  const separator = stderr.length > 0 && !stderr.endsWith("\n") ? "\n" : "";
+  return (
+    stderr +
+    separator +
+    "<sandbox_violations>\n" +
+    rawViolations.join("\n") +
+    "\n</sandbox_violations>"
+  );
+}
+
 export async function executeUnsandboxedBash(
   input: ExecuteUnsandboxedBashInput,
 ): Promise<SandboxedBashResult> {
@@ -261,6 +430,32 @@ export async function executeUnsandboxedBash(
   } finally {
     clearTimeout(timeoutHandle);
   }
+}
+
+export async function startUnsandboxedBash(
+  input: StartManagedBashInput,
+): Promise<ShellCommandHandle> {
+  const ownerAgentId = requireOwnerAgentId(input.context);
+  const cwd = await resolveUnsandboxedBashCwd({
+    context: input.context,
+    ...(input.cwd === undefined ? {} : { requestedCwd: input.cwd }),
+  });
+
+  logger.info("managed bash full-access start", {
+    sessionId: input.context.sessionId,
+    ownerAgentId,
+    toolCallId: input.context.toolCallId,
+    cwd: shortenPathForLog(cwd),
+    command: truncateForLog(input.command),
+  });
+
+  return startManagedUnsandboxedShellCommand({
+    command: input.command,
+    cwd,
+    abortSignal: input.abortSignal,
+    platform: input.platform ?? process.platform,
+    ...(input.shellInfo == null ? {} : { shellInfo: input.shellInfo }),
+  });
 }
 
 async function executeBashInSandbox(input: {
@@ -808,6 +1003,183 @@ async function runUnsandboxedShellCommand(input: {
       );
     });
   });
+}
+
+function startManagedUnsandboxedShellCommand(input: {
+  command: string;
+  cwd: string;
+  abortSignal: AbortSignal;
+  platform: NodeJS.Platform;
+  shellInfo?: RuntimeShellInfo;
+}): ShellCommandHandle {
+  if (input.abortSignal.aborted) {
+    throw createAbortError();
+  }
+
+  const shell =
+    input.shellInfo?.commandShell ??
+    detectRuntimeShellInfo({ platform: input.platform }).commandShell;
+  const command =
+    shell.syntax === "powershell" ? buildPowerShellCommand(input.command) : input.command;
+  const childEnv = sanitizeSandboxEnv(process.env);
+  if (input.platform === "win32") {
+    childEnv.SHELL = shell.executable;
+  }
+  const child = spawn(shell.executable, [...shell.args, command], {
+    cwd: input.cwd,
+    env: childEnv,
+    detached: input.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: input.platform === "win32",
+  });
+
+  let closed = false;
+  const closePromise = new Promise<void>((resolve) => {
+    child.once("close", () => {
+      closed = true;
+      resolve();
+    });
+  });
+  const waitForClose = async (timeoutMs: number): Promise<boolean> => {
+    if (closed) {
+      return true;
+    }
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const result = await Promise.race([
+      closePromise.then(() => true),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+    if (timeout != null) {
+      clearTimeout(timeout);
+    }
+    return result;
+  };
+
+  let terminationPromise: Promise<void> | null = null;
+  const waitPromise = new Promise<SandboxExecResult>((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let aborting = false;
+
+    const finish = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      input.abortSignal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => {
+      aborting = true;
+      void terminateManagedUnsandboxedTree({
+        child,
+        platform: input.platform,
+        graceMs: 0,
+        waitForClose,
+      }).finally(() => finish(() => reject(createAbortError())));
+    };
+
+    input.abortSignal.addEventListener("abort", onAbort, { once: true });
+    if (input.abortSignal.aborted) {
+      onAbort();
+      return;
+    }
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      stdout = appendOutputTail(stdout, toUtf8(chunk), MANAGED_BASH_CAPTURE_CHARS);
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr = appendOutputTail(stderr, toUtf8(chunk), MANAGED_BASH_CAPTURE_CHARS);
+    });
+    child.once("error", (error) => {
+      if (!aborting) {
+        finish(() => reject(error));
+      }
+    });
+    child.once("close", (exitCode, signal) => {
+      if (aborting) {
+        return;
+      }
+      finish(() => resolve({ stdout, stderr, exitCode, signal }));
+    });
+  });
+  void waitPromise.catch(() => {});
+
+  return {
+    pid: child.pid ?? null,
+    stdout: child.stdout,
+    stderr: child.stderr,
+    wait: () => waitPromise,
+    terminate(options = {}) {
+      terminationPromise ??= terminateManagedUnsandboxedTree({
+        child,
+        platform: input.platform,
+        graceMs: Math.max(0, options.graceMs ?? MANAGED_BASH_TERMINATION_GRACE_MS),
+        waitForClose,
+      });
+      return terminationPromise;
+    },
+  };
+}
+
+async function terminateManagedUnsandboxedTree(input: {
+  child: ChildProcess;
+  platform: NodeJS.Platform;
+  graceMs: number;
+  waitForClose: (timeoutMs: number) => Promise<boolean>;
+}): Promise<void> {
+  if (input.child.pid == null || input.child.exitCode != null || input.child.signalCode != null) {
+    return;
+  }
+
+  if (input.platform === "win32") {
+    const killed = await terminateWindowsProcessTree(input.child.pid);
+    if (!killed) {
+      try {
+        input.child.kill("SIGKILL");
+      } catch {
+        // The process may already have settled.
+      }
+    }
+    if (!(await input.waitForClose(MANAGED_BASH_TERMINATION_GRACE_MS))) {
+      try {
+        input.child.kill("SIGKILL");
+      } catch {
+        // Best-effort fallback when taskkill does not settle the parent handle.
+      }
+    }
+    return;
+  }
+
+  const send = (signal: NodeJS.Signals): void => {
+    try {
+      process.kill(-(input.child.pid as number), signal);
+    } catch {
+      try {
+        input.child.kill(signal);
+      } catch {
+        // The process may already have settled.
+      }
+    }
+  };
+
+  send(input.graceMs > 0 ? "SIGTERM" : "SIGKILL");
+  if (input.graceMs > 0 && (await input.waitForClose(input.graceMs))) {
+    return;
+  }
+  send("SIGKILL");
+  await input.waitForClose(MANAGED_BASH_TERMINATION_GRACE_MS);
+}
+
+function appendOutputTail(current: string, chunk: string, maxChars: number): string {
+  const combined = current + chunk;
+  return combined.length <= maxChars ? combined : combined.slice(-maxChars);
+}
+
+function toUtf8(chunk: Buffer | string): string {
+  return typeof chunk === "string" ? chunk : chunk.toString("utf8");
 }
 
 async function terminateWindowsProcessTree(pid: number): Promise<boolean> {

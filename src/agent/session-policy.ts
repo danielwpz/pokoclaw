@@ -51,6 +51,10 @@ export function isToolAllowedForSession(input: {
     return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
   }
 
+  if (input.toolName === "process") {
+    return input.purpose === "chat" && (input.agentKind === "main" || input.agentKind === "sub");
+  }
+
   if (input.toolName === "finish_task") {
     return input.purpose === "task";
   }

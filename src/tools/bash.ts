@@ -1,3 +1,4 @@
+import path from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
 import { isNativeWindowsPlatform } from "@/src/runtime/host-platform.js";
 import { classifyBashApprovalHelper } from "@/src/security/bash-approval-helpers.js";
@@ -9,7 +10,12 @@ import {
   parseConservativeBashCommandSequence,
 } from "@/src/security/bash-prefix.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
-import { executeSandboxedBash, executeUnsandboxedBash } from "@/src/security/sandbox.js";
+import {
+  executeSandboxedBash,
+  executeUnsandboxedBash,
+  startSandboxedBash,
+  startUnsandboxedBash,
+} from "@/src/security/sandbox.js";
 import { SecurityService } from "@/src/security/service.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { toolApprovalRequired, toolRecoverableError } from "@/src/tools/core/errors.js";
@@ -19,6 +25,10 @@ import { renderBashResultBlock } from "@/src/tools/helpers/permission-block.js";
 const DEFAULT_TIMEOUT_SEC = 10;
 const MAX_TIMEOUT_SEC = 10 * 60;
 const MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC = 60;
+const DEFAULT_MANAGED_TIMEOUT_SEC = 30 * 60;
+const MAX_MANAGED_TIMEOUT_SEC = 24 * 60 * 60;
+const MAX_MANAGED_YIELD_MS = 60_000;
+const MANAGED_INVOCATION_OVERHEAD_MS = 20_000;
 const MAX_OUTPUT_CHARS = 128_000;
 const MISSING_PREFIX_GUIDANCE_CODE = "bash_full_access_missing_prefix";
 const WINDOWS_BASH_REQUIRES_AUTOPILOT_CODE = "windows_bash_requires_autopilot_full_access";
@@ -36,10 +46,29 @@ export const BASH_TOOL_SCHEMA = Type.Object(
     ),
     timeoutSec: Type.Optional(
       Type.Integer({
-        minimum: 1,
-        maximum: MAX_TIMEOUT_SEC,
-        default: DEFAULT_TIMEOUT_SEC,
-        description: `Command timeout in seconds. Defaults to ${DEFAULT_TIMEOUT_SEC}. Maximum is ${MAX_TIMEOUT_SEC}.`,
+        minimum: 0,
+        maximum: MAX_MANAGED_TIMEOUT_SEC,
+        description: `Process lifetime timeout in seconds. Foreground calls default to ${DEFAULT_TIMEOUT_SEC} and must be between 1 and ${MAX_TIMEOUT_SEC}. Managed calls default to ${DEFAULT_MANAGED_TIMEOUT_SEC}; use 0 only for an intentional long-lived service.`,
+      }),
+    ),
+    background: Type.Optional(
+      Type.Boolean({
+        description:
+          "Start as a Pokoclaw-managed background process and return a processRunId immediately. Do not combine with yieldMs.",
+      }),
+    ),
+    yieldMs: Type.Optional(
+      Type.Integer({
+        minimum: 250,
+        maximum: MAX_MANAGED_YIELD_MS,
+        description:
+          "Wait up to this many milliseconds for completion, then return a processRunId if the command is still running. Do not combine with background=true.",
+      }),
+    ),
+    notifyOnExit: Type.Optional(
+      Type.Union([Type.Literal("next_turn"), Type.Literal("wake")], {
+        description:
+          "Managed-process exit handling. Defaults to next_turn for background=true and wake for yieldMs. next_turn adds hidden context to the next user-driven turn; wake proactively starts a fresh agent run after the source session becomes idle.",
       }),
     ),
     sandboxMode: Type.Optional(
@@ -73,38 +102,39 @@ export type BashToolArgs = Static<typeof BASH_TOOL_SCHEMA>;
 export interface BashToolDetails {
   command: string;
   cwd: string;
-  timeoutMs: number;
+  timeoutMs: number | null;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   stdoutChars: number;
   stderrChars: number;
   outputTruncated: boolean;
+  processRunId?: string;
+  processStatus?: string;
+  backgrounded?: boolean;
 }
 
 const FULL_ACCESS_JUSTIFICATION_PLACEHOLDER =
   "<one short sentence explaining why this exact command needs full access for the current user request>";
 
 export function createBashTool() {
-  return defineTool({
+  return defineTool<typeof BASH_TOOL_SCHEMA, BashToolDetails>({
     name: "bash",
     description:
-      "Run a shell command in sandboxed or full_access mode. By default it runs sandboxed and returns a structured <bash_result> block with command, cwd, exit_code, stdout, and stderr. If approved host execution outside the sandbox is genuinely necessary, rerun with sandboxMode=full_access and justification. When similar simple commands are likely soon, add prefix so future bash calls can reuse approval; choose the prefix scope based on the task.",
+      "Run a shell command in sandboxed or full_access mode. Normal calls remain synchronous. In main/sub chat sessions, set background=true for an intentional long-lived process, or yieldMs to wait briefly and receive a processRunId if it is still running. Managed processes keep running after this tool call returns and can be inspected or stopped with the process tool. Native shell background syntax such as &, nohup, disown, or Start-Job is not allowed. If approved host execution outside the sandbox is genuinely necessary, use sandboxMode=full_access with justification.",
     inputSchema: BASH_TOOL_SCHEMA,
     getInvocationTimeoutMs: getBashInvocationTimeoutMs,
     async execute(context, args) {
       const backgroundReason = detectUnsupportedBackgroundSyntaxForContext(context, args.command);
       if (backgroundReason != null) {
-        throw toolRecoverableError(
-          `Background shell jobs are not supported yet (${backgroundReason}). Run the command in the foreground.`,
-          {
-            code: "bash_background_not_supported",
-            reason: backgroundReason,
-          },
-        );
+        throw toolRecoverableError(buildUnmanagedBackgroundSyntaxMessage(args, backgroundReason), {
+          code: "bash_background_not_supported",
+          reason: backgroundReason,
+        });
       }
 
-      assertBashTimeoutAllowed(context, args);
-      const timeoutMs = getBashInvocationTimeoutMs(context, args);
+      const managed = isManagedBashCall(args);
+      assertBashInvocationAllowed(context, args, managed);
+      const timeoutMs = getBashProcessTimeoutMs(args, managed);
       const requestedSandboxMode = args.sandboxMode ?? "sandboxed";
       if (
         requestedSandboxMode !== "full_access" &&
@@ -132,27 +162,57 @@ export function createBashTool() {
           ? (parsedCommandSequence.commands[0]?.argv ?? null)
           : normalizeBashCommandPrefix(args.command);
 
+      if (managed) {
+        const executeManaged = () =>
+          executeManagedBash({
+            context,
+            args,
+            timeoutMs,
+            sandboxMode,
+          });
+        return effectiveExecution.windowsAutopilotHostExecution
+          ? await executeManaged()
+          : sandboxMode === "full_access"
+            ? await withBashFullAccessIfAllowed({
+                context,
+                args,
+                security,
+                normalizedCommandPrefix,
+                parsedCommandSequence,
+                execute: executeManaged,
+              })
+            : await executeManaged();
+      }
+
+      const legacyTimeoutMs = timeoutMs as number;
       const result = effectiveExecution.windowsAutopilotHostExecution
         ? await executeUnsandboxedBash({
             context,
             command: args.command,
-            timeoutMs,
+            timeoutMs: legacyTimeoutMs,
             ...(context.shellInfo == null ? {} : { shellInfo: context.shellInfo }),
             ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
           })
         : sandboxMode === "full_access"
-          ? await executeBashWithFullAccessIfAllowed({
+          ? await withBashFullAccessIfAllowed({
               context,
               args,
-              timeoutMs,
               security,
               normalizedCommandPrefix,
               parsedCommandSequence,
+              execute: () =>
+                executeUnsandboxedBash({
+                  context,
+                  command: args.command,
+                  timeoutMs: legacyTimeoutMs,
+                  ...(context.shellInfo == null ? {} : { shellInfo: context.shellInfo }),
+                  ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+                }),
             })
           : await executeSandboxedBash({
               context,
               command: args.command,
-              timeoutMs,
+              timeoutMs: legacyTimeoutMs,
               ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
             });
       const rendered = renderBashResult({
@@ -212,15 +272,80 @@ function resolveEffectiveBashExecution(input: {
 }
 
 function getBashInvocationTimeoutMs(_context: ToolExecutionContext, args: BashToolArgs): number {
-  return (args.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
+  if (!isManagedBashCall(args)) {
+    return (args.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000;
+  }
+
+  return (args.background === true ? 0 : (args.yieldMs ?? 0)) + MANAGED_INVOCATION_OVERHEAD_MS;
 }
 
-function assertBashTimeoutAllowed(context: ToolExecutionContext, args: BashToolArgs): void {
+function isManagedBashCall(args: BashToolArgs): boolean {
+  return args.background === true || args.yieldMs != null;
+}
+
+function getBashProcessTimeoutMs(args: BashToolArgs, managed: boolean): number | null {
+  const timeoutSec =
+    args.timeoutSec ?? (managed ? DEFAULT_MANAGED_TIMEOUT_SEC : DEFAULT_TIMEOUT_SEC);
+  return managed && timeoutSec === 0 ? null : timeoutSec * 1000;
+}
+
+function resolveManagedNotifyOnExit(args: BashToolArgs): "next_turn" | "wake" {
+  return args.notifyOnExit ?? (args.background === true ? "next_turn" : "wake");
+}
+
+function assertBashInvocationAllowed(
+  context: ToolExecutionContext,
+  args: BashToolArgs,
+  managed: boolean,
+): void {
+  if (args.background === true && args.yieldMs != null) {
+    throw toolRecoverableError(buildManagedModeConflictMessage(args), {
+      code: "bash_managed_mode_conflict",
+    });
+  }
+  if (!managed && args.notifyOnExit != null) {
+    throw toolRecoverableError(
+      "`notifyOnExit` is only valid for a managed bash call. Add `background: true` for an intentional service, or add `yieldMs` to wait briefly before handing off a slow command.",
+      { code: "bash_notify_requires_managed_process" },
+    );
+  }
+  if (
+    managed &&
+    !(
+      context.sessionPurpose === "chat" &&
+      (context.agentKind === "main" || context.agentKind === "sub")
+    )
+  ) {
+    throw toolRecoverableError(
+      "Managed bash processes are only available to main and sub agents in chat sessions. Run this command synchronously in the current session.",
+      {
+        code: "bash_managed_process_not_available",
+        sessionPurpose: context.sessionPurpose ?? null,
+        agentKind: context.agentKind ?? null,
+      },
+    );
+  }
+
   const timeoutSec = args.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
+  if (!managed && timeoutSec === 0) {
+    throw toolRecoverableError(buildZeroTimeoutRequiresManagedMessage(args), {
+      code: "bash_zero_timeout_requires_managed_process",
+    });
+  }
+  if (!managed && timeoutSec > MAX_TIMEOUT_SEC) {
+    throw toolRecoverableError(
+      `Synchronous bash commands are capped at ${MAX_TIMEOUT_SEC} seconds. Add \`yieldMs\` to wait briefly and let Pokoclaw manage the command if it runs longer.`,
+      {
+        code: "bash_timeout_exceeds_sync_limit",
+        requestedTimeoutSec: timeoutSec,
+        maxTimeoutSec: MAX_TIMEOUT_SEC,
+      },
+    );
+  }
   if (context.agentKind === "main" && context.sessionPurpose === "chat") {
-    if (timeoutSec > MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC) {
+    if (!managed && timeoutSec > MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC) {
       throw toolRecoverableError(
-        `Bash commands are capped at ${MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC} seconds here to keep you responsive. Use background_task (unattended one-shot) or create_subagent (interactive, multi-step) for longer-running work.`,
+        `Synchronous bash commands are capped at ${MAX_MAIN_CHAT_AGENT_TIMEOUT_SEC} seconds here. Add \`yieldMs\` when the command may run longer, or use \`background: true\` only for an intentional long-lived process such as a development server.`,
         {
           code: "bash_timeout_exceeds_main_agent_limit",
           requestedTimeoutSec: timeoutSec,
@@ -231,14 +356,165 @@ function assertBashTimeoutAllowed(context: ToolExecutionContext, args: BashToolA
   }
 }
 
-async function executeBashWithFullAccessIfAllowed(input: {
+async function executeManagedBash(input: {
   context: ToolExecutionContext;
   args: BashToolArgs;
-  timeoutMs: number;
+  timeoutMs: number | null;
+  sandboxMode: BashSandboxMode;
+}) {
+  const ownerAgentId = input.context.ownerAgentId?.trim();
+  if (ownerAgentId == null || ownerAgentId.length === 0) {
+    throw toolRecoverableError("Managed bash is missing its owner agent context.", {
+      code: "missing_owner_agent",
+    });
+  }
+  const processes = input.context.shellProcesses;
+  if (processes == null) {
+    throw toolRecoverableError("Managed bash processes are unavailable in this runtime.", {
+      code: "shell_process_manager_unavailable",
+    });
+  }
+
+  const cwd = path.resolve(input.context.cwd ?? process.cwd(), input.args.cwd ?? ".");
+  let view = await processes.start({
+    ownerAgentId,
+    sourceSessionId: input.context.sessionId,
+    toolCallId: input.context.toolCallId ?? null,
+    sourceRunId: input.context.runId ?? null,
+    command: input.args.command,
+    cwd,
+    sandboxMode: input.sandboxMode,
+    timeoutMs: input.timeoutMs,
+    notifyOnExit: resolveManagedNotifyOnExit(input.args),
+    startHandle: (abortSignal) =>
+      input.sandboxMode === "full_access"
+        ? startUnsandboxedBash({
+            context: input.context,
+            command: input.args.command,
+            abortSignal,
+            ...(input.context.shellInfo == null ? {} : { shellInfo: input.context.shellInfo }),
+            ...(input.args.cwd === undefined ? {} : { cwd: input.args.cwd }),
+          })
+        : startSandboxedBash({
+            context: input.context,
+            command: input.args.command,
+            abortSignal,
+            ...(input.args.cwd === undefined ? {} : { cwd: input.args.cwd }),
+          }),
+  });
+
+  if (input.args.background !== true) {
+    view = await processes.waitForSettlement({
+      id: view.processRun.id,
+      ownerAgentId,
+      waitMs: input.args.yieldMs ?? 0,
+      ...(input.context.abortSignal == null ? {} : { abortSignal: input.context.abortSignal }),
+    });
+  }
+
+  if (view.processRun.status === "starting" || view.processRun.status === "running") {
+    view = processes.markHandedOff(view.processRun.id, ownerAgentId);
+    if (view.processRun.status === "starting" || view.processRun.status === "running") {
+      return renderManagedBashHandoff(view);
+    }
+  }
+
+  processes.suppressCompletionNotice(view.processRun.id, ownerAgentId);
+  if (view.settlementError != null) {
+    throw view.settlementError;
+  }
+  return renderManagedBashSettlement(view, input.args.command);
+}
+
+function renderManagedBashHandoff(
+  view: import("@/src/runtime/shell-process-manager.js").ShellProcessView,
+) {
+  const run = view.processRun;
+  const output = renderManagedOutput(view.output.chunks);
+  const timeout = run.timeoutMs == null ? "none" : `${run.timeoutMs}ms`;
+  const text = [
+    "<shell_process>",
+    `process_run_id: ${run.id}`,
+    `status: ${run.status}`,
+    `pid: ${run.pid ?? "unknown"}`,
+    `cwd: ${run.cwd}`,
+    `timeout: ${timeout}`,
+    `next_cursor: ${view.output.nextCursor}`,
+    output.stdout.length === 0 ? "" : `stdout:\n${output.stdout}`,
+    output.stderr.length === 0 ? "" : `stderr:\n${output.stderr}`,
+    "Use the process tool with this process_run_id to poll logs, list status, or kill it.",
+    "</shell_process>",
+  ]
+    .filter((line) => line.length > 0)
+    .join("\n");
+
+  return textToolResult(text, {
+    command: run.commandPreview,
+    cwd: run.cwd,
+    timeoutMs: run.timeoutMs,
+    exitCode: run.exitCode,
+    signal: (run.exitSignal as NodeJS.Signals | null) ?? null,
+    stdoutChars: output.stdout.length,
+    stderrChars: output.stderr.length,
+    outputTruncated: view.output.outputTruncated,
+    processRunId: run.id,
+    processStatus: run.status,
+    backgrounded: true,
+  } satisfies BashToolDetails);
+}
+
+function renderManagedBashSettlement(
+  view: import("@/src/runtime/shell-process-manager.js").ShellProcessView,
+  command: string,
+) {
+  const run = view.processRun;
+  const output = renderManagedOutput(view.output.chunks);
+  const rendered = renderBashResult({
+    command,
+    cwd: run.cwd,
+    stdout: output.stdout,
+    stderr: output.stderr,
+    exitCode: run.exitCode,
+    signal: (run.exitSignal as NodeJS.Signals | null) ?? null,
+  });
+  return textToolResult(rendered.text, {
+    command,
+    cwd: run.cwd,
+    timeoutMs: run.timeoutMs,
+    exitCode: run.exitCode,
+    signal: (run.exitSignal as NodeJS.Signals | null) ?? null,
+    stdoutChars: run.stdoutChars,
+    stderrChars: run.stderrChars,
+    outputTruncated: rendered.truncated || view.output.outputTruncated,
+    processRunId: run.id,
+    processStatus: run.status,
+    backgrounded: false,
+  } satisfies BashToolDetails);
+}
+
+function renderManagedOutput(
+  chunks: import("@/src/runtime/shell-process-manager.js").ShellProcessOutputChunk[],
+): { stdout: string; stderr: string } {
+  return {
+    stdout: chunks
+      .filter((chunk) => chunk.stream === "stdout")
+      .map((chunk) => chunk.text)
+      .join(""),
+    stderr: chunks
+      .filter((chunk) => chunk.stream === "stderr")
+      .map((chunk) => chunk.text)
+      .join(""),
+  };
+}
+
+async function withBashFullAccessIfAllowed<TResult>(input: {
+  context: ToolExecutionContext;
+  args: BashToolArgs;
   security: SecurityService;
   normalizedCommandPrefix: string[] | null;
   parsedCommandSequence: ParsedBashCommandSequence | null;
-}) {
+  execute(): Promise<TResult>;
+}): Promise<TResult> {
   const justification = input.args.justification?.trim();
   if (justification == null || justification.length === 0) {
     throw toolRecoverableError(buildRequiresJustificationMessage(input.args), {
@@ -271,13 +547,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
     hasCurrentToolCallOneShotBashApproval(input.context) ||
     input.context.approvalState?.runtimeModeAutoApproval != null
   ) {
-    return await executeUnsandboxedBash({
-      context: input.context,
-      command: input.args.command,
-      timeoutMs: input.timeoutMs,
-      ...(input.context.shellInfo == null ? {} : { shellInfo: input.context.shellInfo }),
-      ...(input.args.cwd === undefined ? {} : { cwd: input.args.cwd }),
-    });
+    return await input.execute();
   }
 
   if (input.parsedCommandSequence != null) {
@@ -291,13 +561,7 @@ async function executeBashWithFullAccessIfAllowed(input: {
     );
     const hasFullAccess = segmentApprovals.every((approval) => approval !== "denied");
     if (hasFullAccess) {
-      return await executeUnsandboxedBash({
-        context: input.context,
-        command: input.args.command,
-        timeoutMs: input.timeoutMs,
-        ...(input.context.shellInfo == null ? {} : { shellInfo: input.context.shellInfo }),
-        ...(input.args.cwd === undefined ? {} : { cwd: input.args.cwd }),
-      });
+      return await input.execute();
     }
   }
 
@@ -511,6 +775,50 @@ function detectUnsupportedPowerShellBackgroundSyntax(command: string): string | 
   return null;
 }
 
+function buildUnmanagedBackgroundSyntaxMessage(args: BashToolArgs, reason: string): string {
+  const retry = selectBashArgs(args, { mode: args.sandboxMode ?? "sandboxed" });
+  retry.command = `<same command with ${reason} removed>`;
+  retry.background = true;
+  delete retry.yieldMs;
+  return [
+    `Native shell backgrounding is not allowed (${reason}) because Pokoclaw cannot reliably observe or stop a detached process tree.`,
+    "",
+    "Remove the shell background syntax and let Pokoclaw manage the process instead:",
+    "```json",
+    renderBashArgsJson(retry),
+    "```",
+  ].join("\n");
+}
+
+function buildManagedModeConflictMessage(args: BashToolArgs): string {
+  const retry = selectBashArgs(args, { mode: args.sandboxMode ?? "sandboxed" });
+  delete retry.background;
+  return [
+    "`background` and `yieldMs` select two different managed-process modes and cannot be combined.",
+    "",
+    "Use `background: true` for an intentional long-lived service, or use `yieldMs` for a command that should normally finish but may need to continue after the initial wait.",
+    "",
+    "To wait briefly before handing off, retry with:",
+    "```json",
+    renderBashArgsJson(retry),
+    "```",
+  ].join("\n");
+}
+
+function buildZeroTimeoutRequiresManagedMessage(args: BashToolArgs): string {
+  const retry = selectBashArgs(args, { mode: args.sandboxMode ?? "sandboxed" });
+  retry.background = true;
+  return [
+    "`timeoutSec: 0` means no process lifetime limit and is only valid for a managed process.",
+    "",
+    "For an intentional long-lived service, retry with:",
+    "```json",
+    renderBashArgsJson(retry),
+    "```",
+    "For a normal command, set a finite timeout instead.",
+  ].join("\n");
+}
+
 function buildFullAccessArgsRequireModeMessage(args: BashToolArgs): string {
   const sandboxedRetry = renderBashArgsJson(selectBashArgs(args, { mode: "sandboxed" }));
   const fullAccessRetry = renderBashArgsJson(selectBashArgs(args, { mode: "full_access" }));
@@ -648,6 +956,15 @@ function selectBashArgs(
   if (args.timeoutSec != null) {
     selected.timeoutSec = args.timeoutSec;
   }
+  if (args.background != null) {
+    selected.background = args.background;
+  }
+  if (args.yieldMs != null) {
+    selected.yieldMs = args.yieldMs;
+  }
+  if (args.notifyOnExit != null) {
+    selected.notifyOnExit = args.notifyOnExit;
+  }
 
   if (options.mode === "full_access") {
     selected.sandboxMode = "full_access";
@@ -678,6 +995,15 @@ function renderBashArgsJson(args: Partial<BashToolArgs>): string {
   }
   if (args.timeoutSec != null) {
     ordered.timeoutSec = args.timeoutSec;
+  }
+  if (args.background != null) {
+    ordered.background = args.background;
+  }
+  if (args.yieldMs != null) {
+    ordered.yieldMs = args.yieldMs;
+  }
+  if (args.notifyOnExit != null) {
+    ordered.notifyOnExit = args.notifyOnExit;
   }
   if (args.sandboxMode != null) {
     ordered.sandboxMode = args.sandboxMode;

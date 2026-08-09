@@ -2,6 +2,21 @@ import { describe, expect, test } from "vitest";
 import { buildPiMessage, buildPiMessages } from "@/src/agent/llm/messages.js";
 import type { Message } from "@/src/storage/schema/types.js";
 
+const emptyUsageJson = JSON.stringify({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+});
+
 function makeStoredMessage(overrides: Partial<Message>): Message {
   return {
     id: "msg_1",
@@ -146,6 +161,146 @@ describe("pi history", () => {
       content: [{ type: "text", text: JSON.stringify({ ok: true, items: [1, 2] }) }],
       isError: false,
       timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+    });
+  });
+
+  test("closes an interrupted tool call before replaying a later user message", () => {
+    const messages: Message[] = [
+      makeStoredMessage({
+        id: "msg_assistant",
+        role: "assistant",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        modelApi: "anthropic-messages",
+        stopReason: "toolUse",
+        usageJson: emptyUsageJson,
+        payloadJson: JSON.stringify({
+          content: [{ type: "toolCall", id: "tool_interrupted", name: "bash", arguments: {} }],
+        }),
+      }),
+      makeStoredMessage({
+        id: "msg_user_after_restart",
+        seq: 2,
+        role: "user",
+        payloadJson: JSON.stringify({ content: "handle this new request" }),
+      }),
+    ];
+
+    expect(buildPiMessages(messages)).toEqual([
+      expect.objectContaining({ role: "assistant", stopReason: "toolUse" }),
+      {
+        role: "toolResult",
+        toolCallId: "tool_interrupted",
+        toolName: "bash",
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining("outcome is unknown"),
+          },
+        ],
+        details: { code: "runtime_interrupted_tool_call" },
+        isError: true,
+        timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+      },
+      {
+        role: "user",
+        content: "handle this new request",
+        timestamp: Date.parse("2026-03-22T00:00:01.000Z"),
+      },
+    ]);
+  });
+
+  test("synthesizes only missing results from a partially completed tool batch", () => {
+    const messages: Message[] = [
+      makeStoredMessage({
+        id: "msg_assistant",
+        role: "assistant",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        modelApi: "anthropic-messages",
+        stopReason: "toolUse",
+        usageJson: emptyUsageJson,
+        payloadJson: JSON.stringify({
+          content: [
+            { type: "toolCall", id: "tool_done", name: "read", arguments: {} },
+            { type: "toolCall", id: "tool_interrupted", name: "bash", arguments: {} },
+          ],
+        }),
+      }),
+      makeStoredMessage({
+        id: "msg_tool_done",
+        seq: 2,
+        role: "tool",
+        payloadJson: JSON.stringify({
+          toolCallId: "tool_done",
+          toolName: "read",
+          content: [{ type: "text", text: "done" }],
+          isError: false,
+        }),
+      }),
+    ];
+
+    const converted = buildPiMessages(messages);
+    expect(converted).toHaveLength(3);
+    expect(converted[1]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "tool_done",
+      isError: false,
+    });
+    expect(converted[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "tool_interrupted",
+      isError: true,
+      details: { code: "runtime_interrupted_tool_call" },
+    });
+  });
+
+  test("ignores a stale tool result that arrives after an interrupted turn boundary", () => {
+    const messages: Message[] = [
+      makeStoredMessage({
+        id: "msg_assistant",
+        role: "assistant",
+        provider: "anthropic_main",
+        model: "claude-sonnet-4-5",
+        modelApi: "anthropic-messages",
+        stopReason: "toolUse",
+        usageJson: emptyUsageJson,
+        payloadJson: JSON.stringify({
+          content: [{ type: "toolCall", id: "tool_interrupted", name: "bash", arguments: {} }],
+        }),
+      }),
+      makeStoredMessage({
+        id: "msg_user_after_restart",
+        seq: 2,
+        role: "user",
+        payloadJson: JSON.stringify({ content: "handle this new request" }),
+      }),
+      makeStoredMessage({
+        id: "msg_stale_tool_result",
+        seq: 3,
+        role: "tool",
+        messageType: "tool_result",
+        visibility: "hidden_system",
+        payloadJson: JSON.stringify({
+          toolCallId: "tool_interrupted",
+          toolName: "bash",
+          content: [{ type: "text", text: "late result" }],
+          isError: false,
+        }),
+      }),
+    ];
+
+    const converted = buildPiMessages(messages);
+    expect(converted).toHaveLength(3);
+    expect(converted[1]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "tool_interrupted",
+      isError: true,
+      details: { code: "runtime_interrupted_tool_call" },
+    });
+    expect(converted[2]).toMatchObject({
+      role: "user",
+      content: "handle this new request",
     });
   });
 

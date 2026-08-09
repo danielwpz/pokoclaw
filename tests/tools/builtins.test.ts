@@ -8,6 +8,7 @@ describe("builtin tools", () => {
     const registry = createBuiltinToolRegistry();
 
     expect(registry.has("bash")).toBe(true);
+    expect(registry.has("process")).toBe(true);
     expect(registry.has("read")).toBe(true);
     expect(registry.has("write")).toBe(true);
     expect(registry.has("edit")).toBe(true);
@@ -34,6 +35,7 @@ describe("builtin tools", () => {
       "write",
       "edit",
       "ls",
+      "process",
       "list_dir",
       "grep",
       "query_system_db",

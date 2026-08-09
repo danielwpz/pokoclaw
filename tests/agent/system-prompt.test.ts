@@ -434,8 +434,31 @@ describe("agent system prompt", () => {
       'Example: repeated exact test runs can use `["npm","test"]` or the full command argv.',
     );
     expect(prompt).toContain("Not suitable: `curl ... && bash ...`");
-    expect(prompt).toContain("do not use unmanaged backgrounding like &, nohup, setsid, or disown");
+    expect(prompt).toContain("Do not use unmanaged backgrounding like &, nohup, setsid, or disown");
+    expect(prompt).toContain(
+      "Pokoclaw does not guess whether a command is a service or merely slow",
+    );
+    expect(prompt).toContain(
+      "With `yieldMs`, it defaults to `wake`; with `background: true`, it defaults to `next_turn`",
+    );
+    expect(prompt).toContain("the mode default is the safe baseline");
+    expect(prompt).toContain("Runtime shutdown or restart never triggers a `wake` Agent run");
+    expect(prompt).toContain('"yieldMs":10000,"timeoutSec":1800,"notifyOnExit":"next_turn"');
+    expect(prompt).toContain('"background":true,"timeoutSec":0');
+    expect(prompt).toContain('"background":true,"timeoutSec":0,"notifyOnExit":"wake"');
+    expect(prompt).not.toContain('"notifyOnExit":"none"');
+    expect(prompt).toContain('"action":"kill","processRunId":"<process_run_id>"');
     expect(prompt).toContain("Do not bypass approval or permission mechanisms.");
+  });
+
+  test("keeps managed process instructions out of task-agent prompts", () => {
+    const prompt = buildAgentSystemPrompt({ sessionPurpose: "task", agentKind: "sub" });
+
+    expect(prompt).toContain("Managed shell processes are not available in this session");
+    expect(prompt).not.toContain(
+      "Pokoclaw does not guess whether a command is a service or merely slow",
+    );
+    expect(prompt).not.toContain('"action":"kill","processRunId"');
   });
 
   test("teaches the main agent to stay responsive, delegate proactively, and keep global diagnosis work local", () => {

@@ -248,6 +248,7 @@ export interface AgentLoopDependencies {
   approvalGrantTtlMs?: number;
   approvalFlow?: SessionApprovalFlowRegistry;
   runtimeControl?: Omit<ToolRuntimeControl, "submitApprovalDecision">;
+  shellProcesses?: ToolExecutionContext["shellProcesses"];
   control?: RuntimeControlService;
   emitEvent?: (event: AgentRuntimeEvent) => void;
 }
@@ -375,6 +376,7 @@ export class AgentLoop {
       ...(input.approvalState == null ? {} : { approvalState: input.approvalState }),
       ...(input.shellInfo === undefined ? {} : { shellInfo: input.shellInfo }),
       runtimeControl,
+      ...(this.deps.shellProcesses == null ? {} : { shellProcesses: this.deps.shellProcesses }),
     };
   }
 

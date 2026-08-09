@@ -190,6 +190,8 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
   const timeoutMs = firstNumber(args?.timeoutMs, details?.timeoutMs);
   const exitCode = firstNumber(details?.exitCode);
   const signal = firstString(details?.signal);
+  const processRunId = firstString(details?.processRunId);
+  const processStatus = firstString(details?.processStatus);
   const stdout = extractBashText(result, "stdout");
   const stderr = extractBashText(result, "stderr");
 
@@ -209,6 +211,10 @@ function renderBashToolDetailContent(tool: LarkToolSequenceTool): string {
       maxLines: 8,
     })}\n\`\`\``;
     return content;
+  }
+
+  if (processRunId != null) {
+    content += `\n\n**Managed process**\n- process_run_id: \`${processRunId}\`\n- status: \`${processStatus ?? "unknown"}\``;
   }
 
   if (exitCode != null || signal != null) {
@@ -305,6 +311,8 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
       return summarizePermissionReview(args);
     case "bash":
       return summarizeBash(args);
+    case "process":
+      return summarizeProcess(tool, args);
     case "read":
     case "write":
     case "edit":
@@ -317,6 +325,18 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
     default:
       return summarizeGeneric(args);
   }
+}
+
+function summarizeProcess(
+  tool: LarkToolSequenceTool,
+  args: Record<string, unknown> | null,
+): string {
+  const action = readString(args?.action);
+  const command = readProcessCommand(tool.result);
+  if (command == null) {
+    return action ?? "";
+  }
+  return summarizeParts(action, normalizeSingleLine(command));
 }
 
 function summarizeFailedToolError(errorMessage: string): string {
@@ -563,6 +583,34 @@ function extractBashText(result: Record<string, unknown> | null, tag: "stdout" |
     }
   }
   return "";
+}
+
+function readProcessCommand(result: unknown): string | null {
+  const resultRecord = isRecord(result) ? result : null;
+  const directCommand = readProcessCommandFromPayload(resultRecord);
+  if (directCommand != null) {
+    return directCommand;
+  }
+
+  const content = Array.isArray(resultRecord?.content) ? resultRecord.content : [];
+  for (const entry of content) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const command = readProcessCommandFromPayload(entry.json);
+    if (command != null) {
+      return command;
+    }
+  }
+  return null;
+}
+
+function readProcessCommandFromPayload(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const process = isRecord(payload.process) ? payload.process : null;
+  return readString(process?.command);
 }
 
 function firstString(...values: unknown[]): string | null {

@@ -62,10 +62,15 @@ import { ConversationsRepo } from "@/src/storage/repos/conversations.repo.js";
 import { CronJobsRepo } from "@/src/storage/repos/cron-jobs.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
+import { ShellProcessRunsRepo } from "@/src/storage/repos/shell-process-runs.repo.js";
 import { SubagentCreationRequestsRepo } from "@/src/storage/repos/subagent-creation-requests.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import { TaskWorkstreamsRepo } from "@/src/storage/repos/task-workstreams.repo.js";
-import type { SubagentCreationRequest, TaskRun } from "@/src/storage/schema/types.js";
+import type {
+  ShellProcessRun,
+  SubagentCreationRequest,
+  TaskRun,
+} from "@/src/storage/schema/types.js";
 import {
   buildBackgroundTaskPayload,
   parseBackgroundTaskPayload,
@@ -78,6 +83,7 @@ const logger = createSubsystemLogger("orchestration/agent-manager");
 export interface AgentManagerIngress {
   submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult>;
   submitApprovalDecision(input: ApprovalResponseInput): boolean;
+  isSessionActive?(sessionId: string): boolean;
 }
 
 export interface AgentManagerDependencies {
@@ -110,6 +116,14 @@ interface PendingBackgroundTaskCompletionNotice {
   createdAt: Date;
 }
 
+interface PendingShellProcessCompletionNotice {
+  processRunId: string;
+  sourceSessionId: string;
+  content: string;
+  createdAt: Date;
+  wake: boolean;
+}
+
 // AgentManager is the orchestration-facing runtime entrypoint.
 // It sits above session-local runtime ingress and handles cross-session
 // coordination such as delegated approvals without pulling that logic into
@@ -122,6 +136,12 @@ export class AgentManager {
     string,
     PendingBackgroundTaskCompletionNotice[]
   >();
+  private readonly pendingShellProcessCompletionNotices = new Map<
+    string,
+    PendingShellProcessCompletionNotice[]
+  >();
+  private readonly scheduledShellNoticeFlushes = new Set<string>();
+  private readonly inflightShellNoticeWakeSubmissions = new Set<string>();
 
   constructor(private readonly deps: AgentManagerDependencies) {}
 
@@ -130,7 +150,60 @@ export class AgentManager {
       sessionId: input.sessionId,
       trigger: "submit_user_message",
     });
+    this.flushShellProcessCompletionNoticesForSession({
+      sessionId: input.sessionId,
+      trigger: "submit_user_message",
+      allowWake: false,
+    });
     return this.deps.ingress.submitMessage(input);
+  }
+
+  appendShellProcessCompletionNotice(
+    processRun: ShellProcessRun,
+    delivery: { allowWake?: boolean } = {},
+  ): void {
+    const repo = new ShellProcessRunsRepo(this.deps.storage);
+    const storedProcessRun = repo.getById(processRun.id);
+    if (storedProcessRun == null || storedProcessRun.notificationStatus !== "pending") {
+      return;
+    }
+    if (storedProcessRun.sourceSessionId == null) {
+      repo.markNotificationSuppressed(storedProcessRun.id);
+      return;
+    }
+    const sourceSession = new SessionsRepo(this.deps.storage).getById(
+      storedProcessRun.sourceSessionId,
+    );
+    if (sourceSession == null || sourceSession.purpose !== "chat") {
+      repo.markNotificationSuppressed(storedProcessRun.id);
+      return;
+    }
+
+    const current = this.pendingShellProcessCompletionNotices.get(sourceSession.id) ?? [];
+    if (current.some((notice) => notice.processRunId === storedProcessRun.id)) {
+      return;
+    }
+    const finishedAt =
+      storedProcessRun.finishedAt == null || Number.isNaN(Date.parse(storedProcessRun.finishedAt))
+        ? new Date()
+        : new Date(storedProcessRun.finishedAt);
+    current.push({
+      processRunId: storedProcessRun.id,
+      sourceSessionId: sourceSession.id,
+      content: renderShellProcessCompletionNotice(storedProcessRun),
+      createdAt: finishedAt,
+      wake:
+        delivery.allowWake !== false &&
+        storedProcessRun.notifyOnExit === "wake" &&
+        storedProcessRun.exitReason !== "runtime_shutdown" &&
+        storedProcessRun.exitReason !== "runtime_restart",
+    });
+    current.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+    this.pendingShellProcessCompletionNotices.set(sourceSession.id, current);
+    this.flushShellProcessCompletionNoticesForSession({
+      sessionId: sourceSession.id,
+      trigger: "process_settled",
+    });
   }
 
   submitApprovalDecision(input: ApprovalResponseInput): boolean {
@@ -1126,6 +1199,7 @@ export class AgentManager {
         sessionId: event.sessionId,
         trigger: event.type,
       });
+      this.scheduleShellProcessCompletionNoticeFlush(event.sessionId, event.type);
     }
   }
 
@@ -1221,6 +1295,156 @@ export class AgentManager {
       });
     }
   }
+
+  private scheduleShellProcessCompletionNoticeFlush(sessionId: string, trigger: string): void {
+    if (this.scheduledShellNoticeFlushes.has(sessionId)) {
+      return;
+    }
+    this.scheduledShellNoticeFlushes.add(sessionId);
+    setTimeout(() => {
+      this.scheduledShellNoticeFlushes.delete(sessionId);
+      this.flushShellProcessCompletionNoticesForSession({ sessionId, trigger });
+    }, 0);
+  }
+
+  private removeQueuedShellProcessCompletionNotices(
+    sessionId: string,
+    processRunIds: readonly string[],
+  ): void {
+    const queued = this.pendingShellProcessCompletionNotices.get(sessionId);
+    if (queued == null) {
+      return;
+    }
+    const removedIds = new Set(processRunIds);
+    const remaining = queued.filter((notice) => !removedIds.has(notice.processRunId));
+    if (remaining.length === 0) {
+      this.pendingShellProcessCompletionNotices.delete(sessionId);
+    } else {
+      this.pendingShellProcessCompletionNotices.set(sessionId, remaining);
+    }
+  }
+
+  private flushShellProcessCompletionNoticesForSession(input: {
+    sessionId: string;
+    trigger: string;
+    allowWake?: boolean;
+  }): void {
+    const pending = this.pendingShellProcessCompletionNotices.get(input.sessionId);
+    if (pending == null || pending.length === 0) {
+      return;
+    }
+    if (
+      this.inflightShellNoticeWakeSubmissions.has(input.sessionId) ||
+      this.activeSessionRuns.has(input.sessionId) ||
+      this.deps.ingress.isSessionActive?.(input.sessionId) === true
+    ) {
+      return;
+    }
+
+    const sourceSession = new SessionsRepo(this.deps.storage).getById(input.sessionId);
+    const processRepo = new ShellProcessRunsRepo(this.deps.storage);
+    if (sourceSession == null || sourceSession.purpose !== "chat") {
+      for (const notice of pending) {
+        processRepo.markNotificationSuppressed(notice.processRunId);
+      }
+      this.pendingShellProcessCompletionNotices.delete(input.sessionId);
+      return;
+    }
+
+    const messagesRepo = new MessagesRepo(this.deps.storage);
+    const stillPending = pending.filter(
+      (notice) => processRepo.getById(notice.processRunId)?.notificationStatus === "pending",
+    );
+    const nextTurnNotices = stillPending.filter(
+      (notice) => !notice.wake || input.allowWake === false,
+    );
+    const wakeNotices = stillPending.filter((notice) => notice.wake && input.allowWake !== false);
+    for (const notice of nextTurnNotices) {
+      messagesRepo.append({
+        id: randomUUID(),
+        sessionId: sourceSession.id,
+        seq: messagesRepo.getNextSeq(sourceSession.id),
+        role: "user",
+        messageType: "shell_process_completion",
+        visibility: "hidden_system",
+        payloadJson: JSON.stringify({ content: notice.content }),
+        createdAt: notice.createdAt,
+      });
+      processRepo.markNotificationDelivered(notice.processRunId);
+    }
+    const retainedWakeIds = new Set(wakeNotices.map((notice) => notice.processRunId));
+    this.removeQueuedShellProcessCompletionNotices(
+      input.sessionId,
+      pending
+        .filter((notice) => !retainedWakeIds.has(notice.processRunId))
+        .map((notice) => notice.processRunId),
+    );
+
+    if (wakeNotices.length > 0) {
+      const content = wakeNotices.map((notice) => notice.content).join("\n\n");
+      const createdAt = wakeNotices.at(-1)?.createdAt ?? new Date();
+      let accepted = false;
+      this.inflightShellNoticeWakeSubmissions.add(input.sessionId);
+      const onAccepted = () => {
+        if (accepted) {
+          return;
+        }
+        for (const notice of wakeNotices) {
+          processRepo.markNotificationDelivered(notice.processRunId);
+        }
+        accepted = true;
+        this.removeQueuedShellProcessCompletionNotices(
+          input.sessionId,
+          wakeNotices.map((notice) => notice.processRunId),
+        );
+        this.inflightShellNoticeWakeSubmissions.delete(input.sessionId);
+      };
+
+      try {
+        const submission = this.deps.ingress.submitMessage({
+          sessionId: sourceSession.id,
+          scenario: "chat",
+          content,
+          messageType: "shell_process_completion",
+          visibility: "hidden_system",
+          createdAt,
+          onAccepted,
+        });
+        void submission
+          .catch((error: unknown) => {
+            logger.error(
+              accepted ? "shell process wake run failed" : "shell process wake submission failed",
+              {
+                sourceSessionId: sourceSession.id,
+                processRunIds: wakeNotices.map((notice) => notice.processRunId),
+                retainedPending: !accepted,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+          })
+          .finally(() => {
+            if (!accepted) {
+              this.inflightShellNoticeWakeSubmissions.delete(input.sessionId);
+            }
+          });
+      } catch (error) {
+        this.inflightShellNoticeWakeSubmissions.delete(input.sessionId);
+        logger.error("shell process wake submission failed", {
+          sourceSessionId: sourceSession.id,
+          processRunIds: wakeNotices.map((notice) => notice.processRunId),
+          retainedPending: true,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    logger.info("flushed hidden shell process completion notices", {
+      sourceSessionId: sourceSession.id,
+      nextTurnCount: nextTurnNotices.length,
+      wakeCount: wakeNotices.length,
+      trigger: input.trigger,
+    });
+  }
 }
 
 function logSettledTaskExecution(
@@ -1313,6 +1537,39 @@ function renderBackgroundTaskCompletionNotice(input: {
     "This is a system completion notice for a background task you started. Do not echo this raw block to the user.",
   );
   lines.push("</system_event>");
+  return lines.join("\n");
+}
+
+function renderShellProcessCompletionNotice(processRun: ShellProcessRun): string {
+  const lines = [
+    '<system_event type="shell_process_completion">',
+    `process_run_id: ${processRun.id}`,
+    `status: ${processRun.status}`,
+    `command: ${processRun.commandPreview}`,
+    `cwd: ${processRun.cwd}`,
+  ];
+  if (processRun.exitCode != null) {
+    lines.push(`exit_code: ${processRun.exitCode}`);
+  }
+  if (processRun.exitSignal != null) {
+    lines.push(`signal: ${processRun.exitSignal}`);
+  }
+  if (processRun.exitReason != null) {
+    lines.push(`exit_reason: ${processRun.exitReason}`);
+  }
+  if (processRun.durationMs != null) {
+    lines.push(`duration_ms: ${processRun.durationMs}`);
+  }
+  if (processRun.errorText != null && processRun.errorText.trim().length > 0) {
+    lines.push(`error: ${processRun.errorText.trim()}`);
+  }
+  if (processRun.outputTail.trim().length > 0) {
+    lines.push("output_tail:", processRun.outputTail);
+  }
+  lines.push(
+    "This is a system completion notice for a managed shell process. Use the process tool if more status or output is needed. Do not echo this raw block to the user.",
+    "</system_event>",
+  );
   return lines.join("\n");
 }
 

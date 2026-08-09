@@ -14,6 +14,7 @@ import { createGrepTool } from "@/src/tools/grep.js";
 import { createListBackgroundTasksTool } from "@/src/tools/list-background-tasks.js";
 import { createListDirTool } from "@/src/tools/list-dir.js";
 import { createLsTool } from "@/src/tools/ls.js";
+import { createProcessTool } from "@/src/tools/process.js";
 import { createQuerySystemDbTool } from "@/src/tools/query-system-db.js";
 import { createReadTool } from "@/src/tools/read.js";
 import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
@@ -38,6 +39,7 @@ export function createBuiltinToolRegistry(
   registry.register(createWriteTool());
   registry.register(createEditTool());
   registry.register(createLsTool());
+  registry.register(createProcessTool());
   registry.register(createListDirTool());
   registry.register(createGrepTool());
   registry.register(createQuerySystemDbTool());

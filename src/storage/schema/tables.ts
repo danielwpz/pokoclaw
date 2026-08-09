@@ -433,6 +433,61 @@ export const taskRuns = sqliteTable(
   ],
 );
 
+export const shellProcessRuns = sqliteTable(
+  "shell_process_runs",
+  {
+    id: text("id").primaryKey(),
+    ownerAgentId: text("owner_agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    sourceSessionId: text("source_session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    branchId: text("branch_id")
+      .notNull()
+      .references(() => conversationBranches.id, { onDelete: "cascade" }),
+    toolCallId: text("tool_call_id"),
+    sourceRunId: text("source_run_id"),
+    commandPreview: text("command_preview").notNull(),
+    commandHash: text("command_hash").notNull(),
+    cwd: text("cwd").notNull(),
+    sandboxMode: text("sandbox_mode").notNull(),
+    status: text("status").notNull(),
+    pid: integer("pid"),
+    timeoutMs: integer("timeout_ms"),
+    notifyOnExit: text("notify_on_exit").notNull().default("next_turn"),
+    startedAt: text("started_at").notNull(),
+    handedOffAt: text("handed_off_at"),
+    finishedAt: text("finished_at"),
+    durationMs: integer("duration_ms"),
+    exitCode: integer("exit_code"),
+    exitSignal: text("exit_signal"),
+    exitReason: text("exit_reason"),
+    errorText: text("error_text"),
+    stdoutChars: integer("stdout_chars").notNull().default(0),
+    stderrChars: integer("stderr_chars").notNull().default(0),
+    outputTail: text("output_tail").notNull().default(""),
+    outputChunksJson: text("output_chunks_json"),
+    outputTruncated: integer("output_truncated", { mode: "boolean" }).notNull().default(false),
+    notificationStatus: text("notification_status").notNull().default("none"),
+  },
+  (table) => [
+    index("idx_shell_process_runs_owner_status_started").on(
+      table.ownerAgentId,
+      table.status,
+      table.startedAt,
+    ),
+    index("idx_shell_process_runs_session_started").on(table.sourceSessionId, table.startedAt),
+    index("idx_shell_process_runs_notification_status_finished").on(
+      table.notificationStatus,
+      table.finishedAt,
+    ),
+  ],
+);
+
 export const meditationState = sqliteTable("meditation_state", {
   id: text("id").primaryKey(),
   running: integer("running", { mode: "boolean" }).notNull().default(false),

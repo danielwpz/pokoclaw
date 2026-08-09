@@ -39,6 +39,9 @@ export interface SubmitSessionMessageInput {
   channelParentMessageId?: string | null;
   channelThreadId?: string | null;
   createdAt?: Date;
+  // Called synchronously once the lane has durably persisted or queued the input.
+  // The returned promise continues to track the resulting Agent run lifecycle.
+  onAccepted?: () => void;
   maxTurns?: number;
   afterToolResultHook?: AgentLoopAfterToolResultHook;
 }
@@ -115,6 +118,7 @@ export class InMemorySessionLane {
           persistedImageCount: normalized.userPayload?.images?.length ?? 0,
           runtimeImageCount: normalized.runtimeImages?.length ?? 0,
         });
+        notifySubmissionAccepted(input);
         return {
           status: "steered",
         };
@@ -139,6 +143,8 @@ export class InMemorySessionLane {
       channelThreadId: input.channelThreadId ?? null,
       createdAt: input.createdAt ?? new Date(),
     });
+
+    notifySubmissionAccepted(input);
 
     const runPromise = this.deps.loop
       .run({
@@ -200,6 +206,18 @@ export class InMemorySessionLane {
 
   submitApprovalDecision(input: ApprovalResponseInput): boolean {
     return this.deps.loop.submitApprovalResponse(input);
+  }
+}
+
+function notifySubmissionAccepted(input: SubmitSessionMessageInput): void {
+  try {
+    input.onAccepted?.();
+  } catch (error) {
+    logger.error("session message acceptance callback failed", {
+      sessionId: input.sessionId,
+      scenario: input.scenario,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
