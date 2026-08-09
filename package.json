@@ -64,7 +64,7 @@
     "vitest": "^4.1.0"
   },
   "dependencies": {
-    "@danielwpz/sandbox-runtime": "github:danielwpz/sandbox-runtime#2060e0bee5c9ca83e069923546428a176219ce43",
+    "@danielwpz/sandbox-runtime": "0.0.43-pokeclaw.4",
     "@larksuiteoapi/node-sdk": "^1.60.0",
     "@mariozechner/pi-agent-core": "0.70.2",
     "@mariozechner/pi-ai": "0.70.2",

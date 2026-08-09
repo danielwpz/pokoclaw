@@ -187,7 +187,9 @@ describe("managed bash process integration", () => {
       await expect(
         registry.execute("bash", context, {
           command: "touch /private/tmp/pokoclaw-managed-permission-integration-probe",
-          yieldMs: 1_000,
+          // macOS sandbox violation events can arrive after the child exits.
+          // Keep this call in the foreground long enough for permission translation.
+          yieldMs: 5_000,
           timeoutSec: 5,
         }),
       ).rejects.toMatchObject({
