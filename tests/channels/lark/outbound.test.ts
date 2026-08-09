@@ -2308,6 +2308,244 @@ describe("lark outbound runtime", () => {
     await runtime.shutdown();
   });
 
+  test("starts a new run card segment after a consumed user steer", async () => {
+    vi.useFakeTimers();
+    handle = await createTestDatabase(import.meta.url);
+    handle.storage.sqlite.exec(`
+      INSERT INTO channel_instances (id, provider, account_key, created_at, updated_at)
+      VALUES ('ci_lark_default', 'lark', 'default', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversations (id, channel_instance_id, external_chat_id, kind, created_at, updated_at)
+      VALUES ('conv_1', 'ci_lark_default', 'oc_chat_1', 'dm', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+
+      INSERT INTO conversation_branches (id, conversation_id, kind, branch_key, created_at, updated_at)
+      VALUES ('branch_1', 'conv_1', 'dm_main', 'main', '2026-03-28T00:00:00.000Z', '2026-03-28T00:00:00.000Z');
+    `);
+    new ChannelSurfacesRepo(handle.storage.db).upsert({
+      id: "surface_1",
+      channelType: "lark",
+      channelInstallationId: "default",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      surfaceKey: "chat:oc_chat_1",
+      surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+    });
+
+    let nextCardId = 0;
+    let nextMessageId = 0;
+    const createCard = vi.fn(async (_input: unknown) => {
+      nextCardId += 1;
+      return { data: { card_id: `card_${nextCardId}` } };
+    });
+    const createMessage = vi.fn(async () => {
+      nextMessageId += 1;
+      return {
+        data: {
+          message_id: `om_card_${nextMessageId}`,
+          open_message_id: `oom_card_${nextMessageId}`,
+        },
+      };
+    });
+    const updateCard = vi.fn(async () => ({}));
+    const streamContent = vi.fn(async () => ({}));
+    const reactionCreate = vi.fn(async () => ({ data: { reaction_id: "reaction_ok" } }));
+    const bus = new RuntimeEventBus<OrchestratedOutboundEventEnvelope>();
+    const runtime = createLarkOutboundRuntime({
+      storage: handle.storage.db,
+      outboundEventBus: bus,
+      clients: {
+        getOrCreate: () =>
+          ({
+            sdk: {
+              cardkit: {
+                v1: {
+                  card: { create: createCard, update: updateCard },
+                  cardElement: { content: streamContent },
+                },
+              },
+              im: {
+                message: { create: createMessage },
+                messageReaction: { create: reactionCreate },
+              },
+            },
+          }) as never,
+      },
+    });
+    runtime.start();
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_before_steer",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_before_steer",
+        text: "before steer",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(createCard).toHaveBeenCalledOnce();
+
+    for (const [index, messageId] of ["om_steer_1", "om_steer_2"].entries()) {
+      bus.publish(
+        makeEnvelope({
+          type: "steer_message_consumed",
+          eventId: `evt_steer_${index + 1}`,
+          createdAt: `2026-03-28T00:00:0${index + 1}.000Z`,
+          sessionId: "sess_1",
+          conversationId: "conv_1",
+          branchId: "branch_1",
+          runId: "run_1",
+          turn: 2,
+          messageId: `msg_steer_${index + 1}`,
+          channelMessageId: messageId,
+        }),
+      );
+    }
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(createCard).toHaveBeenCalledOnce();
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_1:seg:2",
+      }),
+    ).toBeNull();
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_1:seg:1",
+      })?.status,
+    ).toBe("finalized");
+
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_after_steer_start",
+        createdAt: "2026-03-28T00:00:03.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_after_steer",
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_delta",
+        eventId: "evt_after_steer_delta",
+        createdAt: "2026-03-28T00:00:04.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_after_steer",
+        delta: "after user steer",
+        accumulatedText: "after user steer",
+      }),
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(createCard).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(createCard.mock.calls.at(0)?.[0])).toContain("before steer");
+    expect(JSON.stringify(createCard.mock.calls.at(0)?.[0])).not.toContain("after user steer");
+    expect(JSON.stringify(createCard.mock.calls.at(1)?.[0])).toContain("after user steer");
+
+    bus.publish(
+      makeEnvelope({
+        type: "steer_message_consumed",
+        eventId: "evt_hidden_steer",
+        createdAt: "2026-03-28T00:00:05.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 3,
+        messageId: "msg_hidden_steer",
+        channelMessageId: null,
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "assistant_message_completed",
+        eventId: "evt_after_hidden_steer",
+        createdAt: "2026-03-28T00:00:06.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_after_steer",
+        text: "after hidden steer",
+        reasoningText: null,
+        toolCalls: [],
+        usage: null,
+      }),
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(createCard).toHaveBeenCalledTimes(2);
+
+    bus.publish(
+      makeEnvelope({
+        type: "steer_message_consumed",
+        eventId: "evt_steer_before_failure",
+        createdAt: "2026-03-28T00:00:07.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 3,
+        messageId: "msg_steer_before_failure",
+        channelMessageId: "om_steer_3",
+      }),
+    );
+    bus.publish(
+      makeEnvelope({
+        type: "run_failed",
+        eventId: "evt_failed_after_steer",
+        createdAt: "2026-03-28T00:00:08.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        scenario: "chat",
+        modelId: "model_1",
+        errorKind: "upstream",
+        errorMessage: "failed after steer",
+        retryable: false,
+      }),
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(createCard).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(createCard.mock.calls.at(2)?.[0])).toContain("failed after steer");
+    expect(
+      new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
+        channelInstallationId: "default",
+        internalObjectKind: "run_card",
+        internalObjectId: "run_1:seg:3",
+      }),
+    ).not.toBeNull();
+
+    await runtime.shutdown();
+  });
+
   test("retries run-card visible message send with the same uuid after local finalize failure", async () => {
     vi.useFakeTimers();
     handle = await createTestDatabase(import.meta.url);

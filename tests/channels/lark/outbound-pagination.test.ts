@@ -142,6 +142,9 @@ describe("lark outbound pagination", () => {
                 message: {
                   create: createMessage,
                 },
+                messageReaction: {
+                  create: vi.fn(async () => ({ data: { reaction_id: "reaction_ok" } })),
+                },
               },
             },
           }) as never,
@@ -167,6 +170,27 @@ describe("lark outbound pagination", () => {
         usage: null,
       }),
     );
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(createCard).toHaveBeenCalledOnce();
+
+    bus.publish(
+      makeEnvelope({
+        type: "steer_message_consumed",
+        eventId: "evt_steer",
+        createdAt: "2026-03-28T00:00:00.500Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 2,
+        messageId: "msg_steer",
+        channelMessageId: "om_steer",
+      }),
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
 
     for (let index = 0; index < 16; index += 1) {
       const longText = buildLongText(`tool-${index}`, 16);
@@ -263,16 +287,17 @@ describe("lark outbound pagination", () => {
     const createdCards = (createCard.mock.calls as unknown[][]).map((call) =>
       parseCardPayload(call[0]),
     );
-    createdCards.slice(0, -1).forEach((card) => {
+    createdCards.slice(1, -1).forEach((card) => {
       expect(JSON.stringify(card)).not.toContain("stop_run");
     });
+    expect(JSON.stringify(createdCards.at(0) ?? {})).toContain("stop_run");
     expect(JSON.stringify(createdCards.at(-1) ?? {})).toContain("stop_run");
 
     expect(
       new LarkObjectBindingsRepo(handle.storage.db).getByInternalObject({
         channelInstallationId: "default",
         internalObjectKind: "run_card",
-        internalObjectId: "run_1:seg:1:page:2",
+        internalObjectId: "run_1:seg:2:page:2",
       }),
     ).not.toBeNull();
 
