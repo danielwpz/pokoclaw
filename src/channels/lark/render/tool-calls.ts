@@ -312,7 +312,7 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
     case "bash":
       return summarizeBash(args);
     case "process":
-      return summarizeProcess(args);
+      return summarizeProcess(tool, args);
     case "read":
     case "write":
     case "edit":
@@ -327,8 +327,16 @@ function summarizeToolHeader(tool: LarkToolSequenceTool): string {
   }
 }
 
-function summarizeProcess(args: Record<string, unknown> | null): string {
-  return summarizeParts(readString(args?.action), readString(args?.processRunId));
+function summarizeProcess(
+  tool: LarkToolSequenceTool,
+  args: Record<string, unknown> | null,
+): string {
+  const action = readString(args?.action);
+  const command = readProcessCommand(tool.result);
+  if (command == null) {
+    return action ?? "";
+  }
+  return summarizeParts(action, normalizeSingleLine(command));
 }
 
 function summarizeFailedToolError(errorMessage: string): string {
@@ -575,6 +583,34 @@ function extractBashText(result: Record<string, unknown> | null, tag: "stdout" |
     }
   }
   return "";
+}
+
+function readProcessCommand(result: unknown): string | null {
+  const resultRecord = isRecord(result) ? result : null;
+  const directCommand = readProcessCommandFromPayload(resultRecord);
+  if (directCommand != null) {
+    return directCommand;
+  }
+
+  const content = Array.isArray(resultRecord?.content) ? resultRecord.content : [];
+  for (const entry of content) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const command = readProcessCommandFromPayload(entry.json);
+    if (command != null) {
+      return command;
+    }
+  }
+  return null;
+}
+
+function readProcessCommandFromPayload(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const process = isRecord(payload.process) ? payload.process : null;
+  return readString(process?.command);
 }
 
 function firstString(...values: unknown[]): string | null {
