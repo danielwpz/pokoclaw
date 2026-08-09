@@ -277,9 +277,10 @@ describe("AgentManager", () => {
       seedFixture(handle);
       const processRun = createSettledShellProcess(handle, { notifyOnExit: "wake" });
       const submitMessage = vi.fn(
-        async (): Promise<SubmitMessageResult> => ({
-          status: "steered",
-        }),
+        async (input: SubmitMessageInput): Promise<SubmitMessageResult> => {
+          input.onAccepted?.();
+          return { status: "steered" };
+        },
       );
       const manager = new AgentManager({
         storage: handle.storage.db,
@@ -301,6 +302,92 @@ describe("AgentManager", () => {
           content: expect.stringContaining("process_run_id: process_shell_1"),
         }),
       );
+      expect(new ShellProcessRunsRepo(handle.storage.db).getById(processRun.id)).toMatchObject({
+        notificationStatus: "delivered",
+      });
+    });
+  });
+
+  test("keeps an unaccepted wake notification pending for the next user turn", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const processRun = createSettledShellProcess(handle, { notifyOnExit: "wake" });
+      const submitMessage = vi
+        .fn<(input: SubmitMessageInput) => Promise<SubmitMessageResult>>()
+        .mockRejectedValueOnce(new Error("ingress unavailable"))
+        .mockResolvedValueOnce({ status: "steered" });
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+          isSessionActive: () => false,
+        },
+      });
+
+      manager.appendShellProcessCompletionNotice(processRun);
+      await flushMicrotasks();
+
+      expect(new ShellProcessRunsRepo(handle.storage.db).getById(processRun.id)).toMatchObject({
+        notificationStatus: "pending",
+      });
+
+      await manager.submitUserMessage({
+        sessionId: "sess_main",
+        scenario: "chat",
+        content: "What happened?",
+      });
+
+      expect(submitMessage).toHaveBeenCalledTimes(2);
+      expect(submitMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ content: "What happened?" }),
+      );
+      expect(
+        new MessagesRepo(handle.storage.db)
+          .listBySession("sess_main")
+          .filter((message) => message.messageType === "shell_process_completion"),
+      ).toHaveLength(1);
+      expect(new ShellProcessRunsRepo(handle.storage.db).getById(processRun.id)).toMatchObject({
+        notificationStatus: "delivered",
+      });
+    });
+  });
+
+  test("coalesces a deferred wake notice into an arriving user turn", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      const processRun = createSettledShellProcess(handle, { notifyOnExit: "wake" });
+      let laneActive = true;
+      const submitMessage = vi.fn(
+        async (): Promise<SubmitMessageResult> => ({ status: "steered" }),
+      );
+      const manager = new AgentManager({
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          submitApprovalDecision: vi.fn(() => false),
+          isSessionActive: () => laneActive,
+        },
+      });
+
+      manager.appendShellProcessCompletionNotice(processRun);
+      expect(submitMessage).not.toHaveBeenCalled();
+
+      laneActive = false;
+      await manager.submitUserMessage({
+        sessionId: "sess_main",
+        scenario: "chat",
+        content: "Summarize the result.",
+      });
+
+      expect(submitMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ content: "Summarize the result." }),
+      );
+      expect(
+        new MessagesRepo(handle.storage.db)
+          .listBySession("sess_main")
+          .filter((message) => message.messageType === "shell_process_completion"),
+      ).toHaveLength(1);
       expect(new ShellProcessRunsRepo(handle.storage.db).getById(processRun.id)).toMatchObject({
         notificationStatus: "delivered",
       });

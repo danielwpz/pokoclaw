@@ -141,6 +141,7 @@ export class AgentManager {
     PendingShellProcessCompletionNotice[]
   >();
   private readonly scheduledShellNoticeFlushes = new Set<string>();
+  private readonly inflightShellNoticeWakeSubmissions = new Set<string>();
 
   constructor(private readonly deps: AgentManagerDependencies) {}
 
@@ -152,6 +153,7 @@ export class AgentManager {
     this.flushShellProcessCompletionNoticesForSession({
       sessionId: input.sessionId,
       trigger: "submit_user_message",
+      allowWake: false,
     });
     return this.deps.ingress.submitMessage(input);
   }
@@ -1305,15 +1307,34 @@ export class AgentManager {
     }, 0);
   }
 
+  private removeQueuedShellProcessCompletionNotices(
+    sessionId: string,
+    processRunIds: readonly string[],
+  ): void {
+    const queued = this.pendingShellProcessCompletionNotices.get(sessionId);
+    if (queued == null) {
+      return;
+    }
+    const removedIds = new Set(processRunIds);
+    const remaining = queued.filter((notice) => !removedIds.has(notice.processRunId));
+    if (remaining.length === 0) {
+      this.pendingShellProcessCompletionNotices.delete(sessionId);
+    } else {
+      this.pendingShellProcessCompletionNotices.set(sessionId, remaining);
+    }
+  }
+
   private flushShellProcessCompletionNoticesForSession(input: {
     sessionId: string;
     trigger: string;
+    allowWake?: boolean;
   }): void {
     const pending = this.pendingShellProcessCompletionNotices.get(input.sessionId);
     if (pending == null || pending.length === 0) {
       return;
     }
     if (
+      this.inflightShellNoticeWakeSubmissions.has(input.sessionId) ||
       this.activeSessionRuns.has(input.sessionId) ||
       this.deps.ingress.isSessionActive?.(input.sessionId) === true
     ) {
@@ -1334,8 +1355,10 @@ export class AgentManager {
     const stillPending = pending.filter(
       (notice) => processRepo.getById(notice.processRunId)?.notificationStatus === "pending",
     );
-    const nextTurnNotices = stillPending.filter((notice) => !notice.wake);
-    const wakeNotices = stillPending.filter((notice) => notice.wake);
+    const nextTurnNotices = stillPending.filter(
+      (notice) => !notice.wake || input.allowWake === false,
+    );
+    const wakeNotices = stillPending.filter((notice) => notice.wake && input.allowWake !== false);
     for (const notice of nextTurnNotices) {
       messagesRepo.append({
         id: randomUUID(),
@@ -1349,32 +1372,72 @@ export class AgentManager {
       });
       processRepo.markNotificationDelivered(notice.processRunId);
     }
+    const retainedWakeIds = new Set(wakeNotices.map((notice) => notice.processRunId));
+    this.removeQueuedShellProcessCompletionNotices(
+      input.sessionId,
+      pending
+        .filter((notice) => !retainedWakeIds.has(notice.processRunId))
+        .map((notice) => notice.processRunId),
+    );
 
     if (wakeNotices.length > 0) {
       const content = wakeNotices.map((notice) => notice.content).join("\n\n");
       const createdAt = wakeNotices.at(-1)?.createdAt ?? new Date();
-      void this.deps.ingress
-        .submitMessage({
+      let accepted = false;
+      this.inflightShellNoticeWakeSubmissions.add(input.sessionId);
+      const onAccepted = () => {
+        if (accepted) {
+          return;
+        }
+        for (const notice of wakeNotices) {
+          processRepo.markNotificationDelivered(notice.processRunId);
+        }
+        accepted = true;
+        this.removeQueuedShellProcessCompletionNotices(
+          input.sessionId,
+          wakeNotices.map((notice) => notice.processRunId),
+        );
+        this.inflightShellNoticeWakeSubmissions.delete(input.sessionId);
+      };
+
+      try {
+        const submission = this.deps.ingress.submitMessage({
           sessionId: sourceSession.id,
           scenario: "chat",
           content,
           messageType: "shell_process_completion",
           visibility: "hidden_system",
           createdAt,
-        })
-        .catch((error: unknown) => {
-          logger.error("shell process wake run failed", {
-            sourceSessionId: sourceSession.id,
-            processRunIds: wakeNotices.map((notice) => notice.processRunId),
-            error: error instanceof Error ? error.message : String(error),
-          });
+          onAccepted,
         });
-      for (const notice of wakeNotices) {
-        processRepo.markNotificationDelivered(notice.processRunId);
+        void submission
+          .catch((error: unknown) => {
+            logger.error(
+              accepted ? "shell process wake run failed" : "shell process wake submission failed",
+              {
+                sourceSessionId: sourceSession.id,
+                processRunIds: wakeNotices.map((notice) => notice.processRunId),
+                retainedPending: !accepted,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+          })
+          .finally(() => {
+            if (!accepted) {
+              this.inflightShellNoticeWakeSubmissions.delete(input.sessionId);
+            }
+          });
+      } catch (error) {
+        this.inflightShellNoticeWakeSubmissions.delete(input.sessionId);
+        logger.error("shell process wake submission failed", {
+          sourceSessionId: sourceSession.id,
+          processRunIds: wakeNotices.map((notice) => notice.processRunId),
+          retainedPending: true,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
-    this.pendingShellProcessCompletionNotices.delete(input.sessionId);
     logger.info("flushed hidden shell process completion notices", {
       sourceSessionId: sourceSession.id,
       nextTurnCount: nextTurnNotices.length,
