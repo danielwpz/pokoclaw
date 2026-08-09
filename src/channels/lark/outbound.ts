@@ -43,6 +43,7 @@ import {
   type LarkSubagentCreationRequestCardState,
 } from "@/src/channels/lark/render.js";
 import {
+  finalizeLarkRunSegmentForSteer,
   type LarkRunState,
   markLarkRunApprovalResolved,
   markLarkRunAwaitingApproval,
@@ -152,6 +153,7 @@ export function createLarkOutboundRuntime(
   const activeRunSegmentByRunId = new Map<string, string>();
   const latestRunSegmentByRunId = new Map<string, string>();
   const nextRunSegmentIndexByRunId = new Map<string, number>();
+  const pendingSteerBoundaryByRunId = new Set<string>();
   const latestApprovalByRunId = new Map<string, string>();
   const subagentRequestStates = new Map<
     string,
@@ -1806,6 +1808,43 @@ export function createLarkOutboundRuntime(
     }
   };
 
+  const handleSteerConsumedRunSegmentBoundary = (
+    envelope: OrchestratedRuntimeEventEnvelope,
+  ): void => {
+    if (envelope.event.type !== "steer_message_consumed") {
+      return;
+    }
+    const sourceMessageId = envelope.event.channelMessageId;
+    const runId = envelope.run.runId;
+    if (sourceMessageId == null || sourceMessageId.length === 0 || runId == null) {
+      return;
+    }
+
+    ensureRecoveredRunSegmentState(runId);
+    pendingSteerBoundaryByRunId.add(runId);
+
+    const runCardObjectId = activeRunSegmentByRunId.get(runId);
+    if (runCardObjectId == null) {
+      return;
+    }
+    const previous = runStates.get(runCardObjectId);
+    if (previous == null) {
+      activeRunSegmentByRunId.delete(runId);
+      return;
+    }
+
+    const next = finalizeLarkRunSegmentForSteer(previous);
+    runStates.set(runCardObjectId, next);
+    activeRunSegmentByRunId.delete(runId);
+    latestRunSegmentByRunId.set(runId, runCardObjectId);
+    logger.debug("closed lark run card segment after consumed steer message", {
+      runId,
+      runCardObjectId,
+      sourceMessageId,
+    });
+    bumpVersionAndSchedule(`run:${runCardObjectId}`, { immediate: true });
+  };
+
   const handleOutboundAttachmentEvent = async (
     envelope: OrchestratedOutboundAttachmentEventEnvelope,
   ): Promise<void> => {
@@ -2016,6 +2055,7 @@ export function createLarkOutboundRuntime(
         }
 
         if (envelope.event.type === "steer_message_consumed") {
+          handleSteerConsumedRunSegmentBoundary(envelope);
           void handleSteerConsumedReactionUpdate(envelope);
           return;
         }
@@ -2078,8 +2118,11 @@ export function createLarkOutboundRuntime(
           }
         }
 
-        let runCardObjectId = activeRunSegmentByRunId.get(runId) ?? null;
-        if (runCardObjectId == null) {
+        const hasPendingSteerBoundary = pendingSteerBoundaryByRunId.has(runId);
+        let runCardObjectId = hasPendingSteerBoundary
+          ? null
+          : (activeRunSegmentByRunId.get(runId) ?? null);
+        if (runCardObjectId == null && !hasPendingSteerBoundary) {
           runCardObjectId = findResolvedApprovalToolRunCardObjectId(envelope, runId, {
             latestRunSegmentByRunId,
             runStates,
@@ -2091,12 +2134,18 @@ export function createLarkOutboundRuntime(
             envelope.event.type === "run_cancelled" ||
             envelope.event.type === "run_failed";
           if (terminalEvent) {
-            runCardObjectId = latestRunSegmentByRunId.get(runId) ?? null;
+            const shouldCreateSteerTerminalSegment =
+              hasPendingSteerBoundary && envelope.event.type !== "run_completed";
+            runCardObjectId = shouldCreateSteerTerminalSegment
+              ? allocateRunSegmentObjectId(runId)
+              : (latestRunSegmentByRunId.get(runId) ?? null);
+            pendingSteerBoundaryByRunId.delete(runId);
             if (runCardObjectId == null) {
               return;
             }
           } else if (shouldCreateRunSegmentForEvent(envelope)) {
             runCardObjectId = allocateRunSegmentObjectId(runId);
+            pendingSteerBoundaryByRunId.delete(runId);
           } else {
             logger.debug("deferring lark run card creation until visible content arrives", {
               runId,
@@ -2153,6 +2202,7 @@ export function createLarkOutboundRuntime(
       activeRunSegmentByRunId.clear();
       latestRunSegmentByRunId.clear();
       nextRunSegmentIndexByRunId.clear();
+      pendingSteerBoundaryByRunId.clear();
       latestApprovalByRunId.clear();
       sentDocPreviewKeys.clear();
       logger.info("lark outbound runtime shutdown complete");

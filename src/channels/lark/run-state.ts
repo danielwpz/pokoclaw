@@ -620,6 +620,29 @@ export function markLarkRunApprovalResolved(
   };
 }
 
+export function finalizeLarkRunSegmentForSteer(state: LarkRunState): LarkRunState {
+  return {
+    ...state,
+    blocks: finalizeActiveToolSequenceIfNeeded(state.blocks, state.activeToolSequenceBlockId),
+    activeAssistantMessageId: null,
+    activeToolSequenceBlockId: null,
+    footerStatus: null,
+    footerNotice: null,
+    awaitingApprovalTarget: null,
+    reasoning: {
+      ...state.reasoning,
+      active: false,
+      expanded: false,
+    },
+    // LarkRunState represents one rendered segment. The Agent run itself
+    // continues in a new segment after the consumed steer message.
+    terminal: "completed",
+    terminalErrorKind: null,
+    terminalMessage: null,
+    terminalImageAttachments: [],
+  };
+}
+
 export function hasVisibleLarkRunBlocks(state: LarkRunState): boolean {
   return state.blocks.some((block) => {
     if (block.kind === "assistant_text") {

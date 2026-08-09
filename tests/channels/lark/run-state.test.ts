@@ -9,6 +9,7 @@ import {
   renderLarkRunCard,
 } from "@/src/channels/lark/render.js";
 import {
+  finalizeLarkRunSegmentForSteer,
   LARK_ASSISTANT_PLACEHOLDER_TEXT,
   LARK_REASONING_STATE_MAX_CHARS,
   markLarkRunApprovalResolved,
@@ -1151,6 +1152,62 @@ describe("lark run state", () => {
     expect(deniedText).toContain("已拒绝");
     expect(deniedText).toContain("本次执行已停止");
     expect(deniedText).not.toContain("⏹ 停止");
+  });
+
+  test("silently finalizes the current run card when a steer is consumed", () => {
+    const running = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "tool_call_started",
+        eventId: "evt_steer_tool_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        toolCallId: "tool_steer_1",
+        toolName: "bash",
+        args: { command: "pnpm test" },
+      }),
+    );
+
+    const finalized = finalizeLarkRunSegmentForSteer(running);
+    expect(finalized).toMatchObject({
+      terminal: "completed",
+      activeAssistantMessageId: null,
+      activeToolSequenceBlockId: null,
+      footerStatus: null,
+      footerNotice: null,
+    });
+    expect(finalized.blocks).toMatchObject([{ kind: "tool_sequence", finalized: true }]);
+
+    const cardText = JSON.stringify(renderLarkRunCard(finalized));
+    expect(cardText).toContain("pnpm test");
+    expect(cardText).not.toContain("⏹ 停止");
+    expect(cardText).not.toContain("后续回复");
+  });
+
+  test("removes an empty streaming placeholder without adding steer copy", () => {
+    const running = reduceLarkRunState(
+      null,
+      makeEnvelope({
+        type: "assistant_message_started",
+        eventId: "evt_steer_empty_1",
+        createdAt: "2026-03-28T00:00:00.000Z",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        runId: "run_1",
+        turn: 1,
+        messageId: "msg_steer_empty_1",
+      }),
+    );
+
+    const cardText = JSON.stringify(renderLarkRunCard(finalizeLarkRunSegmentForSteer(running)));
+    expect(cardText).not.toContain(LARK_ASSISTANT_PLACEHOLDER_TEXT);
+    expect(cardText).not.toContain("⏹ 停止");
+    expect(cardText).not.toContain("补充指令");
   });
 
   test("renders request_permissions inside the run transcript while awaiting approval", () => {
