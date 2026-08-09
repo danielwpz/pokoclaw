@@ -189,7 +189,8 @@ export class AgentManager {
       createdAt: finishedAt,
       wake:
         storedProcessRun.notifyOnExit === "wake" &&
-        storedProcessRun.exitReason !== "runtime_shutdown",
+        storedProcessRun.exitReason !== "runtime_shutdown" &&
+        storedProcessRun.exitReason !== "runtime_restart",
     });
     current.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
     this.pendingShellProcessCompletionNotices.set(sourceSession.id, current);

@@ -134,7 +134,7 @@ function createSettledShellProcess(
   handle: TestDatabaseHandle,
   input: {
     notifyOnExit: "next_turn" | "wake";
-    exitReason?: "process_exit" | "runtime_shutdown";
+    exitReason?: "process_exit" | "runtime_shutdown" | "runtime_restart";
   },
 ) {
   const repo = new ShellProcessRunsRepo(handle.storage.db);
@@ -153,12 +153,19 @@ function createSettledShellProcess(
     startedAt: new Date("2026-08-07T00:00:00.000Z"),
   });
   repo.markHandedOff("process_shell_1", new Date("2026-08-07T00:00:01.000Z"));
+  const interrupted =
+    input.exitReason === "runtime_shutdown" || input.exitReason === "runtime_restart";
   repo.settle({
     id: "process_shell_1",
-    status: input.exitReason === "runtime_shutdown" ? "killed" : "completed",
+    status:
+      input.exitReason === "runtime_restart"
+        ? "lost"
+        : input.exitReason === "runtime_shutdown"
+          ? "killed"
+          : "completed",
     finishedAt: new Date("2026-08-07T00:00:02.000Z"),
     durationMs: 2_000,
-    exitCode: input.exitReason === "runtime_shutdown" ? null : 0,
+    exitCode: interrupted ? null : 0,
     exitSignal: input.exitReason === "runtime_shutdown" ? "SIGTERM" : null,
     exitReason: input.exitReason ?? "process_exit",
     stdoutChars: 6,
@@ -356,12 +363,15 @@ describe("AgentManager", () => {
     });
   });
 
-  test("does not wake the agent for a process stopped during runtime shutdown", async () => {
+  test.each([
+    "runtime_shutdown",
+    "runtime_restart",
+  ] as const)("does not wake the agent for a process interrupted by %s", async (exitReason) => {
     await withHandle(async (handle) => {
       seedFixture(handle);
       const processRun = createSettledShellProcess(handle, {
         notifyOnExit: "wake",
-        exitReason: "runtime_shutdown",
+        exitReason,
       });
       const submitMessage = vi.fn();
       const manager = new AgentManager({

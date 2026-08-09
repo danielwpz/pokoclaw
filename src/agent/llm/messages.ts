@@ -89,7 +89,50 @@ export interface BuildPiMessageOptions {
 }
 
 export function buildPiMessages(messages: Message[], options?: BuildPiMessageOptions): PiMessage[] {
-  return messages.map((message) => buildPiMessage(message, options));
+  const result: PiMessage[] = [];
+  const pendingToolCalls = new Map<
+    string,
+    { toolCallId: string; toolName: string; timestamp: number }
+  >();
+
+  for (const message of messages) {
+    const converted = buildPiMessage(message, options);
+
+    if (converted.role === "toolResult") {
+      // A result without a pending call can be left behind when a process dies
+      // across a turn boundary. Replaying it would make the provider history
+      // invalid, so only retain results that close a call in this replay.
+      if (pendingToolCalls.has(converted.toolCallId)) {
+        result.push(converted);
+        pendingToolCalls.delete(converted.toolCallId);
+      }
+      continue;
+    }
+
+    if (pendingToolCalls.size > 0) {
+      result.push(...buildInterruptedToolResults(pendingToolCalls.values()));
+      pendingToolCalls.clear();
+    }
+
+    result.push(converted);
+    if (converted.role === "assistant") {
+      for (const block of converted.content) {
+        if (block.type !== "toolCall") {
+          continue;
+        }
+        pendingToolCalls.set(block.id, {
+          toolCallId: block.id,
+          toolName: block.name,
+          timestamp: converted.timestamp,
+        });
+      }
+    }
+  }
+
+  if (pendingToolCalls.size > 0) {
+    result.push(...buildInterruptedToolResults(pendingToolCalls.values()));
+  }
+  return result;
 }
 
 export function buildPiMessage(message: Message, options?: BuildPiMessageOptions): PiMessage {
@@ -448,6 +491,25 @@ function convertToolResultContentBlock(block: AgentToolResultContentBlock) {
     type: "text" as const,
     text: JSON.stringify(block.json),
   };
+}
+
+function buildInterruptedToolResults(
+  pending: Iterable<{ toolCallId: string; toolName: string; timestamp: number }>,
+): ToolResultMessage[] {
+  return [...pending].map((toolCall) => ({
+    role: "toolResult",
+    toolCallId: toolCall.toolCallId,
+    toolName: toolCall.toolName,
+    content: [
+      {
+        type: "text",
+        text: "The previous runtime ended before this tool call produced a result. Its outcome is unknown. Do not automatically retry it solely because of this marker.",
+      },
+    ],
+    details: { code: "runtime_interrupted_tool_call" },
+    isError: true,
+    timestamp: toolCall.timestamp,
+  }));
 }
 
 function parsePayload<T>(payloadJson: string, messageId: string): T {
