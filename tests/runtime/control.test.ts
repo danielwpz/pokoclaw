@@ -293,6 +293,58 @@ describe("RuntimeControlService", () => {
     });
   });
 
+  test("stopping a source chat session also stops its active context handoff run", async () => {
+    await withStorageFixture(async ({ cancel, control, harnessEvents, sessions }) => {
+      const sourceHandle = cancel.begin("sess_1");
+      const handoffHandle = cancel.begin("sess_handoff_1");
+
+      control.beginRun({
+        runId: "run_chat",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+      control.beginRun({
+        runId: "run_handoff",
+        sessionId: "sess_handoff_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "task",
+      });
+
+      sessions.create({
+        id: "sess_handoff_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        ownerAgentId: "agent_1",
+        purpose: "context_handoff",
+        forkedFromSessionId: "sess_1",
+        forkSourceSeq: 0,
+        createdAt: new Date("2026-04-05T00:00:00.000Z"),
+        updatedAt: new Date("2026-04-05T00:00:00.000Z"),
+      });
+
+      const result = control.stopSession({
+        sessionId: "sess_1",
+        actor: "test",
+        sourceKind: "command",
+        requestScope: "session",
+      });
+
+      expect(result).toEqual({
+        accepted: true,
+        sessionId: "sess_1",
+        runIds: ["run_chat", "run_handoff"],
+        conversationId: "conv_1",
+      });
+      expect(sourceHandle.signal.aborted).toBe(true);
+      expect(handoffHandle.signal.aborted).toBe(true);
+      expect(harnessEvents.listByRunId("run_chat")).toHaveLength(1);
+      expect(harnessEvents.listByRunId("run_handoff")).toHaveLength(1);
+    });
+  });
+
   test("records task and cron context on explicit stop events", async () => {
     await withStorageFixture(async ({ cancel, control, harnessEvents, taskRuns }) => {
       taskRuns.create({

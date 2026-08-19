@@ -28,7 +28,7 @@ describe("context clear service", () => {
     const service = new ContextClearService({ storage: handle.storage.db, loop });
 
     const clear = service.request("session_main", "lark:om_clear_1");
-    service.enqueue({
+    const queuedInputId = service.enqueue({
       clearRunId: clear.id,
       sessionId: "session_main",
       scenario: "chat",
@@ -49,6 +49,13 @@ describe("context clear service", () => {
       channelMessageId: "om_queued",
       createdAt: new Date("2026-08-19T08:00:03.000Z"),
     });
+    const duplicateInputId = service.enqueue({
+      clearRunId: clear.id,
+      sessionId: "session_main",
+      scenario: "chat",
+      content: "duplicate delivery must not be queued",
+      channelMessageId: "om_queued",
+    });
 
     const result = await service.execute(clear.id);
 
@@ -59,8 +66,15 @@ describe("context clear service", () => {
       contextEpoch: 1,
     });
     expect(result.drainedInputs).toHaveLength(1);
+    expect(duplicateInputId).toBe(queuedInputId);
     expect(result.drainedInputs[0]?.runtimeImages[0]?.data).toBe("aW1hZ2U=");
     expect(service.request("session_main", "lark:om_clear_1").id).toBe(clear.id);
+    expect(loop.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: settledHandoffSessionId(handle, clear.id),
+        scenario: "task",
+      }),
+    );
 
     const sessions = new SessionsRepo(handle.storage.db);
     expect(sessions.getById("session_main")).toMatchObject({
@@ -282,6 +296,16 @@ describe("context clear service", () => {
     ).toEqual({ count: 0 });
   });
 });
+
+function settledHandoffSessionId(handle: TestDatabaseHandle, clearRunId: string): string {
+  const handoffSessionId = new ContextClearRepo(handle.storage.db).getById(
+    clearRunId,
+  )?.handoffSessionId;
+  if (handoffSessionId == null) {
+    throw new Error(`Missing handoff session for clear ${clearRunId}`);
+  }
+  return handoffSessionId;
+}
 
 function seedMainChat(handle: TestDatabaseHandle): void {
   handle.storage.sqlite.exec(`

@@ -44,6 +44,10 @@ export interface FindLatestApprovalSessionOptions {
   statuses?: string[];
 }
 
+export interface FindLatestContextHandoffSessionOptions {
+  statuses?: string[];
+}
+
 export interface UpdateSessionCompactionInput {
   id: string;
   compactCursor: number;
@@ -187,6 +191,29 @@ export class SessionsRepo {
     const predicates = [
       eq(sessions.approvalForSessionId, approvalForSessionId),
       eq(sessions.purpose, "approval"),
+    ];
+
+    if ((options.statuses?.length ?? 0) > 0) {
+      predicates.push(inArray(sessions.status, options.statuses ?? []));
+    }
+
+    return (
+      this.db
+        .select()
+        .from(sessions)
+        .where(and(...predicates))
+        .orderBy(desc(sessions.updatedAt), desc(sessions.createdAt), desc(sessions.id))
+        .get() ?? null
+    );
+  }
+
+  findLatestContextHandoffSessionForSource(
+    sourceSessionId: string,
+    options: FindLatestContextHandoffSessionOptions = {},
+  ): Session | null {
+    const predicates = [
+      eq(sessions.forkedFromSessionId, sourceSessionId),
+      eq(sessions.purpose, "context_handoff"),
     ];
 
     if ((options.statuses?.length ?? 0) > 0) {

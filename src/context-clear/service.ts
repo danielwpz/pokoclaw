@@ -173,7 +173,7 @@ export class ContextClearService {
       });
       const run = await this.deps.loop.run({
         sessionId: running.handoffSessionId,
-        scenario: "chat",
+        scenario: "task",
         maxTurns: CONTEXT_HANDOFF_MAX_TURNS,
         afterToolResultHook: {
           afterToolResult: ({ toolCall, result }) => {

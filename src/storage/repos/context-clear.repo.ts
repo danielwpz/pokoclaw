@@ -172,6 +172,21 @@ export class ContextClearRepo {
     ) {
       throw new Error(`Context clear run ${input.clearRunId} is not accepting input.`);
     }
+    if (input.channelMessageId != null) {
+      const existing = this.db
+        .select({ id: contextClearPendingInputs.id })
+        .from(contextClearPendingInputs)
+        .where(
+          and(
+            eq(contextClearPendingInputs.clearRunId, input.clearRunId),
+            eq(contextClearPendingInputs.channelMessageId, input.channelMessageId),
+          ),
+        )
+        .get();
+      if (existing != null) {
+        return existing.id;
+      }
+    }
     const nextPosition =
       (this.db
         .select({ value: max(contextClearPendingInputs.position) })

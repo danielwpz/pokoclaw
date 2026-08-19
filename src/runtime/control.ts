@@ -488,6 +488,10 @@ export class RuntimeControlService {
       if (approvalSessionId != null) {
         allSessionIds.add(approvalSessionId);
       }
+      const handoffSessionId = this.findLinkedContextHandoffSessionId(sessionId);
+      if (handoffSessionId != null) {
+        allSessionIds.add(handoffSessionId);
+      }
     }
 
     const seenRunIds = new Set<string>();
@@ -511,6 +515,18 @@ export class RuntimeControlService {
 
     return (
       this.persistence.sessions.findLatestApprovalSessionForSource(sourceSessionId, {
+        statuses: ["active", "paused"],
+      })?.id ?? null
+    );
+  }
+
+  private findLinkedContextHandoffSessionId(sourceSessionId: string): string | null {
+    if (this.persistence?.sessions == null) {
+      return null;
+    }
+
+    return (
+      this.persistence.sessions.findLatestContextHandoffSessionForSource(sourceSessionId, {
         statuses: ["active", "paused"],
       })?.id ?? null
     );
