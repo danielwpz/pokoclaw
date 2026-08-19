@@ -94,6 +94,7 @@ describe("storage db bootstrap", () => {
         { version: 3, name: "a2ui_surface_publications" },
         { version: 4, name: "shell_process_runs" },
         { version: 5, name: "shell_process_output_chunks" },
+        { version: 6, name: "context_clear" },
       ]);
     } finally {
       await destroyTestDatabase(handle);
@@ -134,6 +135,7 @@ describe("storage db bootstrap", () => {
           { version: 3, name: "a2ui_surface_publications" },
           { version: 4, name: "shell_process_runs" },
           { version: 5, name: "shell_process_output_chunks" },
+          { version: 6, name: "context_clear" },
         ]);
 
         const table = upgradedStorage.sqlite

@@ -280,8 +280,8 @@ describe("storage migrations", () => {
       const result = runStorageMigrations(sqlite, { now: () => FIXED_NOW });
 
       expect(result).toEqual({
-        latestVersion: 5,
-        newlyAppliedVersions: [2, 3, 4, 5],
+        latestVersion: 6,
+        newlyAppliedVersions: [2, 3, 4, 5, 6],
         stampedBaseline: true,
       });
       expect(listLedgerRows(sqlite)).toEqual([
@@ -304,6 +304,11 @@ describe("storage migrations", () => {
         {
           version: 5,
           name: "shell_process_output_chunks",
+          applied_at: "2026-04-27T00:00:00.000Z",
+        },
+        {
+          version: 6,
+          name: "context_clear",
           applied_at: "2026-04-27T00:00:00.000Z",
         },
       ]);

@@ -223,4 +223,86 @@ describe("session lane image normalization", () => {
       ],
     });
   });
+
+  test("waits for the active run and durably queues new input once clear is requested", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+    const messages = new MessagesRepo(handle.storage.db);
+    new SessionsRepo(handle.storage.db).create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+    });
+    let resolveActiveRun!: (run: RunAgentLoopResult) => void;
+    const activeRun = new Promise<RunAgentLoopResult>((resolve) => {
+      resolveActiveRun = resolve;
+    });
+    const enqueue = vi.fn(() => "pending_1");
+    const execute = vi.fn(async () => ({
+      status: "completed" as const,
+      clearRunId: "clear_1",
+      sessionId: "sess_1",
+      contextEpoch: 1,
+      drainedInputs: [],
+    }));
+    const enqueueSteerInput = vi.fn(() => true);
+    const lane = new InMemorySessionLane({
+      messages,
+      loop: {
+        enqueueSteerInput,
+        run: vi.fn(() => activeRun),
+        submitApprovalResponse: vi.fn(() => false),
+      } as never,
+      contextClear: {
+        request: vi.fn(() => ({ id: "clear_1" })),
+        enqueue,
+        execute,
+      } as never,
+    });
+
+    void lane.submitMessage({ sessionId: "sess_1", scenario: "chat", content: "first" });
+    const clearing = lane.clearContext("sess_1");
+    const queued = await lane.submitMessage({
+      sessionId: "sess_1",
+      scenario: "chat",
+      content: "after clear request",
+      channelMessageId: "om_queued",
+    });
+
+    expect(queued).toEqual({ status: "queued", clearRunId: "clear_1" });
+    expect(enqueueSteerInput).not.toHaveBeenCalled();
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clearRunId: "clear_1",
+        sessionId: "sess_1",
+        content: "after clear request",
+        channelMessageId: "om_queued",
+      }),
+    );
+    expect(execute).not.toHaveBeenCalled();
+
+    resolveActiveRun(buildRunResult());
+    await clearing;
+    expect(execute).toHaveBeenCalledExactlyOnceWith("clear_1");
+  });
 });
+
+function buildRunResult(): RunAgentLoopResult {
+  return {
+    runId: "run_1",
+    sessionId: "sess_1",
+    scenario: "chat",
+    modelId: "model_1",
+    appendedMessageIds: [],
+    toolExecutions: 0,
+    compaction: {
+      shouldCompact: false,
+      thresholdTokens: 0,
+      effectiveWindow: 0,
+      reason: null,
+    },
+    events: [],
+    stopSignal: null,
+  };
+}

@@ -18,6 +18,7 @@ describe("builtin tools", () => {
     expect(registry.has("query_system_db")).toBe(true);
     expect(registry.has("get_runtime_status")).toBe(true);
     expect(registry.has("finish_task")).toBe(true);
+    expect(registry.has("submit_context_handoff")).toBe(true);
     expect(registry.has("request_permissions")).toBe(true);
     expect(registry.has("review_permission_request")).toBe(true);
     expect(registry.has("create_subagent")).toBe(true);
@@ -41,6 +42,7 @@ describe("builtin tools", () => {
       "query_system_db",
       "get_runtime_status",
       "finish_task",
+      "submit_context_handoff",
       "request_permissions",
       "review_permission_request",
       "create_subagent",

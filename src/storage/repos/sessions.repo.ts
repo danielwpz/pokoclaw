@@ -53,6 +53,11 @@ export interface UpdateSessionCompactionInput {
   updatedAt?: Date;
 }
 
+export interface UpdateSessionCompactionResult {
+  compactionsSinceClear: number;
+  shouldSuggestClear: boolean;
+}
+
 export interface UpdateSessionStatusInput {
   id: string;
   status: string;
@@ -198,23 +203,40 @@ export class SessionsRepo {
     );
   }
 
-  updateCompaction(input: UpdateSessionCompactionInput): void {
-    const updatedAt = input.updatedAt ?? new Date();
+  updateCompaction(input: UpdateSessionCompactionInput): UpdateSessionCompactionResult {
+    return this.db.transaction((tx) => {
+      const current = tx.select().from(sessions).where(eq(sessions.id, input.id)).get();
+      if (current == null) {
+        throw new Error(`Session not found: ${input.id}`);
+      }
+      const compactionsSinceClear =
+        current.purpose === "chat"
+          ? normalizeNonNegativeInteger("compactionsSinceClear", current.compactionsSinceClear + 1)
+          : current.compactionsSinceClear;
+      const shouldSuggestClear =
+        current.purpose === "chat" &&
+        compactionsSinceClear > 0 &&
+        compactionsSinceClear % 5 === 0 &&
+        current.lastClearReminderCount !== compactionsSinceClear;
+      const updatedAt = input.updatedAt ?? new Date();
 
-    this.db
-      .update(sessions)
-      .set({
-        compactCursor: normalizeNonNegativeInteger("compactCursor", input.compactCursor),
-        compactSummary: input.compactSummary ?? null,
-        compactSummaryTokenTotal: normalizeOptionalNonNegativeInteger(
-          "compactSummaryTokenTotal",
-          input.compactSummaryTokenTotal,
-        ),
-        compactSummaryUsageJson: input.compactSummaryUsageJson ?? null,
-        updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
-      })
-      .where(eq(sessions.id, input.id))
-      .run();
+      tx.update(sessions)
+        .set({
+          compactCursor: normalizeNonNegativeInteger("compactCursor", input.compactCursor),
+          compactSummary: input.compactSummary ?? null,
+          compactSummaryTokenTotal: normalizeOptionalNonNegativeInteger(
+            "compactSummaryTokenTotal",
+            input.compactSummaryTokenTotal,
+          ),
+          compactSummaryUsageJson: input.compactSummaryUsageJson ?? null,
+          compactionsSinceClear,
+          ...(shouldSuggestClear ? { lastClearReminderCount: compactionsSinceClear } : {}),
+          updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
+        })
+        .where(eq(sessions.id, input.id))
+        .run();
+      return { compactionsSinceClear, shouldSuggestClear };
+    });
   }
 
   updateStatus(input: UpdateSessionStatusInput): void {

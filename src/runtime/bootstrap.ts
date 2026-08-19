@@ -19,6 +19,7 @@ import { LiveConfigManager } from "@/src/config/live-manager.js";
 import type { LoadConfigOptions } from "@/src/config/load.js";
 import { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { AppConfig } from "@/src/config/schema.js";
+import { ContextClearService } from "@/src/context-clear/service.js";
 import { CronService } from "@/src/cron/service.js";
 import { McpCatalogService } from "@/src/mcp/catalog.js";
 import { computeStableFingerprint } from "@/src/mcp/fingerprint.js";
@@ -166,9 +167,15 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     emitEvent: bridge.emitRuntimeEvent,
   });
 
+  const contextClear = new ContextClearService({
+    storage: input.storage,
+    loop,
+  });
+
   const ingress = new SessionRuntimeIngress({
     loop,
     messages,
+    contextClear,
   });
   const manager = new AgentManager({
     storage: input.storage,
@@ -342,6 +349,9 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
           starting = null;
         });
       lark.start();
+      for (const recovered of contextClear.recoverIncomplete()) {
+        ingress.resumeDrainedInputs(recovered.drainedInputs);
+      }
       shellProcesses.recoverAfterRestart();
       cron.start();
       meditation.start();

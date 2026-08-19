@@ -1,6 +1,6 @@
 ---
 name: system-observe
-description: Use this skill for pokoclaw observability and self-diagnosis, including delegated approval review. It shows how to inspect pokoclaw through the system database, runtime logs, and authoritative source definitions.
+description: Use this skill before calling query_system_db or when diagnosing pokoclaw. It teaches how to query the read-only system database, including conversation history before compaction or context clear, and how to combine database facts with runtime logs and authoritative source definitions.
 skillKey: pokoclaw/system-observe
 ---
 
@@ -29,6 +29,9 @@ Choose one or more channels based on the question. Do not force a fixed order fo
     - `../../src/storage/migrate/files/0001_init.sql`
     - `../../src/storage/migrate/files/0002_agent_runtime_modes.sql`
     - `../../src/storage/migrate/files/0003_a2ui_surface_publications.sql`
+    - `../../src/storage/migrate/files/0004_shell_process_runs.sql`
+    - `../../src/storage/migrate/files/0005_shell_process_output_chunks.sql`
+    - `../../src/storage/migrate/files/0006_context_clear.sql`
       The schema truth lives in `tables.ts` plus the migration SQL files.
   - Only then use `query_system_db` for live schema discovery.
 - If the task involves live runtime status payload semantics for `get_runtime_status`:
@@ -48,6 +51,8 @@ Choose one or more channels based on the question. Do not force a fixed order fo
 - If the `runId` form says a run is not present in live memory, treat that as "not currently active here and no retained in-memory snapshot was found" rather than proof of success; then use the DB to determine whether it completed, failed, or was cancelled.
 - If the answer depends on live in-memory state that `get_runtime_status` does not expose, say that clearly and do not guess.
 - Adapt an existing query recipe before inventing a new exploratory query.
+- When recovering conversation history before compaction or context clear, start with the dedicated recipe in `references/query-recipes.md`. Do not begin by listing tables or running `PRAGMA table_info(...)` unless that recipe fails because the schema has actually changed.
+- For conversation history, extract user-visible text and page by `seq`. Do not bulk-select raw `payload_json`, which may contain large reasoning signatures and tool payloads that pollute the current context.
 - Delegated approval investigation uses the same DB and log channels; start from the approval recipes and approval log hints in the references.
 - Separate facts from inference.
 - Include exact IDs, statuses, timestamps, and error text when available.
@@ -70,5 +75,6 @@ Do not skip the required first reads above when they directly apply.
 - Do not start with exploratory schema probing when the references or source files already tell you what to query.
 - Do not spam repeated `sqlite_master` or `PRAGMA table_info(...)` queries unless you genuinely need schema discovery.
 - Do not use `query_system_db` as your first move for schema exploration when a recipe or source definition is already available.
+- Do not bulk-load raw message payloads when a text-only, bounded history query can answer the question.
 - Do not rely on logs alone when the database already contains the durable fact you need.
 - Do not present inference as fact.

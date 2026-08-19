@@ -155,4 +155,33 @@ describe("session policy", () => {
       isToolAllowedForSession({ purpose: "approval", agentKind: "main", toolName: "process" }),
     ).toBe(false);
   });
+
+  test("limits context handoff sessions to continuity tools", () => {
+    for (const toolName of [
+      "read",
+      "write",
+      "edit",
+      "ls",
+      "list_dir",
+      "grep",
+      "query_system_db",
+      "submit_context_handoff",
+    ]) {
+      expect(
+        isToolAllowedForSession({ purpose: "context_handoff", agentKind: "sub", toolName }),
+      ).toBe(true);
+    }
+    for (const toolName of ["bash", "background_task", "schedule_task", "send_attachment"]) {
+      expect(
+        isToolAllowedForSession({ purpose: "context_handoff", agentKind: "sub", toolName }),
+      ).toBe(false);
+    }
+    expect(
+      isToolAllowedForSession({
+        purpose: "chat",
+        agentKind: "main",
+        toolName: "submit_context_handoff",
+      }),
+    ).toBe(false);
+  });
 });

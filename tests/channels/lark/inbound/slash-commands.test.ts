@@ -638,9 +638,63 @@ describe("lark inbound slash commands", () => {
           "- /status — Show the current conversation status, model, usage, and active runs.",
           "- /model — Open the model switch card for the current conversation.",
           "- /stop — Stop the current conversation or session.",
+          "- /clear — Hand off essential context, then start a fresh LLM context in the same session.",
           "- /yolo — Toggle YOLO mode for this agent.",
         ].join("\n"),
       );
+    });
+  });
+
+  test("runs /clear through runtime ingress and reports start and completion", async () => {
+    await withHandle(async (handle) => {
+      seedFixture(handle);
+      new ChannelSurfacesRepo(handle.storage.db).upsert({
+        id: "surface_clear_1",
+        channelType: "lark",
+        channelInstallationId: "default",
+        conversationId: "conv_main",
+        branchId: "branch_main",
+        surfaceKey: buildLarkChatSurfaceKey("oc_chat_1"),
+        surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
+      });
+      const submitMessage = vi.fn(async () => ({ status: "started" as const }));
+      const clearContext = vi.fn(async () => ({
+        status: "completed" as const,
+        clearRunId: "clear_1",
+        contextEpoch: 1,
+      }));
+      const create = vi.fn(async (_input: unknown) => ({
+        data: { message_id: "om_clear_status" },
+      }));
+      const handler = createLarkMessageReceiveHandler({
+        installationId: "default",
+        storage: handle.storage.db,
+        ingress: {
+          submitMessage,
+          clearContext,
+          submitApprovalDecision: vi.fn(() => false),
+        },
+        control: new RuntimeControlService(new SessionRunAbortRegistry()),
+        clients: {
+          getOrCreate: vi.fn(() => ({
+            sdk: { im: { message: { create, reply: vi.fn() } } },
+          })) as unknown as (installationId: string) => LarkSdkClient,
+        },
+      });
+
+      await handler(makeTextEvent("/clear"));
+
+      expect(submitMessage).not.toHaveBeenCalled();
+      expect(clearContext).toHaveBeenCalledExactlyOnceWith("sess_chat_1", "om_msg_1");
+      expect(create).toHaveBeenCalledTimes(2);
+      const sentTexts = create.mock.calls.map((call) => {
+        const content = (call[0] as { data?: { content?: string } }).data?.content ?? "{}";
+        return (JSON.parse(content) as { text?: string }).text ?? "";
+      });
+      expect(sentTexts).toEqual([
+        "🧹 正在整理并交接上下文。期间的新消息会排队，不会丢失。",
+        "✅ 上下文已清理，当前会话保持不变。",
+      ]);
     });
   });
 
