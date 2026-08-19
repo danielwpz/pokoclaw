@@ -4,6 +4,74 @@ Use these as starting points and adapt them to the concrete IDs or time window y
 
 If the task is about approvals or delegated approval, start from this file before writing custom SQL.
 
+## Recover conversation history before compaction or context clear
+
+Use this when earlier messages are not loaded into the current LLM context. The current session ID and, after `/clear`, the previous-context boundary are provided by the host.
+
+Start with the newest 100 user-visible messages at or before the boundary. This extracts only visible text and avoids loading reasoning signatures, tool payloads, and other large internal JSON.
+
+```sql
+WITH history_page AS (
+  SELECT
+    seq,
+    role,
+    message_type,
+    payload_json,
+    stop_reason,
+    error_message,
+    created_at
+  FROM messages
+  WHERE session_id = 'REPLACE_SESSION_ID'
+    AND seq <= REPLACE_UPPER_SEQ
+    AND visibility = 'user_visible'
+  ORDER BY seq DESC
+  LIMIT 100
+)
+SELECT
+  p.seq,
+  p.role,
+  p.message_type,
+  CASE json_type(p.payload_json, '$.content')
+    WHEN 'text' THEN json_extract(p.payload_json, '$.content')
+    WHEN 'array' THEN (
+      SELECT group_concat(json_extract(block.value, '$.text'), char(10))
+      FROM json_each(p.payload_json, '$.content') AS block
+      WHERE json_extract(block.value, '$.type') = 'text'
+    )
+    ELSE NULL
+  END AS text_content,
+  p.stop_reason,
+  p.error_message,
+  p.created_at
+FROM history_page AS p
+ORDER BY p.seq ASC;
+```
+
+- Replace `REPLACE_UPPER_SEQ` with the clear boundary when recovering pre-clear history. Remove that predicate when no boundary is needed.
+- To page farther back, replace it with `seq < REPLACE_OLDEST_RETURNED_SEQ` and repeat.
+- Query a narrow `payload_json` range separately only when a non-text message or exact tool detail is genuinely required.
+
+## Context clear status for one session
+
+```sql
+SELECT
+  id,
+  session_id,
+  handoff_session_id,
+  source_seq,
+  status,
+  error_text,
+  requested_at,
+  started_at,
+  completed_at,
+  failed_at,
+  updated_at
+FROM context_clear_runs
+WHERE session_id = 'REPLACE_SESSION_ID'
+ORDER BY requested_at DESC
+LIMIT 10;
+```
+
 ## Agent and SubAgent inventory
 
 Use this instead of guessing a `subagents` table. SubAgents are stored in `agents`.
@@ -253,35 +321,65 @@ LIMIT 10;
 
 ## Recent session activity
 
+`sessions.updated_at` is lifecycle state and is not updated for every appended message. Use the latest message timestamp when ordering by real conversation activity.
+
 ```sql
 SELECT
-  id,
-  owner_agent_id,
-  purpose,
-  status,
-  approval_for_session_id,
-  created_at,
-  updated_at,
-  ended_at
-FROM sessions
-ORDER BY updated_at DESC
+  s.id,
+  s.owner_agent_id,
+  s.purpose,
+  s.status,
+  s.approval_for_session_id,
+  s.created_at,
+  s.updated_at AS session_updated_at,
+  s.ended_at,
+  (
+    SELECT MAX(m.created_at)
+    FROM messages AS m
+    WHERE m.session_id = s.id
+  ) AS last_message_at
+FROM sessions AS s
+ORDER BY COALESCE(last_message_at, s.updated_at) DESC
 LIMIT 20;
 ```
 
 ## Latest assistant outputs for one session
 
 ```sql
+WITH assistant_text AS (
+  SELECT
+    m.seq,
+    (
+      SELECT group_concat(json_extract(block.value, '$.text'), char(10))
+      FROM json_each(m.payload_json, '$.content') AS block
+      WHERE json_extract(block.value, '$.type') = 'text'
+    ) AS text_content,
+    m.stop_reason,
+    m.error_message,
+    m.usage_json,
+    m.created_at
+  FROM messages AS m
+  WHERE m.session_id = 'REPLACE_SESSION_ID'
+    AND m.role = 'assistant'
+    AND m.visibility = 'user_visible'
+),
+recent_assistant AS (
+  SELECT *
+  FROM assistant_text
+  WHERE text_content IS NOT NULL
+    AND trim(text_content) <> ''
+  ORDER BY seq DESC
+  LIMIT 20
+)
 SELECT
-  seq,
-  role,
-  stop_reason,
-  error_message,
-  usage_json,
-  created_at
-FROM messages
-WHERE session_id = 'REPLACE_SESSION_ID'
-ORDER BY seq DESC
-LIMIT 20;
+  a.seq,
+  a.text_content,
+  a.stop_reason,
+  a.error_message,
+  a.usage_json,
+  a.created_at
+FROM recent_assistant AS a
+ORDER BY a.seq DESC;
 ```
 
 ## Latest task run for one cron job

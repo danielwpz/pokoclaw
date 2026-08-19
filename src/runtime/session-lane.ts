@@ -17,6 +17,10 @@ import type {
   AgentLoopAfterToolResultHook,
   RunAgentLoopResult,
 } from "@/src/agent/loop.js";
+import type {
+  ContextClearExecutionResult,
+  ContextClearService,
+} from "@/src/context-clear/service.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
@@ -54,20 +58,27 @@ export type SubmitSessionMessageResult =
     }
   | {
       status: "steered";
+    }
+  | {
+      status: "queued";
+      clearRunId: string;
     };
 
 export interface SessionLaneDependencies {
   loop: AgentLoop;
   messages: MessagesRepo;
+  contextClear?: ContextClearService;
 }
 
 export class InMemorySessionLane {
   private activeRun: Promise<RunAgentLoopResult> | null = null;
+  private clearRunId: string | null = null;
+  private clearPromise: Promise<ContextClearExecutionResult> | null = null;
 
   constructor(private readonly deps: SessionLaneDependencies) {}
 
   isActive(): boolean {
-    return this.activeRun != null;
+    return this.activeRun != null || this.clearPromise != null;
   }
 
   // If a run is already active, this message becomes steer and is handed to the
@@ -91,6 +102,40 @@ export class InMemorySessionLane {
       channelParentMessageId: input.channelParentMessageId ?? null,
       channelThreadId: input.channelThreadId ?? null,
     });
+    if (this.clearRunId != null) {
+      if (input.afterToolResultHook != null) {
+        throw new Error("Inputs with terminal tool hooks cannot be queued during context clear.");
+      }
+      const contextClear = this.requireContextClear();
+      contextClear.enqueue({
+        clearRunId: this.clearRunId,
+        sessionId: input.sessionId,
+        scenario: input.scenario,
+        content: input.content,
+        ...(normalized.userPayload == null ? {} : { userPayload: normalized.userPayload }),
+        ...(normalized.runtimeImages == null ? {} : { runtimeImages: normalized.runtimeImages }),
+        ...(input.messageType == null ? {} : { messageType: input.messageType }),
+        ...(input.visibility == null ? {} : { visibility: input.visibility }),
+        ...(input.channelMessageId === undefined
+          ? {}
+          : { channelMessageId: input.channelMessageId ?? null }),
+        ...(input.channelParentMessageId === undefined
+          ? {}
+          : { channelParentMessageId: input.channelParentMessageId ?? null }),
+        ...(input.channelThreadId === undefined
+          ? {}
+          : { channelThreadId: input.channelThreadId ?? null }),
+        ...(input.createdAt == null ? {} : { createdAt: input.createdAt }),
+        ...(input.maxTurns == null ? {} : { maxTurns: input.maxTurns }),
+      });
+      notifySubmissionAccepted(input);
+      logger.info("durably queued session message during context clear", {
+        sessionId: input.sessionId,
+        clearRunId: this.clearRunId,
+        scenario: input.scenario,
+      });
+      return { status: "queued", clearRunId: this.clearRunId };
+    }
     if (this.activeRun != null) {
       const steered = this.deps.loop.enqueueSteerInput({
         sessionId: input.sessionId,
@@ -146,18 +191,135 @@ export class InMemorySessionLane {
 
     notifySubmissionAccepted(input);
 
+    const runPromise = this.startPersistedRun({
+      sessionId: input.sessionId,
+      scenario: input.scenario,
+      ...(normalized.runtimeImages == null || normalized.runtimeImages.length === 0
+        ? {}
+        : { initialRuntimeImagesByMessageId: { [messageId]: normalized.runtimeImages } }),
+      ...(input.maxTurns == null ? {} : { maxTurns: input.maxTurns }),
+      ...(input.afterToolResultHook == null
+        ? {}
+        : { afterToolResultHook: input.afterToolResultHook }),
+    });
+
+    logger.debug("starting session run", {
+      sessionId: input.sessionId,
+      messageId,
+      scenario: input.scenario,
+      persistedImageCount: normalized.userPayload?.images?.length ?? 0,
+      runtimeImageCount: normalized.runtimeImages?.length ?? 0,
+      runtimeImageMessageIds: normalized.runtimeImages?.map((image) => image.messageId) ?? [],
+    });
+
+    return {
+      status: "started",
+      messageId,
+      run: await runPromise,
+    };
+  }
+
+  clearContext(
+    sessionId: string,
+    requestKey?: string | null,
+  ): Promise<ContextClearExecutionResult> {
+    if (this.clearPromise != null) {
+      return this.clearPromise;
+    }
+    const contextClear = this.requireContextClear();
+    const requested = contextClear.request(sessionId, requestKey);
+    if (requested.status === "completed" || requested.status === "failed") {
+      return contextClear.execute(requested.id);
+    }
+    this.clearRunId = requested.id;
+    const clearPromise = this.performContextClear({
+      sessionId,
+      clearRunId: requested.id,
+      activeRunAtRequest: this.activeRun,
+    });
+    this.clearPromise = clearPromise;
+    return clearPromise;
+  }
+
+  resumeDrainedInputs(result: ContextClearExecutionResult): void {
+    if (result.drainedInputs.length === 0) {
+      return;
+    }
+    if (this.activeRun != null || this.clearPromise != null) {
+      throw new Error(`Cannot resume persisted input while session ${result.sessionId} is active.`);
+    }
+    this.startDrainedInputs(result);
+  }
+
+  private async performContextClear(input: {
+    sessionId: string;
+    clearRunId: string;
+    activeRunAtRequest: Promise<RunAgentLoopResult> | null;
+  }): Promise<ContextClearExecutionResult> {
+    if (input.activeRunAtRequest != null) {
+      await input.activeRunAtRequest.catch(() => undefined);
+    }
+    let result: ContextClearExecutionResult;
+    try {
+      result = await this.requireContextClear().execute(input.clearRunId);
+    } finally {
+      if (this.clearRunId === input.clearRunId) {
+        this.clearRunId = null;
+        this.clearPromise = null;
+      }
+    }
+    this.startDrainedInputs(result);
+    return result;
+  }
+
+  private startDrainedInputs(result: ContextClearExecutionResult): void {
+    const first = result.drainedInputs[0];
+    if (first == null) {
+      return;
+    }
+    const runtimeImagesByMessageId = Object.fromEntries(
+      result.drainedInputs
+        .filter((entry) => entry.runtimeImages.length > 0)
+        .map((entry) => [entry.messageId, entry.runtimeImages]),
+    );
+    const runPromise = this.startPersistedRun({
+      sessionId: first.sessionId,
+      scenario: first.scenario,
+      ...(Object.keys(runtimeImagesByMessageId).length === 0
+        ? {}
+        : { initialRuntimeImagesByMessageId: runtimeImagesByMessageId }),
+      ...(first.maxTurns == null ? {} : { maxTurns: first.maxTurns }),
+    });
+    void runPromise.then(
+      () => {
+        try {
+          this.requireContextClear().markQueuedInputsProcessed(result.clearRunId);
+          logger.info("context clear queued input run completed", {
+            clearRunId: result.clearRunId,
+            sessionId: result.sessionId,
+            queuedInputCount: result.drainedInputs.length,
+          });
+        } catch (error) {
+          logger.error("failed to acknowledge context clear queued input run", {
+            clearRunId: result.clearRunId,
+            sessionId: result.sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+      () => undefined,
+    );
+  }
+
+  private startPersistedRun(input: {
+    sessionId: string;
+    scenario: ModelScenario;
+    initialRuntimeImagesByMessageId?: Record<string, AgentUserRuntimeImagePayload[]>;
+    maxTurns?: number;
+    afterToolResultHook?: AgentLoopAfterToolResultHook;
+  }): Promise<RunAgentLoopResult> {
     const runPromise = this.deps.loop
-      .run({
-        sessionId: input.sessionId,
-        scenario: input.scenario,
-        ...(normalized.runtimeImages == null || normalized.runtimeImages.length === 0
-          ? {}
-          : { initialRuntimeImagesByMessageId: { [messageId]: normalized.runtimeImages } }),
-        ...(input.maxTurns == null ? {} : { maxTurns: input.maxTurns }),
-        ...(input.afterToolResultHook == null
-          ? {}
-          : { afterToolResultHook: input.afterToolResultHook }),
-      })
+      .run(input)
       .then((run) => {
         logger.debug("session lane run resolved", {
           sessionId: input.sessionId,
@@ -188,24 +350,18 @@ export class InMemorySessionLane {
       });
 
     this.activeRun = runPromise;
-    logger.debug("starting session run", {
-      sessionId: input.sessionId,
-      messageId,
-      scenario: input.scenario,
-      persistedImageCount: normalized.userPayload?.images?.length ?? 0,
-      runtimeImageCount: normalized.runtimeImages?.length ?? 0,
-      runtimeImageMessageIds: normalized.runtimeImages?.map((image) => image.messageId) ?? [],
-    });
-
-    return {
-      status: "started",
-      messageId,
-      run: await runPromise,
-    };
+    return runPromise;
   }
 
   submitApprovalDecision(input: ApprovalResponseInput): boolean {
     return this.deps.loop.submitApprovalResponse(input);
+  }
+
+  private requireContextClear(): ContextClearService {
+    if (this.deps.contextClear == null) {
+      throw new Error("Context clear service is not configured.");
+    }
+    return this.deps.contextClear;
   }
 }
 

@@ -1906,6 +1906,52 @@ describe("agent loop", () => {
     );
   });
 
+  test("fails early when a context handoff resolves to a model without tool support", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationAndAgentFixture(handle);
+
+    const sessionsRepo = new SessionsRepo(handle.storage.db);
+    const messagesRepo = new MessagesRepo(handle.storage.db);
+    sessionsRepo.create({
+      id: "sess_handoff",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      ownerAgentId: "agent_1",
+      purpose: "context_handoff",
+      createdAt: new Date("2026-03-22T00:00:00.000Z"),
+    });
+    messagesRepo.append({
+      id: "msg_handoff",
+      sessionId: "sess_handoff",
+      seq: 1,
+      role: "user",
+      messageType: "context_handoff_request",
+      visibility: "hidden_system",
+      payloadJson: '{"content":"prepare the handoff"}',
+      createdAt: new Date("2026-03-22T00:00:01.000Z"),
+    });
+
+    const loop = new AgentLoop({
+      sessions: new AgentSessionService(sessionsRepo, messagesRepo),
+      messages: messagesRepo,
+      models: new ProviderRegistry(createModelConfig({ supportsTools: false })),
+      tools: new ToolRegistry(),
+      cancel: new SessionRunAbortRegistry(),
+      modelRunner: {
+        async runTurn() {
+          throw new Error("model runner should not be called");
+        },
+      },
+      storage: handle.storage.db,
+      securityConfig: DEFAULT_CONFIG.security,
+      compaction: DEFAULT_CONFIG.compaction,
+    });
+
+    await expect(loop.run({ sessionId: "sess_handoff", scenario: "task" })).rejects.toThrow(
+      'Session purpose "context_handoff" requires a tool-capable model',
+    );
+  });
+
   test("continues after bash tool calls and persists tool results", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationFixture(handle);

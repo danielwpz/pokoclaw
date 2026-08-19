@@ -12,6 +12,10 @@ If you need the authoritative code definition, inspect:
 - `../../src/storage/migrate/files/0001_init.sql`
 - `../../src/storage/migrate/files/0002_agent_runtime_modes.sql`
 - `../../src/storage/migrate/files/0003_a2ui_surface_publications.sql`
+- `../../src/storage/migrate/files/0004_shell_process_runs.sql`
+- `../../src/storage/migrate/files/0005_shell_process_output_chunks.sql`
+- `../../src/storage/migrate/files/0006_context_clear.sql`
+- `../../src/storage/migrate/files/0007_context_clear_recovery.sql`
 
 Important current-schema pitfalls:
 
@@ -80,9 +84,17 @@ PRAGMA table_info(cron_jobs);
 
 - `sessions`
   - Execution and chat sessions.
-  - Columns: `id`, `conversation_id`, `branch_id`, `owner_agent_id`, `purpose`, `context_mode`, `approval_for_session_id`, `forked_from_session_id`, `fork_source_seq`, `status`, `compact_cursor`, `compact_summary`, `compact_summary_token_total`, `compact_summary_usage_json`, `created_at`, `updated_at`, `ended_at`.
+  - Columns: `id`, `conversation_id`, `branch_id`, `owner_agent_id`, `purpose`, `context_mode`, `approval_for_session_id`, `forked_from_session_id`, `fork_source_seq`, `status`, `compact_cursor`, `compact_summary`, `compact_summary_token_total`, `compact_summary_usage_json`, `context_epoch`, `compactions_since_clear`, `last_clear_reminder_count`, `created_at`, `updated_at`, `ended_at`.
   - `context_mode` currently uses values such as `"isolated"` and `"group"`; check this when diagnosing approval routing or context isolation.
   - Compaction fields (`compact_cursor`, `compact_summary`, `compact_summary_token_total`, `compact_summary_usage_json`) track memory compaction state; relevant for long-session cost and context analysis.
+
+- `context_clear_runs`
+  - Durable lifecycle for internal fresh-context handoffs, including source boundary, handoff session, kickoff, failure, and timestamps.
+  - Columns: `id`, `session_id`, `request_key`, `handoff_session_id`, `source_seq`, `status`, `kickoff_message`, `error_text`, `requested_at`, `started_at`, `completed_at`, `failed_at`, `queued_inputs_processed_at`, `updated_at`.
+
+- `context_clear_pending_inputs`
+  - Durable recovery queue for messages received while a context clear is waiting or running. Rows remain until the follow-up Agent run completes so restart recovery can resume them safely.
+  - Columns: `id`, `clear_run_id`, `session_id`, `position`, `scenario`, `content`, `user_payload_json`, `runtime_images_json`, `message_type`, `visibility`, `channel_message_id`, `channel_parent_message_id`, `channel_thread_id`, `max_turns`, `appended_message_id`, `created_at`.
 
 - `a2ui_surface_publications`
   - Published A2UI surface state and callback consumption records.

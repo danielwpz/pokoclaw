@@ -271,6 +271,9 @@ describe("compaction helpers", () => {
         '{"input":55,"output":77,"cacheRead":0,"cacheWrite":0,"totalTokens":132}',
       createdAt: new Date("2026-03-22T00:00:00.000Z"),
     });
+    handle.storage.sqlite
+      .prepare("UPDATE sessions SET compactions_since_clear = 4 WHERE id = ?")
+      .run("sess_1");
     messagesRepo.append({
       id: "msg_1",
       sessionId: "sess_1",
@@ -398,9 +401,15 @@ describe("compaction helpers", () => {
     expect(session?.compactSummaryUsageJson).toBe(
       '{"input":500,"output":123,"cacheRead":0,"cacheWrite":0,"totalTokens":623}',
     );
+    expect(session?.compactionsSinceClear).toBe(5);
+    expect(session?.lastClearReminderCount).toBe(5);
     expect(prompts[0]).toContain("<previous-summary>");
     expect(prompts[0]).toContain("/workspace/uploads/brief--12345678.md");
-    expect(emitted).toEqual(["compaction_started", "compaction_completed"]);
+    expect(emitted).toEqual([
+      "compaction_started",
+      "compaction_completed",
+      "context_clear_suggested",
+    ]);
   });
 });
 

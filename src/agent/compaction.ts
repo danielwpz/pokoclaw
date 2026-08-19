@@ -171,6 +171,14 @@ export type CompactionLifecycleEventInput =
       conversationId: string;
       branchId: string;
       runId: string;
+    }
+  | {
+      type: "context_clear_suggested";
+      compactionCount: number;
+      sessionId: string;
+      conversationId: string;
+      branchId: string;
+      runId: string;
     };
 
 export interface AgentCompactionServiceDependencies {
@@ -466,7 +474,7 @@ export class AgentCompactionService {
         signal: input.signal,
       });
 
-      this.deps.sessions.updateCompaction({
+      const compactionUpdate = this.deps.sessions.updateCompaction({
         id: input.sessionId,
         compactCursor: preparation.compactCursor,
         compactSummary: summaryResult.text,
@@ -495,6 +503,17 @@ export class AgentCompactionService {
         branchId: input.branchId,
         runId: input.runId,
       });
+
+      if (compactionUpdate.shouldSuggestClear) {
+        input.emitEvent?.({
+          type: "context_clear_suggested",
+          compactionCount: compactionUpdate.compactionsSinceClear,
+          sessionId: input.sessionId,
+          conversationId: input.conversationId,
+          branchId: input.branchId,
+          runId: input.runId,
+        });
+      }
 
       return {
         compacted: true,

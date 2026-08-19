@@ -44,6 +44,10 @@ export interface FindLatestApprovalSessionOptions {
   statuses?: string[];
 }
 
+export interface FindLatestContextHandoffSessionOptions {
+  statuses?: string[];
+}
+
 export interface UpdateSessionCompactionInput {
   id: string;
   compactCursor: number;
@@ -51,6 +55,11 @@ export interface UpdateSessionCompactionInput {
   compactSummaryTokenTotal?: number | null;
   compactSummaryUsageJson?: string | null;
   updatedAt?: Date;
+}
+
+export interface UpdateSessionCompactionResult {
+  compactionsSinceClear: number;
+  shouldSuggestClear: boolean;
 }
 
 export interface UpdateSessionStatusInput {
@@ -198,23 +207,63 @@ export class SessionsRepo {
     );
   }
 
-  updateCompaction(input: UpdateSessionCompactionInput): void {
-    const updatedAt = input.updatedAt ?? new Date();
+  findLatestContextHandoffSessionForSource(
+    sourceSessionId: string,
+    options: FindLatestContextHandoffSessionOptions = {},
+  ): Session | null {
+    const predicates = [
+      eq(sessions.forkedFromSessionId, sourceSessionId),
+      eq(sessions.purpose, "context_handoff"),
+    ];
 
-    this.db
-      .update(sessions)
-      .set({
-        compactCursor: normalizeNonNegativeInteger("compactCursor", input.compactCursor),
-        compactSummary: input.compactSummary ?? null,
-        compactSummaryTokenTotal: normalizeOptionalNonNegativeInteger(
-          "compactSummaryTokenTotal",
-          input.compactSummaryTokenTotal,
-        ),
-        compactSummaryUsageJson: input.compactSummaryUsageJson ?? null,
-        updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
-      })
-      .where(eq(sessions.id, input.id))
-      .run();
+    if ((options.statuses?.length ?? 0) > 0) {
+      predicates.push(inArray(sessions.status, options.statuses ?? []));
+    }
+
+    return (
+      this.db
+        .select()
+        .from(sessions)
+        .where(and(...predicates))
+        .orderBy(desc(sessions.updatedAt), desc(sessions.createdAt), desc(sessions.id))
+        .get() ?? null
+    );
+  }
+
+  updateCompaction(input: UpdateSessionCompactionInput): UpdateSessionCompactionResult {
+    return this.db.transaction((tx) => {
+      const current = tx.select().from(sessions).where(eq(sessions.id, input.id)).get();
+      if (current == null) {
+        throw new Error(`Session not found: ${input.id}`);
+      }
+      const compactionsSinceClear =
+        current.purpose === "chat"
+          ? normalizeNonNegativeInteger("compactionsSinceClear", current.compactionsSinceClear + 1)
+          : current.compactionsSinceClear;
+      const shouldSuggestClear =
+        current.purpose === "chat" &&
+        compactionsSinceClear > 0 &&
+        compactionsSinceClear % 5 === 0 &&
+        current.lastClearReminderCount !== compactionsSinceClear;
+      const updatedAt = input.updatedAt ?? new Date();
+
+      tx.update(sessions)
+        .set({
+          compactCursor: normalizeNonNegativeInteger("compactCursor", input.compactCursor),
+          compactSummary: input.compactSummary ?? null,
+          compactSummaryTokenTotal: normalizeOptionalNonNegativeInteger(
+            "compactSummaryTokenTotal",
+            input.compactSummaryTokenTotal,
+          ),
+          compactSummaryUsageJson: input.compactSummaryUsageJson ?? null,
+          compactionsSinceClear,
+          ...(shouldSuggestClear ? { lastClearReminderCount: compactionsSinceClear } : {}),
+          updatedAt: toCanonicalUtcIsoTimestamp(updatedAt),
+        })
+        .where(eq(sessions.id, input.id))
+        .run();
+      return { compactionsSinceClear, shouldSuggestClear };
+    });
   }
 
   updateStatus(input: UpdateSessionStatusInput): void {

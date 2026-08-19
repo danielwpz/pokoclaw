@@ -175,6 +175,19 @@ Without real context materialization, background tasks run blind: they get eithe
 
 **Trade-off:** Full context materialization at fork time means background tasks carry some memory overhead and the fork snapshot reflects context state at that instant. If the parent session compacts aggressively while a background task is running, the fork is unaffected — it already has what it needs. The tradeoff is memory and snapshot cost vs. background tasks that actually know what they were doing.
 
+### Fresh context handoff
+
+Main Agent and SubAgent chats can use `/clear` when repeated compaction has made the effective context noisy. The user-visible session and full SQLite transcript stay intact, while the runtime replaces only the LLM-visible context:
+
+1. Wait for the current run to finish and fork a fixed snapshot into an internal `context_handoff` session.
+2. Ask the owning agent to persist durable facts in Memory/workspace files, optionally inspect earlier messages through read-only `query_system_db`, and submit a fresh-context kickoff with `submit_context_handoff`.
+3. Atomically advance the original session's context boundary, remove the old compact summary, append the hidden kickoff, and then append any user inputs durably queued during the handoff.
+4. If the handoff fails, preserve the old context and append the queued inputs there instead. Queued-input recovery metadata remains durable until the follow-up Agent run completes, so a process restart resumes unhandled work without repeating a response that was already persisted.
+
+`query_system_db` is currently a whole-database, read-only observation capability for both Main Agents and SubAgents. Main Agents may inspect global runtime history. SubAgents are instructed to default to their own conversation and use broader history only when it is relevant to their confirmed scope, but the SQL layer does not enforce row-level isolation. This is a behavioral scope boundary, not a confidentiality boundary.
+
+Each successful chat compaction increments a per-session counter. At 5, 10, 15, and subsequent multiples of five, the channel sends one `/clear` suggestion; a successful clear resets the counter.
+
 ---
 
 ## 6. Self-Harness: The System That Improves Itself

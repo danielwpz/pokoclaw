@@ -27,7 +27,7 @@ export function createQuerySystemDbTool() {
   return defineTool({
     name: "query_system_db",
     description:
-      "Run a SQL query against pokoclaw's read-only system SQLite database for diagnostics and observability.",
+      "Run a SQL query against pokoclaw's read-only system SQLite database for diagnostics, observability, and persisted conversation history, including messages before compaction or context clear.",
     inputSchema: QUERY_SYSTEM_DB_TOOL_SCHEMA,
     execute(context, args) {
       const ownerAgentId = resolveToolOwnerAgentId(context);

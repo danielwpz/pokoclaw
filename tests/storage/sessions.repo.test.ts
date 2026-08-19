@@ -58,6 +58,9 @@ describe("sessions repo", () => {
     expect(session?.compactSummaryUsageJson).toBe(
       '{"input":111,"output":321,"cacheRead":0,"cacheWrite":0,"totalTokens":432}',
     );
+    expect(session?.contextEpoch).toBe(0);
+    expect(session?.compactionsSinceClear).toBe(0);
+    expect(session?.lastClearReminderCount).toBe(0);
     expect(session?.createdAt).toBe("2026-03-22T00:00:01.000Z");
     expect(session?.updatedAt).toBe("2026-03-22T00:00:01.000Z");
   });
@@ -93,6 +96,35 @@ describe("sessions repo", () => {
       '{"input":222,"output":456,"cacheRead":0,"cacheWrite":0,"totalTokens":678}',
     );
     expect(session?.updatedAt).toBe("2026-03-22T00:00:05.000Z");
+  });
+
+  test("claims one clear reminder at every fifth successful chat compaction", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    const repo = new SessionsRepo(handle.storage.db);
+    seedConversationFixture(handle);
+    repo.create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+    });
+
+    const suggestions = Array.from({ length: 10 }, (_, index) =>
+      repo.updateCompaction({
+        id: "sess_1",
+        compactCursor: index,
+        compactSummary: `summary ${index + 1}`,
+      }),
+    ).filter((result) => result.shouldSuggestClear);
+
+    expect(suggestions).toEqual([
+      { compactionsSinceClear: 5, shouldSuggestClear: true },
+      { compactionsSinceClear: 10, shouldSuggestClear: true },
+    ]);
+    expect(repo.getById("sess_1")).toMatchObject({
+      compactionsSinceClear: 10,
+      lastClearReminderCount: 10,
+    });
   });
 
   test("listByConversation filters by status and orders by createdAt", async () => {

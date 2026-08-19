@@ -5,6 +5,8 @@
  * and approval decisions through this boundary. Ingress delegates scheduling
  * and ordering to dispatcher/session-lane primitives.
  */
+
+import type { ContextClearExecutionResult } from "@/src/context-clear/service.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import {
   InMemorySessionDispatcher,
@@ -33,6 +35,17 @@ export class SessionRuntimeIngress {
   // starts a new run or gets queued behind the current run as steer.
   submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
     return this.dispatcher.submitMessage(input);
+  }
+
+  clearContext(
+    sessionId: string,
+    requestKey?: string | null,
+  ): Promise<ContextClearExecutionResult> {
+    return this.dispatcher.clearContext(sessionId, requestKey);
+  }
+
+  resumeDrainedInputs(result: ContextClearExecutionResult): void {
+    this.dispatcher.resumeDrainedInputs(result);
   }
 
   // Approval decisions are a distinct ingress command type. They target a

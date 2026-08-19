@@ -178,6 +178,11 @@ export interface CompactionFailedEvent extends AgentRuntimeEventBase {
   retryable: boolean;
 }
 
+export interface ContextClearSuggestedEvent extends AgentRuntimeEventBase {
+  type: "context_clear_suggested";
+  compactionCount: number;
+}
+
 export interface ApprovalRequestedEvent extends AgentRuntimeEventBase {
   type: "approval_requested";
   approvalId: string;
@@ -246,6 +251,7 @@ export type AgentRuntimeEvent =
   | CompactionStartedEvent
   | CompactionCompletedEvent
   | CompactionFailedEvent
+  | ContextClearSuggestedEvent
   | ApprovalRequestedEvent
   | ApprovalResolvedEvent
   | RuntimeNudgeEvent
@@ -270,6 +276,7 @@ export type AgentRuntimeEventInput =
   | Omit<CompactionStartedEvent, "eventId" | "createdAt">
   | Omit<CompactionCompletedEvent, "eventId" | "createdAt">
   | Omit<CompactionFailedEvent, "eventId" | "createdAt">
+  | Omit<ContextClearSuggestedEvent, "eventId" | "createdAt">
   | Omit<ApprovalRequestedEvent, "eventId" | "createdAt">
   | Omit<ApprovalResolvedEvent, "eventId" | "createdAt">
   | Omit<RuntimeNudgeEvent, "eventId" | "createdAt">
