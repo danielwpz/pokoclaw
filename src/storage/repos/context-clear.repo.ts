@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, max, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, max, sql } from "drizzle-orm";
 import type { AgentUserPayload, AgentUserRuntimeImagePayload } from "@/src/agent/llm/messages.js";
 import type { ModelScenario } from "@/src/agent/llm/models.js";
 import { toCanonicalUtcIsoTimestamp } from "@/src/shared/time.js";
@@ -8,6 +8,7 @@ import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import {
   contextClearPendingInputs,
   contextClearRuns,
+  messages,
   sessions,
 } from "@/src/storage/schema/tables.js";
 import type {
@@ -73,6 +74,7 @@ export class ContextClearRepo {
       startedAt: null,
       completedAt: null,
       failedAt: null,
+      queuedInputsProcessedAt: null,
       updatedAt: now,
     };
     this.db.insert(contextClearRuns).values(row).run();
@@ -117,6 +119,26 @@ export class ContextClearRepo {
       .select()
       .from(contextClearRuns)
       .where(inArray(contextClearRuns.status, ACTIVE_CLEAR_STATUSES))
+      .orderBy(asc(contextClearRuns.requestedAt))
+      .all();
+  }
+
+  listUnprocessedSettled(): ContextClearRun[] {
+    return this.db
+      .select()
+      .from(contextClearRuns)
+      .where(
+        and(
+          inArray(contextClearRuns.status, ["completed", "failed"]),
+          isNull(contextClearRuns.queuedInputsProcessedAt),
+          sql`exists (
+            select 1
+            from ${contextClearPendingInputs}
+            where ${contextClearPendingInputs.clearRunId} = ${contextClearRuns.id}
+              and ${contextClearPendingInputs.appendedMessageId} is not null
+          )`,
+        ),
+      )
       .orderBy(asc(contextClearRuns.requestedAt))
       .all();
   }
@@ -172,6 +194,7 @@ export class ContextClearRepo {
       channelParentMessageId: input.channelParentMessageId ?? null,
       channelThreadId: input.channelThreadId ?? null,
       maxTurns: input.maxTurns ?? null,
+      appendedMessageId: null,
       createdAt: toCanonicalUtcIsoTimestamp(input.createdAt ?? new Date()),
     };
     this.db.insert(contextClearPendingInputs).values(row).run();
@@ -234,14 +257,12 @@ export class ContextClearRepo {
           kickoffMessage: input.kickoffMessage,
           errorText: null,
           completedAt: now,
+          queuedInputsProcessedAt: drainedInputs.length === 0 ? now : null,
           updatedAt: now,
         })
         .where(eq(contextClearRuns.id, input.id))
         .run();
       clearRepo.endHandoffSession(clearRun.handoffSessionId, now);
-      tx.delete(contextClearPendingInputs)
-        .where(eq(contextClearPendingInputs.clearRunId, input.id))
-        .run();
       return {
         clearRun: clearRepo.requireById(input.id),
         drainedInputs,
@@ -269,18 +290,84 @@ export class ContextClearRepo {
       });
       const now = toCanonicalUtcIsoTimestamp(input.now ?? new Date());
       tx.update(contextClearRuns)
-        .set({ status: "failed", errorText: input.errorText, failedAt: now, updatedAt: now })
+        .set({
+          status: "failed",
+          errorText: input.errorText,
+          failedAt: now,
+          queuedInputsProcessedAt: drainedInputs.length === 0 ? now : null,
+          updatedAt: now,
+        })
         .where(eq(contextClearRuns.id, input.id))
         .run();
       clearRepo.endHandoffSession(clearRun.handoffSessionId, now);
-      tx.delete(contextClearPendingInputs)
-        .where(eq(contextClearPendingInputs.clearRunId, input.id))
-        .run();
       return {
         clearRun: clearRepo.requireById(input.id),
         drainedInputs,
         contextEpoch: sourceSession.contextEpoch,
       };
+    });
+  }
+
+  listDrainedInputs(clearRunId: string): DrainedContextClearInput[] {
+    return this.db
+      .select()
+      .from(contextClearPendingInputs)
+      .where(
+        and(
+          eq(contextClearPendingInputs.clearRunId, clearRunId),
+          isNotNull(contextClearPendingInputs.appendedMessageId),
+        ),
+      )
+      .orderBy(asc(contextClearPendingInputs.position))
+      .all()
+      .map((row) => deserializeDrainedInput(row, requireAppendedMessageId(row)));
+  }
+
+  hasPersistedResponseAfterQueuedInputs(clearRunId: string): boolean {
+    const boundary = this.db
+      .select({ value: max(messages.seq) })
+      .from(contextClearPendingInputs)
+      .innerJoin(messages, eq(messages.id, contextClearPendingInputs.appendedMessageId))
+      .where(eq(contextClearPendingInputs.clearRunId, clearRunId))
+      .get()?.value;
+    if (boundary == null) {
+      return false;
+    }
+    const clearRun = this.requireById(clearRunId);
+    return (
+      this.db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.sessionId, clearRun.sessionId),
+            gt(messages.seq, boundary),
+            eq(messages.role, "assistant"),
+            eq(messages.visibility, "user_visible"),
+            inArray(messages.stopReason, ["stop", "length", "error", "aborted"]),
+          ),
+        )
+        .get() != null
+    );
+  }
+
+  markQueuedInputsProcessed(clearRunId: string, now = new Date()): void {
+    this.db.transaction((tx) => {
+      const repo = new ContextClearRepo(tx);
+      const clearRun = repo.requireById(clearRunId);
+      if (ACTIVE_CLEAR_STATUSES.includes(clearRun.status)) {
+        throw new Error(`Context clear run ${clearRunId} is still ${clearRun.status}.`);
+      }
+      tx.update(contextClearRuns)
+        .set({
+          queuedInputsProcessedAt: toCanonicalUtcIsoTimestamp(now),
+          updatedAt: toCanonicalUtcIsoTimestamp(now),
+        })
+        .where(eq(contextClearRuns.id, clearRunId))
+        .run();
+      tx.delete(contextClearPendingInputs)
+        .where(eq(contextClearPendingInputs.clearRunId, clearRunId))
+        .run();
     });
   }
 
@@ -310,6 +397,11 @@ export class ContextClearRepo {
         channelThreadId: row.channelThreadId,
         createdAt: new Date(row.createdAt),
       });
+      this.db
+        .update(contextClearPendingInputs)
+        .set({ appendedMessageId: messageId })
+        .where(eq(contextClearPendingInputs.id, row.id))
+        .run();
       return deserializeDrainedInput(row, messageId);
     });
   }
@@ -340,6 +432,13 @@ export class ContextClearRepo {
       .where(eq(sessions.id, handoffSessionId))
       .run();
   }
+}
+
+function requireAppendedMessageId(row: ContextClearPendingInput): string {
+  if (row.appendedMessageId == null) {
+    throw new Error(`Context clear pending input ${row.id} has not been appended.`);
+  }
+  return row.appendedMessageId;
 }
 
 function deserializeDrainedInput(

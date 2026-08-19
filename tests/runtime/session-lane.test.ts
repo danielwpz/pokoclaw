@@ -244,8 +244,17 @@ describe("session lane image normalization", () => {
       clearRunId: "clear_1",
       sessionId: "sess_1",
       contextEpoch: 1,
-      drainedInputs: [],
+      drainedInputs: [
+        {
+          messageId: "queued_message_1",
+          sessionId: "sess_1",
+          scenario: "chat" as const,
+          runtimeImages: [],
+          maxTurns: null,
+        },
+      ],
     }));
+    const markQueuedInputsProcessed = vi.fn();
     const enqueueSteerInput = vi.fn(() => true);
     const lane = new InMemorySessionLane({
       messages,
@@ -258,6 +267,7 @@ describe("session lane image normalization", () => {
         request: vi.fn(() => ({ id: "clear_1" })),
         enqueue,
         execute,
+        markQueuedInputsProcessed,
       } as never,
     });
 
@@ -285,6 +295,9 @@ describe("session lane image normalization", () => {
     resolveActiveRun(buildRunResult());
     await clearing;
     expect(execute).toHaveBeenCalledExactlyOnceWith("clear_1");
+    await vi.waitFor(() => {
+      expect(markQueuedInputsProcessed).toHaveBeenCalledExactlyOnceWith("clear_1");
+    });
   });
 });
 

@@ -15,6 +15,7 @@ If you need the authoritative code definition, inspect:
 - `../../src/storage/migrate/files/0004_shell_process_runs.sql`
 - `../../src/storage/migrate/files/0005_shell_process_output_chunks.sql`
 - `../../src/storage/migrate/files/0006_context_clear.sql`
+- `../../src/storage/migrate/files/0007_context_clear_recovery.sql`
 
 Important current-schema pitfalls:
 
@@ -89,11 +90,11 @@ PRAGMA table_info(cron_jobs);
 
 - `context_clear_runs`
   - Durable lifecycle for internal fresh-context handoffs, including source boundary, handoff session, kickoff, failure, and timestamps.
-  - Columns: `id`, `session_id`, `request_key`, `handoff_session_id`, `source_seq`, `status`, `kickoff_message`, `error_text`, `requested_at`, `started_at`, `completed_at`, `failed_at`, `updated_at`.
+  - Columns: `id`, `session_id`, `request_key`, `handoff_session_id`, `source_seq`, `status`, `kickoff_message`, `error_text`, `requested_at`, `started_at`, `completed_at`, `failed_at`, `queued_inputs_processed_at`, `updated_at`.
 
 - `context_clear_pending_inputs`
-  - Temporary durable queue for messages received while a context clear is waiting or running. Rows are atomically moved into the original session on success or fallback.
-  - Columns: `id`, `clear_run_id`, `session_id`, `position`, `scenario`, `content`, `user_payload_json`, `runtime_images_json`, `message_type`, `visibility`, `channel_message_id`, `channel_parent_message_id`, `channel_thread_id`, `max_turns`, `created_at`.
+  - Durable recovery queue for messages received while a context clear is waiting or running. Rows remain until the follow-up Agent run completes so restart recovery can resume them safely.
+  - Columns: `id`, `clear_run_id`, `session_id`, `position`, `scenario`, `content`, `user_payload_json`, `runtime_images_json`, `message_type`, `visibility`, `channel_message_id`, `channel_parent_message_id`, `channel_thread_id`, `max_turns`, `appended_message_id`, `created_at`.
 
 - `a2ui_surface_publications`
   - Published A2UI surface state and callback consumption records.

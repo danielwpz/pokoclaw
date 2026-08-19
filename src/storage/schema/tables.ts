@@ -281,9 +281,17 @@ export const contextClearRuns = sqliteTable(
     startedAt: text("started_at"),
     completedAt: text("completed_at"),
     failedAt: text("failed_at"),
+    queuedInputsProcessedAt: text("queued_inputs_processed_at"),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [index("idx_context_clear_runs_status_updated").on(table.status, table.updatedAt)],
+  (table) => [
+    index("idx_context_clear_runs_status_updated").on(table.status, table.updatedAt),
+    index("idx_context_clear_runs_unprocessed_queue").on(
+      table.status,
+      table.queuedInputsProcessedAt,
+      table.requestedAt,
+    ),
+  ],
 );
 
 export const contextClearPendingInputs = sqliteTable(
@@ -307,6 +315,9 @@ export const contextClearPendingInputs = sqliteTable(
     channelParentMessageId: text("channel_parent_message_id"),
     channelThreadId: text("channel_thread_id"),
     maxTurns: integer("max_turns"),
+    appendedMessageId: text("appended_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
@@ -315,6 +326,7 @@ export const contextClearPendingInputs = sqliteTable(
       table.position,
     ),
     index("idx_context_clear_pending_inputs_run_position").on(table.clearRunId, table.position),
+    index("idx_context_clear_pending_inputs_appended_message").on(table.appendedMessageId),
   ],
 );
 

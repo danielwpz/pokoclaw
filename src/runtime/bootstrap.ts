@@ -349,8 +349,8 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
           starting = null;
         });
       lark.start();
-      for (const recovered of contextClear.recoverIncomplete()) {
-        ingress.resumeDrainedInputs(recovered.drainedInputs);
+      for (const recovered of contextClear.recoverAfterRestart()) {
+        ingress.resumeDrainedInputs(recovered);
       }
       shellProcesses.recoverAfterRestart();
       cron.start();

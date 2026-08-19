@@ -43,12 +43,12 @@ export class InMemorySessionDispatcher {
     return this.getOrCreateLane(sessionId).clearContext(sessionId, requestKey);
   }
 
-  resumeDrainedInputs(inputs: ContextClearExecutionResult["drainedInputs"]): void {
-    const first = inputs[0];
+  resumeDrainedInputs(result: ContextClearExecutionResult): void {
+    const first = result.drainedInputs[0];
     if (first == null) {
       return;
     }
-    this.getOrCreateLane(first.sessionId).resumeDrainedInputs(inputs);
+    this.getOrCreateLane(first.sessionId).resumeDrainedInputs(result);
   }
 
   // Approval decisions still go straight to the pending wait registry owned by

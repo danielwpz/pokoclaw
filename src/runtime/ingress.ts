@@ -44,8 +44,8 @@ export class SessionRuntimeIngress {
     return this.dispatcher.clearContext(sessionId, requestKey);
   }
 
-  resumeDrainedInputs(inputs: ContextClearExecutionResult["drainedInputs"]): void {
-    this.dispatcher.resumeDrainedInputs(inputs);
+  resumeDrainedInputs(result: ContextClearExecutionResult): void {
+    this.dispatcher.resumeDrainedInputs(result);
   }
 
   // Approval decisions are a distinct ingress command type. They target a

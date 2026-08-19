@@ -32,6 +32,7 @@ Choose one or more channels based on the question. Do not force a fixed order fo
     - `../../src/storage/migrate/files/0004_shell_process_runs.sql`
     - `../../src/storage/migrate/files/0005_shell_process_output_chunks.sql`
     - `../../src/storage/migrate/files/0006_context_clear.sql`
+    - `../../src/storage/migrate/files/0007_context_clear_recovery.sql`
       The schema truth lives in `tables.ts` plus the migration SQL files.
   - Only then use `query_system_db` for live schema discovery.
 - If the task involves live runtime status payload semantics for `get_runtime_status`:

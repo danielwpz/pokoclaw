@@ -4,7 +4,7 @@ import {
   buildContextHandoffRequest,
   extractContextHandoffSignal,
 } from "@/src/context-clear/handoff.js";
-import { materializeForkedSessionSnapshot } from "@/src/orchestration/session-fork.js";
+import { materializeForkedSessionSnapshotInStorage } from "@/src/orchestration/session-fork.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
 import { AgentsRepo } from "@/src/storage/repos/agents.repo.js";
@@ -121,25 +121,28 @@ export class ContextClearService {
       }
       const sourceSeq = Math.max(0, this.messages.getNextSeq(clearRun.sessionId) - 1);
       handoffSessionId = handoffSessionId ?? randomUUID();
+      const targetHandoffSessionId = handoffSessionId;
       if (clearRun.status === "pending") {
-        materializeForkedSessionSnapshot({
-          db: this.deps.storage,
-          sourceSessionId: sourceSession.id,
-          forkSourceSeq: sourceSeq,
-          targetSession: {
-            id: handoffSessionId,
-            conversationId: sourceSession.conversationId,
-            branchId: sourceSession.branchId,
-            ownerAgentId: sourceSession.ownerAgentId,
-            purpose: "context_handoff",
-            contextMode: sourceSession.contextMode,
-            status: "active",
-          },
-        });
-        this.clears.markRunning({
-          id: clearRunId,
-          sourceSeq,
-          handoffSessionId,
+        this.deps.storage.transaction((tx) => {
+          materializeForkedSessionSnapshotInStorage({
+            db: tx,
+            sourceSessionId: sourceSession.id,
+            forkSourceSeq: sourceSeq,
+            targetSession: {
+              id: targetHandoffSessionId,
+              conversationId: sourceSession.conversationId,
+              branchId: sourceSession.branchId,
+              ownerAgentId: sourceSession.ownerAgentId,
+              purpose: "context_handoff",
+              contextMode: sourceSession.contextMode,
+              status: "active",
+            },
+          });
+          new ContextClearRepo(tx).markRunning({
+            id: clearRunId,
+            sourceSeq,
+            handoffSessionId: targetHandoffSessionId,
+          });
         });
       }
       const running = this.clears.getById(clearRunId);
@@ -230,8 +233,8 @@ export class ContextClearService {
     }
   }
 
-  recoverIncomplete(): ContextClearExecutionResult[] {
-    return this.clears.listActive().map((run) => {
+  recoverAfterRestart(): ContextClearExecutionResult[] {
+    for (const run of this.clears.listActive()) {
       const errorMessage =
         "Context clear was interrupted by process restart; original context restored.";
       const settled = this.clears.fail({ id: run.id, errorText: errorMessage });
@@ -240,15 +243,39 @@ export class ContextClearService {
         sessionId: run.sessionId,
         queuedInputCount: settled.drainedInputs.length,
       });
-      return {
-        status: "failed" as const,
+    }
+
+    const recoverable: ContextClearExecutionResult[] = [];
+    for (const run of this.clears.listUnprocessedSettled()) {
+      if (this.clears.hasPersistedResponseAfterQueuedInputs(run.id)) {
+        this.clears.markQueuedInputsProcessed(run.id);
+        logger.info("context clear queued input was already handled before restart", {
+          clearRunId: run.id,
+          sessionId: run.sessionId,
+        });
+        continue;
+      }
+      const drainedInputs = this.clears.listDrainedInputs(run.id);
+      if (drainedInputs.length === 0) {
+        this.clears.markQueuedInputsProcessed(run.id);
+        continue;
+      }
+      recoverable.push({
+        status: run.status === "completed" ? "completed" : "failed",
         clearRunId: run.id,
         sessionId: run.sessionId,
-        contextEpoch: settled.contextEpoch,
-        drainedInputs: settled.drainedInputs,
-        errorMessage,
-      };
-    });
+        contextEpoch: this.sessions.getById(run.sessionId)?.contextEpoch ?? 0,
+        drainedInputs,
+        ...(run.status === "failed"
+          ? { errorMessage: run.errorText ?? "Context handoff previously failed." }
+          : {}),
+      });
+    }
+    return recoverable;
+  }
+
+  markQueuedInputsProcessed(clearRunId: string): void {
+    this.clears.markQueuedInputsProcessed(clearRunId);
   }
 }
 

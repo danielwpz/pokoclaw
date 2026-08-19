@@ -165,7 +165,7 @@ describe("context clear service", () => {
       channelMessageId: "om_restart",
     });
 
-    const recovered = service.recoverIncomplete();
+    const recovered = service.recoverAfterRestart();
 
     expect(recovered).toHaveLength(1);
     expect(recovered[0]).toMatchObject({ status: "failed", clearRunId: clear.id });
@@ -176,6 +176,110 @@ describe("context clear service", () => {
     expect(new MessagesRepo(handle.storage.db).listBySession("session_main").at(-1)).toMatchObject({
       channelMessageId: "om_restart",
     });
+  });
+
+  test("restart recovery resumes queued input after a completed clear until its run is acknowledged", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedMainChat(handle);
+    const service = new ContextClearService({
+      storage: handle.storage.db,
+      loop: createHandoffLoop("Continue with the queued request."),
+    });
+    const clear = service.request("session_main");
+    service.enqueue({
+      clearRunId: clear.id,
+      sessionId: "session_main",
+      scenario: "chat",
+      content: "survive after successful clear",
+      runtimeImages: [
+        {
+          type: "image",
+          id: "restart_image",
+          messageId: "om_restart_image",
+          mimeType: "image/png",
+          data: "cmVzdGFydA==",
+        },
+      ],
+      channelMessageId: "om_completed_restart",
+    });
+
+    const completed = await service.execute(clear.id);
+    const recovered = service.recoverAfterRestart();
+
+    expect(completed.status).toBe("completed");
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({
+      status: "completed",
+      clearRunId: clear.id,
+      sessionId: "session_main",
+    });
+    expect(recovered[0]?.drainedInputs).toEqual(completed.drainedInputs);
+
+    service.markQueuedInputsProcessed(clear.id);
+
+    expect(service.recoverAfterRestart()).toEqual([]);
+  });
+
+  test("does not resume a completed queued-input run whose final response was already persisted", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedMainChat(handle);
+    const service = new ContextClearService({
+      storage: handle.storage.db,
+      loop: createHandoffLoop("Answer the queued request."),
+    });
+    const clear = service.request("session_main");
+    service.enqueue({
+      clearRunId: clear.id,
+      sessionId: "session_main",
+      scenario: "chat",
+      content: "already answered before restart",
+    });
+    await service.execute(clear.id);
+    const messages = new MessagesRepo(handle.storage.db);
+    messages.append({
+      id: "message_final_response",
+      sessionId: "session_main",
+      seq: messages.getNextSeq("session_main"),
+      role: "assistant",
+      payloadJson: JSON.stringify({ content: "done" }),
+      stopReason: "stop",
+    });
+
+    expect(service.recoverAfterRestart()).toEqual([]);
+    expect(
+      handle.storage.sqlite
+        .prepare(
+          "SELECT count(*) AS count FROM context_clear_pending_inputs WHERE clear_run_id = ?",
+        )
+        .get(clear.id),
+    ).toEqual({ count: 0 });
+  });
+
+  test("rolls back the handoff fork when recording the running clear fails", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedMainChat(handle);
+    const service = new ContextClearService({
+      storage: handle.storage.db,
+      loop: createHandoffLoop("unused"),
+    });
+    const clear = service.request("session_main");
+    handle.storage.sqlite.exec(`
+      CREATE TRIGGER reject_context_clear_running
+      BEFORE UPDATE OF status ON context_clear_runs
+      WHEN NEW.status = 'running'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced markRunning failure');
+      END;
+    `);
+
+    const result = await service.execute(clear.id);
+
+    expect(result).toMatchObject({ status: "failed", clearRunId: clear.id });
+    expect(
+      handle.storage.sqlite
+        .prepare("SELECT count(*) AS count FROM sessions WHERE purpose = 'context_handoff'")
+        .get(),
+    ).toEqual({ count: 0 });
   });
 });
 

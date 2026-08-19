@@ -241,16 +241,14 @@ export class InMemorySessionLane {
     return clearPromise;
   }
 
-  resumeDrainedInputs(inputs: ContextClearExecutionResult["drainedInputs"]): void {
-    if (inputs.length === 0) {
+  resumeDrainedInputs(result: ContextClearExecutionResult): void {
+    if (result.drainedInputs.length === 0) {
       return;
     }
     if (this.activeRun != null || this.clearPromise != null) {
-      throw new Error(
-        `Cannot resume persisted input while session ${inputs[0]?.sessionId} is active.`,
-      );
+      throw new Error(`Cannot resume persisted input while session ${result.sessionId} is active.`);
     }
-    this.startDrainedInputs(inputs);
+    this.startDrainedInputs(result);
   }
 
   private async performContextClear(input: {
@@ -270,17 +268,17 @@ export class InMemorySessionLane {
         this.clearPromise = null;
       }
     }
-    this.startDrainedInputs(result.drainedInputs);
+    this.startDrainedInputs(result);
     return result;
   }
 
-  private startDrainedInputs(inputs: ContextClearExecutionResult["drainedInputs"]): void {
-    const first = inputs[0];
+  private startDrainedInputs(result: ContextClearExecutionResult): void {
+    const first = result.drainedInputs[0];
     if (first == null) {
       return;
     }
     const runtimeImagesByMessageId = Object.fromEntries(
-      inputs
+      result.drainedInputs
         .filter((entry) => entry.runtimeImages.length > 0)
         .map((entry) => [entry.messageId, entry.runtimeImages]),
     );
@@ -292,7 +290,25 @@ export class InMemorySessionLane {
         : { initialRuntimeImagesByMessageId: runtimeImagesByMessageId }),
       ...(first.maxTurns == null ? {} : { maxTurns: first.maxTurns }),
     });
-    void runPromise.catch(() => undefined);
+    void runPromise.then(
+      () => {
+        try {
+          this.requireContextClear().markQueuedInputsProcessed(result.clearRunId);
+          logger.info("context clear queued input run completed", {
+            clearRunId: result.clearRunId,
+            sessionId: result.sessionId,
+            queuedInputCount: result.drainedInputs.length,
+          });
+        } catch (error) {
+          logger.error("failed to acknowledge context clear queued input run", {
+            clearRunId: result.clearRunId,
+            sessionId: result.sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+      () => undefined,
+    );
   }
 
   private startPersistedRun(input: {
