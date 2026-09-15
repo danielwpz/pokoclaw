@@ -20,6 +20,7 @@ import { createReadTool } from "@/src/tools/read.js";
 import { createRequestPermissionsTool } from "@/src/tools/request-permissions.js";
 import { createReviewPermissionRequestTool } from "@/src/tools/review-permission-request.js";
 import { createSendAttachmentTool } from "@/src/tools/send-attachment.js";
+import { createSubmitContextHandoffTool } from "@/src/tools/submit-context-handoff.js";
 import { createWaitTaskTool } from "@/src/tools/wait-task.js";
 import { createWebFetchTool } from "@/src/tools/web/fetch.js";
 import { createWebSearchTool } from "@/src/tools/web/search.js";
@@ -45,6 +46,7 @@ export function createBuiltinToolRegistry(
   registry.register(createQuerySystemDbTool());
   registry.register(createGetRuntimeStatusTool());
   registry.register(createFinishTaskTool());
+  registry.register(createSubmitContextHandoffTool());
   registry.register(createRequestPermissionsTool());
   registry.register(createReviewPermissionRequestTool());
   registry.register(createCreateSubagentTool());

@@ -123,7 +123,7 @@ describe("security service", () => {
     ).toMatchObject({ result: "deny", reason: "not_granted" });
   });
 
-  test("expired grants do not contribute to effective permissions", async () => {
+  test("subagent retains baseline read-only DB access after an explicit grant expires", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedAgentFixture(handle);
     const service = new SecurityService(handle.storage.db);
@@ -143,9 +143,9 @@ describe("security service", () => {
         activeAt: new Date("2026-03-22T12:00:00.000Z"),
       }),
     ).toEqual({
-      result: "deny",
-      reason: "not_granted",
-      summary: "db.read requires approval for the system database",
+      result: "allow",
+      reason: "granted",
+      summary: "db.read is granted for the system database",
     });
   });
 

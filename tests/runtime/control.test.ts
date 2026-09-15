@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { SessionRunAbortRegistry } from "@/src/runtime/cancel.js";
 import { RuntimeControlService } from "@/src/runtime/control.js";
+import { ContextClearRepo } from "@/src/storage/repos/context-clear.repo.js";
 import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
+import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
 import { createTestDatabase, destroyTestDatabase } from "@/tests/storage/helpers/test-db.js";
@@ -10,7 +12,9 @@ async function withStorageFixture<T>(
   run: (deps: {
     cancel: SessionRunAbortRegistry;
     control: RuntimeControlService;
+    contextClears: ContextClearRepo;
     harnessEvents: HarnessEventsRepo;
+    messages: MessagesRepo;
     sessions: SessionsRepo;
     taskRuns: TaskRunsRepo;
   }) => T | Promise<T>,
@@ -50,14 +54,25 @@ async function withStorageFixture<T>(
 
     const cancel = new SessionRunAbortRegistry();
     const harnessEvents = new HarnessEventsRepo(handle.storage.db);
+    const contextClears = new ContextClearRepo(handle.storage.db);
+    const messages = new MessagesRepo(handle.storage.db);
     const taskRuns = new TaskRunsRepo(handle.storage.db);
     const sessions = new SessionsRepo(handle.storage.db);
     const control = new RuntimeControlService(cancel, {
       harnessEvents,
+      contextClears,
       sessions,
       taskRuns,
     });
-    return await run({ cancel, control, harnessEvents, sessions, taskRuns });
+    return await run({
+      cancel,
+      control,
+      contextClears,
+      harnessEvents,
+      messages,
+      sessions,
+      taskRuns,
+    });
   } finally {
     await destroyTestDatabase(handle);
   }
@@ -240,6 +255,76 @@ describe("RuntimeControlService", () => {
     });
   });
 
+  test("stops an in-flight context clear without resuming its queued input", async () => {
+    await withStorageFixture(async ({ contextClears, control, messages }) => {
+      contextClears.createPending({
+        id: "clear_1",
+        sessionId: "sess_1",
+        sourceSeq: 0,
+      });
+      contextClears.enqueue({
+        clearRunId: "clear_1",
+        sessionId: "sess_1",
+        scenario: "chat",
+        content: "keep this queued request for the next explicit interaction",
+      });
+
+      const result = control.stopSession({
+        sessionId: "sess_1",
+        actor: "test",
+        sourceKind: "command",
+        requestScope: "session",
+      });
+
+      expect(result).toEqual({
+        accepted: true,
+        sessionId: "sess_1",
+        runIds: [],
+        conversationId: "conv_1",
+      });
+      expect(contextClears.getById("clear_1")).toMatchObject({
+        status: "failed",
+        errorText: "Context clear stopped by user: stop requested by test",
+      });
+      expect(messages.listBySession("sess_1").at(-1)?.payloadJson).toContain(
+        "keep this queued request for the next explicit interaction",
+      );
+      expect(contextClears.listDrainedInputs("clear_1")).toEqual([]);
+      expect(contextClears.listUnprocessedSettled()).toEqual([]);
+    });
+  });
+
+  test("stopping a run also stops an in-flight context clear for its session", async () => {
+    await withStorageFixture(async ({ cancel, contextClears, control }) => {
+      cancel.begin("sess_1");
+      control.beginRun({
+        runId: "run_1",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+      contextClears.createPending({
+        id: "clear_1",
+        sessionId: "sess_1",
+        sourceSeq: 0,
+      });
+
+      const result = control.stopRun({
+        runId: "run_1",
+        actor: "test",
+        sourceKind: "button",
+        requestScope: "run",
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(contextClears.getById("clear_1")).toMatchObject({
+        status: "failed",
+        errorText: "Context clear stopped by user: stop requested by test",
+      });
+    });
+  });
+
   test("stopping a source task session also stops its delegated approval run", async () => {
     await withStorageFixture(async ({ cancel, control, harnessEvents, sessions }) => {
       const sourceHandle = cancel.begin("sess_1");
@@ -290,6 +375,58 @@ describe("RuntimeControlService", () => {
       expect(cancel.isActive("sess_approval_1")).toBe(false);
       expect(harnessEvents.listByRunId("run_task")).toHaveLength(1);
       expect(harnessEvents.listByRunId("run_approval")).toHaveLength(1);
+    });
+  });
+
+  test("stopping a source chat session also stops its active context handoff run", async () => {
+    await withStorageFixture(async ({ cancel, control, harnessEvents, sessions }) => {
+      const sourceHandle = cancel.begin("sess_1");
+      const handoffHandle = cancel.begin("sess_handoff_1");
+
+      control.beginRun({
+        runId: "run_chat",
+        sessionId: "sess_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "chat",
+      });
+      control.beginRun({
+        runId: "run_handoff",
+        sessionId: "sess_handoff_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        scenario: "task",
+      });
+
+      sessions.create({
+        id: "sess_handoff_1",
+        conversationId: "conv_1",
+        branchId: "branch_1",
+        ownerAgentId: "agent_1",
+        purpose: "context_handoff",
+        forkedFromSessionId: "sess_1",
+        forkSourceSeq: 0,
+        createdAt: new Date("2026-04-05T00:00:00.000Z"),
+        updatedAt: new Date("2026-04-05T00:00:00.000Z"),
+      });
+
+      const result = control.stopSession({
+        sessionId: "sess_1",
+        actor: "test",
+        sourceKind: "command",
+        requestScope: "session",
+      });
+
+      expect(result).toEqual({
+        accepted: true,
+        sessionId: "sess_1",
+        runIds: ["run_chat", "run_handoff"],
+        conversationId: "conv_1",
+      });
+      expect(sourceHandle.signal.aborted).toBe(true);
+      expect(handoffHandle.signal.aborted).toBe(true);
+      expect(harnessEvents.listByRunId("run_chat")).toHaveLength(1);
+      expect(harnessEvents.listByRunId("run_handoff")).toHaveLength(1);
     });
   });
 

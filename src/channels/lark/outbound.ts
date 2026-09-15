@@ -1808,6 +1808,38 @@ export function createLarkOutboundRuntime(
     }
   };
 
+  const handleContextClearSuggestion = async (
+    envelope: OrchestratedRuntimeEventEnvelope,
+  ): Promise<void> => {
+    if (envelope.event.type !== "context_clear_suggested") {
+      return;
+    }
+    const deliveryTargets = listLarkDeliveryTargets(input.storage, {
+      conversationId: envelope.target.conversationId,
+      branchId: envelope.target.branchId,
+    });
+    for (const target of deliveryTargets) {
+      const chatId = readStringValue(target.surfaceObject.chat_id);
+      if (chatId == null) {
+        continue;
+      }
+      await sendLarkTextMessage({
+        installationId: target.channelInstallationId,
+        chatId,
+        replyToMessageId: readStringValue(target.surfaceObject.reply_to_message_id),
+        text: "💡 这段会话已经持续较久，可以考虑使用 /clear 重新整理上下文。",
+        clients: input.clients,
+      });
+      logger.info("sent context clear suggestion", {
+        sessionId: envelope.session.sessionId,
+        conversationId: envelope.target.conversationId,
+        branchId: envelope.target.branchId,
+        compactionCount: envelope.event.compactionCount,
+        channelInstallationId: target.channelInstallationId,
+      });
+    }
+  };
+
   const handleSteerConsumedRunSegmentBoundary = (
     envelope: OrchestratedRuntimeEventEnvelope,
   ): void => {
@@ -2032,6 +2064,10 @@ export function createLarkOutboundRuntime(
 
         if (envelope.kind !== "runtime_event") {
           return;
+        }
+
+        if (envelope.event.type === "context_clear_suggested") {
+          return handleContextClearSuggestion(envelope);
         }
 
         if (!shouldDeliverLarkRuntimeTranscript(envelope)) {

@@ -240,6 +240,9 @@ export const sessions = sqliteTable(
     compactSummary: text("compact_summary"),
     compactSummaryTokenTotal: integer("compact_summary_token_total"),
     compactSummaryUsageJson: text("compact_summary_usage_json"),
+    contextEpoch: integer("context_epoch").notNull().default(0),
+    compactionsSinceClear: integer("compactions_since_clear").notNull().default(0),
+    lastClearReminderCount: integer("last_clear_reminder_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
     endedAt: text("ended_at"),
@@ -256,6 +259,74 @@ export const sessions = sqliteTable(
       table.status,
       table.updatedAt,
     ),
+  ],
+);
+
+export const contextClearRuns = sqliteTable(
+  "context_clear_runs",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    requestKey: text("request_key"),
+    handoffSessionId: text("handoff_session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    sourceSeq: integer("source_seq").notNull(),
+    status: text("status").notNull(),
+    kickoffMessage: text("kickoff_message"),
+    errorText: text("error_text"),
+    requestedAt: text("requested_at").notNull(),
+    startedAt: text("started_at"),
+    completedAt: text("completed_at"),
+    failedAt: text("failed_at"),
+    queuedInputsProcessedAt: text("queued_inputs_processed_at"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("idx_context_clear_runs_status_updated").on(table.status, table.updatedAt),
+    index("idx_context_clear_runs_unprocessed_queue").on(
+      table.status,
+      table.queuedInputsProcessedAt,
+      table.requestedAt,
+    ),
+  ],
+);
+
+export const contextClearPendingInputs = sqliteTable(
+  "context_clear_pending_inputs",
+  {
+    id: text("id").primaryKey(),
+    clearRunId: text("clear_run_id")
+      .notNull()
+      .references(() => contextClearRuns.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    scenario: text("scenario").notNull(),
+    content: text("content").notNull(),
+    userPayloadJson: text("user_payload_json"),
+    runtimeImagesJson: text("runtime_images_json"),
+    messageType: text("message_type"),
+    visibility: text("visibility"),
+    channelMessageId: text("channel_message_id"),
+    channelParentMessageId: text("channel_parent_message_id"),
+    channelThreadId: text("channel_thread_id"),
+    maxTurns: integer("max_turns"),
+    appendedMessageId: text("appended_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uidx_context_clear_pending_inputs_run_position").on(
+      table.clearRunId,
+      table.position,
+    ),
+    index("idx_context_clear_pending_inputs_run_position").on(table.clearRunId, table.position),
+    index("idx_context_clear_pending_inputs_appended_message").on(table.appendedMessageId),
   ],
 );
 

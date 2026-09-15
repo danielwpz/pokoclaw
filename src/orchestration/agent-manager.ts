@@ -1251,7 +1251,10 @@ export class AgentManager {
     if (pending == null || pending.length === 0) {
       return;
     }
-    if (this.activeSessionRuns.has(input.sessionId)) {
+    if (
+      this.activeSessionRuns.has(input.sessionId) ||
+      this.deps.ingress.isSessionActive?.(input.sessionId) === true
+    ) {
       logger.debug("deferred background task completion notice flush due to active run", {
         sourceSessionId: input.sessionId,
         pendingCount: pending.length,

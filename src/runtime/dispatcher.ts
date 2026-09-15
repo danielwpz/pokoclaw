@@ -5,6 +5,8 @@
  * either fresh runs or in-run steering queues. It is the execution scheduler
  * above AgentLoop and below channel/orchestration layers.
  */
+
+import type { ContextClearExecutionResult } from "@/src/context-clear/service.js";
 import type { ApprovalResponseInput } from "@/src/runtime/approval-waits.js";
 import {
   InMemorySessionLane,
@@ -32,6 +34,21 @@ export class InMemorySessionDispatcher {
 
   submitMessage(input: SubmitSessionMessageInput): Promise<SubmitSessionMessageResult> {
     return this.getOrCreateLane(input.sessionId).submitMessage(input);
+  }
+
+  clearContext(
+    sessionId: string,
+    requestKey?: string | null,
+  ): Promise<ContextClearExecutionResult> {
+    return this.getOrCreateLane(sessionId).clearContext(sessionId, requestKey);
+  }
+
+  resumeDrainedInputs(result: ContextClearExecutionResult): void {
+    const first = result.drainedInputs[0];
+    if (first == null) {
+      return;
+    }
+    this.getOrCreateLane(first.sessionId).resumeDrainedInputs(result);
   }
 
   // Approval decisions still go straight to the pending wait registry owned by

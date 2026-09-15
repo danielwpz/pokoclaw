@@ -133,6 +133,22 @@ export function buildAgentPermissionBaseline(role: AgentRuntimeRole): AgentPermi
         },
       };
     case "subagent":
+      return {
+        role,
+        db: {
+          read: true,
+          write: false,
+        },
+        fs: {
+          readMode: "allow_only",
+          readAllow: [
+            appendFsSubtreeSuffix(POKOCLAW_WORKSPACE_DIR),
+            appendFsSubtreeSuffix(POKOCLAW_SKILLS_DIR),
+            appendFsSubtreeSuffix(POKOCLAW_REPO_DIR),
+          ],
+          writeAllow: [appendFsSubtreeSuffix(POKOCLAW_WORKSPACE_DIR)],
+        },
+      };
     case "task":
       return {
         role,

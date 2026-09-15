@@ -23,6 +23,7 @@ import {
   toRunLiveObservabilitySnapshot,
 } from "@/src/runtime/run-observability.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
+import type { ContextClearRepo } from "@/src/storage/repos/context-clear.repo.js";
 import type { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
 import type { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
 import type { TaskRunsRepo } from "@/src/storage/repos/task-runs.repo.js";
@@ -33,6 +34,7 @@ export type HarnessStopSourceKind = "command" | "button";
 export type HarnessStopRequestScope = "run" | "session" | "conversation";
 
 export interface RuntimeControlPersistence {
+  contextClears: ContextClearRepo;
   harnessEvents: HarnessEventsRepo;
   sessions: SessionsRepo;
   taskRuns: TaskRunsRepo;
@@ -150,11 +152,13 @@ export class RuntimeControlService {
       };
     }
 
+    const reasonText = input.reasonText ?? `stop requested by ${input.actor}`;
     const stopped = this.stopRuns(
       this.collectStopTargetsForSession(run.sessionId),
-      input.reasonText ?? `stop requested by ${input.actor}`,
+      reasonText,
       input,
     );
+    this.stopContextClear(run.sessionId, reasonText);
     const accepted = stopped.some((candidate) => candidate.runId === input.runId);
     logger.info("processed stop run request", {
       runId: input.runId,
@@ -177,46 +181,57 @@ export class RuntimeControlService {
     const matches = Array.from(this.runsByRunId.values()).filter(
       (run) => run.conversationId === input.conversationId,
     );
+    const reasonText = input.reasonText ?? `stop requested by ${input.actor}`;
     const stopped = this.stopRuns(
       this.collectStopTargetsForSessions(matches.map((run) => run.sessionId)),
-      input.reasonText ?? `stop requested by ${input.actor}`,
+      reasonText,
       input,
+    );
+    const stoppedClearSessionIds = this.stopContextClearsForConversation(
+      input.conversationId,
+      reasonText,
+    );
+    const stoppedSessionIds = Array.from(
+      new Set([...stopped.map((run) => run.sessionId), ...stoppedClearSessionIds]),
     );
 
     logger.info("processed stop conversation request", {
       conversationId: input.conversationId,
       actor: input.actor,
-      acceptedCount: stopped.length,
+      acceptedCount: stopped.length + stoppedClearSessionIds.length,
       runIds: stopped.map((run) => run.runId),
     });
 
     return {
-      acceptedCount: stopped.length,
+      acceptedCount: stopped.length + stoppedClearSessionIds.length,
       conversationId: input.conversationId,
       runIds: stopped.map((run) => run.runId),
-      sessionIds: stopped.map((run) => run.sessionId),
+      sessionIds: stoppedSessionIds,
     };
   }
 
   stopSession(input: StopSessionInput): StopSessionResult {
+    const reasonText = input.reasonText ?? `stop requested by ${input.actor}`;
     const stopped = this.stopRuns(
       this.collectStopTargetsForSession(input.sessionId),
-      input.reasonText ?? `stop requested by ${input.actor}`,
+      reasonText,
       input,
     );
+    const stoppedClear = this.stopContextClear(input.sessionId, reasonText);
+    const sourceSession = this.persistence?.sessions.getById(input.sessionId) ?? null;
 
     logger.info("processed stop session request", {
       sessionId: input.sessionId,
       actor: input.actor,
-      acceptedCount: stopped.length,
+      acceptedCount: stopped.length + Number(stoppedClear),
       runIds: stopped.map((run) => run.runId),
     });
 
     return {
-      accepted: stopped.length > 0,
+      accepted: stopped.length > 0 || stoppedClear,
       sessionId: input.sessionId,
       runIds: stopped.map((run) => run.runId),
-      conversationId: stopped[0]?.conversationId ?? null,
+      conversationId: stopped[0]?.conversationId ?? sourceSession?.conversationId ?? null,
     };
   }
 
@@ -477,6 +492,45 @@ export class RuntimeControlService {
     return stopped;
   }
 
+  private stopContextClear(sessionId: string, reasonText: string): boolean {
+    const contextClears = this.persistence?.contextClears;
+    if (contextClears == null) {
+      return false;
+    }
+    const active = contextClears.findActiveBySession(sessionId);
+    if (active == null) {
+      return false;
+    }
+    contextClears.fail({
+      id: active.id,
+      errorText: `Context clear stopped by user: ${reasonText}`,
+      resumeQueuedInputs: false,
+    });
+    logger.info("stopped active context clear", {
+      clearRunId: active.id,
+      sessionId,
+    });
+    return true;
+  }
+
+  private stopContextClearsForConversation(conversationId: string, reasonText: string): string[] {
+    const contextClears = this.persistence?.contextClears;
+    const sessions = this.persistence?.sessions;
+    if (contextClears == null || sessions == null) {
+      return [];
+    }
+    const stoppedSessionIds: string[] = [];
+    for (const clear of contextClears.listActive()) {
+      if (sessions.getById(clear.sessionId)?.conversationId !== conversationId) {
+        continue;
+      }
+      if (this.stopContextClear(clear.sessionId, reasonText)) {
+        stoppedSessionIds.push(clear.sessionId);
+      }
+    }
+    return stoppedSessionIds;
+  }
+
   private collectStopTargetsForSession(sessionId: string): ActiveRunRecord[] {
     return this.collectStopTargetsForSessions([sessionId]);
   }
@@ -487,6 +541,10 @@ export class RuntimeControlService {
       const approvalSessionId = this.findLinkedApprovalSessionId(sessionId);
       if (approvalSessionId != null) {
         allSessionIds.add(approvalSessionId);
+      }
+      const handoffSessionId = this.findLinkedContextHandoffSessionId(sessionId);
+      if (handoffSessionId != null) {
+        allSessionIds.add(handoffSessionId);
       }
     }
 
@@ -511,6 +569,18 @@ export class RuntimeControlService {
 
     return (
       this.persistence.sessions.findLatestApprovalSessionForSource(sourceSessionId, {
+        statuses: ["active", "paused"],
+      })?.id ?? null
+    );
+  }
+
+  private findLinkedContextHandoffSessionId(sourceSessionId: string): string | null {
+    if (this.persistence?.sessions == null) {
+      return null;
+    }
+
+    return (
+      this.persistence.sessions.findLatestContextHandoffSessionForSource(sourceSessionId, {
         statuses: ["active", "paused"],
       })?.id ?? null
     );

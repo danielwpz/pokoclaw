@@ -2303,7 +2303,11 @@ function assertSessionModelSupportsTools(input: {
     return;
   }
 
-  if (input.sessionPurpose !== "task" && input.sessionPurpose !== "approval") {
+  if (
+    input.sessionPurpose !== "task" &&
+    input.sessionPurpose !== "approval" &&
+    input.sessionPurpose !== "context_handoff"
+  ) {
     return;
   }
 

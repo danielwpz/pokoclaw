@@ -90,6 +90,15 @@ export interface LarkInboundIngress {
     maxTurns?: number;
     afterToolResultHook?: AgentLoopAfterToolResultHook;
   }): Promise<unknown>;
+  clearContext?(
+    sessionId: string,
+    requestKey?: string | null,
+  ): Promise<{
+    status: "completed" | "failed";
+    clearRunId: string;
+    contextEpoch: number;
+    errorMessage?: string;
+  }>;
   submitApprovalDecision(input: {
     approvalId: number;
     decision: "approve" | "deny";
@@ -501,6 +510,61 @@ export function createLarkMessageReceiveHandler(input: {
         scenario: route.scenario,
         routeKind: route.kind,
       });
+      return;
+    }
+
+    if (hydrated.text === "/clear") {
+      if (input.ingress.clearContext == null) {
+        logger.warn("ignoring lark clear command because context clear is not configured", {
+          installationId: input.installationId,
+          conversationId: route.conversationId,
+          sessionId: route.sessionId,
+        });
+        return;
+      }
+      await sendLarkTextMessage({
+        installationId: input.installationId,
+        chatId: route.chatId,
+        replyToMessageId: route.replyToMessageId,
+        text: "🧹 正在整理并交接上下文。期间的新消息会排队，不会丢失。",
+        ...(input.clients == null ? {} : { clients: input.clients }),
+      });
+      try {
+        const result = await input.ingress.clearContext(route.sessionId, hydrated.messageId);
+        await sendLarkTextMessage({
+          installationId: input.installationId,
+          chatId: route.chatId,
+          replyToMessageId: route.replyToMessageId,
+          text:
+            result.status === "completed"
+              ? "✅ 上下文已清理，当前会话保持不变。"
+              : `⚠️ 交接失败，已恢复原上下文和排队消息。${result.errorMessage == null ? "" : `\n原因：${result.errorMessage}`}`,
+          ...(input.clients == null ? {} : { clients: input.clients }),
+        });
+        logger.info("processed lark clear command", {
+          installationId: input.installationId,
+          conversationId: route.conversationId,
+          sessionId: route.sessionId,
+          clearRunId: result.clearRunId,
+          result: result.status,
+          contextEpoch: result.contextEpoch,
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        await sendLarkTextMessage({
+          installationId: input.installationId,
+          chatId: route.chatId,
+          replyToMessageId: route.replyToMessageId,
+          text: `⚠️ 无法清理这个会话的上下文。\n原因：${errorMessage}`,
+          ...(input.clients == null ? {} : { clients: input.clients }),
+        });
+        logger.warn("failed to process lark clear command", {
+          installationId: input.installationId,
+          conversationId: route.conversationId,
+          sessionId: route.sessionId,
+          error: errorMessage,
+        });
+      }
       return;
     }
 
@@ -2251,6 +2315,7 @@ function isLarkThreadControlCommand(text: string): boolean {
   return (
     text === "/stop" ||
     text === "/status" ||
+    text === "/clear" ||
     text === "/model" ||
     text === "/help" ||
     isLarkYoloCommand(text)

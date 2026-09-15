@@ -10,6 +10,8 @@ import type {
   channelInstances,
   channelSurfaces,
   channelThreads,
+  contextClearPendingInputs,
+  contextClearRuns,
   conversationBranches,
   conversations,
   cronJobs,
@@ -53,6 +55,12 @@ export type NewTaskWorkstream = InferInsertModel<typeof taskWorkstreams>;
 
 export type Session = InferSelectModel<typeof sessions>;
 export type NewSession = InferInsertModel<typeof sessions>;
+
+export type ContextClearRun = InferSelectModel<typeof contextClearRuns>;
+export type NewContextClearRun = InferInsertModel<typeof contextClearRuns>;
+
+export type ContextClearPendingInput = InferSelectModel<typeof contextClearPendingInputs>;
+export type NewContextClearPendingInput = InferInsertModel<typeof contextClearPendingInputs>;
 
 export type Message = InferSelectModel<typeof messages>;
 export type NewMessage = InferInsertModel<typeof messages>;

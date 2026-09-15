@@ -10,6 +10,8 @@ import {
   channelInstances,
   channelSurfaces,
   channelThreads,
+  contextClearPendingInputs,
+  contextClearRuns,
   conversationBranches,
   conversations,
   cronJobs,
@@ -179,7 +181,42 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   subagentCreationRequests: many(subagentCreationRequests),
   harnessEvents: many(harnessEvents),
   shellProcessRuns: many(shellProcessRuns),
+  sourceContextClearRuns: many(contextClearRuns, {
+    relationName: "context_clear_source_session",
+  }),
+  handoffContextClearRuns: many(contextClearRuns, {
+    relationName: "context_clear_handoff_session",
+  }),
+  contextClearPendingInputs: many(contextClearPendingInputs),
 }));
+
+export const contextClearRunsRelations = relations(contextClearRuns, ({ one, many }) => ({
+  sourceSession: one(sessions, {
+    fields: [contextClearRuns.sessionId],
+    references: [sessions.id],
+    relationName: "context_clear_source_session",
+  }),
+  handoffSession: one(sessions, {
+    fields: [contextClearRuns.handoffSessionId],
+    references: [sessions.id],
+    relationName: "context_clear_handoff_session",
+  }),
+  pendingInputs: many(contextClearPendingInputs),
+}));
+
+export const contextClearPendingInputsRelations = relations(
+  contextClearPendingInputs,
+  ({ one }) => ({
+    clearRun: one(contextClearRuns, {
+      fields: [contextClearPendingInputs.clearRunId],
+      references: [contextClearRuns.id],
+    }),
+    session: one(sessions, {
+      fields: [contextClearPendingInputs.sessionId],
+      references: [sessions.id],
+    }),
+  }),
+);
 
 export const messagesRelations = relations(messages, ({ one }) => ({
   session: one(sessions, {

@@ -19,6 +19,7 @@ import { LiveConfigManager } from "@/src/config/live-manager.js";
 import type { LoadConfigOptions } from "@/src/config/load.js";
 import { ScenarioModelSwitchService } from "@/src/config/scenario-model-switch.js";
 import type { AppConfig } from "@/src/config/schema.js";
+import { ContextClearService } from "@/src/context-clear/service.js";
 import { CronService } from "@/src/cron/service.js";
 import { McpCatalogService } from "@/src/mcp/catalog.js";
 import { computeStableFingerprint } from "@/src/mcp/fingerprint.js";
@@ -49,6 +50,7 @@ import { ShellProcessManager } from "@/src/runtime/shell-process-manager.js";
 import { RuntimeStatusService } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import { ContextClearRepo } from "@/src/storage/repos/context-clear.repo.js";
 import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
 import { MeditationStateRepo } from "@/src/storage/repos/meditation-state.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
@@ -123,6 +125,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const cancel = new SessionRunAbortRegistry();
   const shellProcesses = new ShellProcessManager(input.storage);
   const control = new RuntimeControlService(cancel, {
+    contextClears: new ContextClearRepo(input.storage),
     harnessEvents: new HarnessEventsRepo(input.storage),
     sessions,
     taskRuns: new TaskRunsRepo(input.storage),
@@ -166,9 +169,15 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
     emitEvent: bridge.emitRuntimeEvent,
   });
 
+  const contextClear = new ContextClearService({
+    storage: input.storage,
+    loop,
+  });
+
   const ingress = new SessionRuntimeIngress({
     loop,
     messages,
+    contextClear,
   });
   const manager = new AgentManager({
     storage: input.storage,
@@ -342,6 +351,9 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
           starting = null;
         });
       lark.start();
+      for (const recovered of contextClear.recoverAfterRestart()) {
+        ingress.resumeDrainedInputs(recovered);
+      }
       shellProcesses.recoverAfterRestart();
       cron.start();
       meditation.start();

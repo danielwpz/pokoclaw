@@ -228,6 +228,20 @@ describe("agent system prompt", () => {
     expect(prompt).not.toContain("You must explicitly call finish_task");
   });
 
+  test("gives context handoff sessions a dedicated continuity-only operating mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      sessionPurpose: "context_handoff",
+      agentKind: "sub",
+    });
+
+    expect(prompt).toContain("You are Pokoclaw SubAgent");
+    expect(prompt).toContain("## Context Handoff Mode");
+    expect(prompt).toContain("preserve durable information in Memory/workspace files");
+    expect(prompt).toContain("Use query_system_db when earlier messages are needed");
+    expect(prompt).toContain("End only by calling submit_context_handoff");
+    expect(prompt).toContain("Do not reply to the user");
+  });
+
   test("keeps the current section order stable", () => {
     const prompt = buildAgentSystemPrompt({
       sessionPurpose: "chat",
@@ -699,6 +713,22 @@ describe("agent system prompt", () => {
         "When a tool fails, inspect the failure and choose the next step based on the result instead of guessing.",
       );
     }
+  });
+
+  test("teaches long-lived agents to recover unloaded conversation history", () => {
+    const main = buildMainAgentOperatingModelSection();
+    const sub = buildSubagentOperatingModelSection();
+
+    expect(main).toContain("messages from the current session before compaction or context clear");
+    expect(main).toContain("records from other agents, sessions, and runs");
+    expect(main).toContain(
+      "Do not mistake history that is absent from the loaded context for history that is unavailable.",
+    );
+
+    expect(sub).toContain("persisted messages from this conversation");
+    expect(sub).toContain("including history before compaction or context clear");
+    expect(sub).toContain("By default, do not inspect other agents or conversations");
+    expect(sub).toContain("Only do so when the user explicitly requests it");
   });
 
   test("exports the built prompt as a stable constant", () => {

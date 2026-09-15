@@ -31,6 +31,10 @@ const SLASH_COMMANDS: SlashCommandHelpEntry[] = [
     description: "Stop the current conversation or session.",
   },
   {
+    command: "/clear",
+    description: "Hand off essential context, then start a fresh LLM context in the same session.",
+  },
+  {
     command: "/yolo",
     description: "Toggle YOLO mode for this agent.",
   },

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -180,7 +180,7 @@ describe("agent skills catalog", () => {
     expect(roots.map((root) => root.source)).toEqual(["global", "workspace", "builtin"]);
   });
 
-  test("loads real builtin skills from the repository skills directory", () => {
+  test("loads real builtin skills from the repository skills directory", async () => {
     const builtinRoot = resolveDefaultSkillRoots(process.cwd()).find(
       (root) => root.source === "builtin",
     );
@@ -198,7 +198,26 @@ describe("agent skills catalog", () => {
       ],
     });
 
-    expect(snapshot.entries.some((entry) => entry.name === "system-observe")).toBe(true);
+    const systemObserve = snapshot.entries.find((entry) => entry.name === "system-observe");
+    expect(systemObserve).not.toBeUndefined();
+    expect(systemObserve?.description).toContain("before calling query_system_db");
+    expect(systemObserve?.description).toContain("conversation history before compaction");
+    if (systemObserve == null) {
+      throw new Error("Expected system-observe builtin skill to exist");
+    }
+    const systemObserveBody = await readFile(systemObserve.skillFilePath, "utf8");
+    const queryRecipes = await readFile(
+      path.join(systemObserve.skillDir, "references", "query-recipes.md"),
+      "utf8",
+    );
+    expect(systemObserveBody).toContain(
+      "Do not bulk-select raw `payload_json`, which may contain large reasoning signatures",
+    );
+    expect(queryRecipes).toContain(
+      "## Recover conversation history before compaction or context clear",
+    );
+    expect(queryRecipes).toContain("AND visibility = 'user_visible'");
+    expect(queryRecipes).toContain("AND m.role = 'assistant'");
     expect(snapshot.entries.some((entry) => entry.name === "claude-session-observe")).toBe(true);
     expect(snapshot.entries.some((entry) => entry.name === "a2ui-author")).toBe(true);
   });

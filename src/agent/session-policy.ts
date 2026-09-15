@@ -16,6 +16,17 @@ export const APPROVAL_SESSION_TOOL_ALLOWLIST = [
   "review_permission_request",
 ] as const;
 
+export const CONTEXT_HANDOFF_SESSION_TOOL_ALLOWLIST = [
+  "read",
+  "write",
+  "edit",
+  "ls",
+  "list_dir",
+  "grep",
+  "query_system_db",
+  "submit_context_handoff",
+] as const;
+
 export function isToolAllowedForSession(input: {
   purpose: string;
   agentKind?: string | null;
@@ -25,6 +36,16 @@ export function isToolAllowedForSession(input: {
     return APPROVAL_SESSION_TOOL_ALLOWLIST.includes(
       input.toolName as (typeof APPROVAL_SESSION_TOOL_ALLOWLIST)[number],
     );
+  }
+
+  if (input.purpose === "context_handoff") {
+    return CONTEXT_HANDOFF_SESSION_TOOL_ALLOWLIST.includes(
+      input.toolName as (typeof CONTEXT_HANDOFF_SESSION_TOOL_ALLOWLIST)[number],
+    );
+  }
+
+  if (input.toolName === "submit_context_handoff") {
+    return false;
   }
 
   if (input.toolName === "create_subagent") {
@@ -65,6 +86,10 @@ export function isToolAllowedForSession(input: {
 export function getAllowedToolsForSessionPurpose(purpose: string): readonly string[] | null {
   if (purpose === "approval") {
     return APPROVAL_SESSION_TOOL_ALLOWLIST;
+  }
+
+  if (purpose === "context_handoff") {
+    return CONTEXT_HANDOFF_SESSION_TOOL_ALLOWLIST;
   }
 
   return null;

@@ -22,6 +22,13 @@ describe("query_system_db tool", () => {
     }
   });
 
+  test("describes persisted conversation history as a supported use", () => {
+    const tool = createQuerySystemDbTool();
+
+    expect(tool.description).toContain("persisted conversation history");
+    expect(tool.description).toContain("before compaction or context clear");
+  });
+
   test("returns structured rows from the system database", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedConversationAndAgentFixture(handle);

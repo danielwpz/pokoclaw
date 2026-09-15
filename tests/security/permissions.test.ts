@@ -87,7 +87,7 @@ describe("effective permissions", () => {
       `${path.resolve(POKOCLAW_REPO_DIR)}/**`,
     ]);
     expect(permissions.fs.write.allow).toEqual([`${path.resolve(POKOCLAW_WORKSPACE_DIR)}/**`]);
-    expect(permissions.db.read).toBe(false);
+    expect(permissions.db.read).toBe(true);
     expect(permissions.db.write).toBe(false);
   });
 

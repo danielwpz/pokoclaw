@@ -12,6 +12,7 @@ import {
   buildAttachmentsSection,
   buildBashFullAccessSection,
   buildBootstrapSection,
+  buildContextHandoffSection,
   buildFutureRuntimeSections,
   buildInteractiveUiSection,
   buildMainAgentIdentitySection,
@@ -223,10 +224,21 @@ function buildApprovalAgentSystemPrompt(input: BuildAgentSystemPromptInput): str
   ]);
 }
 
+function buildContextHandoffSystemPrompt(input: BuildAgentSystemPromptInput): string {
+  const base =
+    input.agentKind === "sub"
+      ? buildSubagentSystemPrompt(input)
+      : buildMainAgentSystemPrompt(input);
+  return joinSections([base, buildContextHandoffSection()]);
+}
+
 // Keep the prompt assembled from purpose-specific builders so each runtime role
 // can evolve into a distinct agent setup instead of accumulating branchy patch
 // logic inside one shared prompt body.
 export function buildAgentSystemPrompt(input: BuildAgentSystemPromptInput = {}): string {
+  if (input.sessionPurpose === "context_handoff") {
+    return buildContextHandoffSystemPrompt(input);
+  }
   if (input.sessionPurpose === "approval") {
     return buildApprovalAgentSystemPrompt(input);
   }
