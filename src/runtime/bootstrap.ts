@@ -50,6 +50,7 @@ import { ShellProcessManager } from "@/src/runtime/shell-process-manager.js";
 import { RuntimeStatusService } from "@/src/runtime/status.js";
 import { createSubsystemLogger } from "@/src/shared/logger.js";
 import type { StorageDb } from "@/src/storage/db/client.js";
+import { ContextClearRepo } from "@/src/storage/repos/context-clear.repo.js";
 import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
 import { MeditationStateRepo } from "@/src/storage/repos/meditation-state.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
@@ -124,6 +125,7 @@ export function createRuntimeBootstrap(input: CreateRuntimeBootstrapInput): Runt
   const cancel = new SessionRunAbortRegistry();
   const shellProcesses = new ShellProcessManager(input.storage);
   const control = new RuntimeControlService(cancel, {
+    contextClears: new ContextClearRepo(input.storage),
     harnessEvents: new HarnessEventsRepo(input.storage),
     sessions,
     taskRuns: new TaskRunsRepo(input.storage),

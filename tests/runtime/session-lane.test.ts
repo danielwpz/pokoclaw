@@ -242,6 +242,7 @@ describe("session lane image normalization", () => {
     const execute = vi.fn(async () => ({
       status: "completed" as const,
       clearRunId: "clear_1",
+      queuedInputClearRunIds: ["clear_1"],
       sessionId: "sess_1",
       contextEpoch: 1,
       drainedInputs: [
@@ -298,6 +299,60 @@ describe("session lane image normalization", () => {
     await vi.waitFor(() => {
       expect(markQueuedInputsProcessed).toHaveBeenCalledExactlyOnceWith("clear_1");
     });
+  });
+
+  test("acknowledges every coalesced clear after a recovered queued-input run", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedConversationFixture(handle);
+    const messages = new MessagesRepo(handle.storage.db);
+    new SessionsRepo(handle.storage.db).create({
+      id: "sess_1",
+      conversationId: "conv_1",
+      branchId: "branch_1",
+      purpose: "chat",
+    });
+    const markQueuedInputsProcessed = vi.fn();
+    const lane = new InMemorySessionLane({
+      messages,
+      loop: {
+        enqueueSteerInput: vi.fn(() => false),
+        run: vi.fn(async () => buildRunResult()),
+        submitApprovalResponse: vi.fn(() => false),
+      } as never,
+      contextClear: {
+        markQueuedInputsProcessed,
+      } as never,
+    });
+
+    lane.resumeDrainedInputs({
+      status: "completed",
+      clearRunId: "clear_1",
+      queuedInputClearRunIds: ["clear_1", "clear_2"],
+      sessionId: "sess_1",
+      contextEpoch: 2,
+      drainedInputs: [
+        {
+          messageId: "queued_message_1",
+          sessionId: "sess_1",
+          scenario: "chat",
+          runtimeImages: [],
+          maxTurns: null,
+        },
+        {
+          messageId: "queued_message_2",
+          sessionId: "sess_1",
+          scenario: "chat",
+          runtimeImages: [],
+          maxTurns: null,
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(markQueuedInputsProcessed).toHaveBeenCalledTimes(2);
+    });
+    expect(markQueuedInputsProcessed).toHaveBeenNthCalledWith(1, "clear_1");
+    expect(markQueuedInputsProcessed).toHaveBeenNthCalledWith(2, "clear_2");
   });
 });
 

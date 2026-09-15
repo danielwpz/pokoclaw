@@ -286,7 +286,12 @@ export class ContextClearRepo {
     });
   }
 
-  fail(input: { id: string; errorText: string; now?: Date }): SettledContextClearRun {
+  fail(input: {
+    id: string;
+    errorText: string;
+    resumeQueuedInputs?: boolean;
+    now?: Date;
+  }): SettledContextClearRun {
     return this.db.transaction((tx) => {
       const clearRepo = new ContextClearRepo(tx);
       const clearRun = clearRepo.requireActive(input.id);
@@ -304,16 +309,22 @@ export class ContextClearRepo {
         startingSeq: new MessagesRepo(tx).getNextSeq(clearRun.sessionId),
       });
       const now = toCanonicalUtcIsoTimestamp(input.now ?? new Date());
+      const resumeQueuedInputs = input.resumeQueuedInputs ?? true;
       tx.update(contextClearRuns)
         .set({
           status: "failed",
           errorText: input.errorText,
           failedAt: now,
-          queuedInputsProcessedAt: drainedInputs.length === 0 ? now : null,
+          queuedInputsProcessedAt: drainedInputs.length === 0 || !resumeQueuedInputs ? now : null,
           updatedAt: now,
         })
         .where(eq(contextClearRuns.id, input.id))
         .run();
+      if (!resumeQueuedInputs) {
+        tx.delete(contextClearPendingInputs)
+          .where(eq(contextClearPendingInputs.clearRunId, input.id))
+          .run();
+      }
       clearRepo.endHandoffSession(clearRun.handoffSessionId, now);
       return {
         clearRun: clearRepo.requireById(input.id),

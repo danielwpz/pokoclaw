@@ -234,6 +234,43 @@ describe("context clear service", () => {
     expect(service.recoverAfterRestart()).toEqual([]);
   });
 
+  test("coalesces multiple unprocessed clear runs for the same session during restart recovery", async () => {
+    handle = await createTestDatabase(import.meta.url);
+    seedMainChat(handle);
+    const service = new ContextClearService({
+      storage: handle.storage.db,
+      loop: createHandoffLoop("Continue with the queued requests."),
+    });
+    const firstClear = service.request("session_main");
+    service.enqueue({
+      clearRunId: firstClear.id,
+      sessionId: "session_main",
+      scenario: "chat",
+      content: "first queued request",
+      channelMessageId: "om_first_recovery",
+    });
+    await service.execute(firstClear.id);
+
+    const secondClear = service.request("session_main");
+    service.enqueue({
+      clearRunId: secondClear.id,
+      sessionId: "session_main",
+      scenario: "chat",
+      content: "second queued request",
+      channelMessageId: "om_second_recovery",
+    });
+    await service.execute(secondClear.id);
+
+    const recovered = service.recoverAfterRestart();
+
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({
+      sessionId: "session_main",
+      queuedInputClearRunIds: [firstClear.id, secondClear.id],
+    });
+    expect(recovered[0]?.drainedInputs).toHaveLength(2);
+  });
+
   test("does not resume a completed queued-input run whose final response was already persisted", async () => {
     handle = await createTestDatabase(import.meta.url);
     seedMainChat(handle);

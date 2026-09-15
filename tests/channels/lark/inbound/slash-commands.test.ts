@@ -661,6 +661,7 @@ describe("lark inbound slash commands", () => {
       const clearContext = vi.fn(async () => ({
         status: "completed" as const,
         clearRunId: "clear_1",
+        queuedInputClearRunIds: [],
         contextEpoch: 1,
       }));
       const create = vi.fn(async (_input: unknown) => ({

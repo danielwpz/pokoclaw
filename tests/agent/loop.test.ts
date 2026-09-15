@@ -25,6 +25,7 @@ import {
   TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE,
 } from "@/src/shared/tool-result-codes.js";
 import { ApprovalsRepo } from "@/src/storage/repos/approvals.repo.js";
+import { ContextClearRepo } from "@/src/storage/repos/context-clear.repo.js";
 import { HarnessEventsRepo } from "@/src/storage/repos/harness-events.repo.js";
 import { MessagesRepo } from "@/src/storage/repos/messages.repo.js";
 import { SessionsRepo } from "@/src/storage/repos/sessions.repo.js";
@@ -2699,6 +2700,7 @@ describe("agent loop", () => {
 
     const emittedEvents: Array<{ type: string; approvalId?: string; decision?: string }> = [];
     const control = new RuntimeControlService(new SessionRunAbortRegistry(), {
+      contextClears: new ContextClearRepo(handle.storage.db),
       harnessEvents,
       sessions: sessionsRepo,
       taskRuns: new TaskRunsRepo(handle.storage.db),

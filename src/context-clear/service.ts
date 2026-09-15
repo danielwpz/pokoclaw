@@ -23,6 +23,7 @@ const CONTEXT_HANDOFF_MAX_TURNS = 12;
 export interface ContextClearExecutionResult {
   status: "completed" | "failed";
   clearRunId: string;
+  queuedInputClearRunIds: string[];
   sessionId: string;
   contextEpoch: number;
   drainedInputs: DrainedContextClearInput[];
@@ -97,6 +98,7 @@ export class ContextClearService {
       return {
         status: "completed",
         clearRunId,
+        queuedInputClearRunIds: [],
         sessionId: clearRun.sessionId,
         contextEpoch: this.sessions.getById(clearRun.sessionId)?.contextEpoch ?? 0,
         drainedInputs: [],
@@ -106,6 +108,7 @@ export class ContextClearService {
       return {
         status: "failed",
         clearRunId,
+        queuedInputClearRunIds: [],
         sessionId: clearRun.sessionId,
         contextEpoch: this.sessions.getById(clearRun.sessionId)?.contextEpoch ?? 0,
         drainedInputs: [],
@@ -204,6 +207,7 @@ export class ContextClearService {
       return {
         status: "completed",
         clearRunId,
+        queuedInputClearRunIds: settled.drainedInputs.length === 0 ? [] : [clearRunId],
         sessionId: settled.clearRun.sessionId,
         contextEpoch: settled.contextEpoch,
         drainedInputs: settled.drainedInputs,
@@ -225,6 +229,7 @@ export class ContextClearService {
       return {
         status: "failed",
         clearRunId,
+        queuedInputClearRunIds: settled.drainedInputs.length === 0 ? [] : [clearRunId],
         sessionId: settled.clearRun.sessionId,
         contextEpoch: settled.contextEpoch,
         drainedInputs: settled.drainedInputs,
@@ -245,7 +250,7 @@ export class ContextClearService {
       });
     }
 
-    const recoverable: ContextClearExecutionResult[] = [];
+    const recoverableBySession = new Map<string, ContextClearExecutionResult>();
     for (const run of this.clears.listUnprocessedSettled()) {
       if (this.clears.hasPersistedResponseAfterQueuedInputs(run.id)) {
         this.clears.markQueuedInputsProcessed(run.id);
@@ -260,9 +265,20 @@ export class ContextClearService {
         this.clears.markQueuedInputsProcessed(run.id);
         continue;
       }
-      recoverable.push({
+      const existing = recoverableBySession.get(run.sessionId);
+      if (existing != null) {
+        existing.drainedInputs.push(...drainedInputs);
+        existing.queuedInputClearRunIds.push(run.id);
+        if (run.status === "failed") {
+          existing.status = "failed";
+          existing.errorMessage = run.errorText ?? "Context handoff previously failed.";
+        }
+        continue;
+      }
+      recoverableBySession.set(run.sessionId, {
         status: run.status === "completed" ? "completed" : "failed",
         clearRunId: run.id,
+        queuedInputClearRunIds: [run.id],
         sessionId: run.sessionId,
         contextEpoch: this.sessions.getById(run.sessionId)?.contextEpoch ?? 0,
         drainedInputs,
@@ -271,7 +287,7 @@ export class ContextClearService {
           : {}),
       });
     }
-    return recoverable;
+    return Array.from(recoverableBySession.values());
   }
 
   markQueuedInputsProcessed(clearRunId: string): void {

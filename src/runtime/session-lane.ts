@@ -292,20 +292,22 @@ export class InMemorySessionLane {
     });
     void runPromise.then(
       () => {
-        try {
-          this.requireContextClear().markQueuedInputsProcessed(result.clearRunId);
-          logger.info("context clear queued input run completed", {
-            clearRunId: result.clearRunId,
-            sessionId: result.sessionId,
-            queuedInputCount: result.drainedInputs.length,
-          });
-        } catch (error) {
-          logger.error("failed to acknowledge context clear queued input run", {
-            clearRunId: result.clearRunId,
-            sessionId: result.sessionId,
-            error: error instanceof Error ? error.message : String(error),
-          });
+        for (const clearRunId of result.queuedInputClearRunIds) {
+          try {
+            this.requireContextClear().markQueuedInputsProcessed(clearRunId);
+          } catch (error) {
+            logger.error("failed to acknowledge context clear queued input run", {
+              clearRunId,
+              sessionId: result.sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
+        logger.info("context clear queued input run completed", {
+          clearRunIds: result.queuedInputClearRunIds,
+          sessionId: result.sessionId,
+          queuedInputCount: result.drainedInputs.length,
+        });
       },
       () => undefined,
     );
