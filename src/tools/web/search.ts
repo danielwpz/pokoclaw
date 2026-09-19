@@ -1,6 +1,7 @@
 import { type Static, Type } from "@sinclair/typebox";
 import { defineTool, jsonToolResult } from "@/src/tools/core/types.js";
 import { executeWebProviderChain } from "@/src/tools/web/provider-chain.js";
+import { WebProviderGovernor } from "@/src/tools/web/provider-governor.js";
 import { createSearchProvider, type WebProviderConfigInput } from "@/src/tools/web/providers.js";
 import { webProviderChainToToolFailure } from "@/src/tools/web/tool-failure.js";
 
@@ -26,22 +27,30 @@ export const WEB_SEARCH_TOOL_SCHEMA = Type.Object(
 export type WebSearchToolArgs = Static<typeof WEB_SEARCH_TOOL_SCHEMA>;
 
 export function createWebSearchTool(
-  input: WebProviderConfigInput & { fallbackProvider?: WebProviderConfigInput },
+  input: WebProviderConfigInput & {
+    fallbackProvider?: WebProviderConfigInput;
+    governor?: WebProviderGovernor;
+  },
 ) {
   const provider = createSearchProvider(input);
   const fallbackProvider =
     input.fallbackProvider == null ? undefined : createSearchProvider(input.fallbackProvider);
+  const governor = input.governor ?? new WebProviderGovernor();
 
   return defineTool({
     name: "web_search",
     description: "Search the web using the configured web services.",
     inputSchema: WEB_SEARCH_TOOL_SCHEMA,
+    getInvocationTimeoutMs() {
+      return 90_000;
+    },
     async execute(context, args) {
       try {
         const response = await executeWebProviderChain({
           toolName: "web_search",
           context,
           primary: provider,
+          governor,
           ...(fallbackProvider == null ? {} : { fallback: fallbackProvider }),
           execute: (candidate) =>
             candidate.search({

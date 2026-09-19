@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { executeWebProviderChain } from "@/src/tools/web/provider-chain.js";
+import { WebProviderGovernor } from "@/src/tools/web/provider-governor.js";
 
 const { logger } = vi.hoisted(() => ({
   logger: {
@@ -39,6 +40,7 @@ describe("web provider chain", () => {
       },
       primary,
       fallback,
+      governor: new WebProviderGovernor(),
       execute: async (provider) => {
         if (provider === primary) {
           throw new Error("Authorization: Bearer private-token");
@@ -92,6 +94,7 @@ describe("web provider chain", () => {
         },
         primary: { providerId: "primary", providerApi: "tavily" },
         fallback: { providerId: "fallback", providerApi: "firecrawl" },
+        governor: new WebProviderGovernor(),
         execute,
       }),
     ).rejects.toMatchObject({

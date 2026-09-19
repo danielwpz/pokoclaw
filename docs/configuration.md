@@ -312,6 +312,8 @@ Use this when the user wants Pokoclaw to search the web or fetch web pages durin
 
 Use Tavily as the primary service and Firecrawl as the fallback. The tool performs fallback internally; the agent sees the same provider-neutral result shape either way. Provider attempts, fallback decisions, request IDs, credit usage, timing, and upstream failures are written only to the system runtime log.
 
+Rate-limit timing is also host-managed. Pokoclaw serializes requests per provider capability, honors `Retry-After`, queues bounded waits, and retries once before returning a retryable provider-neutral tool error. The agent may retry the same request, but it never receives provider names or retry timestamps; subsequent timing remains controlled by the host. Authentication and exhausted-plan failures temporarily remove that provider from routing so repeated calls can proceed directly to a configured fallback.
+
 Explain the difference clearly:
 
 - `web search` is for finding current information or locating relevant pages on the internet.

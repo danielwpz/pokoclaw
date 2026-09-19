@@ -3,6 +3,7 @@ import { buildSystemPolicy } from "@/src/security/policy.js";
 import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import { defineTool, jsonToolResult, type ToolExecutionContext } from "@/src/tools/core/types.js";
 import { executeWebProviderChain } from "@/src/tools/web/provider-chain.js";
+import { WebProviderGovernor } from "@/src/tools/web/provider-governor.js";
 import { createFetchProvider, type WebProviderConfigInput } from "@/src/tools/web/providers.js";
 import { webProviderChainToToolFailure } from "@/src/tools/web/tool-failure.js";
 
@@ -22,16 +23,23 @@ export const WEB_FETCH_TOOL_SCHEMA = Type.Object(
 export type WebFetchToolArgs = Static<typeof WEB_FETCH_TOOL_SCHEMA>;
 
 export function createWebFetchTool(
-  input: WebProviderConfigInput & { fallbackProvider?: WebProviderConfigInput },
+  input: WebProviderConfigInput & {
+    fallbackProvider?: WebProviderConfigInput;
+    governor?: WebProviderGovernor;
+  },
 ) {
   const provider = createFetchProvider(input);
   const fallbackProvider =
     input.fallbackProvider == null ? undefined : createFetchProvider(input.fallbackProvider);
+  const governor = input.governor ?? new WebProviderGovernor();
 
   return defineTool({
     name: "web_fetch",
     description: "Fetch and extract the main content of a web page.",
     inputSchema: WEB_FETCH_TOOL_SCHEMA,
+    getInvocationTimeoutMs() {
+      return 90_000;
+    },
     getResultMaxChars() {
       return WEB_FETCH_RESULT_MAX_CHARS;
     },
@@ -43,6 +51,7 @@ export function createWebFetchTool(
           toolName: "web_fetch",
           context,
           primary: provider,
+          governor,
           ...(fallbackProvider == null ? {} : { fallback: fallbackProvider }),
           execute: (candidate) =>
             candidate.fetch({

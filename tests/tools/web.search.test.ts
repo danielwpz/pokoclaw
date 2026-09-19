@@ -267,4 +267,41 @@ describe("web_search tool", () => {
       },
     });
   });
+
+  test("allows an unchanged retry after host-managed rate limiting without exposing timing", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+        status: 429,
+        headers: { "Retry-After": "120" },
+      }),
+    );
+    const tool = createWebSearchTool({
+      providerId: "firecrawl",
+      providerConfig: { api: "firecrawl", apiKey: "fc-test" },
+    });
+
+    const result = tool.execute(
+      {
+        sessionId: "session_1",
+        conversationId: "conversation_1",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: {} as never,
+      },
+      { query: "retry unchanged" },
+    );
+
+    await expect(result).rejects.toMatchObject({
+      retryable: true,
+      message:
+        "web_search was temporarily rate limited. Retry the same request; the host will manage the timing.",
+      details: {
+        code: "web_search_failed",
+        reason: "rate_limited",
+        retryable: true,
+        retryManagedByHost: true,
+        recommendedAction: "retry",
+      },
+    });
+    await expect(result).rejects.not.toThrow(/120|firecrawl|retry-after/iu);
+  });
 });

@@ -23,6 +23,7 @@ import { createSendAttachmentTool } from "@/src/tools/send-attachment.js";
 import { createSubmitContextHandoffTool } from "@/src/tools/submit-context-handoff.js";
 import { createWaitTaskTool } from "@/src/tools/wait-task.js";
 import { createWebFetchTool } from "@/src/tools/web/fetch.js";
+import { WebProviderGovernor } from "@/src/tools/web/provider-governor.js";
 import { createWebSearchTool } from "@/src/tools/web/search.js";
 import { createWriteTool } from "@/src/tools/write.js";
 
@@ -34,6 +35,7 @@ export function createBuiltinToolRegistry(
 ): ToolRegistry {
   const providers = config?.providers ?? DEFAULT_CONFIG.providers;
   const toolsConfig = config?.tools ?? DEFAULT_CONFIG.tools;
+  const webProviderGovernor = new WebProviderGovernor();
   const registry = new ToolRegistry([], { source: BUILTIN_TOOL_SOURCE });
   registry.register(createBashTool());
   registry.register(createReadTool());
@@ -70,6 +72,7 @@ export function createBuiltinToolRegistry(
       createWebSearchTool({
         providerId,
         providerConfig,
+        governor: webProviderGovernor,
         ...resolveFallbackProvider(
           providers,
           toolsConfig.web.search.fallbackProvider,
@@ -88,6 +91,7 @@ export function createBuiltinToolRegistry(
       createWebFetchTool({
         providerId,
         providerConfig,
+        governor: webProviderGovernor,
         ...resolveFallbackProvider(
           providers,
           toolsConfig.web.fetch.fallbackProvider,

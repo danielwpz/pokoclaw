@@ -5,6 +5,7 @@ import {
   WebProviderError,
   type WebProviderFailure,
 } from "@/src/tools/web/provider-errors.js";
+import type { WebProviderGovernor } from "@/src/tools/web/provider-governor.js";
 
 const logger = createSubsystemLogger("web-provider");
 
@@ -42,6 +43,7 @@ export async function executeWebProviderChain<
   context: ToolExecutionContext;
   primary: TProvider;
   fallback?: TProvider;
+  governor: WebProviderGovernor;
   execute: (provider: TProvider) => Promise<TResponse>;
   summarizeResponse?: (response: TResponse) => Record<string, unknown>;
 }): Promise<TResponse> {
@@ -68,7 +70,14 @@ export async function executeWebProviderChain<
 
     const startedAt = Date.now();
     try {
-      const response = await input.execute(attempt.provider);
+      const response = await input.governor.execute({
+        toolName: input.toolName,
+        providerId: attempt.provider.providerId,
+        providerApi: attempt.provider.providerApi,
+        ...(input.context.abortSignal == null ? {} : { signal: input.context.abortSignal }),
+        waitForRateLimit: index === providers.length - 1,
+        execute: () => input.execute(attempt.provider),
+      });
       logger.info("web provider attempt succeeded", {
         toolName: input.toolName,
         toolCallId: input.context.toolCallId,
@@ -98,6 +107,7 @@ export async function executeWebProviderChain<
         failureCode: failure.code,
         retryable: failure.retryable,
         statusCode: failure.statusCode,
+        retryAfterMs: failure.retryAfterMs,
         errorMessage: failure.message,
       });
 

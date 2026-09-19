@@ -15,18 +15,21 @@ export interface WebProviderFailure {
   message: string;
   retryable: boolean;
   statusCode?: number;
+  retryAfterMs?: number;
 }
 
 export class WebProviderError extends Error {
   readonly code: WebProviderFailureCode;
   readonly retryable: boolean;
   readonly statusCode?: number;
+  readonly retryAfterMs?: number;
 
   constructor(input: {
     code: WebProviderFailureCode;
     message: string;
     retryable: boolean;
     statusCode?: number;
+    retryAfterMs?: number;
   }) {
     super(input.message);
     this.name = "WebProviderError";
@@ -34,6 +37,9 @@ export class WebProviderError extends Error {
     this.retryable = input.retryable;
     if (input.statusCode != null) {
       this.statusCode = input.statusCode;
+    }
+    if (input.retryAfterMs != null) {
+      this.retryAfterMs = input.retryAfterMs;
     }
   }
 }
@@ -45,6 +51,7 @@ export function normalizeWebProviderFailure(error: unknown): WebProviderFailure 
       message: sanitizeProviderErrorMessage(error.message),
       retryable: error.retryable,
       ...(error.statusCode == null ? {} : { statusCode: error.statusCode }),
+      ...(error.retryAfterMs == null ? {} : { retryAfterMs: error.retryAfterMs }),
     };
   }
 
@@ -59,7 +66,8 @@ export function normalizeWebProviderFailure(error: unknown): WebProviderFailure 
   const statusCode = readStatusCode(error);
   const message = sanitizeProviderErrorMessage(getErrorMessage(error));
   if (statusCode != null) {
-    return failureFromStatus(statusCode, message);
+    const retryAfterMs = readRetryAfterMs(error);
+    return failureFromStatus(statusCode, message, retryAfterMs);
   }
 
   const code = readErrorCode(error);
@@ -83,12 +91,21 @@ export function normalizeWebProviderFailure(error: unknown): WebProviderFailure 
   return { code: "upstream_error", message, retryable: true };
 }
 
-export function createHttpProviderError(statusCode: number, message: string): WebProviderError {
-  const failure = failureFromStatus(statusCode, message);
+export function createHttpProviderError(
+  statusCode: number,
+  message: string,
+  headers?: Headers,
+): WebProviderError {
+  const retryAfterMs = parseRetryAfterMs(headers?.get("retry-after"));
+  const failure = failureFromStatus(statusCode, message, retryAfterMs);
   return new WebProviderError({ ...failure, statusCode });
 }
 
-function failureFromStatus(statusCode: number, message: string): WebProviderFailure {
+function failureFromStatus(
+  statusCode: number,
+  message: string,
+  retryAfterMs?: number,
+): WebProviderFailure {
   if (statusCode === 401 || statusCode === 403) {
     return { code: "authentication", message, retryable: false, statusCode };
   }
@@ -102,7 +119,14 @@ function failureFromStatus(statusCode: number, message: string): WebProviderFail
     return { code: "timeout", message, retryable: true, statusCode };
   }
   if (statusCode === 429) {
-    return { code: "rate_limited", message, retryable: true, statusCode };
+    const resolvedRetryAfterMs = retryAfterMs ?? parseRetryAfterMessageMs(message);
+    return {
+      code: "rate_limited",
+      message,
+      retryable: true,
+      statusCode,
+      ...(resolvedRetryAfterMs == null ? {} : { retryAfterMs: resolvedRetryAfterMs }),
+    };
   }
   if (statusCode >= 500) {
     return { code: "upstream_error", message, retryable: true, statusCode };
@@ -125,17 +149,60 @@ function failureFromMessage(message: string): WebProviderFailure | null {
     normalized.includes("payment required") ||
     normalized.includes("insufficient credit") ||
     normalized.includes("quota exceeded") ||
-    normalized.includes("out of credits")
+    normalized.includes("out of credits") ||
+    normalized.includes("exceeds your plan's set usage limit") ||
+    normalized.includes("usage limit has been reached")
   ) {
     return { code: "quota_exhausted", message, retryable: false };
   }
   if (normalized.includes("rate limit") || normalized.includes("too many requests")) {
-    return { code: "rate_limited", message, retryable: true };
+    const retryAfterMs = parseRetryAfterMessageMs(message);
+    return {
+      code: "rate_limited",
+      message,
+      retryable: true,
+      ...(retryAfterMs == null ? {} : { retryAfterMs }),
+    };
   }
   if (normalized.includes("timed out") || normalized.includes("timeout")) {
     return { code: "timeout", message, retryable: true };
   }
   return null;
+}
+
+export function parseRetryAfterMs(
+  value: string | null | undefined,
+  now = Date.now(),
+): number | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const seconds = Number(normalized);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds * 1_000);
+  }
+
+  const retryAt = Date.parse(normalized);
+  if (Number.isNaN(retryAt)) {
+    return undefined;
+  }
+  return Math.max(0, retryAt - now);
+}
+
+function parseRetryAfterMessageMs(message: string, now = Date.now()): number | undefined {
+  const secondsMatch = /retry after\s+(\d+(?:\.\d+)?)s\b/iu.exec(message);
+  if (secondsMatch?.[1] != null) {
+    const seconds = Number(secondsMatch[1]);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.ceil(seconds * 1_000);
+    }
+  }
+
+  const resetMatch = /resets at\s+(.+?)(?:\s+\(|$)/iu.exec(message);
+  const retryAt = resetMatch?.[1] == null ? Number.NaN : Date.parse(resetMatch[1]);
+  return Number.isNaN(retryAt) ? undefined : Math.max(0, retryAt - now);
 }
 
 function isAbortError(error: unknown): boolean {
@@ -157,6 +224,21 @@ function readStatusCode(error: unknown): number | undefined {
     }
   }
   return undefined;
+}
+
+function readRetryAfterMs(error: unknown): number | undefined {
+  if (typeof error !== "object" || error == null) {
+    return undefined;
+  }
+  const headers = Reflect.get(error, "headers");
+  if (headers instanceof Headers) {
+    return parseRetryAfterMs(headers.get("retry-after"));
+  }
+  if (typeof headers !== "object" || headers == null) {
+    return undefined;
+  }
+  const value = Reflect.get(headers, "retry-after") ?? Reflect.get(headers, "Retry-After");
+  return typeof value === "string" ? parseRetryAfterMs(value) : undefined;
 }
 
 function readErrorCode(error: unknown): string | undefined {

@@ -161,7 +161,7 @@ async function postFirecrawlJson(input: {
   const errorMessage =
     readString(record?.error) ?? `Firecrawl request failed with HTTP ${response.status}.`;
   if (!response.ok) {
-    throw createHttpProviderError(response.status, errorMessage);
+    throw createHttpProviderError(response.status, errorMessage, response.headers);
   }
   if (record?.success !== true) {
     throw new WebProviderError({

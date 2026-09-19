@@ -28,6 +28,19 @@ export function webProviderChainToToolFailure(
     });
   }
 
+  if (failures.some((failure) => failure.code === "rate_limited")) {
+    return toolRetryableError(
+      `${toolName} was temporarily rate limited. Retry the same request; the host will manage the timing.`,
+      {
+        code: `${toolName}_failed`,
+        reason: "rate_limited",
+        retryable: true,
+        retryManagedByHost: true,
+        recommendedAction: "retry",
+      },
+    );
+  }
+
   if (failures.some((failure) => failure.retryable)) {
     return toolRetryableError(`${toolName} is temporarily unavailable. Retry later.`, {
       code: `${toolName}_failed`,
