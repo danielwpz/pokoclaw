@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_CONFIG } from "@/src/config/defaults.js";
 import { createWebSearchTool } from "@/src/tools/web/search.js";
 
-const { searchMock } = vi.hoisted(() => ({
+const { fetchMock, searchMock } = vi.hoisted(() => ({
+  fetchMock: vi.fn(),
   searchMock: vi.fn(),
 }));
 
@@ -15,7 +16,9 @@ vi.mock("@tavily/core", () => ({
 
 describe("web_search tool", () => {
   beforeEach(() => {
+    fetchMock.mockReset();
     searchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
   });
 
   test("maps Tavily search results into the tool response shape", async () => {
@@ -65,13 +68,8 @@ describe("web_search tool", () => {
       {
         type: "json",
         json: {
-          providerId: "tavily",
-          providerApi: "tavily",
           query: "latest pokoclaw news",
           answer: "Short answer",
-          requestId: "req_123",
-          responseTimeMs: 321,
-          creditsUsed: 2,
           results: [
             {
               title: "Pokoclaw launch",
@@ -84,5 +82,189 @@ describe("web_search tool", () => {
         },
       },
     ]);
+  });
+
+  test("maps Firecrawl search results without exposing provider diagnostics", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          id: "fc_req_1",
+          creditsUsed: 1,
+          data: {
+            web: [
+              {
+                title: "Pokoclaw docs",
+                description: "Official documentation",
+                url: "https://example.com/docs",
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const tool = createWebSearchTool({
+      providerId: "firecrawl",
+      providerConfig: { api: "firecrawl", apiKey: "fc-test" },
+    });
+    const result = await tool.execute(
+      {
+        sessionId: "session_1",
+        conversationId: "conversation_1",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: {} as never,
+      },
+      { query: "pokoclaw", maxResults: 3 },
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.firecrawl.dev/v2/search",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "pokoclaw", limit: 3, sources: ["web"] }),
+      }),
+    );
+    expect(result.content).toEqual([
+      {
+        type: "json",
+        json: {
+          query: "pokoclaw",
+          results: [
+            {
+              title: "Pokoclaw docs",
+              url: "https://example.com/docs",
+              snippet: "Official documentation",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  test("falls back from Tavily to Firecrawl inside the tool", async () => {
+    searchMock.mockRejectedValue(new Error("Tavily transport failed"));
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            web: [
+              { title: "Fallback result", description: "Found", url: "https://example.com/found" },
+            ],
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const tool = createWebSearchTool({
+      providerId: "tavily",
+      providerConfig: { api: "tavily", apiKey: "tvly-test" },
+      fallbackProvider: {
+        providerId: "firecrawl",
+        providerConfig: { api: "firecrawl", apiKey: "fc-test" },
+      },
+    });
+
+    const result = await tool.execute(
+      {
+        sessionId: "session_1",
+        conversationId: "conversation_1",
+        securityConfig: DEFAULT_CONFIG.security,
+        storage: {} as never,
+      },
+      { query: "fallback" },
+    );
+
+    expect(searchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.content).toEqual([
+      {
+        type: "json",
+        json: {
+          query: "fallback",
+          results: [
+            {
+              title: "Fallback result",
+              url: "https://example.com/found",
+              snippet: "Found",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  test("reports a provider-neutral non-retryable failure when every service rejects access", async () => {
+    searchMock.mockRejectedValue(new Error("Unauthorized: missing or invalid API key."));
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Firecrawl payment required" }), { status: 402 }),
+    );
+    const tool = createWebSearchTool({
+      providerId: "tavily",
+      providerConfig: { api: "tavily", apiKey: "tvly-test" },
+      fallbackProvider: {
+        providerId: "firecrawl",
+        providerConfig: { api: "firecrawl", apiKey: "fc-test" },
+      },
+    });
+
+    await expect(
+      tool.execute(
+        {
+          sessionId: "session_1",
+          conversationId: "conversation_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: {} as never,
+        },
+        { query: "fallback" },
+      ),
+    ).rejects.toMatchObject({
+      retryable: false,
+      details: {
+        code: "web_search_failed",
+        reason: "system_unavailable",
+        retryable: false,
+        recommendedAction: "report",
+      },
+    });
+  });
+
+  test("marks an exhausted temporary provider chain as retryable", async () => {
+    searchMock.mockRejectedValue(new Error("socket timed out"));
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ success: false, error: "Upstream unavailable" }), {
+        status: 503,
+      }),
+    );
+    const tool = createWebSearchTool({
+      providerId: "tavily",
+      providerConfig: { api: "tavily", apiKey: "tvly-test" },
+      fallbackProvider: {
+        providerId: "firecrawl",
+        providerConfig: { api: "firecrawl", apiKey: "fc-test" },
+      },
+    });
+
+    await expect(
+      tool.execute(
+        {
+          sessionId: "session_1",
+          conversationId: "conversation_1",
+          securityConfig: DEFAULT_CONFIG.security,
+          storage: {} as never,
+        },
+        { query: "fallback" },
+      ),
+    ).rejects.toMatchObject({
+      retryable: true,
+      details: {
+        code: "web_search_failed",
+        reason: "temporary_unavailable",
+        retryable: true,
+        recommendedAction: "retry",
+      },
+    });
   });
 });

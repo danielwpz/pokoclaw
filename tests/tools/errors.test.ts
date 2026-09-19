@@ -6,6 +6,7 @@ import {
   toolFatalError,
   toolInternalError,
   toolRecoverableError,
+  toolRetryableError,
 } from "@/src/tools/core/errors.js";
 
 describe("tool errors", () => {
@@ -25,6 +26,14 @@ describe("tool errors", () => {
     expect(error.message).toBe("runtime blew up");
     expect(error.shouldReturnToLlm).toBe(true);
     expect(error.retryable).toBe(false);
+  });
+
+  test("allows tools to explicitly declare a retryable recoverable failure", () => {
+    const error = toolRetryableError("temporary upstream failure");
+
+    expect(error.kind).toBe("recoverable_error");
+    expect(error.shouldReturnToLlm).toBe(true);
+    expect(error.retryable).toBe(true);
   });
 
   test("keeps fatal tool errors as run-terminating", () => {

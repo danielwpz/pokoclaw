@@ -62,6 +62,10 @@ describe("builtin tools", () => {
           api: "tavily",
           apiKey: "tvly-test",
         },
+        firecrawl: {
+          api: "firecrawl",
+          apiKey: "fc-test",
+        },
       },
       tools: {
         ...DEFAULT_CONFIG.tools,
@@ -69,10 +73,12 @@ describe("builtin tools", () => {
           search: {
             enabled: true,
             provider: "tavily",
+            fallbackProvider: "firecrawl",
           },
           fetch: {
             enabled: true,
             provider: "tavily",
+            fallbackProvider: "firecrawl",
           },
         },
       },

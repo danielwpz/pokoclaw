@@ -70,6 +70,11 @@ export function createBuiltinToolRegistry(
       createWebSearchTool({
         providerId,
         providerConfig,
+        ...resolveFallbackProvider(
+          providers,
+          toolsConfig.web.search.fallbackProvider,
+          "tools.web.search",
+        ),
       }),
     );
   }
@@ -83,8 +88,38 @@ export function createBuiltinToolRegistry(
       createWebFetchTool({
         providerId,
         providerConfig,
+        ...resolveFallbackProvider(
+          providers,
+          toolsConfig.web.fetch.fallbackProvider,
+          "tools.web.fetch",
+        ),
       }),
     );
   }
   return registry;
+}
+
+function resolveFallbackProvider(
+  providers: AppConfig["providers"],
+  providerId: string | undefined,
+  configPath: string,
+): {
+  fallbackProvider?: {
+    providerId: string;
+    providerConfig: AppConfig["providers"][string];
+  };
+} {
+  if (providerId == null) {
+    return {};
+  }
+  const providerConfig = providers[providerId];
+  if (providerConfig == null) {
+    throw new Error(`${configPath}.fallbackProvider is not configured.`);
+  }
+  return {
+    fallbackProvider: {
+      providerId,
+      providerConfig,
+    },
+  };
 }

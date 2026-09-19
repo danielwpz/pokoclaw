@@ -59,7 +59,7 @@ Keep these rules:
 - produce understandable Pokoclaw config, not a 1:1 clone of OpenClaw internals
 - do not treat every imported model as equally suitable; if the visible model set is weak, say so clearly and recommend a stronger main model
 - best experience: GPT-5 or Claude Sonnet; acceptable floor: a strong mainstream model such as MiniMax 2.7 class
-- if the user expects web search or web fetch, import or add a Tavily provider during onboarding instead of leaving web tools unconfigured
+- if the user expects web search or web fetch, import or add Tavily as primary and Firecrawl as fallback during onboarding instead of leaving web tools unconfigured or single-homed
 
 ### 5. Validate like a normal Pokoclaw setup
 

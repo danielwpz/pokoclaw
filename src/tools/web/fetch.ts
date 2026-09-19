@@ -1,9 +1,10 @@
 import { type Static, Type } from "@sinclair/typebox";
-import type { ProviderConfig } from "@/src/config/schema.js";
 import { buildSystemPolicy } from "@/src/security/policy.js";
 import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import { defineTool, jsonToolResult, type ToolExecutionContext } from "@/src/tools/core/types.js";
-import { createFetchProvider } from "@/src/tools/web/providers.js";
+import { executeWebProviderChain } from "@/src/tools/web/provider-chain.js";
+import { createFetchProvider, type WebProviderConfigInput } from "@/src/tools/web/providers.js";
+import { webProviderChainToToolFailure } from "@/src/tools/web/tool-failure.js";
 
 const MAX_CONTENT_CHARS = 100_000;
 const WEB_FETCH_RESULT_MAX_CHARS = 8_000;
@@ -20,12 +21,16 @@ export const WEB_FETCH_TOOL_SCHEMA = Type.Object(
 
 export type WebFetchToolArgs = Static<typeof WEB_FETCH_TOOL_SCHEMA>;
 
-export function createWebFetchTool(input: { providerId: string; providerConfig: ProviderConfig }) {
+export function createWebFetchTool(
+  input: WebProviderConfigInput & { fallbackProvider?: WebProviderConfigInput },
+) {
   const provider = createFetchProvider(input);
+  const fallbackProvider =
+    input.fallbackProvider == null ? undefined : createFetchProvider(input.fallbackProvider);
 
   return defineTool({
     name: "web_fetch",
-    description: "Fetch and extract the main content of a web page using the configured provider.",
+    description: "Fetch and extract the main content of a web page.",
     inputSchema: WEB_FETCH_TOOL_SCHEMA,
     getResultMaxChars() {
       return WEB_FETCH_RESULT_MAX_CHARS;
@@ -34,8 +39,17 @@ export function createWebFetchTool(input: { providerId: string; providerConfig: 
       const targetUrl = parseAllowedFetchUrl(context, args.url);
 
       try {
-        const response = await provider.fetch({
-          url: targetUrl.toString(),
+        const response = await executeWebProviderChain({
+          toolName: "web_fetch",
+          context,
+          primary: provider,
+          ...(fallbackProvider == null ? {} : { fallback: fallbackProvider }),
+          execute: (candidate) =>
+            candidate.fetch({
+              url: targetUrl.toString(),
+              ...(context.abortSignal == null ? {} : { signal: context.abortSignal }),
+            }),
+          summarizeResponse: (result) => ({ contentLength: result.content.length }),
         });
         const content =
           response.content.length > MAX_CONTENT_CHARS
@@ -43,19 +57,14 @@ export function createWebFetchTool(input: { providerId: string; providerConfig: 
             : response.content;
 
         return jsonToolResult({
-          ...response,
+          url: response.url,
+          title: response.title,
           content,
           truncated: content.length < response.content.length,
           originalContentLength: response.content.length,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw toolRecoverableError(`web_fetch failed: ${message}`, {
-          code: "web_fetch_failed",
-          providerId: input.providerId,
-          providerApi: input.providerConfig.api,
-          url: targetUrl.toString(),
-        });
+        throw webProviderChainToToolFailure("web_fetch", error);
       }
     },
   });

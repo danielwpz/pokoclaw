@@ -34,8 +34,8 @@ Finish with a valid config under `~/.pokoclaw/system/`, including Feishu/Lark ch
 - Feishu/Lark is currently the only supported channel and is required before startup.
 - Run Feishu/Lark as an independent required phase: `docs/feishu-lark-setup.md`, Phase 3C: Required Feishu/Lark setup.
 - For Feishu/Lark, warn that current support is for one personal assistant, not a shared team bot.
-- Ask early whether the user expects web search or web fetch. If yes, guide them to configure Tavily during onboarding.
-- Tell the user Tavily can be registered with a free account at `https://www.tavily.com/`, then help them get an API key and wire it into Pokoclaw config.
+- Ask early whether the user expects web search or web fetch. If yes, guide them to configure Tavily as primary and Firecrawl as fallback during onboarding.
+- Help them get both API keys and wire them into Pokoclaw config without exposing the credentials in chat or logs.
 - Explain the difference briefly:
 - `web search` finds current information or relevant pages on the internet.
 - `web fetch` opens a known page and reads its contents.
@@ -206,7 +206,7 @@ Do not stop at "please configure a provider". Help the user pick one path first:
 - an OpenAI-compatible API provider
 - an Anthropic-compatible API provider
 
-If the user wants web search or web fetch during normal use, also plan a Tavily provider during onboarding instead of leaving it for later.
+If the user wants web search or web fetch during normal use, also plan Tavily plus a Firecrawl fallback during onboarding instead of leaving the web tools with one failure domain.
 
 Say the model recommendation clearly:
 
@@ -230,7 +230,7 @@ For initial setup, always write:
 
 If the user wants web search or web fetch, also write:
 
-- a Tavily provider
+- Tavily and Firecrawl providers
 - `[tools.web.search]`
 - `[tools.web.fetch]`
 

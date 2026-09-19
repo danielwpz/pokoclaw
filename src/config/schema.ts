@@ -95,6 +95,7 @@ export interface SelfHarnessConfig {
 export interface WebToolConfig {
   enabled: boolean;
   provider?: string;
+  fallbackProvider?: string;
 }
 
 export interface WebToolsConfig {
@@ -297,6 +298,7 @@ interface SelfHarnessConfigInput {
 interface WebToolConfigInput {
   enabled?: unknown;
   provider?: unknown;
+  fallbackProvider?: unknown;
 }
 
 interface WebToolsConfigInput {
@@ -1142,7 +1144,7 @@ function validateWebToolsConfig(
   return {
     search: validateWebToolConfig(config.search, defaults.search, providers, {
       path: "config.toml tools.web.search",
-      supportedApis: ["tavily", "brave"],
+      supportedApis: ["tavily", "brave", "firecrawl"],
     }),
     fetch: validateWebToolConfig(config.fetch, defaults.fetch, providers, {
       path: "config.toml tools.web.fetch",
@@ -1169,7 +1171,7 @@ function validateWebToolConfig(
   }
 
   const config = input as WebToolConfigInput;
-  assertAllowedKeys(config, new Set(["enabled", "provider"]), options.path);
+  assertAllowedKeys(config, new Set(["enabled", "provider", "fallbackProvider"]), options.path);
 
   const enabled = validateOptionalBoolean(
     config.enabled,
@@ -1177,18 +1179,14 @@ function validateWebToolConfig(
     `${options.path}.enabled`,
   );
   const provider = validateOptionalNonEmptyString(config.provider, `${options.path}.provider`);
+  const fallbackProvider = validateOptionalNonEmptyString(
+    config.fallbackProvider,
+    `${options.path}.fallbackProvider`,
+  );
 
   const resolved: WebToolConfig = { enabled };
   if (provider != null) {
-    if (!Object.hasOwn(providers, provider)) {
-      throw new Error(`${options.path}.provider references unknown provider: ${provider}`);
-    }
-    const providerApi = providers[provider]?.api;
-    if (providerApi == null || !options.supportedApis.includes(providerApi)) {
-      throw new Error(
-        `${options.path}.provider must reference a provider with api ${options.supportedApis.join(" or ")}`,
-      );
-    }
+    validateWebProviderReference(provider, "provider", providers, options);
     resolved.provider = provider;
   } else if (defaults.provider != null && !enabled) {
     resolved.provider = defaults.provider;
@@ -1198,7 +1196,37 @@ function validateWebToolConfig(
     throw new Error(`${options.path}.provider is required when enabled = true`);
   }
 
+  if (fallbackProvider != null) {
+    validateWebProviderReference(fallbackProvider, "fallbackProvider", providers, options);
+    if (fallbackProvider === resolved.provider) {
+      throw new Error(`${options.path}.fallbackProvider must differ from provider`);
+    }
+    if (resolved.provider == null) {
+      throw new Error(`${options.path}.fallbackProvider requires provider`);
+    }
+    resolved.fallbackProvider = fallbackProvider;
+  } else if (defaults.fallbackProvider != null && !enabled) {
+    resolved.fallbackProvider = defaults.fallbackProvider;
+  }
+
   return resolved;
+}
+
+function validateWebProviderReference(
+  providerId: string,
+  field: "provider" | "fallbackProvider",
+  providers: Record<string, ProviderConfig>,
+  options: { path: string; supportedApis: string[] },
+): void {
+  if (!Object.hasOwn(providers, providerId)) {
+    throw new Error(`${options.path}.${field} references unknown provider: ${providerId}`);
+  }
+  const providerApi = providers[providerId]?.api;
+  if (providerApi == null || !options.supportedApis.includes(providerApi)) {
+    throw new Error(
+      `${options.path}.${field} must reference a provider with api ${options.supportedApis.join(" or ")}`,
+    );
+  }
 }
 
 function validateMcpConfig(input: unknown, defaults: McpConfig): McpConfig {
@@ -1713,9 +1741,11 @@ function cloneProviderConfig(provider: ProviderConfig): ProviderConfig {
 }
 
 function cloneWebToolConfig(config: WebToolConfig): WebToolConfig {
-  return config.provider == null
-    ? { enabled: config.enabled }
-    : { enabled: config.enabled, provider: config.provider };
+  return {
+    enabled: config.enabled,
+    ...(config.provider == null ? {} : { provider: config.provider }),
+    ...(config.fallbackProvider == null ? {} : { fallbackProvider: config.fallbackProvider }),
+  };
 }
 
 function cloneMcpConfig(config: McpConfig): McpConfig {

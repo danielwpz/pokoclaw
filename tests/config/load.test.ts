@@ -812,7 +812,65 @@ describe("config loader", () => {
     );
 
     await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
-      "config.toml tools.web.search.provider must reference a provider with api tavily or brave",
+      "config.toml tools.web.search.provider must reference a provider with api tavily or brave or firecrawl",
+    );
+  });
+
+  test("loads a Firecrawl fallback for both web tools", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.tavily]",
+        'api = "tavily"',
+        'apiKey = "tvly-test"',
+        "",
+        "[providers.firecrawl]",
+        'api = "firecrawl"',
+        'apiKey = "fc-test"',
+        "",
+        "[tools.web.search]",
+        "enabled = true",
+        'provider = "tavily"',
+        'fallbackProvider = "firecrawl"',
+        "",
+        "[tools.web.fetch]",
+        "enabled = true",
+        'provider = "tavily"',
+        'fallbackProvider = "firecrawl"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const config = await loadConfig({ configTomlPath: configPath });
+
+    expect(config.tools.web).toEqual({
+      search: { enabled: true, provider: "tavily", fallbackProvider: "firecrawl" },
+      fetch: { enabled: true, provider: "tavily", fallbackProvider: "firecrawl" },
+    });
+  });
+
+  test("rejects a web fallback that repeats the primary provider", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.tavily]",
+        'api = "tavily"',
+        'apiKey = "tvly-test"',
+        "",
+        "[tools.web.search]",
+        "enabled = true",
+        'provider = "tavily"',
+        'fallbackProvider = "tavily"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      "config.toml tools.web.search.fallbackProvider must differ from provider",
     );
   });
 

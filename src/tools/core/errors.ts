@@ -25,6 +25,7 @@ export interface ToolFailureShape {
   message: string;
   details?: unknown;
   rawMessage?: string;
+  retryable?: boolean;
 }
 
 export interface ToolApprovalRequiredShape {
@@ -41,21 +42,19 @@ export class ToolFailure extends Error {
   readonly kind: ToolFailureKind;
   readonly details?: unknown;
   readonly rawMessage?: string;
+  readonly retryable: boolean;
 
   constructor(shape: ToolFailureShape) {
     super(shape.message);
     this.name = "ToolFailure";
     this.kind = shape.kind;
+    this.retryable = shape.retryable ?? false;
     if (shape.details !== undefined) {
       this.details = shape.details;
     }
     if (shape.rawMessage !== undefined) {
       this.rawMessage = shape.rawMessage;
     }
-  }
-
-  get retryable(): boolean {
-    return false;
   }
 
   get shouldReturnToLlm(): boolean {
@@ -101,6 +100,16 @@ export function toolRecoverableError(message: string, details?: unknown): ToolFa
     message,
     ...(details !== undefined ? { details } : {}),
     rawMessage: message,
+  });
+}
+
+export function toolRetryableError(message: string, details?: unknown): ToolFailure {
+  return new ToolFailure({
+    kind: "recoverable_error",
+    message,
+    ...(details !== undefined ? { details } : {}),
+    rawMessage: message,
+    retryable: true,
   });
 }
 

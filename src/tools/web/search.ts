@@ -1,8 +1,8 @@
 import { type Static, Type } from "@sinclair/typebox";
-import type { ProviderConfig } from "@/src/config/schema.js";
-import { toolRecoverableError } from "@/src/tools/core/errors.js";
 import { defineTool, jsonToolResult } from "@/src/tools/core/types.js";
-import { createSearchProvider } from "@/src/tools/web/providers.js";
+import { executeWebProviderChain } from "@/src/tools/web/provider-chain.js";
+import { createSearchProvider, type WebProviderConfigInput } from "@/src/tools/web/providers.js";
+import { webProviderChainToToolFailure } from "@/src/tools/web/tool-failure.js";
 
 const DEFAULT_MAX_RESULTS = 5;
 
@@ -25,27 +25,39 @@ export const WEB_SEARCH_TOOL_SCHEMA = Type.Object(
 
 export type WebSearchToolArgs = Static<typeof WEB_SEARCH_TOOL_SCHEMA>;
 
-export function createWebSearchTool(input: { providerId: string; providerConfig: ProviderConfig }) {
+export function createWebSearchTool(
+  input: WebProviderConfigInput & { fallbackProvider?: WebProviderConfigInput },
+) {
   const provider = createSearchProvider(input);
+  const fallbackProvider =
+    input.fallbackProvider == null ? undefined : createSearchProvider(input.fallbackProvider);
 
   return defineTool({
     name: "web_search",
-    description: "Search the web using the configured provider.",
+    description: "Search the web using the configured web services.",
     inputSchema: WEB_SEARCH_TOOL_SCHEMA,
-    async execute(_context, args) {
+    async execute(context, args) {
       try {
-        const response = await provider.search({
-          query: args.query,
-          maxResults: args.maxResults ?? DEFAULT_MAX_RESULTS,
+        const response = await executeWebProviderChain({
+          toolName: "web_search",
+          context,
+          primary: provider,
+          ...(fallbackProvider == null ? {} : { fallback: fallbackProvider }),
+          execute: (candidate) =>
+            candidate.search({
+              query: args.query,
+              maxResults: args.maxResults ?? DEFAULT_MAX_RESULTS,
+              ...(context.abortSignal == null ? {} : { signal: context.abortSignal }),
+            }),
+          summarizeResponse: (result) => ({ resultCount: result.results.length }),
         });
-        return jsonToolResult(response);
+        return jsonToolResult({
+          query: response.query,
+          ...(response.answer == null ? {} : { answer: response.answer }),
+          results: response.results,
+        });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw toolRecoverableError(`web_search failed: ${message}`, {
-          code: "web_search_failed",
-          providerId: input.providerId,
-          providerApi: input.providerConfig.api,
-        });
+        throw webProviderChainToToolFailure("web_search", error);
       }
     },
   });

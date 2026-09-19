@@ -1,6 +1,9 @@
 import type { ProviderConfig } from "@/src/config/schema.js";
 import { createBraveSearchProvider } from "@/src/tools/web/providers/brave.js";
-import { createFirecrawlFetchProvider } from "@/src/tools/web/providers/firecrawl.js";
+import {
+  createFirecrawlFetchProvider,
+  createFirecrawlSearchProvider,
+} from "@/src/tools/web/providers/firecrawl.js";
 import {
   createTavilyFetchProvider,
   createTavilySearchProvider,
@@ -17,6 +20,7 @@ export interface WebSearchItem {
 export interface WebSearchRequest {
   query: string;
   maxResults: number;
+  signal?: AbortSignal;
 }
 
 export interface WebSearchResponse {
@@ -32,6 +36,7 @@ export interface WebSearchResponse {
 
 export interface WebFetchRequest {
   url: string;
+  signal?: AbortSignal;
 }
 
 export interface WebFetchResponse {
@@ -57,15 +62,19 @@ export interface FetchProvider {
   fetch(req: WebFetchRequest): Promise<WebFetchResponse>;
 }
 
-export function createSearchProvider(input: {
+export interface WebProviderConfigInput {
   providerId: string;
   providerConfig: ProviderConfig;
-}): SearchProvider {
+}
+
+export function createSearchProvider(input: WebProviderConfigInput): SearchProvider {
   switch (input.providerConfig.api) {
     case "tavily":
       return createTavilySearchProvider(input);
     case "brave":
       return createBraveSearchProvider(input);
+    case "firecrawl":
+      return createFirecrawlSearchProvider(input);
     default:
       throw new Error(
         `web_search does not support provider api "${input.providerConfig.api}" yet.`,
@@ -73,10 +82,7 @@ export function createSearchProvider(input: {
   }
 }
 
-export function createFetchProvider(input: {
-  providerId: string;
-  providerConfig: ProviderConfig;
-}): FetchProvider {
+export function createFetchProvider(input: WebProviderConfigInput): FetchProvider {
   switch (input.providerConfig.api) {
     case "tavily":
       return createTavilyFetchProvider(input);

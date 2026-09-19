@@ -306,11 +306,11 @@ apiKey = "paste-your-deepseek-api-key-here"
 appSecret = "paste-your-feishu-or-lark-app-secret-here"
 ```
 
-### Template D: Tavily for web search and web fetch
+### Template D: Tavily with Firecrawl fallback for web search and web fetch
 
 Use this when the user wants Pokoclaw to search the web or fetch web pages during normal use.
 
-Tavily is the current practical path here. Tell the user it can be registered with a free account at `https://www.tavily.com/`, then help them get an API key and wire it through `env://...` or `secret://...`.
+Use Tavily as the primary service and Firecrawl as the fallback. The tool performs fallback internally; the agent sees the same provider-neutral result shape either way. Provider attempts, fallback decisions, request IDs, credit usage, timing, and upstream failures are written only to the system runtime log.
 
 Explain the difference clearly:
 
@@ -323,13 +323,19 @@ Explain the difference clearly:
 api = "tavily"
 apiKey_ref = "env://TAVILY_API_KEY"
 
+[providers.firecrawl]
+api = "firecrawl"
+apiKey_ref = "env://FIRECRAWL_API_KEY"
+
 [tools.web.search]
 enabled = true
 provider = "tavily"
+fallbackProvider = "firecrawl"
 
 [tools.web.fetch]
 enabled = true
 provider = "tavily"
+fallbackProvider = "firecrawl"
 ```
 
 If the user prefers file-based secrets:
@@ -338,6 +344,10 @@ If the user prefers file-based secrets:
 [providers.tavily]
 api = "tavily"
 apiKey_ref = "secret://tools/tavily/apiKey"
+
+[providers.firecrawl]
+api = "firecrawl"
+apiKey_ref = "secret://tools/firecrawl/apiKey"
 ```
 
 Matching `secrets.toml`:
@@ -345,6 +355,9 @@ Matching `secrets.toml`:
 ```toml
 [tools.tavily]
 apiKey = "paste-your-tavily-api-key-here"
+
+[tools.firecrawl]
+apiKey = "paste-your-firecrawl-api-key-here"
 ```
 
 ### Runtime approval modes
