@@ -1415,7 +1415,7 @@ describe("lark outbound runtime", () => {
       surfaceObjectJson: JSON.stringify({ chat_id: "oc_chat_1" }),
     });
 
-    const docLink1 = "https://www.feishu.cn/docx/C4DUdbOz9oiC7Qx8TBncxtevnXb";
+    const docLink1 = "https://www.feishu.cn/docx/FakeDocToken0001";
     const docLink2 = "https://openclaw.feishu.cn/wiki/AbCdEfGhIjKlMnOp";
     const reasoningOnlyLink = "https://www.feishu.cn/docx/ReasoningOnlyDoc";
     const expectedPreviewText = `${docLink1}\n${docLink2}`;

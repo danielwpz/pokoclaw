@@ -44,6 +44,7 @@
     "linux:preflight:local-sandbox": "scripts/linux-docker.sh preflight:local-sandbox",
     "linux:shell": "scripts/linux-docker.sh shell",
     "linux:shell:local-sandbox": "scripts/linux-docker.sh shell:local-sandbox",
+    "privacy:check": "node scripts/privacy-check.mjs --all",
     "preflight": "pnpm build && pnpm format && pnpm lint && pnpm test",
     "prepare": "husky"
   },

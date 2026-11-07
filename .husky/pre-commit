@@ -1,2 +1,3 @@
+node scripts/privacy-check.mjs
 pnpm lint-staged
 pnpm preflight

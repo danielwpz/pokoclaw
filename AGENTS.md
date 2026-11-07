@@ -136,6 +136,7 @@ Prefer the narrowest relevant test command first. Run `pnpm preflight` for large
 ## Security
 
 - Never commit real secrets.
+- Never commit personal data (local home paths, server IPs, real Lark/Feishu IDs or doc links, personal emails). The pre-commit hook and CI run `scripts/privacy-check.mjs`; keep personal literals for it in the uncommitted `.git/info/privacy-denylist`.
 - Do not print or echo secrets unnecessarily.
 - Treat local environment files as private machine state.
 - If a task reveals a leaked credential, recommend rotation immediately.

@@ -34,6 +34,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Privacy check
+        run: pnpm privacy:check
+
       - name: Lint
         run: pnpm lint
 
