@@ -100,18 +100,18 @@ check_command() {
 check_node_version() {
   if ! command -v node >/dev/null 2>&1; then
     fail "missing node"
-    info "Install Node.js 20 or newer."
+    info "Install Node.js 24 LTS or newer."
     return 1
   fi
 
   local major
   major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || printf '0')"
-  if [[ "${major}" =~ ^[0-9]+$ && "${major}" -ge 20 ]]; then
+  if [[ "${major}" =~ ^[0-9]+$ && "${major}" -ge 24 ]]; then
     ok "node $(node --version)"
     return 0
   fi
 
-  fail "Node.js 20 or newer is required; found $(node --version 2>/dev/null || printf 'unknown')"
+  fail "Node.js 24 or newer is required; found $(node --version 2>/dev/null || printf 'unknown')"
   return 1
 }
 

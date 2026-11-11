@@ -21,7 +21,7 @@
     "typescript"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "type": "module",
   "packageManager": "pnpm@10.15.0",
@@ -56,29 +56,27 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^25.5.0",
-    "drizzle-kit": "^0.31.10",
+    "@types/node": "^24.19.2",
     "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vite": "^8.3.7",
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@danielwpz/sandbox-runtime": "0.0.43-pokeclaw.4",
-    "@larksuiteoapi/node-sdk": "^1.60.0",
-    "@mariozechner/pi-agent-core": "0.70.2",
+    "@larksuiteoapi/node-sdk": "^1.76.0",
     "@mariozechner/pi-ai": "0.70.2",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@sinclair/typebox": "^0.34.48",
-    "@tavily/core": "^0.7.2",
-    "ajv": "^8.20.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@sinclair/typebox": "^0.34.52",
+    "@tavily/core": "^0.7.14",
     "better-sqlite3": "^12.8.0",
     "croner": "^10.0.1",
-    "drizzle-orm": "^0.45.1",
+    "drizzle-orm": "^0.45.4",
     "lark-a2ui-renderer": "0.1.2",
-    "openai": "6.26.0",
-    "toml": "^3.0.0",
+    "openai": "6.49.0",
+    "toml": "^5.0.1",
     "tree-sitter-bash": "^0.25.1",
     "web-tree-sitter": "^0.26.8"
   }

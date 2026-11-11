@@ -12,6 +12,11 @@ Treat these layers separately:
 
 Do not collapse these into one file.
 
+TOML integers must fit JavaScript's safe integer range. Quote long numeric
+identifiers (for example, account IDs) as strings instead of using integer
+literals. Invalid or oversized integers fail configuration loading rather than
+being silently rounded.
+
 ## Current channel requirement
 
 Feishu/Lark is currently the only supported channel. A runnable onboarding setup should therefore include:

@@ -55,11 +55,16 @@ Work from the `pokoclaw/` directory.
 
 Use the repo's declared tooling:
 
-- Node.js 20+
+- Node.js 24 LTS (or a newer supported LTS release)
 - `pnpm`
 - project scripts from `package.json`
 
 The repo currently declares `pnpm@10.15.0`.
+
+Run `nvm use` when using nvm; the repository's `.nvmrc` selects Node.js 24.
+When moving an existing checkout from an older Node.js release, run `pnpm install`
+and `pnpm rebuild better-sqlite3` before starting it so the native SQLite module
+matches the new runtime.
 
 ### 3. Run the host doctor
 
@@ -80,7 +85,7 @@ The doctor is a lightweight, no-side-effect host check. It prints diagnostics an
 Current checks:
 
 - common host checks:
-  - Node.js 20+
+  - Node.js 24 LTS (or a newer supported LTS release)
   - `pnpm`
   - `rg` from `ripgrep`
 - macOS:
