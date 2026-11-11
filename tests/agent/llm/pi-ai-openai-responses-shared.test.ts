@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { buildPiMessages } from "@/src/agent/llm/messages.js";
-import { convertResponsesMessages } from "@/src/agent/llm/pi-ai-openai-responses-shared.js";
+import {
+  convertResponsesMessages,
+  normalizeResponsesInputRoles,
+  type ResponsesInput,
+} from "@/src/agent/llm/pi-ai-openai-responses-shared.js";
 import {
   APPROVAL_DENIED_USER_INTERVENTION_CODE,
   TOOL_BATCH_ABORTED_USER_INTERVENTION_CODE,
@@ -36,6 +40,22 @@ function makeStoredMessage(overrides: Partial<Message>): Message {
 }
 
 describe("pi ai openai responses shared", () => {
+  test("normalizes developer messages without changing non-message Responses items", () => {
+    const input: ResponsesInput = [
+      { role: "developer", content: "Follow the system rules." },
+      { type: "additional_tools", role: "developer", tools: [] },
+    ];
+
+    const normalized = normalizeResponsesInputRoles(input);
+
+    expect(normalized).toEqual([
+      { role: "system", content: "Follow the system rules." },
+      { type: "additional_tools", role: "developer", tools: [] },
+    ]);
+    expect(normalized[1]).toBe(input[1]);
+    expect(input[0]).toEqual({ role: "developer", content: "Follow the system rules." });
+  });
+
   test("generates unique fallback response item ids for multiple unsigned assistant text items", () => {
     const messages: Message[] = [
       makeStoredMessage({

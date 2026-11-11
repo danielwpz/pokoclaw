@@ -35,6 +35,16 @@ Optional variables:
 
 Notes:
 
+- Prefer running the full suite in the Linux test container:
+
+  ```bash
+  pnpm linux:docker run -- env VITEST_MAX_WORKERS=2 pnpm test:integration
+  ```
+
+  The container has a fresh test-user home, so AgentLoop's default memory and
+  skill discovery cannot inject your host's personal workspace into requests.
+  The local integration env file is used for provider authentication; test
+  prompts, transcripts, and the repo-local skill fixture are synthetic.
 - The main app stores config under `~/.pokoclaw/system/config.toml` and `~/.pokoclaw/system/secrets.toml`
 - Integration tests only use the local env file to generate temporary config files
 - Default `pnpm test` excludes everything under `tests/integration/`

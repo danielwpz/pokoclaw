@@ -79,10 +79,10 @@ const STREAM_REASONING_TRUNCATION_PREFIX = "...[earlier reasoning truncated]\n";
 /**
  * Normalizes developer role to system for the Responses API.
  *
- * This is a hard invariant: the Responses API must never emit developer-role
- * input items, even if a future upstream change allows `supportsDeveloperRole`
+ * This is a hard invariant: Responses message items must never use the developer
+ * role, even if a future upstream change allows `supportsDeveloperRole`
  * in a compat layer. The responses format treats developer and system as
- * equivalent, and pokoclaw normalizes to system everywhere.
+ * equivalent. Non-message items retain their protocol-required roles.
  */
 export function normalizeResponsesInputRoles(input: ResponsesInput): ResponsesInput {
   if (!Array.isArray(input)) {
@@ -91,7 +91,13 @@ export function normalizeResponsesInputRoles(input: ResponsesInput): ResponsesIn
 
   let changed = false;
   const normalized = input.map((item) => {
-    if (!isRecord(item) || item.role !== "developer") {
+    if (
+      item == null ||
+      typeof item !== "object" ||
+      ("type" in item && item.type !== "message") ||
+      !("role" in item) ||
+      item.role !== "developer"
+    ) {
       return item;
     }
 

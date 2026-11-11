@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { buildAppConfigFromInputs, loadConfig } from "@/src/config/load.js";
+import { buildAppConfigFromInputs, loadConfig, readOptionalTomlFile } from "@/src/config/load.js";
 import { resolveConfigRefs, resolveEnvRef, resolveSecretRef } from "@/src/config/refs.js";
 
 describe("config loader", () => {
@@ -943,6 +943,31 @@ describe("config loader", () => {
     await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
       `Failed to load TOML file at ${configPath}`,
     );
+  });
+
+  test("rejects TOML integers that would silently lose precision", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(configPath, "[runtime]\nmaxTurns = 9007199254740993\n", "utf8");
+
+    await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
+      `Failed to load TOML file at ${configPath}`,
+    );
+  });
+
+  test("preserves ordinary TOML integers and quoted identifiers", async () => {
+    const secretsPath = path.join(tempDir, "secrets.toml");
+    await writeFile(
+      secretsPath,
+      '[service]\nlimit = 9007199254740991\naccountId = "9007199254740993"\n',
+      "utf8",
+    );
+
+    await expect(readOptionalTomlFile(secretsPath)).resolves.toEqual({
+      service: {
+        limit: Number.MAX_SAFE_INTEGER,
+        accountId: "9007199254740993",
+      },
+    });
   });
 
   test("fails clearly on invalid typed values", async () => {

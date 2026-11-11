@@ -168,6 +168,18 @@ describe("managed bash process integration", () => {
     expect(
       manager.get({ id: backgroundId as string, ownerAgentId: "agent_1" }).processRun,
     ).toMatchObject({ notifyOnExit: "wake" });
+    // Test termination of the running payload, rather than racing shell-wrapper startup.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const output = manager
+        .get({ id: backgroundId as string, ownerAgentId: "agent_1" })
+        .output.chunks.map((chunk) => chunk.text)
+        .join("");
+      if (output.includes("WORKER_READY")) {
+        break;
+      }
+      await sleep(50);
+    }
+    expect(countOutputMatches(manager, backgroundId as string, "WORKER_READY")).toBe(1);
     const killed = await registry.execute("process", context, {
       action: "kill",
       processRunId: backgroundId,
