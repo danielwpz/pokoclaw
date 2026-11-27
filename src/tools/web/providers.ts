@@ -5,6 +5,10 @@ import {
   createFirecrawlSearchProvider,
 } from "@/src/tools/web/providers/firecrawl.js";
 import {
+  createKeenableFetchProvider,
+  createKeenableSearchProvider,
+} from "@/src/tools/web/providers/keenable.js";
+import {
   createTavilyFetchProvider,
   createTavilySearchProvider,
 } from "@/src/tools/web/providers/tavily.js";
@@ -75,6 +79,8 @@ export function createSearchProvider(input: WebProviderConfigInput): SearchProvi
       return createBraveSearchProvider(input);
     case "firecrawl":
       return createFirecrawlSearchProvider(input);
+    case "keenable":
+      return createKeenableSearchProvider(input);
     default:
       throw new Error(
         `web_search does not support provider api "${input.providerConfig.api}" yet.`,
@@ -88,6 +94,8 @@ export function createFetchProvider(input: WebProviderConfigInput): FetchProvide
       return createTavilyFetchProvider(input);
     case "firecrawl":
       return createFirecrawlFetchProvider(input);
+    case "keenable":
+      return createKeenableFetchProvider(input);
     default:
       throw new Error(`web_fetch does not support provider api "${input.providerConfig.api}" yet.`);
   }

@@ -367,6 +367,24 @@ apiKey = "paste-your-tavily-api-key-here"
 apiKey = "paste-your-firecrawl-api-key-here"
 ```
 
+Keenable can also back either web tool, as the primary provider or as the fallback. It is opt-in: nothing uses it unless a `[providers.*]` entry has `api = "keenable"` and a tool points at it. It needs an API key from https://app.keenable.ai. Search uses `POST /v1/search` and fetch uses `POST /v1/fetch`. Keenable logs requests under its default data policy.
+
+```toml
+[providers.keenable]
+api = "keenable"
+apiKey_ref = "env://KEENABLE_API_KEY"
+
+[tools.web.search]
+enabled = true
+provider = "tavily"
+fallbackProvider = "keenable"
+
+[tools.web.fetch]
+enabled = true
+provider = "tavily"
+fallbackProvider = "keenable"
+```
+
 ### Runtime approval modes
 
 Pokoclaw normally asks before actions that need extra permission.
