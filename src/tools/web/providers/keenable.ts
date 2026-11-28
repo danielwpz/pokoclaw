@@ -109,6 +109,7 @@ class KeenableFetchProvider implements FetchProvider {
       url: readString(result.url) ?? req.url,
       title: readNonEmptyString(result.title) ?? null,
       content,
+      ...(result.truncated === true ? { truncated: true } : {}),
       ...(requestId == null ? {} : { requestId }),
     };
   }
@@ -150,9 +151,16 @@ async function postKeenableJson(input: {
   try {
     body = JSON.parse(text);
   } catch {
-    throw invalidResponse(
-      `Keenable returned a non-JSON response${response.ok ? "." : ` with HTTP ${response.status}.`}`,
-    );
+    if (!response.ok) {
+      // A proxy or gateway can answer with plain text or HTML; classify by status so
+      // a 401 still blocks and a 429 keeps its Retry-After.
+      throw createHttpProviderError(
+        response.status,
+        `Keenable request failed with HTTP ${response.status}.`,
+        response.headers,
+      );
+    }
+    throw invalidResponse("Keenable returned a non-JSON response.");
   }
 
   const record = asRecord(body);
@@ -198,10 +206,20 @@ function targetPageError(error: Record<string, unknown>): WebProviderError {
       retryable: false,
     });
   }
+  if (error.retryable === true) {
+    return new WebProviderError({
+      code: "upstream_error",
+      message: `Failed to fetch URL: ${message}`,
+      retryable: true,
+    });
+  }
+  // The target page refused or failed (e.g. 403): the request needs a different URL,
+  // the provider itself is healthy.
   return new WebProviderError({
-    code: "upstream_error",
+    code: "invalid_request",
     message: `Failed to fetch URL: ${message}`,
-    retryable: error.retryable === true,
+    retryable: false,
+    ...(status == null ? {} : { statusCode: status }),
   });
 }
 

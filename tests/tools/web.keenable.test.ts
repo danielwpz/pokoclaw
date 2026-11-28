@@ -207,8 +207,59 @@ describe("Keenable web provider", () => {
     const failure = await provider.fetch({ url: "https://example.com/private" }).catch((e) => e);
 
     expect(failure).toBeInstanceOf(WebProviderError);
-    expect(failure).toMatchObject({ code: "upstream_error", retryable: false });
+    expect(failure).toMatchObject({ code: "invalid_request", retryable: false, statusCode: 403 });
     expect(failure.code).not.toBe("authentication");
+  });
+
+  test("keeps a retryable per-URL fetch error retryable", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        results: [
+          { url: "https://example.com/slow", error: { message: "Timed out", retryable: true } },
+        ],
+      }),
+    );
+    const provider = createKeenableFetchProvider({
+      providerId: "keenable",
+      providerConfig: keenableConfig,
+    });
+
+    await expect(provider.fetch({ url: "https://example.com/slow" })).rejects.toMatchObject({
+      code: "upstream_error",
+      retryable: true,
+    });
+  });
+
+  test("carries Keenable's truncated flag on a fetched page", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        results: [{ url: "https://example.com/long", content: "partial", truncated: true }],
+      }),
+    );
+    const provider = createKeenableFetchProvider({
+      providerId: "keenable",
+      providerConfig: keenableConfig,
+    });
+
+    await expect(provider.fetch({ url: "https://example.com/long" })).resolves.toMatchObject({
+      content: "partial",
+      truncated: true,
+    });
+  });
+
+  test("classifies a plain-text error response by its HTTP status", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("Unauthorized", { status: 401, headers: { "content-type": "text/plain" } }),
+    );
+    const provider = createKeenableSearchProvider({
+      providerId: "keenable",
+      providerConfig: keenableConfig,
+    });
+
+    await expect(provider.search({ query: "q", maxResults: 1 })).rejects.toMatchObject({
+      code: "authentication",
+      retryable: false,
+    });
   });
 
   test("maps a missing target page to not_found", async () => {

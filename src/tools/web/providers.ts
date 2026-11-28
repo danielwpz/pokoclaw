@@ -49,6 +49,8 @@ export interface WebFetchResponse {
   url: string;
   title: string | null;
   content: string;
+  /** Set when the provider itself returned partial content. */
+  truncated?: boolean;
   requestId?: string;
   responseTimeMs?: number;
   creditsUsed?: number;

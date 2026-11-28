@@ -69,7 +69,7 @@ export function createWebFetchTool(
           url: response.url,
           title: response.title,
           content,
-          truncated: content.length < response.content.length,
+          truncated: content.length < response.content.length || response.truncated === true,
           originalContentLength: response.content.length,
         });
       } catch (error) {
