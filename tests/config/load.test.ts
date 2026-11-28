@@ -812,7 +812,7 @@ describe("config loader", () => {
     );
 
     await expect(loadConfig({ configTomlPath: configPath })).rejects.toThrow(
-      "config.toml tools.web.search.provider must reference a provider with api tavily or brave or firecrawl",
+      "config.toml tools.web.search.provider must reference a provider with api tavily or brave or firecrawl or keenable",
     );
   });
 
@@ -848,6 +848,41 @@ describe("config loader", () => {
     expect(config.tools.web).toEqual({
       search: { enabled: true, provider: "tavily", fallbackProvider: "firecrawl" },
       fetch: { enabled: true, provider: "tavily", fallbackProvider: "firecrawl" },
+    });
+  });
+
+  test("loads a Keenable fallback for both web tools", async () => {
+    const configPath = path.join(tempDir, "config.toml");
+    await writeFile(
+      configPath,
+      [
+        "[providers.tavily]",
+        'api = "tavily"',
+        'apiKey = "tvly-test"',
+        "",
+        "[providers.keenable]",
+        'api = "keenable"',
+        'apiKey = "kn-test"',
+        "",
+        "[tools.web.search]",
+        "enabled = true",
+        'provider = "tavily"',
+        'fallbackProvider = "keenable"',
+        "",
+        "[tools.web.fetch]",
+        "enabled = true",
+        'provider = "tavily"',
+        'fallbackProvider = "keenable"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const config = await loadConfig({ configTomlPath: configPath });
+
+    expect(config.tools.web).toEqual({
+      search: { enabled: true, provider: "tavily", fallbackProvider: "keenable" },
+      fetch: { enabled: true, provider: "tavily", fallbackProvider: "keenable" },
     });
   });
 

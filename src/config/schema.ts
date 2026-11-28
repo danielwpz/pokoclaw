@@ -1144,11 +1144,11 @@ function validateWebToolsConfig(
   return {
     search: validateWebToolConfig(config.search, defaults.search, providers, {
       path: "config.toml tools.web.search",
-      supportedApis: ["tavily", "brave", "firecrawl"],
+      supportedApis: ["tavily", "brave", "firecrawl", "keenable"],
     }),
     fetch: validateWebToolConfig(config.fetch, defaults.fetch, providers, {
       path: "config.toml tools.web.fetch",
-      supportedApis: ["tavily", "firecrawl"],
+      supportedApis: ["tavily", "firecrawl", "keenable"],
     }),
   };
 }
